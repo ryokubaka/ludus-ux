@@ -1,0 +1,521 @@
+"use client"
+
+import { useState, useEffect, useCallback, useRef } from "react"
+import { useRouter } from "next/navigation"
+import Link from "next/link"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { VMTable } from "@/components/range/vm-table"
+import { LogViewer } from "@/components/range/log-viewer"
+import {
+  Server,
+  Layers,
+  Activity,
+  RefreshCw,
+  Play,
+  StopCircle,
+  Power,
+  PowerOff,
+  Shield,
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  Wifi,
+  ChevronDown,
+  ChevronRight,
+  Network,
+  List,
+  FileCode2,
+  Download,
+  X,
+} from "lucide-react"
+import { ludusApi } from "@/lib/api"
+import type { RangeObject, VMObject } from "@/lib/types"
+import { cn, getRangeStateBadge } from "@/lib/utils"
+import { useToast } from "@/hooks/use-toast"
+import { useDeployLogs } from "@/hooks/use-deploy-logs"
+import { useConfirm } from "@/hooks/use-confirm"
+import { ConfirmBar } from "@/components/ui/confirm-bar"
+
+export default function DashboardPage() {
+  const { toast } = useToast()
+  const router = useRouter()
+  const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
+
+  // ── Global ─────────────────────────────────────────────────────────────────
+  const [ranges, setRanges] = useState<RangeObject[]>([])
+  const [version, setVersion] = useState<string>("")
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshingRef = useRef(false)
+  const initialLoadDoneRef = useRef(false)
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // ── Per-range expanded state (first range auto-expanded) ───────────────────
+  const [expandedRanges, setExpandedRanges] = useState<Set<string>>(new Set())
+  const [etcHosts, setEtcHosts] = useState<string | null>(null)
+  const [showHosts, setShowHosts] = useState(false)
+  const [inventoryText, setInventoryText] = useState<string | null>(null)
+  const [showInventory, setShowInventory] = useState(false)
+
+  // ── Deploy ─────────────────────────────────────────────────────────────────
+  const [deploying, setDeploying] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+  const { lines: logLines, isStreaming, startStreaming, clearLogs } = useDeployLogs({
+    onComplete: () => {
+      setDeploying(false)
+      fetchRanges()
+      // Auto-hide the log panel after a short delay so the user sees the final lines
+      setTimeout(() => setShowLogs(false), 5000)
+    },
+  })
+
+  // ── Console ────────────────────────────────────────────────────────────────
+  const [downloadingVm, setDownloadingVm] = useState<string | null>(null)
+  const [openingVm, setOpeningVm] = useState<string | null>(null)
+
+  // ── Data fetching ──────────────────────────────────────────────────────────
+  // De-duplicate VMs by proxmoxID/ID to guard against occasional API-level duplicates
+  // that appear during active deployments (VMs being provisioned or powered on).
+  const dedupeVMs = (vms: VMObject[]): VMObject[] => {
+    const seen = new Set<number | string>()
+    return vms.filter((vm) => {
+      const key = vm.proxmoxID ?? vm.ID
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  const applyRangeData = useCallback((r: RangeObject) => {
+    const deduped = { ...r, VMs: dedupeVMs(r.VMs || (r as RangeObject & { vms?: VMObject[] }).vms || []) }
+    setRanges((prev) => {
+      if (prev.length === 0) {
+        setExpandedRanges((e) =>
+          e.size === 0 ? new Set([r.rangeID || r.name || "range-0"]) : e
+        )
+        return [deduped]
+      }
+      // Merge in-place so the accordion stays mounted (no flicker/remount)
+      return [{ ...prev[0], ...deduped }]
+    })
+    setLastRefreshed(new Date())
+  }, [])
+
+  const fetchRanges = useCallback(async () => {
+    // Prevent concurrent refreshes
+    if (refreshingRef.current) return
+    refreshingRef.current = true
+    setError(null)
+    const isInitial = !initialLoadDoneRef.current
+    if (isInitial) setLoading(true)
+    else setRefreshing(true)
+    const [rangeResult, versionResult] = await Promise.all([
+      ludusApi.getRangeStatus(),
+      ludusApi.getVersion(),
+    ])
+    if (rangeResult.error) {
+      setError(rangeResult.error)
+    } else if (rangeResult.data) {
+      applyRangeData(rangeResult.data)
+      initialLoadDoneRef.current = true
+    }
+    if (versionResult.data) {
+      setVersion(versionResult.data.result || versionResult.data.version || "")
+    }
+    if (isInitial) setLoading(false)
+    else setRefreshing(false)
+    refreshingRef.current = false
+  }, [applyRangeData])
+
+  const silentRefresh = useCallback(async () => {
+    if (refreshingRef.current) return
+    refreshingRef.current = true
+    setRefreshing(true)
+    const result = await ludusApi.getRangeStatus()
+    if (!result.error && result.data) {
+      applyRangeData(result.data)
+    }
+    refreshingRef.current = false
+    setRefreshing(false)
+  }, [applyRangeData])
+
+  useEffect(() => {
+    fetchRanges()
+    // On mount: check if a deployment is already in progress
+    const checkDeploy = async () => {
+      const r = await ludusApi.getRangeStatus()
+      if (r.data?.rangeState === "DEPLOYING") {
+        setDeploying(true)
+        setShowLogs(true)
+        startStreaming()
+      }
+    }
+    checkDeploy()
+    const interval = setInterval(silentRefresh, 15000)
+    return () => clearInterval(interval)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchRanges, silentRefresh])
+
+  // ── Deploy actions ─────────────────────────────────────────────────────────
+  const doDeploy = async () => {
+    clearLogs()
+    setShowLogs(true)
+    setDeploying(true)
+    const result = await ludusApi.deployRange()
+    if (result.error) {
+      toast({ variant: "destructive", title: "Deploy failed", description: result.error })
+      setDeploying(false)
+      return
+    }
+    toast({ title: "Deploy started" })
+    startStreaming()
+  }
+  const handleDeploy = () => confirm("Start range deployment?", doDeploy)
+
+  const doAbort = async () => {
+    const result = await ludusApi.abortDeploy()
+    if (result.error) {
+      toast({ variant: "destructive", title: "Error", description: result.error })
+    } else {
+      toast({ title: "Deploy aborted" })
+      setDeploying(false)
+      fetchRanges()
+    }
+  }
+  const handleAbort = () => confirm("Abort the running deployment?", doAbort)
+
+  const doPowerAll = async (action: "on" | "off") => {
+    const vmNames = (primaryRange?.VMs || (primaryRange as RangeObject & { vms?: VMObject[] })?.vms || [])
+      .map((v: VMObject) => v.name || `vm-${v.ID}`)
+      .filter(Boolean)
+    if (vmNames.length === 0) {
+      toast({ variant: "destructive", title: "No VMs", description: "No VMs in this range to power " + action })
+      return
+    }
+    const result = action === "on" ? await ludusApi.powerOn(vmNames) : await ludusApi.powerOff(vmNames)
+    if (result.error) {
+      toast({ variant: "destructive", title: "Error", description: result.error })
+    } else {
+      toast({ title: `Powering ${action} all VMs`, description: `${vmNames.length} VMs targeted` })
+      setTimeout(fetchRanges, 3000)
+    }
+  }
+  const handlePowerAll = (action: "on" | "off") =>
+    confirm(
+      action === "on"
+        ? `Power ON all VMs in this range?`
+        : `Power OFF all VMs in this range?`,
+      () => doPowerAll(action)
+    )
+
+  // ── Range extras ───────────────────────────────────────────────────────────
+  const extractText = (data: unknown) => {
+    const d = data as { result?: string }
+    return d?.result || (typeof data === "string" ? data : "")
+  }
+
+  const handleGetHosts = async () => {
+    const result = await ludusApi.getRangeEtcHosts()
+    if (result.data) { setEtcHosts(extractText(result.data)); setShowHosts(true) }
+    else toast({ variant: "destructive", title: "Error", description: String(result.error) })
+  }
+
+  const handleShowInventory = async () => {
+    const result = await ludusApi.getRangeEtcHosts()
+    if (result.data) { setInventoryText(extractText(result.data)); setShowInventory(true) }
+    else toast({ variant: "destructive", title: "Error", description: String(result.error) })
+  }
+
+  const downloadText = (text: string, filename: string) => {
+    const blob = new Blob([text], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Console actions ────────────────────────────────────────────────────────
+  const vmName = (vm: VMObject) => vm.name || `vm-${vm.ID}`
+  const vmId = (vm: VMObject) => vm.proxmoxID || vm.ID
+
+  const handleDownloadVv = async (vm: VMObject) => {
+    const name = vmName(vm)
+    const id = vmId(vm)
+    if (!id) { toast({ variant: "destructive", title: "No VM ID" }); return }
+    setDownloadingVm(name)
+    try {
+      const res = await fetch(`/api/console/spice?vmId=${id}&vmName=${encodeURIComponent(name)}`)
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(d.error || `HTTP ${res.status}`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url; a.download = `${name.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast({ title: "Downloaded", description: `Open ${name}.vv with virt-viewer` })
+    } catch (err) {
+      toast({ variant: "destructive", title: "Console failed", description: (err as Error).message })
+    } finally {
+      setDownloadingVm(null)
+    }
+  }
+
+  const handleOpenBrowser = (vm: VMObject) => {
+    const name = vmName(vm)
+    const id = vmId(vm)
+    if (!id) { toast({ variant: "destructive", title: "No VM ID" }); return }
+    router.push(`/console?vmId=${id}&vmName=${encodeURIComponent(name)}`)
+  }
+
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const primaryRange = ranges[0] ?? null
+  const allVMs = primaryRange?.VMs || primaryRange?.vms || []
+  const runningVMs = allVMs.filter((v) => v.poweredOn || v.powerState === "running").length
+  const rangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
+
+  const toggleRange = (id: string) => {
+    setExpandedRanges((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription>
+            {error.includes("Connection failed")
+              ? "Cannot connect to Ludus server. Check your LUDUS_URL and LUDUS_API_KEY settings."
+              : error}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* ── Stats ─────────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-4">
+        <StatCard title="Range State" icon={<Activity className="h-4 w-4 text-primary" />}
+          value={loading
+            ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            : <Badge className={cn("text-xs", getRangeStateBadge(rangeState))}>{rangeState}</Badge>}
+        />
+        <StatCard title="Total VMs" icon={<Server className="h-4 w-4 text-blue-400" />}
+          value={loading ? "—" : String(allVMs.length)} />
+        <StatCard title="Running" icon={<CheckCircle2 className="h-4 w-4 text-green-400" />}
+          value={loading ? "—" : String(runningVMs)}
+          subtext={allVMs.length > 0 ? `${Math.round((runningVMs / allVMs.length) * 100)}% online` : undefined}
+        />
+        <StatCard title="Ludus Version" icon={<Layers className="h-4 w-4 text-cyan-400" />}
+          value={loading ? "—" : (version ? (version.split(" ").pop() || "—") : "—")}
+          subtext={version ? version.replace(/\s+\S+$/, "") : "Not connected"}
+        />
+      </div>
+
+      {/* ── Range accordions ──────────────────────────────────────────────── */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      ) : ranges.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <Server className="h-10 w-10 mx-auto mb-3 opacity-40" />
+            <p>No ranges available. Deploy a range to get started.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        ranges.map((range, idx) => {
+          const rangeKey = range.rangeID || range.name || `range-${idx}`
+          const isExpanded = expandedRanges.has(rangeKey)
+          const vms = range.VMs || range.vms || []
+          const running = vms.filter((v) => v.poweredOn || v.powerState === "running").length
+          const state = range.rangeState || "NEVER DEPLOYED"
+
+          return (
+            <Card key={rangeKey} className="overflow-hidden">
+              {/* ── Accordion header ──────────────────────────────────────── */}
+              <button
+                className="w-full text-left"
+                onClick={() => toggleRange(rangeKey)}
+              >
+                <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {isExpanded
+                        ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                      <Server className="h-4 w-4 text-primary" />
+                      <CardTitle className="text-sm font-semibold">
+                        {range.name || range.rangeID || `Range ${range.rangeNumber ?? idx + 1}`}
+                      </CardTitle>
+                      {range.rangeNumber != null && (
+                        <span className="text-xs text-muted-foreground font-mono">#{range.rangeNumber}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-muted-foreground">
+                        <span className="text-green-400 font-medium">{running}</span>
+                        <span> / {vms.length} running</span>
+                      </span>
+                      <Badge className={cn("text-xs", getRangeStateBadge(state))}>{state}</Badge>
+                      {lastRefreshed && (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <Wifi className={cn("h-3 w-3", refreshing ? "text-yellow-400 animate-pulse" : "text-green-400")} />
+                          {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+              </button>
+
+              {isExpanded && (
+                <CardContent className="pt-0 space-y-4">
+                  {/* ── Action bar ──────────────────────────────────────── */}
+                  <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button onClick={handleDeploy} disabled={deploying || state === "DEPLOYING" || !!pendingAction} className="gap-1.5">
+                      {deploying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                      {deploying ? "Deploying…" : "Deploy"}
+                    </Button>
+                    {(deploying || state === "DEPLOYING") && (
+                      <Button variant="destructive" onClick={handleAbort} disabled={!!pendingAction} className="gap-1.5">
+                        <StopCircle className="h-3.5 w-3.5" /> Abort
+                      </Button>
+                    )}
+                    <Button variant="outline" onClick={() => handlePowerAll("on")} disabled={!!pendingAction} className="gap-1.5">
+                      <Power className="h-3.5 w-3.5 text-green-400" /> All On
+                    </Button>
+                    <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction} className="gap-1.5">
+                      <PowerOff className="h-3.5 w-3.5 text-red-400" /> All Off
+                    </Button>
+                    <Button variant="outline" onClick={handleGetHosts} className="gap-1.5">
+                      <Network className="h-3.5 w-3.5" /> /etc/hosts
+                    </Button>
+                    <Button variant="outline" onClick={handleShowInventory} className="gap-1.5">
+                      <List className="h-3.5 w-3.5" /> Inventory
+                    </Button>
+                    <Link href="/range/config">
+                      <Button variant="ghost" className="gap-1.5">
+                        <FileCode2 className="h-3.5 w-3.5" /> Config & Deploy
+                      </Button>
+                    </Link>
+                    <Button variant="ghost" size="icon" onClick={fetchRanges} disabled={loading} className="ml-auto">
+                      <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                    </Button>
+                    {range.testingEnabled && (
+                      <Badge variant="warning" className="flex items-center gap-1 px-3 py-1.5">
+                        <Shield className="h-3 w-3" /> Testing Mode
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* ── Deploy logs ─────────────────────────────────────── */}
+                  {showLogs && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                          <Activity className={cn("h-3.5 w-3.5", isStreaming && "animate-pulse text-green-400")} />
+                          Deploy Logs
+                          {isStreaming && <Badge variant="success" className="text-xs">Live</Badge>}
+                        </h4>
+                        <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <LogViewer lines={logLines} onClear={clearLogs} maxHeight="300px" />
+                    </div>
+                  )}
+                  {!showLogs && (deploying || state === "DEPLOYING") && (
+                    <Button size="sm" variant="ghost" onClick={() => setShowLogs(true)} className="gap-1.5 text-xs">
+                      <Activity className="h-3.5 w-3.5 animate-pulse text-green-400" />
+                      Show deploy logs
+                    </Button>
+                  )}
+
+                  {/* ── /etc/hosts viewer ───────────────────────────────── */}
+                  {showHosts && etcHosts && (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border">
+                        <span className="text-xs font-mono font-semibold">/etc/hosts</span>
+                        <div className="flex gap-1">
+                          <Button size="icon-sm" variant="ghost" onClick={() => downloadText(etcHosts, "hosts")}>
+                            <Download className="h-3 w-3" />
+                          </Button>
+                          <Button size="icon-sm" variant="ghost" onClick={() => setShowHosts(false)}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                      <pre className="p-3 text-xs font-mono overflow-auto max-h-48 bg-black/60">{etcHosts}</pre>
+                    </div>
+                  )}
+
+                  {/* ── Ansible inventory viewer ────────────────────────── */}
+                  {showInventory && inventoryText && (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border">
+                        <span className="text-xs font-mono font-semibold">Ansible Inventory</span>
+                        <div className="flex gap-1">
+                          <Button size="icon-sm" variant="ghost" onClick={() => downloadText(inventoryText, "inventory")}>
+                            <Download className="h-3 w-3" />
+                          </Button>
+                          <Button size="icon-sm" variant="ghost" onClick={() => setShowInventory(false)}>
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                      <pre className="p-3 text-xs font-mono overflow-auto max-h-48 bg-black/60">{inventoryText}</pre>
+                    </div>
+                  )}
+
+                  {/* ── VM table with console actions ────────────────────── */}
+                  <VMTable
+                    vms={vms}
+                    onRefresh={fetchRanges}
+                    onDownloadVv={handleDownloadVv}
+                    onOpenBrowser={handleOpenBrowser}
+                    downloadingVm={downloadingVm}
+                    openingVm={openingVm}
+                  />
+                </CardContent>
+              )}
+            </Card>
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+function StatCard({
+  title, value, icon, subtext,
+}: {
+  title: string
+  value: React.ReactNode
+  icon: React.ReactNode
+  subtext?: string
+}) {
+  return (
+    <Card className="glass-card">
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-muted-foreground">{title}</span>
+          {icon}
+        </div>
+        <div className="text-xl font-bold">{value}</div>
+        {subtext && <p className="text-xs text-muted-foreground mt-1">{subtext}</p>}
+      </CardContent>
+    </Card>
+  )
+}

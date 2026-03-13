@@ -1,0 +1,280 @@
+// Ludus API Types — matched to Ludus Server v2.x API responses
+
+export interface LudusVersion {
+  result: string
+  version?: string
+}
+
+export interface LudusError {
+  error: string
+}
+
+// ── Range / VM ────────────────────────────────────────────────────────────────
+
+export type RangeState =
+  | "DEPLOYING"
+  | "SUCCESS"
+  | "ERROR"
+  | "NEVER DEPLOYED"
+  | "ABORTED"
+  | "WAITING"
+
+/** VM as returned by GET /range */
+export interface VMObject {
+  ID: number
+  proxmoxID: number
+  rangeNumber: number
+  name: string
+  poweredOn: boolean
+  ip: string
+  // Derived helpers (populated client-side)
+  vmName?: string
+  powerState?: "running" | "stopped"
+}
+
+/** Range as returned by GET /range (v2) */
+export interface RangeObject {
+  rangeID: string
+  name: string
+  rangeNumber: number
+  rangeState: RangeState
+  lastDeployment?: string
+  numberOfVMs?: number
+  testingEnabled?: boolean
+  description?: string
+  purpose?: string
+  VMs: VMObject[]
+  allowedDomains?: string[]
+  allowedIPs?: string[]
+  // Legacy aliases
+  userID?: string
+  vms?: VMObject[]
+}
+
+/** Entry from GET /ranges/accessible */
+export interface RangeAccessEntry {
+  rangeNumber: number
+  rangeID: string
+  accessType: "Direct" | "Group" | string
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+
+export interface TemplateObject {
+  name: string
+  built: boolean
+  status?: string
+  lastBuilt?: string
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+/** User as returned by GET /user (v2) */
+export interface UserObject {
+  userID: string
+  userNumber?: number
+  name?: string
+  isAdmin: boolean
+  proxmoxUsername?: string
+  portforwardingEnabled?: boolean
+  dateCreated?: string
+  dateLastActive?: string
+  // v2 extras
+  email?: string
+  defaultRangeID?: string
+  // Legacy aliases
+  rangeID?: string
+  lastActivity?: string
+}
+
+export interface UserAPIKeyObject {
+  result: string  // the API key string
+}
+
+// ── Ansible ───────────────────────────────────────────────────────────────────
+
+/** Ansible item as returned by GET /ansible (v2 — lowercase fields) */
+export interface AnsibleItem {
+  name: string
+  version: string
+  type: "role" | "collection"
+  // v2 does not include a 'global' field
+  global?: boolean
+  // Legacy uppercase aliases (v1 compat)
+  Name?: string
+  Version?: string
+  Type?: string
+  Global?: boolean
+}
+
+export interface AnsibleRole {
+  name: string
+  version?: string
+  source?: "galaxy" | "local"
+  scope?: "global" | "local"
+}
+
+export interface AnsibleCollection {
+  name: string
+  version?: string
+}
+
+// ── Snapshots ─────────────────────────────────────────────────────────────────
+
+/** Single snapshot entry as returned in the flat list from GET /snapshots/list (v2) */
+export interface SnapshotInfo {
+  name: string
+  description?: string
+  vmid?: number
+  vmname?: string
+  snaptime?: number          // unix timestamp
+  includesRAM?: boolean
+  parent?: string            // parent snapshot name
+}
+
+/** Response wrapper from GET /snapshots/list */
+export interface SnapshotListResponse {
+  snapshots: SnapshotInfo[]
+}
+
+export interface SnapshotCreatePayload {
+  vmNames?: string[]
+  snapshotName: string
+  description?: string
+  includeRAM?: boolean
+}
+
+// ── Blueprints ────────────────────────────────────────────────────────────────
+
+/** v2 blueprint list item — returned by GET /blueprints */
+export interface BlueprintListItem {
+  id: string
+  blueprintID?: string
+  name?: string
+  description?: string
+  ownerID?: string
+  access?: "admin" | "owner" | "direct" | "group" | string
+  sharedUsers?: number
+  sharedGroups?: number
+  updatedAt?: string
+  created?: string
+  updated?: string
+}
+
+export interface BlueprintAccessUserItem {
+  userID: string
+  name?: string
+  access: string
+  groups?: string[]
+}
+
+// ── Groups ────────────────────────────────────────────────────────────────────
+
+/** v2 group object */
+export interface GroupObject {
+  id?: string
+  groupName?: string
+  name?: string
+  managers?: string[]
+  members?: string[]
+  ranges?: string[]
+}
+
+// ── Testing ───────────────────────────────────────────────────────────────────
+
+export interface TestingStatus {
+  testingEnabled: boolean
+  allowedDomains: string[]
+  allowedIPs: string[]
+}
+
+// ── Deploy ────────────────────────────────────────────────────────────────────
+
+export interface DeployOptions {
+  tags?: string[]
+  limit?: string
+}
+
+// ── KMS ───────────────────────────────────────────────────────────────────────
+
+export interface KMSStatus {
+  enabled: boolean
+  vmID?: number
+}
+
+// ── Misc ──────────────────────────────────────────────────────────────────────
+
+export interface RangeAccessUser {
+  userID: string
+  name?: string
+  access: string
+}
+
+export interface LogLine {
+  timestamp?: string
+  level?: "INFO" | "WARNING" | "ERROR" | "DEBUG"
+  message: string
+  raw: string
+}
+
+export type PowerAction = "on" | "off"
+
+// ── GOAD ──────────────────────────────────────────────────────────────────────
+
+// String aliases — actual values are discovered dynamically from the server's
+// GOAD directory (e.g. /opt/goad-mod/ad/ and /opt/goad-mod/extensions/).
+export type GoadLabType = string
+export type GoadExtension = string
+
+export type GoadInstanceStatus = "CREATED" | "PROVIDED" | "READY"
+
+export interface GoadInstance {
+  instanceId: string
+  lab: GoadLabType
+  provider: string
+  provisioner: string
+  ipRange: string
+  status: GoadInstanceStatus
+  isDefault: boolean
+  extensions: GoadExtension[]
+  /** Linux username that owns the instance workspace directory */
+  ownerUserId?: string
+  /**
+   * Ludus rangeID (Proxmox pool name, e.g. "smeowden") for the range this
+   * GOAD instance was deployed to. Populated by correlating ipRange with
+   * GET /range/all — set once the instance has been "provided" (ip_range known).
+   */
+  ludusRangeId?: string
+}
+
+/** A lab discovered from <goadPath>/ad/<LabName>/data/config.json */
+export interface GoadLabDef {
+  name: string
+  description: string
+  vmCount: number
+  domains: number
+}
+
+/** An extension discovered from <goadPath>/extensions/<ext>/config.json */
+export interface GoadExtensionDef {
+  name: string
+  description: string
+  machines: string[]
+  /** Lab names this extension is compatible with; "*" means all */
+  compatibility: string[]
+  impact: string
+}
+
+/** Full catalog returned by GET /api/goad/catalog */
+export interface GoadCatalog {
+  configured: boolean
+  goadPath: string
+  labs: GoadLabDef[]
+  extensions: GoadExtensionDef[]
+}
+
+export interface GoadCommand {
+  command: string
+  args?: string[]
+  instanceId?: string
+}

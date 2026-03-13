@@ -1,0 +1,41 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Next.js
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Build
+dist/
+
+# Secrets (keep the directory but not the keys)
+ssh/*.pem
+ssh/*.key
+ssh/id_*
+ssh/*.p12
+!ssh/.gitkeep
+
+# TLS certificates (keep the directory but not the cert files)
+certificates/*.pem
+certificates/*.key
+certificates/*.crt
+certificates/*.p12
+!certificates/.gitkeep
+
+# Persistent data (SQLite DB — volume-mounted at runtime, not committed to git)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Developer docs (internal notes, not for end users)
+docs/CURRENT_STATUS.md

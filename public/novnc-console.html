@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VM Console</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: #09090b; color: #fafafa; height: 100vh; overflow: hidden; font-family: monospace; }
+    #screen { width: 100vw; height: 100vh; }
+    #overlay {
+      position: fixed; inset: 0; background: #09090b;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; z-index: 100; transition: opacity 0.3s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+    .spinner {
+      width: 40px; height: 40px; border: 3px solid #27272a;
+      border-top-color: #a78bfa; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #msg  { font-size: 13px; color: #a1a1aa; max-width: 420px; text-align: center; line-height: 1.6; }
+    #err  { font-size: 13px; color: #f87171; max-width: 460px; text-align: center; line-height: 1.6; }
+    #hint { font-size: 12px; color: #71717a; max-width: 460px; text-align: center; line-height: 1.7; }
+    #hint a { color: #c4b5fd; }
+    #hint code { background: #18181b; padding: 1px 5px; border-radius: 3px; color: #c4b5fd; }
+    .btn {
+      margin-top: 4px; padding: 7px 20px; font-size: 12px; font-family: monospace;
+      border: 1px solid #3f3f46; background: transparent; color: #d4d4d8;
+      border-radius: 6px; cursor: pointer;
+    }
+    .btn:hover { background: #27272a; }
+    #badge {
+      position: fixed; bottom: 10px; right: 14px;
+      background: rgba(0,0,0,0.7); border: 1px solid #27272a;
+      border-radius: 4px; padding: 4px 10px;
+      font-size: 11px; color: #4ade80; display: flex; align-items: center; gap: 6px;
+      pointer-events: none; z-index: 200; transition: opacity 1s;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; animation: pulse 1.5s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="spinner" id="spinner"></div>
+    <div id="msg">Loading VNC viewer…</div>
+    <div id="err"  style="display:none"></div>
+    <div id="hint" style="display:none"></div>
+    <button class="btn" id="retryBtn" style="display:none" onclick="window.location.reload()">↺ Retry</button>
+  </div>
+
+  <div id="screen"></div>
+  <div id="badge" style="display:none">
+    <span class="dot"></span>
+    <span id="badge-label">Connected</span>
+  </div>
+
+  <script type="module">
+    const params  = new URLSearchParams(window.location.search)
+    const vmId    = params.get('vmId')
+    const vmName  = params.get('vmName') || `vm-${vmId}`
+
+    const overlay  = document.getElementById('overlay')
+    const spinner  = document.getElementById('spinner')
+    const msg      = document.getElementById('msg')
+    const err      = document.getElementById('err')
+    const hint     = document.getElementById('hint')
+    const retryBtn = document.getElementById('retryBtn')
+    const badge    = document.getElementById('badge')
+    const screen   = document.getElementById('screen')
+
+    function showError(message, hintHtml) {
+      spinner.style.display = 'none'
+      msg.style.display     = 'none'
+      err.style.display     = 'block'
+      err.textContent       = message
+      if (hintHtml) { hint.style.display = 'block'; hint.innerHTML = hintHtml }
+      retryBtn.style.display = 'inline-block'
+    }
+
+    if (!vmId) { showError('No vmId parameter provided.', null); throw new Error('no vmId') }
+
+    // ── Load noVNC ────────────────────────────────────────────────────────────
+    let RFB
+    try {
+      const m = await import('/novnc/rfb.js')
+      // esbuild CJS→ESM: handle potential double-wrap of the default export
+      RFB = typeof m.default === 'function' ? m.default : m.default?.default
+    } catch (e) {
+      showError(
+        `Failed to load VNC viewer library: ${e.message}`,
+        'The noVNC files may be missing. Try rebuilding the Docker image.',
+      )
+      throw e
+    }
+
+    // ── Fetch VNC ticket + proxy token from our server ────────────────────────
+    msg.textContent = `Requesting VNC ticket for ${vmName}…`
+    let info
+    try {
+      const res = await fetch(
+        `/api/console/vnc-info?vmId=${encodeURIComponent(vmId)}&vmName=${encodeURIComponent(vmName)}`,
+      )
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || `HTTP ${res.status}`)
+      }
+      info = await res.json()
+    } catch (e) {
+      showError(`Failed to get VNC ticket: ${e.message}`, null)
+      throw e
+    }
+
+    // ── Connect via our server-side WebSocket proxy ───────────────────────────
+    // The proxy adds the PVEAuthCookie Proxmox requires.  The browser never
+    // needs to trust Proxmox's self-signed cert — all traffic goes through
+    // our own server over the existing HTTP connection.
+    msg.textContent = `Connecting to ${vmName}…`
+
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl   = `${wsProto}//${window.location.host}/api/vnc-ws?token=${encodeURIComponent(info.token)}`
+
+    let rfb
+    try {
+      rfb = new RFB(screen, wsUrl, { credentials: { password: info.ticket } })
+    } catch (e) {
+      showError(`Failed to init noVNC: ${e.message}`, null)
+      throw e
+    }
+
+    rfb.scaleViewport = true
+    rfb.resizeSession = true
+
+    rfb.addEventListener('connect', () => {
+      overlay.classList.add('hidden')
+      badge.style.display = 'flex'
+      document.getElementById('badge-label').textContent = `${vmName} · Connected`
+      setTimeout(() => { badge.style.opacity = '0' }, 5000)
+    })
+
+    rfb.addEventListener('disconnect', (e) => {
+      badge.style.display = 'none'
+      const clean = e.detail?.clean
+      showError(
+        clean ? 'Disconnected from VM.' : 'Connection closed unexpectedly.',
+        clean
+          ? null
+          : 'The VM may have powered off, or the session timed out. Click Retry to reconnect.',
+      )
+    })
+
+    rfb.addEventListener('credentialsrequired', () => {
+      rfb.sendCredentials({ password: info.ticket })
+    })
+
+    rfb.addEventListener('securityfailure', (e) => {
+      showError(
+        `VNC security negotiation failed: ${e.detail?.reason || 'unknown'}`,
+        'The VNC ticket may have expired (30-second window). Click Retry to request a fresh ticket.',
+      )
+    })
+  </script>
+</body>
+</html>

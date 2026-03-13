@@ -1,0 +1,42 @@
+Ludus UX
+Copyright (C) 2026 Ludus UX Contributors
+
+This software is licensed under the GNU Affero General Public License v3.0
+or later. See the LICENSE file for full terms.
+
+===============================================================================
+THIRD-PARTY SOFTWARE NOTICES
+===============================================================================
+
+This product interacts with the following external projects over network
+interfaces (no source code from these projects is incorporated):
+
+  Ludus — https://github.com/badsectorlabs/ludus
+  Copyright (C) Bad Sector Labs
+  Licensed under the GNU Affero General Public License v3.0
+
+  GOAD (Game of Active Directory) — https://github.com/Orange-Cyberdefense/GOAD
+  Copyright (C) Orange Cyberdefense
+  Licensed under the GNU General Public License v3.0
+
+-------------------------------------------------------------------------------
+This product includes software developed by third parties and distributed
+under MIT-compatible licenses:
+
+  Next.js — https://github.com/vercel/next.js (MIT)
+  React — https://github.com/facebook/react (MIT)
+  Tailwind CSS — https://github.com/tailwindlabs/tailwindcss (MIT)
+  shadcn/ui — https://github.com/shadcn-ui/ui (MIT)
+  Radix UI — https://github.com/radix-ui/primitives (MIT)
+  Monaco Editor — https://github.com/microsoft/monaco-editor (MIT)
+  ssh2 — https://github.com/mscdex/ssh2 (MIT)
+  iron-session — https://github.com/vvo/iron-session (MIT)
+  lucide-react — https://github.com/lucide-icons/lucide (ISC)
+  xterm.js — https://github.com/xtermjs/xterm.js (MIT)
+  Recharts — https://github.com/recharts/recharts (MIT)
+  Zod — https://github.com/colinhacks/zod (MIT)
+  date-fns — https://github.com/date-fns/date-fns (MIT)
+  js-yaml — https://github.com/nodeca/js-yaml (MIT)
+  ws — https://github.com/websockets/ws (MIT)
+
+See each project's repository for the full text of their respective licenses.

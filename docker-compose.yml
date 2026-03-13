@@ -20,9 +20,9 @@ services:
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
       # Session encryption secret (change this!)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}
-      # Ludus API endpoints
-      - LUDUS_URL=${LUDUS_URL:-https://198.51.100.1:8080}
-      - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-}
+      # Ludus API endpoints — constructed from LUDUS_SSH_HOST so only one var is needed
+      - LUDUS_URL=https://${LUDUS_SSH_HOST}:8080
+      - LUDUS_ADMIN_URL=https://${LUDUS_SSH_HOST}:8081
       - LUDUS_VERIFY_TLS=${LUDUS_VERIFY_TLS:-false}
       # ROOT API key for Ludus v2 admin operations (user management)
       - LUDUS_ROOT_API_KEY=${LUDUS_ROOT_API_KEY:-}

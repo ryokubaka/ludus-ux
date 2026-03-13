@@ -193,6 +193,21 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON pending_allow_ops(rangeId, username);
       `)
     },
+
+    // v5 — Range ownership overrides: admin-confirmed assignments that survive
+    // container restarts even when Ludus API doesn't surface userID in responses.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS range_ownership (
+          rangeID     TEXT    NOT NULL PRIMARY KEY,
+          userID      TEXT    NOT NULL,
+          assignedBy  TEXT    NOT NULL DEFAULT 'admin',
+          assignedAt  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_range_ownership_user
+          ON range_ownership(userID);
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

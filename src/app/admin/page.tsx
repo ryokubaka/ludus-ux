@@ -42,21 +42,10 @@ interface ImpersonateTarget {
   displayName: string
 }
 
-// ── Module-level state — survives component unmount/remount and navigation ────
-// Both the cache and pinned assignments must live here; a useRef resets to its
-// initial value whenever the component unmounts (navigating away and back).
-
-interface AdminCache {
-  ranges: RangeObject[]
-  users: UserObject[]
-  ts: number
-}
-let _adminCache: AdminCache | null = null
-const CACHE_TTL_MS = 45_000 // 45 s — serve stale instantly, revalidate in background
-
-// rangeID → userID: assignments confirmed via the UI that the Ludus API may not
-// immediately reflect in GET /range/all responses.
-const _pinnedAssignments = new Map<string, string>()
+// Optimistic-UI overlay: records assignments made in this tab session so they
+// appear immediately without waiting for the server to revalidate its cache.
+// The server-side SQLite store is the real persistence layer.
+const _pinnedAssignments = new Map<string, string>() // rangeID → userID
 
 export default function AdminRangesPage() {
   const { toast } = useToast()
@@ -82,129 +71,61 @@ export default function AdminRangesPage() {
   const [assignTarget, setAssignTarget] = useState<string>("")
   const [assignInProgress, setAssignInProgress] = useState(false)
 
-  const buildUserRangeMap = useCallback((fetchedRanges: RangeObject[], fetchedUsers: UserObject[]) => {
-    const map = new Map<string, Set<string>>()
-    for (const u of fetchedUsers) map.set(u.userID, new Set())
-
-    const claimed = new Set<string>()
-
-    // Heuristic 1: range.userID explicitly set by Ludus in GET /range/all
-    for (const range of fetchedRanges) {
-      const owner = (range.userID || (range as RangeObject & { ownerID?: string; owner?: string }).ownerID || (range as RangeObject & { owner?: string }).owner) as string | undefined
-      if (owner && map.has(owner)) {
-        map.get(owner)!.add(range.rangeID)
-        claimed.add(range.rangeID)
-      }
-    }
-
-    // Heuristic 2: range.rangeID === user.userID (Ludus convention: primary range = username)
-    for (const range of fetchedRanges) {
-      if (claimed.has(range.rangeID)) continue
-      if (map.has(range.rangeID)) {
-        map.get(range.rangeID)!.add(range.rangeID)
-        claimed.add(range.rangeID)
-      }
-    }
-
-    // Heuristic 3: user.defaultRangeID / user.rangeID
-    for (const user of fetchedUsers) {
-      const defRange = user.defaultRangeID || user.rangeID
-      if (defRange && !claimed.has(defRange) && map.has(user.userID)) {
-        map.get(user.userID)!.add(defRange)
-        claimed.add(defRange)
-      }
-    }
-
-    // Merge in any manually-pinned assignments from this session.
-    // This ensures assignments the user confirmed survive background API refreshes
-    // even when Ludus doesn't return userID for those ranges.
-    for (const [rangeID, ownerID] of _pinnedAssignments) {
-      if (!map.has(ownerID)) continue
-      for (const [, ids] of map) ids.delete(rangeID) // remove from any previous owner
-      map.get(ownerID)!.add(rangeID)
-      // Also patch the range object so unclaimedRanges excludes it
-      const idx = fetchedRanges.findIndex((r) => r.rangeID === rangeID)
-      if (idx !== -1 && !fetchedRanges[idx].userID) {
-        fetchedRanges[idx] = { ...fetchedRanges[idx], userID: ownerID }
-      }
-    }
-
-    applyUserRangeMap(map)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const applyUserRangeMap = useCallback((map: Map<string, Set<string>>) => {
-    setUserRangeIDs(map)
-    // Default all users to collapsed; user can expand individually
-    setExpandedUsers((prev) => {
-      // Preserve any rows the user already expanded (don't collapse on background refresh)
-      return new Set([...prev].filter((id) => map.has(id)))
-    })
-  }, [])
-
-  const applyData = useCallback((fetchedRanges: RangeObject[], fetchedUsers: UserObject[]) => {
+  // Apply server-returned data + merge optimistic pinned assignments for the current session.
+  const applyData = useCallback((
+    fetchedRanges: RangeObject[],
+    fetchedUsers: UserObject[],
+    serverOwnership: Record<string, string>,
+  ) => {
     setRanges(fetchedRanges)
     setUsers(fetchedUsers)
     setRangeByID(new Map(fetchedRanges.map((r) => [r.rangeID, r])))
-    buildUserRangeMap(fetchedRanges, fetchedUsers)
-  }, [buildUserRangeMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Build userID → Set<rangeID> from the server's authoritative ownership map,
+    // with optimistic session-local overrides on top.
+    const map = new Map<string, Set<string>>()
+    for (const u of fetchedUsers) map.set(u.userID, new Set())
+
+    const merged = { ...serverOwnership }
+    for (const [rid, uid] of _pinnedAssignments) merged[rid] = uid
+
+    for (const [rangeID, userID] of Object.entries(merged)) {
+      if (!map.has(userID)) map.set(userID, new Set())
+      // Remove from any previous owner first
+      for (const [uid, ids] of map) { if (uid !== userID) ids.delete(rangeID) }
+      map.get(userID)!.add(rangeID)
+    }
+
+    setUserRangeIDs(map)
+    // Preserve expanded rows the user already opened; don't collapse on background refresh
+    setExpandedUsers((prev) => new Set([...prev].filter((id) => map.has(id))))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Single server call replaces N Ludus API calls. Server-side caching (30 s)
+  // means the response is usually instant; ownership comes from SQLite so it
+  // persists across container restarts.
   const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
-    const now = Date.now()
-
-    // Serve stale cache instantly so the page feels responsive, then revalidate
-    if (_adminCache && now - _adminCache.ts < CACHE_TTL_MS) {
-      applyData(_adminCache.ranges, _adminCache.users)
-      if (!opts?.silent) setLoading(false)
-      // Still refresh in background to pick up changes
-    } else {
-      if (!opts?.silent) setLoading(true)
-    }
-
+    if (!opts?.silent) setLoading(true)
     setError(null)
-    const [rangesResult, usersResult] = await Promise.all([
-      ludusApi.listAllRanges(),
-      ludusApi.listAllUsers(),
-    ])
-
-    let fetchedRanges: RangeObject[] = []
-    let fetchedUsers: UserObject[] = []
-
-    if (rangesResult.error) {
-      setError(rangesResult.error)
-    } else if (rangesResult.data) {
-      fetchedRanges = Array.isArray(rangesResult.data) ? rangesResult.data : [rangesResult.data]
-    }
-    if (usersResult.data) {
-      fetchedUsers = Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data]
-    }
-
-    // For ranges that lack userID in the list response, fetch them individually.
-    // The single-range endpoint (GET /range?rangeID=X) may include owner info
-    // that the bulk endpoint omits. Cap at 20 concurrent requests to avoid overload.
-    const needsDetail = fetchedRanges.filter((r) => !r.userID).slice(0, 20)
-    if (needsDetail.length > 0) {
-      const details = await Promise.allSettled(
-        needsDetail.map((r) => ludusApi.getRangeStatus(r.rangeID))
-      )
-      for (let i = 0; i < needsDetail.length; i++) {
-        const result = details[i]
-        if (result.status === "fulfilled" && result.value.data) {
-          const detail = result.value.data as RangeObject & { ownerID?: string; owner?: string }
-          const owner = detail.userID || detail.ownerID || detail.owner
-          if (owner) {
-            const idx = fetchedRanges.findIndex((r) => r.rangeID === needsDetail[i].rangeID)
-            if (idx !== -1) fetchedRanges[idx] = { ...fetchedRanges[idx], userID: owner }
-          }
-        }
+    try {
+      const res = await fetch("/api/admin/ranges-data")
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        setError(d.error || `HTTP ${res.status}`)
+        return
       }
+      const data = await res.json() as {
+        ranges: RangeObject[]
+        users: UserObject[]
+        ownership: Record<string, string>
+      }
+      applyData(data.ranges ?? [], data.users ?? [], data.ownership ?? {})
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setLoading(false)
     }
-
-    // Update cache
-    _adminCache = { ranges: fetchedRanges, users: fetchedUsers, ts: Date.now() }
-
-    applyData(fetchedRanges, fetchedUsers)
-    setLoading(false)
-  }, [applyData]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [applyData])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -219,17 +140,8 @@ export default function AdminRangesPage() {
   const applyAssignment = useCallback((rangeID: string, userID: string) => {
     setAssigningRange(null)
     setAssignTarget("")
-    // Persist so background fetchData calls don't undo it (module-level, survives navigation)
+    // Optimistic local overlay — SQLite is the real persistent store now
     _pinnedAssignments.set(rangeID, userID)
-    // Bake into cache so the assignment is visible immediately on next page revisit
-    if (_adminCache) {
-      _adminCache = {
-        ..._adminCache,
-        ranges: _adminCache.ranges.map((r) =>
-          r.rangeID === rangeID ? { ...r, userID } : r
-        ),
-      }
-    }
     setUserRangeIDs((prev) => {
       const next = new Map(prev)
       if (!next.has(userID)) next.set(userID, new Set())
@@ -256,39 +168,49 @@ export default function AdminRangesPage() {
   const handleDeleteRange = async (rangeID: string) => {
     setDeletingRange(null)
     setDeleteConfirmText("")
-    // Also clear the pinned assignment for this range
     _pinnedAssignments.delete(rangeID)
+    // Delete the range from Ludus
     const res = await ludusApi.deleteRange(rangeID)
     if (res.error) {
       toast({ variant: "destructive", title: "Delete failed", description: res.error })
-    } else {
-      toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
-      _adminCache = null // Bust cache so next fetchData is fully fresh
-      fetchData()
+      return
     }
+    // Remove ownership record from SQLite + bust server cache
+    await fetch("/api/admin/ranges-data", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rangeID }),
+    }).catch(() => {}) // non-fatal
+    toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
+    fetchData()
   }
 
   const handleAssign = async (rangeID: string, userID: string) => {
     if (!userID) return
     setAssignInProgress(true)
-    const res = await ludusApi.assignRange(userID, rangeID)
-    setAssignInProgress(false)
-
-    const alreadyOwned = res.error?.toLowerCase().includes("already has access")
-
-    if (res.error && !alreadyOwned) {
-      toast({ variant: "destructive", title: "Assignment failed", description: res.error })
-      return
+    try {
+      const res = await fetch("/api/admin/ranges-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rangeID, userID }),
+      })
+      const data = await res.json() as { ok?: boolean; confirmed?: boolean; error?: string }
+      if (!res.ok && !data.confirmed) {
+        toast({ variant: "destructive", title: "Assignment failed", description: data.error })
+        return
+      }
+      toast({
+        title: data.confirmed ? "Ownership confirmed" : "Range assigned",
+        description: `${rangeID} → ${userID}`,
+      })
+      applyAssignment(rangeID, userID)
+      // Silent background refresh — server cache is already busted by POST handler
+      fetchData({ silent: true })
+    } catch (err) {
+      toast({ variant: "destructive", title: "Assignment failed", description: (err as Error).message })
+    } finally {
+      setAssignInProgress(false)
     }
-
-    // Success or "already has access" — both mean the relationship exists in Ludus
-    toast({
-      title: alreadyOwned ? "Ownership confirmed" : "Range assigned",
-      description: `${rangeID} → ${userID}`,
-    })
-    applyAssignment(rangeID, userID)
-    // Full refresh in background to sync any other fields (silent — no loading spinner)
-    fetchData({ silent: true })
   }
 
   /**
@@ -458,7 +380,7 @@ export default function AdminRangesPage() {
               <Users className="h-4 w-4 text-primary" />
               Users &amp; Ranges
             </CardTitle>
-            <Button variant="ghost" size="icon" onClick={() => { _adminCache = null; fetchData() }} disabled={loading}>
+            <Button variant="ghost" size="icon" onClick={() => fetchData()} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>

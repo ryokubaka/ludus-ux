@@ -39,3 +39,7 @@ Thumbs.db
 
 # Developer docs (internal notes, not for end users)
 docs/CURRENT_STATUS.md
+
+# Local sync scripts (machine-specific paths, not for the repo)
+sync-to-git.sh
+sync-to-git.ps1

@@ -8,7 +8,14 @@
 
 A web UI for [Ludus](https://docs.ludus.cloud) cyber range management. Replaces the CLI with a modern browser-based interface and adds [GOAD](https://github.com/Orange-Cyberdefense/GOAD) integration.
 
-> **Not affiliated with Ludus or GOAD.** This is an independent companion tool that communicates over the public Ludus REST API.
+---
+
+> [!WARNING]
+> **This project was largely vibe-coded (AI-assisted development) and has not undergone a formal security audit.**
+>
+> While I have gone through as much testing as I can, it does handle sensitive credentials — SSH passwords, API keys, session secrets — and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source code yourself before deploying it anywhere you care about.** Use it at your own risk. If you identify any issues or concerns, please raise an issue.
+>
+> This is an independent tool and is not affiliated with or endorsed by Ludus or GOAD.
 
 ---
 

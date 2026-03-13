@@ -7,11 +7,13 @@ import { Badge } from "@/components/ui/badge"
 import { LogViewer } from "@/components/range/log-viewer"
 import { Activity, RefreshCw, Trash2, Download } from "lucide-react"
 import { ludusApi, getImpersonationApiKey } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
 export default function LogsPage() {
   const { toast } = useToast()
+  const { selectedRangeId } = useRange()
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [rangeState, setRangeState] = useState<string>("")
@@ -49,7 +51,10 @@ export default function LogsPage() {
         const headers: Record<string, string> = {}
         if (impKey) headers["X-Impersonate-Apikey"] = impKey
 
-        const res = await fetch("/api/logs/stream", { signal: ctrl.signal, headers })
+        const streamUrl = selectedRangeId
+          ? `/api/logs/stream?rangeId=${selectedRangeId}`
+          : "/api/logs/stream"
+        const res = await fetch(streamUrl, { signal: ctrl.signal, headers })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const dec = new TextDecoder()
@@ -76,7 +81,7 @@ export default function LogsPage() {
         setIsStreaming(false)
       }
     })()
-  }, [loadLogs])
+  }, [loadLogs, selectedRangeId])
 
   const clearLogs = useCallback(() => setLines([]), [])
 
@@ -97,7 +102,7 @@ export default function LogsPage() {
   useEffect(() => {
     startStreaming()
     return () => abortRef.current?.abort()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [startStreaming])
 
   const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
 

@@ -10,6 +10,7 @@ interface UseDeployLogsOptions {
 export function useDeployLogs(options: UseDeployLogsOptions = {}) {
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
+  const [rangeState, setRangeState] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastCountRef = useRef(0)
   const onCompleteRef = useRef(options.onComplete)
@@ -23,16 +24,21 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
     setIsStreaming(false)
   }, [])
 
-  const startStreaming = useCallback(() => {
+  /**
+   * Start polling range logs. Pass an optional `rangeId` to scope to a
+   * specific range (e.g. from the GOAD deploy page where the range is known).
+   */
+  const startStreaming = useCallback((rangeId?: string) => {
     stopStreaming()
     lastCountRef.current = 0
     setIsStreaming(true)
+    setRangeState(null)
 
     const poll = async () => {
       try {
         const [logsResult, rangeResult] = await Promise.all([
-          ludusApi.getRangeLogs(),
-          ludusApi.getRangeStatus(),
+          ludusApi.getRangeLogs(rangeId),
+          ludusApi.getRangeStatus(rangeId),
         ])
 
         if (logsResult.data) {
@@ -46,6 +52,7 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
         }
 
         const state = (rangeResult.data as { rangeState?: string } | null)?.rangeState
+        if (state) setRangeState(state)
         if (state && state !== "DEPLOYING" && state !== "WAITING") {
           stopStreaming()
           onCompleteRef.current?.()
@@ -63,7 +70,8 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
   const clearLogs = useCallback(() => {
     setLines([])
     lastCountRef.current = 0
+    setRangeState(null)
   }, [])
 
-  return { lines, isStreaming, startStreaming, stopStreaming, clearLogs }
+  return { lines, isStreaming, rangeState, startStreaming, stopStreaming, clearLogs }
 }

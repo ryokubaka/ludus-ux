@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -27,6 +27,9 @@ import {
   KeyRound,
   X,
   UserCog,
+  ChevronRight,
+  ChevronDown,
+  Trash2,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
@@ -38,6 +41,22 @@ interface ImpersonateTarget {
   userID: string
   displayName: string
 }
+
+// ── Module-level state — survives component unmount/remount and navigation ────
+// Both the cache and pinned assignments must live here; a useRef resets to its
+// initial value whenever the component unmounts (navigating away and back).
+
+interface AdminCache {
+  ranges: RangeObject[]
+  users: UserObject[]
+  ts: number
+}
+let _adminCache: AdminCache | null = null
+const CACHE_TTL_MS = 45_000 // 45 s — serve stale instantly, revalidate in background
+
+// rangeID → userID: assignments confirmed via the UI that the Ludus API may not
+// immediately reflect in GET /range/all responses.
+const _pinnedAssignments = new Map<string, string>()
 
 export default function AdminRangesPage() {
   const { toast } = useToast()
@@ -51,30 +70,225 @@ export default function AdminRangesPage() {
   const [fetchingKey, setFetchingKey] = useState(false)
   const apiKeyInputRef = useRef<HTMLInputElement>(null)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
+  // rangeID → RangeObject lookup
+  const [rangeByID, setRangeByID] = useState<Map<string, RangeObject>>(new Map())
+  // userID → Set<rangeID> — built locally from range.userID + user.defaultRangeID
+  const [userRangeIDs, setUserRangeIDs] = useState<Map<string, Set<string>>>(new Map())
+  // which user rows are expanded
+  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set())
+
+  // assigning a range: rangeID → userID being assigned
+  const [assigningRange, setAssigningRange] = useState<string | null>(null)
+  const [assignTarget, setAssignTarget] = useState<string>("")
+  const [assignInProgress, setAssignInProgress] = useState(false)
+
+  const buildUserRangeMap = useCallback((fetchedRanges: RangeObject[], fetchedUsers: UserObject[]) => {
+    const map = new Map<string, Set<string>>()
+    for (const u of fetchedUsers) map.set(u.userID, new Set())
+
+    const claimed = new Set<string>()
+
+    // Heuristic 1: range.userID explicitly set by Ludus in GET /range/all
+    for (const range of fetchedRanges) {
+      const owner = (range.userID || (range as RangeObject & { ownerID?: string; owner?: string }).ownerID || (range as RangeObject & { owner?: string }).owner) as string | undefined
+      if (owner && map.has(owner)) {
+        map.get(owner)!.add(range.rangeID)
+        claimed.add(range.rangeID)
+      }
+    }
+
+    // Heuristic 2: range.rangeID === user.userID (Ludus convention: primary range = username)
+    for (const range of fetchedRanges) {
+      if (claimed.has(range.rangeID)) continue
+      if (map.has(range.rangeID)) {
+        map.get(range.rangeID)!.add(range.rangeID)
+        claimed.add(range.rangeID)
+      }
+    }
+
+    // Heuristic 3: user.defaultRangeID / user.rangeID
+    for (const user of fetchedUsers) {
+      const defRange = user.defaultRangeID || user.rangeID
+      if (defRange && !claimed.has(defRange) && map.has(user.userID)) {
+        map.get(user.userID)!.add(defRange)
+        claimed.add(defRange)
+      }
+    }
+
+    // Merge in any manually-pinned assignments from this session.
+    // This ensures assignments the user confirmed survive background API refreshes
+    // even when Ludus doesn't return userID for those ranges.
+    for (const [rangeID, ownerID] of _pinnedAssignments) {
+      if (!map.has(ownerID)) continue
+      for (const [, ids] of map) ids.delete(rangeID) // remove from any previous owner
+      map.get(ownerID)!.add(rangeID)
+      // Also patch the range object so unclaimedRanges excludes it
+      const idx = fetchedRanges.findIndex((r) => r.rangeID === rangeID)
+      if (idx !== -1 && !fetchedRanges[idx].userID) {
+        fetchedRanges[idx] = { ...fetchedRanges[idx], userID: ownerID }
+      }
+    }
+
+    applyUserRangeMap(map)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyUserRangeMap = useCallback((map: Map<string, Set<string>>) => {
+    setUserRangeIDs(map)
+    // Default all users to collapsed; user can expand individually
+    setExpandedUsers((prev) => {
+      // Preserve any rows the user already expanded (don't collapse on background refresh)
+      return new Set([...prev].filter((id) => map.has(id)))
+    })
+  }, [])
+
+  const applyData = useCallback((fetchedRanges: RangeObject[], fetchedUsers: UserObject[]) => {
+    setRanges(fetchedRanges)
+    setUsers(fetchedUsers)
+    setRangeByID(new Map(fetchedRanges.map((r) => [r.rangeID, r])))
+    buildUserRangeMap(fetchedRanges, fetchedUsers)
+  }, [buildUserRangeMap]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
+    const now = Date.now()
+
+    // Serve stale cache instantly so the page feels responsive, then revalidate
+    if (_adminCache && now - _adminCache.ts < CACHE_TTL_MS) {
+      applyData(_adminCache.ranges, _adminCache.users)
+      if (!opts?.silent) setLoading(false)
+      // Still refresh in background to pick up changes
+    } else {
+      if (!opts?.silent) setLoading(true)
+    }
+
     setError(null)
     const [rangesResult, usersResult] = await Promise.all([
       ludusApi.listAllRanges(),
       ludusApi.listAllUsers(),
     ])
+
+    let fetchedRanges: RangeObject[] = []
+    let fetchedUsers: UserObject[] = []
+
     if (rangesResult.error) {
       setError(rangesResult.error)
     } else if (rangesResult.data) {
-      setRanges(Array.isArray(rangesResult.data) ? rangesResult.data : [rangesResult.data])
+      fetchedRanges = Array.isArray(rangesResult.data) ? rangesResult.data : [rangesResult.data]
     }
     if (usersResult.data) {
-      setUsers(Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data])
+      fetchedUsers = Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data]
     }
+
+    // For ranges that lack userID in the list response, fetch them individually.
+    // The single-range endpoint (GET /range?rangeID=X) may include owner info
+    // that the bulk endpoint omits. Cap at 20 concurrent requests to avoid overload.
+    const needsDetail = fetchedRanges.filter((r) => !r.userID).slice(0, 20)
+    if (needsDetail.length > 0) {
+      const details = await Promise.allSettled(
+        needsDetail.map((r) => ludusApi.getRangeStatus(r.rangeID))
+      )
+      for (let i = 0; i < needsDetail.length; i++) {
+        const result = details[i]
+        if (result.status === "fulfilled" && result.value.data) {
+          const detail = result.value.data as RangeObject & { ownerID?: string; owner?: string }
+          const owner = detail.userID || detail.ownerID || detail.owner
+          if (owner) {
+            const idx = fetchedRanges.findIndex((r) => r.rangeID === needsDetail[i].rangeID)
+            if (idx !== -1) fetchedRanges[idx] = { ...fetchedRanges[idx], userID: owner }
+          }
+        }
+      }
+    }
+
+    // Update cache
+    _adminCache = { ranges: fetchedRanges, users: fetchedUsers, ts: Date.now() }
+
+    applyData(fetchedRanges, fetchedUsers)
     setLoading(false)
-  }, [])
+  }, [applyData]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  // Build userID → user name map
-  const userMap: Record<string, string> = {}
-  for (const u of users) {
-    userMap[u.userID.toLowerCase()] = u.name || u.userID
+  const toggleExpanded = (userID: string) =>
+    setExpandedUsers((prev) => {
+      const next = new Set(prev)
+      if (next.has(userID)) next.delete(userID)
+      else next.add(userID)
+      return next
+    })
+
+  const applyAssignment = useCallback((rangeID: string, userID: string) => {
+    setAssigningRange(null)
+    setAssignTarget("")
+    // Persist so background fetchData calls don't undo it (module-level, survives navigation)
+    _pinnedAssignments.set(rangeID, userID)
+    // Bake into cache so the assignment is visible immediately on next page revisit
+    if (_adminCache) {
+      _adminCache = {
+        ..._adminCache,
+        ranges: _adminCache.ranges.map((r) =>
+          r.rangeID === rangeID ? { ...r, userID } : r
+        ),
+      }
+    }
+    setUserRangeIDs((prev) => {
+      const next = new Map(prev)
+      if (!next.has(userID)) next.set(userID, new Set())
+      next.get(userID)!.add(rangeID)
+      // Remove from any other owner's set
+      for (const [uid, ids] of next) {
+        if (uid !== userID) ids.delete(rangeID)
+      }
+      return next
+    })
+    setRanges((prev) => prev.map((r) => r.rangeID === rangeID ? { ...r, userID } : r))
+    setRangeByID((prev) => {
+      const next = new Map(prev)
+      const r = next.get(rangeID)
+      if (r) next.set(rangeID, { ...r, userID })
+      return next
+    })
+    setExpandedUsers((prev) => new Set([...prev, userID]))
+  }, [])
+
+  const [deletingRange, setDeletingRange] = useState<string | null>(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState("")
+
+  const handleDeleteRange = async (rangeID: string) => {
+    setDeletingRange(null)
+    setDeleteConfirmText("")
+    // Also clear the pinned assignment for this range
+    _pinnedAssignments.delete(rangeID)
+    const res = await ludusApi.deleteRange(rangeID)
+    if (res.error) {
+      toast({ variant: "destructive", title: "Delete failed", description: res.error })
+    } else {
+      toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
+      _adminCache = null // Bust cache so next fetchData is fully fresh
+      fetchData()
+    }
+  }
+
+  const handleAssign = async (rangeID: string, userID: string) => {
+    if (!userID) return
+    setAssignInProgress(true)
+    const res = await ludusApi.assignRange(userID, rangeID)
+    setAssignInProgress(false)
+
+    const alreadyOwned = res.error?.toLowerCase().includes("already has access")
+
+    if (res.error && !alreadyOwned) {
+      toast({ variant: "destructive", title: "Assignment failed", description: res.error })
+      return
+    }
+
+    // Success or "already has access" — both mean the relationship exists in Ludus
+    toast({
+      title: alreadyOwned ? "Ownership confirmed" : "Range assigned",
+      description: `${rangeID} → ${userID}`,
+    })
+    applyAssignment(rangeID, userID)
+    // Full refresh in background to sync any other fields (silent — no loading spinner)
+    fetchData({ silent: true })
   }
 
   /**
@@ -128,6 +342,18 @@ export default function AdminRangesPage() {
   const totalVMs = ranges.reduce((sum, r) => sum + (r.VMs?.length || r.numberOfVMs || 0), 0)
   const deployedRanges = ranges.filter((r) => r.rangeState === "SUCCESS").length
   const deployingRanges = ranges.filter((r) => r.rangeState === "DEPLOYING" || r.rangeState === "WAITING").length
+
+  // Sorted users list — purely alphabetical by userID
+  const sortedUsers = useMemo(() =>
+    [...users].sort((a, b) => a.userID.localeCompare(b.userID)),
+  [users])
+
+  // Ranges with no known owner
+  const unclaimedRanges = useMemo(() => {
+    const claimed = new Set<string>()
+    for (const [, ids] of userRangeIDs) ids.forEach((id) => claimed.add(id))
+    return ranges.filter((r) => !claimed.has(r.rangeID))
+  }, [ranges, userRangeIDs])
 
   return (
     <div className="space-y-6">
@@ -224,15 +450,15 @@ export default function AdminRangesPage() {
         ))}
       </div>
 
-      {/* Ranges table */}
+      {/* Users + Ranges table — user-centric, ranges as sub-rows */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Server className="h-4 w-4 text-primary" />
-              All Ranges
+              <Users className="h-4 w-4 text-primary" />
+              Users &amp; Ranges
             </CardTitle>
-            <Button variant="ghost" size="icon" onClick={fetchData} disabled={loading}>
+            <Button variant="ghost" size="icon" onClick={() => { _adminCache = null; fetchData() }} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>
@@ -242,9 +468,9 @@ export default function AdminRangesPage() {
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : ranges.length === 0 ? (
+          ) : users.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground text-sm">
-              No ranges found. Users need to deploy ranges to appear here.
+              No users found.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -252,9 +478,9 @@ export default function AdminRangesPage() {
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
                     <th className="p-3 w-8"></th>
-                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Range ID</th>
-                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Name</th>
-                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Owner</th>
+                    <th className="p-3 w-24"></th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">User</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Ranges</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">VMs</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Running</th>
@@ -263,75 +489,352 @@ export default function AdminRangesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {ranges.map((range) => {
-                    const vms = range.VMs || range.vms || []
-                    const runningVMs = vms.filter((v) => v.poweredOn || v.powerState === "running").length
-                    const vmCount = vms.length || range.numberOfVMs || 0
-                    const owner = range.userID
-                      ? (userMap[range.userID.toLowerCase()] || range.userID)
-                      : (range.rangeID?.split("-")[0] || "—")
-                    const ownerID = range.userID || range.rangeID?.split("-")[0] || "unknown"
-                    const lastDeploy = range.lastDeployment
-                      ? new Date(range.lastDeployment).toLocaleString([], {
-                          month: "short", day: "numeric",
-                          hour: "2-digit", minute: "2-digit",
-                        })
+                  {sortedUsers.map((user) => {
+                    const userRanges = [...(userRangeIDs.get(user.userID) ?? [])]
+                      .map((rid) => rangeByID.get(rid))
+                      .filter(Boolean) as RangeObject[]
+                    const isExpanded = expandedUsers.has(user.userID)
+                    const totalUserVMs = userRanges.reduce((n, r) => n + (r.VMs?.length || r.numberOfVMs || 0), 0)
+                    const totalRunning = userRanges.reduce((n, r) => {
+                      const vms = r.VMs || r.vms || []
+                      return n + vms.filter((v) => v.poweredOn || v.powerState === "running").length
+                    }, 0)
+                    const anyTesting = userRanges.some((r) => r.testingEnabled)
+                    const lastDeploy = userRanges.reduce<string | null>((latest, r) => {
+                      if (!r.lastDeployment) return latest
+                      if (!latest || r.lastDeployment > latest) return r.lastDeployment
+                      return latest
+                    }, null)
+                    const lastDeployStr = lastDeploy
+                      ? new Date(lastDeploy).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
                       : "—"
+                    // Roll-up status from user's ranges
+                    const rolledState = userRanges.find((r) => r.rangeState === "DEPLOYING" || r.rangeState === "WAITING")?.rangeState
+                      ?? userRanges.find((r) => r.rangeState === "ERROR")?.rangeState
+                      ?? userRanges.find((r) => r.rangeState === "SUCCESS")?.rangeState
+                      ?? (userRanges.length > 0 ? "NEVER DEPLOYED" : null)
 
-                    return (
-                      <tr key={range.rangeID} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
-                        <td className="p-3">
+                    return [
+                      /* ── User row ── */
+                      <tr
+                        key={user.userID}
+                        className="border-b border-border/50 hover:bg-muted/20 cursor-pointer select-none"
+                        onClick={() => userRanges.length > 0 && toggleExpanded(user.userID)}
+                      >
+                        {/* Expand toggle */}
+                        <td className="p-3 w-8">
+                          {userRanges.length > 0 ? (
+                            isExpanded
+                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                          ) : (
+                            <span className="h-3.5 w-3.5 block" />
+                          )}
+                        </td>
+                        {/* Manage button — left of username */}
+                        <td className="p-2" onClick={(e) => e.stopPropagation()}>
                           <TooltipProvider delayDuration={200}>
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  className="h-6 w-6 text-primary/70 hover:text-primary hover:bg-primary/10"
-                                  onClick={() => startImpersonate(ownerID, owner)}
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
+                                  onClick={() => startImpersonate(user.userID, user.userID)}
                                 >
-                                  <UserCog className="h-3.5 w-3.5" />
+                                  <Terminal className="h-3 w-3" />
+                                  Manage
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="right" className="text-xs">
-                                Impersonate {owner}
+                                Manage Ludus as {user.userID}
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
                         </td>
+                        {/* User */}
                         <td className="p-3">
-                          <code className="font-mono text-xs text-primary">{range.rangeID || "—"}</code>
-                        </td>
-                        <td className="p-3 text-xs">{range.name || range.rangeID || "—"}</td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-1.5">
-                            <Users className="h-3 w-3 text-muted-foreground" />
-                            <span className="text-xs">{owner}</span>
+                          <div className="flex items-center gap-2">
+                            <UserCog className="h-3.5 w-3.5 text-primary flex-shrink-0" />
+                            <span className="text-xs font-semibold">{user.userID}</span>
+                            {user.isAdmin && <Badge variant="secondary" className="text-[9px] px-1 py-0">admin</Badge>}
                           </div>
                         </td>
+                        {/* Ranges count */}
                         <td className="p-3">
-                          <Badge className={cn("text-xs", getRangeStateBadge(range.rangeState || "NEVER DEPLOYED"))}>
+                          <span className="text-xs text-muted-foreground">
+                            {userRanges.length === 0 ? (
+                              <span className="italic">no ranges</span>
+                            ) : (
+                              <span className="font-medium text-foreground">{userRanges.length}</span>
+                            )}
+                          </span>
+                        </td>
+                        {/* Rolled-up status */}
+                        <td className="p-3">
+                          {rolledState ? (
+                            <Badge className={cn("text-[9px] px-1.5", getRangeStateBadge(rolledState))}>
+                              {rolledState.replace("NEVER DEPLOYED", "EMPTY")}
+                            </Badge>
+                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">{totalUserVMs || "—"}</td>
+                        <td className="p-3">
+                          {totalUserVMs > 0 ? (
+                            <span className={cn("text-xs font-medium", totalRunning > 0 ? "text-green-400" : "text-muted-foreground")}>
+                              {totalRunning} / {totalUserVMs}
+                            </span>
+                          ) : <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                        <td className="p-3">
+                          {anyTesting
+                            ? <Badge variant="warning" className="text-[9px] px-1.5">On</Badge>
+                            : <span className="text-xs text-muted-foreground">—</span>}
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">{lastDeployStr}</td>
+                      </tr>,
+
+                      /* ── Range sub-rows (shown when expanded) ── */
+                      ...(isExpanded ? userRanges
+                        .sort((a, b) => (b.rangeNumber || 0) - (a.rangeNumber || 0))
+                        .map((range) => {
+                          const vms = range.VMs || range.vms || []
+                          const runningVMs = vms.filter((v) => v.poweredOn || v.powerState === "running").length
+                          const vmCount = vms.length || range.numberOfVMs || 0
+                          const ipPrefix = range.rangeNumber ? `10.${range.rangeNumber}.*` : "—"
+                          const deployStr = range.lastDeployment
+                            ? new Date(range.lastDeployment).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                            : "—"
+                          return (
+                            <tr key={`${user.userID}-${range.rangeID}`} className="border-b border-border/30 bg-muted/10 hover:bg-muted/20">
+                              <td className="p-0" />
+                              <td className="p-0" />
+                              {/* Range ID with indented styling */}
+                              <td className="p-3 pl-8" colSpan={1}>
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-px h-4 bg-border/60 mr-1" />
+                                  <Server className="h-3 w-3 text-primary/70 flex-shrink-0" />
+                                  <code className="font-mono text-xs text-primary">{range.rangeID}</code>
+                                  {ipPrefix !== "—" && (
+                                    <code className="text-[10px] text-muted-foreground font-mono">{ipPrefix}</code>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="p-3 text-xs text-muted-foreground">{range.name || range.rangeID}</td>
+                              <td className="p-3">
+                                <Badge className={cn("text-[9px] px-1.5", getRangeStateBadge(range.rangeState || "NEVER DEPLOYED"))}>
+                                  {range.rangeState || "NEVER DEPLOYED"}
+                                </Badge>
+                              </td>
+                              <td className="p-3 text-xs text-muted-foreground">{vmCount}</td>
+                              <td className="p-3">
+                                {vmCount > 0 ? (
+                                  <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-green-400" : "text-muted-foreground")}>
+                                    {runningVMs} / {vmCount}
+                                  </span>
+                                ) : <span className="text-xs text-muted-foreground">—</span>}
+                              </td>
+                              <td className="p-3">
+                                {range.testingEnabled
+                                  ? <Badge variant="warning" className="text-[9px] px-1.5">On</Badge>
+                                  : <span className="text-xs text-muted-foreground">Off</span>}
+                              </td>
+                              <td className="p-3 text-xs text-muted-foreground">{deployStr}</td>
+                              {/* Delete range */}
+                              <td className="p-2 text-right">
+                                {deletingRange === range.rangeID ? (
+                                  <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                                    <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
+                                    <Input
+                                      value={deleteConfirmText}
+                                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                                      className="h-6 w-28 text-xs font-mono border-red-500/50"
+                                      placeholder={range.rangeID}
+                                      autoFocus
+                                    />
+                                    <Button
+                                      size="icon-sm"
+                                      variant="destructive"
+                                      className="h-6 w-6"
+                                      disabled={deleteConfirmText !== range.rangeID}
+                                      onClick={() => handleDeleteRange(range.rangeID)}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      size="icon-sm"
+                                      variant="ghost"
+                                      className="h-6 w-6 text-muted-foreground"
+                                      onClick={() => { setDeletingRange(null); setDeleteConfirmText("") }}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <TooltipProvider delayDuration={200}>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button
+                                          size="icon-sm"
+                                          variant="ghost"
+                                          className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                          onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="left" className="text-xs">
+                                        Delete range {range.rangeID}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        }) : []),
+                    ]
+                  })}
+
+                  {/* Unclaimed ranges — no owner known; show Assign button */}
+                  {unclaimedRanges.length > 0 && (
+                    <tr className="border-b border-border/50 bg-yellow-500/5">
+                      <td colSpan={9} className="px-3 py-1.5 text-[10px] text-yellow-500 uppercase tracking-wider font-semibold">
+                        Unassigned ranges — use the Assign button to link them to a user
+                      </td>
+                    </tr>
+                  )}
+                  {unclaimedRanges.map((range) => {
+                    const vms = range.VMs || range.vms || []
+                    const runningVMs = vms.filter((v) => v.poweredOn || v.powerState === "running").length
+                    const vmCount = vms.length || range.numberOfVMs || 0
+                    const ipPrefix = range.rangeNumber ? `10.${range.rangeNumber}.*` : "—"
+                    const deployStr = range.lastDeployment
+                      ? new Date(range.lastDeployment).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                      : "—"
+                    const isAssigning = assigningRange === range.rangeID
+                    return (
+                      <tr key={range.rangeID} className="border-b border-border/30 bg-yellow-500/5 hover:bg-yellow-500/10">
+                        <td className="p-3 w-8" />
+                        {/* Assign button or inline assign form */}
+                        <td className="p-2">
+                          {isAssigning ? (
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              <select
+                                value={assignTarget}
+                                onChange={(e) => setAssignTarget(e.target.value)}
+                                className="h-7 text-xs rounded border border-border bg-background px-1.5 max-w-[120px]"
+                              >
+                                <option value="">User...</option>
+                                {sortedUsers.map((u) => (
+                                  <option key={u.userID} value={u.userID}>{u.userID}</option>
+                                ))}
+                              </select>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="h-7 w-7 text-green-400 hover:text-green-300"
+                                disabled={!assignTarget || assignInProgress}
+                                onClick={() => handleAssign(range.rangeID, assignTarget)}
+                              >
+                                {assignInProgress ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="h-7 w-7 text-muted-foreground"
+                                onClick={() => { setAssigningRange(null); setAssignTarget("") }}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1.5 border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 text-xs whitespace-nowrap"
+                              onClick={() => { setAssigningRange(range.rangeID); setAssignTarget("") }}
+                            >
+                              <UserCog className="h-3 w-3" />
+                              Assign
+                            </Button>
+                          )}
+                        </td>
+                        <td className="p-3" colSpan={1}>
+                          <div className="flex items-center gap-1.5">
+                            <Server className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
+                            <code className="font-mono text-xs text-yellow-400">{range.rangeID}</code>
+                            {ipPrefix !== "—" && <code className="text-[10px] text-muted-foreground font-mono">{ipPrefix}</code>}
+                          </div>
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">{range.name || range.rangeID}</td>
+                        <td className="p-3">
+                          <Badge className={cn("text-[9px] px-1.5", getRangeStateBadge(range.rangeState || "NEVER DEPLOYED"))}>
                             {range.rangeState || "NEVER DEPLOYED"}
                           </Badge>
                         </td>
                         <td className="p-3 text-xs text-muted-foreground">{vmCount}</td>
                         <td className="p-3">
-                          {vmCount > 0 ? (
-                            <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-green-400" : "text-muted-foreground")}>
-                              {runningVMs} / {vmCount}
-                            </span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
+                          {vmCount > 0
+                            ? <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-green-400" : "text-muted-foreground")}>{runningVMs} / {vmCount}</span>
+                            : <span className="text-xs text-muted-foreground">—</span>}
                         </td>
                         <td className="p-3">
-                          {range.testingEnabled ? (
-                            <Badge variant="warning" className="text-xs">On</Badge>
+                          {range.testingEnabled
+                            ? <Badge variant="warning" className="text-[9px] px-1.5">On</Badge>
+                            : <span className="text-xs text-muted-foreground">Off</span>}
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">{deployStr}</td>
+                        {/* Delete range */}
+                        <td className="p-2 text-right">
+                          {deletingRange === range.rangeID ? (
+                            <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                              <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
+                              <Input
+                                value={deleteConfirmText}
+                                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                                className="h-6 w-28 text-xs font-mono border-red-500/50"
+                                placeholder={range.rangeID}
+                                autoFocus
+                              />
+                              <Button
+                                size="icon-sm"
+                                variant="destructive"
+                                className="h-6 w-6"
+                                disabled={deleteConfirmText !== range.rangeID}
+                                onClick={() => handleDeleteRange(range.rangeID)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="h-6 w-6 text-muted-foreground"
+                                onClick={() => { setDeletingRange(null); setDeleteConfirmText("") }}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
                           ) : (
-                            <span className="text-xs text-muted-foreground">Off</span>
+                            <TooltipProvider delayDuration={200}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    size="icon-sm"
+                                    variant="ghost"
+                                    className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                    onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent side="left" className="text-xs">
+                                  Delete range {range.rangeID}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           )}
                         </td>
-                        <td className="p-3 text-xs text-muted-foreground">{lastDeploy}</td>
                       </tr>
                     )
                   })}
@@ -341,93 +844,6 @@ export default function AdminRangesPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* Per-user range breakdown */}
-      {ranges.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {ranges.map((range) => {
-            const vms = range.VMs || range.vms || []
-            const running = vms.filter((v) => v.poweredOn || v.powerState === "running").length
-            const state = range.rangeState || "NEVER DEPLOYED"
-            const owner = range.userID
-              ? (userMap[range.userID.toLowerCase()] || range.userID)
-              : (range.rangeID?.split("-")[0] || "unknown")
-
-            return (
-              <Card key={range.rangeID} className="glass-card">
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Server className="h-3.5 w-3.5 text-primary" />
-                        <code className="font-mono text-xs font-semibold text-primary">{range.rangeID}</code>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
-                        <Users className="h-3 w-3" />
-                        {owner}
-                      </p>
-                    </div>
-                    <Badge className={cn("text-xs", getRangeStateBadge(state))}>{state}</Badge>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="bg-muted/30 rounded p-2">
-                      <p className="text-xs text-muted-foreground">VMs</p>
-                      <p className="font-bold text-sm">{vms.length || range.numberOfVMs || 0}</p>
-                    </div>
-                    <div className="bg-muted/30 rounded p-2">
-                      <p className="text-xs text-muted-foreground">Running</p>
-                      <p className={cn("font-bold text-sm", running > 0 ? "text-green-400" : "text-muted-foreground")}>
-                        {running}
-                      </p>
-                    </div>
-                    <div className="bg-muted/30 rounded p-2">
-                      <p className="text-xs text-muted-foreground">Testing</p>
-                      <p className="font-bold text-sm">
-                        {range.testingEnabled
-                          ? <CheckCircle2 className="h-4 w-4 text-yellow-400 mx-auto" />
-                          : <XCircle className="h-4 w-4 text-muted-foreground mx-auto" />}
-                      </p>
-                    </div>
-                  </div>
-
-                  {vms.length > 0 && (
-                    <div className="space-y-1">
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider">VMs</p>
-                      <div className="flex flex-wrap gap-1">
-                        {vms.slice(0, 8).map((vm) => (
-                          <Badge key={vm.ID} variant="secondary" className={cn(
-                            "text-xs font-mono",
-                            (vm.poweredOn || vm.powerState === "running") ? "border-green-500/30 text-green-400" : ""
-                          )}>
-                            {vm.name || `vm-${vm.ID}`}
-                          </Badge>
-                        ))}
-                        {vms.length > 8 && (
-                          <Badge variant="secondary" className="text-xs text-muted-foreground">+{vms.length - 8} more</Badge>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full gap-1.5 border-primary/30 text-primary hover:bg-primary/10"
-                    onClick={() => startImpersonate(
-                      range.userID || range.rangeID?.split("-")[0] || "unknown",
-                      owner
-                    )}
-                  >
-                    <Terminal className="h-3.5 w-3.5" />
-                    Manage Ludus Ranges as {owner}
-                  </Button>
-                </CardContent>
-              </Card>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }

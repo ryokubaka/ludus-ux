@@ -30,8 +30,10 @@ import {
   FileCode2,
   Download,
   X,
+  Trash2,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import type { RangeObject, VMObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
@@ -43,6 +45,7 @@ export default function DashboardPage() {
   const { toast } = useToast()
   const router = useRouter()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
+  const { selectedRangeId, ranges: accessibleRanges, loading: rangeCtxLoading } = useRange()
 
   // ── Global ─────────────────────────────────────────────────────────────────
   const [ranges, setRanges] = useState<RangeObject[]>([])
@@ -53,6 +56,8 @@ export default function DashboardPage() {
   const initialLoadDoneRef = useRef(false)
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0 && !selectedRangeId
 
   // ── Per-range expanded state (first range auto-expanded) ───────────────────
   const [expandedRanges, setExpandedRanges] = useState<Set<string>>(new Set())
@@ -92,33 +97,45 @@ export default function DashboardPage() {
 
   const applyRangeData = useCallback((r: RangeObject) => {
     const deduped = { ...r, VMs: dedupeVMs(r.VMs || (r as RangeObject & { vms?: VMObject[] }).vms || []) }
-    setRanges((prev) => {
-      if (prev.length === 0) {
-        setExpandedRanges((e) =>
-          e.size === 0 ? new Set([r.rangeID || r.name || "range-0"]) : e
-        )
-        return [deduped]
-      }
-      // Merge in-place so the accordion stays mounted (no flicker/remount)
-      return [{ ...prev[0], ...deduped }]
-    })
+    const rangeKey = r.rangeID || r.name || "range-0"
+    setRanges([deduped])
+    // Always ensure the current range is expanded (handles impersonation switches)
+    setExpandedRanges((e) => new Set([...e, rangeKey]))
     setLastRefreshed(new Date())
   }, [])
 
   const fetchRanges = useCallback(async () => {
-    // Prevent concurrent refreshes
     if (refreshingRef.current) return
     refreshingRef.current = true
     setError(null)
     const isInitial = !initialLoadDoneRef.current
     if (isInitial) setLoading(true)
     else setRefreshing(true)
+
+    if (hasNoRanges) {
+      const versionResult = await ludusApi.getVersion()
+      if (versionResult.data) {
+        setVersion(versionResult.data.result || versionResult.data.version || "")
+      }
+      setRanges([])
+      initialLoadDoneRef.current = true
+      if (isInitial) setLoading(false)
+      else setRefreshing(false)
+      refreshingRef.current = false
+      return
+    }
+
     const [rangeResult, versionResult] = await Promise.all([
-      ludusApi.getRangeStatus(),
+      ludusApi.getRangeStatus(selectedRangeId ?? undefined),
       ludusApi.getVersion(),
     ])
     if (rangeResult.error) {
-      setError(rangeResult.error)
+      if (rangeResult.status === 400 && !selectedRangeId) {
+        setRanges([])
+        initialLoadDoneRef.current = true
+      } else {
+        setError(rangeResult.error)
+      }
     } else if (rangeResult.data) {
       applyRangeData(rangeResult.data)
       initialLoadDoneRef.current = true
@@ -129,55 +146,63 @@ export default function DashboardPage() {
     if (isInitial) setLoading(false)
     else setRefreshing(false)
     refreshingRef.current = false
-  }, [applyRangeData])
+  }, [applyRangeData, selectedRangeId, hasNoRanges])
 
   const silentRefresh = useCallback(async () => {
-    if (refreshingRef.current) return
+    if (refreshingRef.current || hasNoRanges) return
     refreshingRef.current = true
     setRefreshing(true)
-    const result = await ludusApi.getRangeStatus()
+    const result = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
     if (!result.error && result.data) {
       applyRangeData(result.data)
     }
     refreshingRef.current = false
     setRefreshing(false)
-  }, [applyRangeData])
+  }, [applyRangeData, selectedRangeId, hasNoRanges])
 
   useEffect(() => {
+    if (rangeCtxLoading) return
+
+    initialLoadDoneRef.current = false
+    setRanges([])
+    setError(null)
+    setLoading(true)
+
     fetchRanges()
-    // On mount: check if a deployment is already in progress
-    const checkDeploy = async () => {
-      const r = await ludusApi.getRangeStatus()
-      if (r.data?.rangeState === "DEPLOYING") {
-        setDeploying(true)
-        setShowLogs(true)
-        startStreaming()
+    if (!hasNoRanges) {
+      const checkDeploy = async () => {
+        const r = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
+        if (r.data?.rangeState === "DEPLOYING") {
+          setDeploying(true)
+          setShowLogs(true)
+          startStreaming(selectedRangeId ?? undefined)
+        }
       }
+      checkDeploy()
     }
-    checkDeploy()
     const interval = setInterval(silentRefresh, 15000)
     return () => clearInterval(interval)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchRanges, silentRefresh])
+  }, [fetchRanges, silentRefresh, selectedRangeId, rangeCtxLoading, hasNoRanges])
 
   // ── Deploy actions ─────────────────────────────────────────────────────────
   const doDeploy = async () => {
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
-    const result = await ludusApi.deployRange()
+    const result = await ludusApi.deployRange(undefined, undefined, selectedRangeId ?? undefined)
     if (result.error) {
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
       setDeploying(false)
       return
     }
     toast({ title: "Deploy started" })
-    startStreaming()
+    startStreaming(selectedRangeId ?? undefined)
   }
   const handleDeploy = () => confirm("Start range deployment?", doDeploy)
 
   const doAbort = async () => {
-    const result = await ludusApi.abortDeploy()
+    const result = await ludusApi.abortDeploy(selectedRangeId ?? undefined)
     if (result.error) {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
@@ -188,6 +213,30 @@ export default function DashboardPage() {
   }
   const handleAbort = () => confirm("Abort the running deployment?", doAbort)
 
+  const doDeleteRange = async (rangeId: string, vmCount: number) => {
+    const result = await ludusApi.deleteRange(rangeId)
+    if (result.error) {
+      toast({ variant: "destructive", title: "Delete failed", description: result.error })
+    } else {
+      toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
+      fetchRanges()
+    }
+  }
+  const handleDeleteRange = (rangeId: string, rangeName: string, vmCount: number) =>
+    confirm(
+      [
+        `Permanently DELETE range "${rangeName}"?`,
+        "",
+        `This will:`,
+        `  • Power off and destroy all ${vmCount} VM${vmCount !== 1 ? "s" : ""}`,
+        `  • Remove the Proxmox pool "${rangeId}"`,
+        `  • Remove the range record from the database`,
+        "",
+        `This CANNOT be undone.`,
+      ].join("\n"),
+      () => doDeleteRange(rangeId, vmCount)
+    )
+
   const doPowerAll = async (action: "on" | "off") => {
     const vmNames = (primaryRange?.VMs || (primaryRange as RangeObject & { vms?: VMObject[] })?.vms || [])
       .map((v: VMObject) => v.name || `vm-${v.ID}`)
@@ -196,7 +245,7 @@ export default function DashboardPage() {
       toast({ variant: "destructive", title: "No VMs", description: "No VMs in this range to power " + action })
       return
     }
-    const result = action === "on" ? await ludusApi.powerOn(vmNames) : await ludusApi.powerOff(vmNames)
+    const result = action === "on" ? await ludusApi.powerOn(vmNames, selectedRangeId ?? undefined) : await ludusApi.powerOff(vmNames, selectedRangeId ?? undefined)
     if (result.error) {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
@@ -328,9 +377,14 @@ export default function DashboardPage() {
         </div>
       ) : ranges.length === 0 ? (
         <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
+          <CardContent className="py-12 text-center text-muted-foreground space-y-3">
             <Server className="h-10 w-10 mx-auto mb-3 opacity-40" />
-            <p>No ranges available. Deploy a range to get started.</p>
+            <p>No ranges available yet.</p>
+            <Link href="/range/new">
+              <Button className="gap-1.5">
+                <Play className="h-3.5 w-3.5" /> Deploy a New Range
+              </Button>
+            </Link>
           </CardContent>
         </Card>
       ) : (
@@ -418,6 +472,20 @@ export default function DashboardPage() {
                         <Shield className="h-3 w-3" /> Testing Mode
                       </Badge>
                     )}
+                    {/* Destructive zone — separated to avoid accidental clicks */}
+                    <div className="w-px h-6 bg-border/60 mx-1 self-center" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-red-400/70 hover:text-red-400 hover:bg-red-400/10 border border-transparent hover:border-red-400/30"
+                      disabled={!!pendingAction || state === "DEPLOYING"}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeleteRange(range.rangeID || rangeKey, range.name || range.rangeID || rangeKey, vms.length)
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete Range
+                    </Button>
                   </div>
 
                   {/* ── Deploy logs ─────────────────────────────────────── */}

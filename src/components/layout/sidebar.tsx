@@ -10,10 +10,12 @@ import {
   Shield,
   Camera,
   BookTemplate,
+  Server,
   Users,
   Users2,
   Package,
   Zap,
+  Plus,
   Settings,
   Terminal,
   ChevronRight,
@@ -24,6 +26,7 @@ import {
 } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
+import { useRange } from "@/lib/range-context"
 
 interface NavItem {
   href: string
@@ -47,6 +50,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Range Management",
     items: [
+      { href: "/range/new", label: "Deploy New Range", icon: Plus },
       { href: "/range/config", label: "Configuration", icon: FileCode2 },
       { href: "/templates", label: "Templates", icon: BookTemplate },
       { href: "/testing", label: "Testing Mode", icon: Shield },
@@ -83,8 +87,9 @@ export function Sidebar() {
   const pathname = usePathname()
   const [isAdmin, setIsAdmin] = useState(false)
   const [hasCustomLogo, setHasCustomLogo] = useState(false)
-  // Use a cache-busting key so the <img> refreshes after an upload/delete
   const [logoKey, setLogoKey] = useState(0)
+  const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
+  const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
 
   useEffect(() => {
     fetch("/api/auth/session")
@@ -99,7 +104,6 @@ export function Sidebar() {
       .catch(() => setHasCustomLogo(false))
   }, [logoKey])
 
-  // Let the settings page trigger a logo refresh
   useEffect(() => {
     const handler = () => setLogoKey((k) => k + 1)
     window.addEventListener("logo-updated", handler)
@@ -125,6 +129,47 @@ export function Sidebar() {
       </Link>
 
       <Separator className="bg-sidebar-border" />
+
+      {/* Range selector */}
+      {!rangesLoading && ranges.length > 0 && (
+        <div className="px-3 py-2">
+          <p className="px-3 mb-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            Active Range
+          </p>
+          <div className="relative">
+            <button
+              onClick={() => setRangeDropdownOpen((o) => !o)}
+              className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium
+                         bg-sidebar-accent/50 hover:bg-sidebar-accent text-sidebar-foreground transition-colors"
+            >
+              <Server className="h-4 w-4 text-primary flex-shrink-0" />
+              <span className="flex-1 text-left truncate font-mono text-xs">
+                {selectedRangeId || "Select range"}
+              </span>
+              <ChevronRight className={cn("h-3 w-3 transition-transform", rangeDropdownOpen && "rotate-90")} />
+            </button>
+            {rangeDropdownOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-md border border-sidebar-border bg-sidebar shadow-lg py-1 max-h-48 overflow-y-auto">
+                {ranges.map((r) => (
+                  <button
+                    key={r.rangeID}
+                    onClick={() => { selectRange(r.rangeID); setRangeDropdownOpen(false) }}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
+                      r.rangeID === selectedRangeId
+                        ? "bg-primary/10 text-primary"
+                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                    )}
+                  >
+                    <span className="flex-1 text-left truncate">{r.rangeID}</span>
+                    <Badge variant="secondary" className="text-[10px] px-1 py-0">{r.accessType}</Badge>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-6">

@@ -245,9 +245,40 @@ export default function GoadInstancePage() {
   const handleDestroy = () =>
     confirm(`Permanently destroy instance ${instanceId}? This cannot be undone.`, async () => {
       await runAction("destroy", `-i ${instanceId} -t destroy`)
+      // Clean up the GOAD workspace directory so the instance disappears from the list
+      try {
+        await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+          body: JSON.stringify({}),
+        })
+      } catch {}
       toast({ title: "Lab destroyed" })
       router.push("/goad")
     })
+
+  const handleForceDelete = () =>
+    confirm(
+      `FORCE DELETE "${instanceId}"? This bypasses GOAD and directly destroys the Ludus range + workspace. Use only when normal destroy fails.`,
+      async () => {
+        try {
+          const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+            body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+          })
+          const result = await res.json()
+          if (result.errors?.length) {
+            toast({ title: "Force delete partially succeeded", description: result.errors.join("; "), variant: "destructive" })
+          } else {
+            toast({ title: "Instance force-deleted" })
+          }
+          router.push("/goad")
+        } catch (err) {
+          toast({ title: "Force delete failed", description: (err as Error).message, variant: "destructive" })
+        }
+      }
+    )
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === instance?.lab)
   const extMap: Record<string, GoadExtensionDef> = Object.fromEntries(
@@ -423,6 +454,15 @@ export default function GoadInstancePage() {
             >
               <Trash2 className="h-3.5 w-3.5" />
               Destroy
+            </Button>
+            <Button
+              size="sm" variant="outline"
+              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+              onClick={handleForceDelete} disabled={isRunning || !!pendingAction}
+              title="Force-delete: bypass GOAD and directly remove the Ludus range + workspace"
+            >
+              <X className="h-3.5 w-3.5" />
+              Force Delete
             </Button>
           </div>
         </CardContent>

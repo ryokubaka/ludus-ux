@@ -22,6 +22,7 @@ import {
   Info,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -72,6 +73,7 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
 
 export default function RangeConfigPage() {
   const { toast } = useToast()
+  const { selectedRangeId } = useRange()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const [config, setConfig] = useState("")
   const [originalConfig, setOriginalConfig] = useState("")
@@ -90,7 +92,7 @@ export default function RangeConfigPage() {
 
   const fetchConfig = useCallback(async () => {
     setLoading(true)
-    const result = await ludusApi.getRangeConfig()
+    const result = await ludusApi.getRangeConfig(selectedRangeId ?? undefined)
     if (result.data) {
       // v1 API returns {"result": "yaml string"}
       const raw = result.data as { result?: string } | string
@@ -103,7 +105,7 @@ export default function RangeConfigPage() {
       toast({ variant: "destructive", title: "Error loading config", description: result.error })
     }
     setLoading(false)
-  }, [toast])
+  }, [toast, selectedRangeId])
 
   // On mount: check if a deployment is already running so navigating
   // away and back doesn't lose the in-progress status.
@@ -124,7 +126,7 @@ export default function RangeConfigPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    const result = await ludusApi.setRangeConfig(config)
+    const result = await ludusApi.setRangeConfig(config, selectedRangeId ?? undefined)
     if (result.error) {
       toast({ variant: "destructive", title: "Save failed", description: result.error })
     } else {
@@ -145,7 +147,8 @@ export default function RangeConfigPage() {
     setDeploying(true)
     const result = await ludusApi.deployRange(
       selectedTags.length > 0 ? selectedTags : undefined,
-      limitVM || undefined
+      limitVM || undefined,
+      selectedRangeId ?? undefined
     )
     if (result.error) {
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
@@ -164,7 +167,7 @@ export default function RangeConfigPage() {
     )
 
   const doAbort = async () => {
-    await ludusApi.abortDeploy()
+    await ludusApi.abortDeploy(selectedRangeId ?? undefined)
     stopStreaming()
     setDeploying(false)
     toast({ title: "Deploy aborted" })

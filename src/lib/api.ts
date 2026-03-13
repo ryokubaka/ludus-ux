@@ -143,29 +143,78 @@ export const ludusApi = {
   listAccessibleRanges: () =>
     get<import("./types").RangeAccessEntry[]>("/ranges/accessible"),
 
+
   // Range config — GET /range/config → {"result":"yaml..."}
-  getRangeConfig: () => get<{ result: string }>("/range/config"),
-  setRangeConfig: (yaml: string) => put<{ result: string }>("/range/config", yaml),
+  getRangeConfig: (rangeId?: string) =>
+    get<{ result: string }>(rangeId ? `/range/config?rangeID=${rangeId}` : "/range/config"),
+
+  // Upload range config YAML (routed through dedicated endpoint that sends multipart/form-data)
+  setRangeConfig: async (yaml: string, rangeId?: string, force?: boolean): Promise<{ data?: { result: string }; error?: string; status: number }> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    Object.assign(headers, getImpersonationHeaders())
+    try {
+      const res = await fetch("/api/range/config", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ config: yaml, rangeId, force }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) return { error: data?.error || `HTTP ${res.status}`, status: res.status }
+      return { data, status: res.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+
+  // Delete a range — destroys all VMs, removes Proxmox pool, removes PocketBase record.
+  // force=true is required to delete even when VMs still exist.
+  deleteRange: (rangeId: string) =>
+    del(`/range?rangeID=${encodeURIComponent(rangeId)}&force=true`),
 
   // Deployment
-  deployRange: (tags?: string[], limit?: string) =>
-    post("/range/deploy", tags?.length || limit ? { tags, limit } : undefined),
-  abortDeploy: () => post("/range/abort"),
+  deployRange: (tags?: string[], limit?: string, rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${rangeId}` : ""
+    return post(`/range/deploy${q}`, tags?.length || limit ? { tags, limit } : undefined)
+  },
+  abortDeploy: (rangeId?: string) =>
+    post(rangeId ? `/range/abort?rangeID=${rangeId}` : "/range/abort"),
 
   // Deploy tags — GET /range/tags
   getDeployTags: () => get<{ result: string }>("/range/tags"),
 
   // Logs — GET /range/logs → {"cursor":N,"result":"log text"}
-  getRangeLogs: () => get<{ cursor: number; result: string }>("/range/logs"),
+  getRangeLogs: (rangeId?: string) =>
+    get<{ cursor: number; result: string }>(rangeId ? `/range/logs?rangeID=${rangeId}` : "/range/logs"),
 
   // etc/hosts — GET /range/etchosts → {"result":"hosts string"}
-  getRangeEtcHosts: () => get<{ result: string }>("/range/etchosts"),
+  getRangeEtcHosts: (rangeId?: string) =>
+    get<{ result: string }>(rangeId ? `/range/etchosts?rangeID=${rangeId}` : "/range/etchosts"),
 
   // SSH config — GET /range/sshconfig
-  getRangeSSHConfig: () => get<{ result: string }>("/range/sshconfig"),
+  getRangeSSHConfig: (rangeId?: string) =>
+    get<{ result: string }>(rangeId ? `/range/sshconfig?rangeID=${rangeId}` : "/range/sshconfig"),
 
   // RDP configs — GET /range/rdpconfigs
-  getRangeRDPConfigs: () => get<{ result: string }>("/range/rdpconfigs"),
+  getRangeRDPConfigs: (rangeId?: string) =>
+    get<{ result: string }>(rangeId ? `/range/rdpconfigs?rangeID=${rangeId}` : "/range/rdpconfigs"),
+
+  // Range creation — routed through dedicated endpoint that proxies to admin API (port 8081)
+  createRange: async (data: { name: string; rangeID: string; description?: string; purpose?: string; userID?: string[] }): Promise<{ data?: { result: string }; error?: string; status: number }> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    Object.assign(headers, getImpersonationHeaders())
+    try {
+      const res = await fetch("/api/range/create", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(data),
+      })
+      const resData = await res.json().catch(() => null)
+      if (!res.ok) return { error: resData?.error || `HTTP ${res.status}`, status: res.status }
+      return { data: resData, status: res.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
 
   // Templates — GET /templates → [{name, built, status}]
   listTemplates: () => get<import("./types").TemplateObject[]>("/templates"),
@@ -211,10 +260,14 @@ export const ludusApi = {
     get<{ username: string; password: string }>("/user/credentials"),
 
   // Range power actions — PUT /range/poweron|poweroff with {"machines": [...names]}
-  powerOn: (vmNames?: string[]) =>
-    put("/range/poweron", { machines: vmNames ?? [] }),
-  powerOff: (vmNames?: string[]) =>
-    put("/range/poweroff", { machines: vmNames ?? [] }),
+  powerOn: (vmNames?: string[], rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${rangeId}` : ""
+    return put(`/range/poweron${q}`, { machines: vmNames ?? [] })
+  },
+  powerOff: (vmNames?: string[], rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${rangeId}` : ""
+    return put(`/range/poweroff${q}`, { machines: vmNames ?? [] })
+  },
 
   // Testing mode (rangeId selects which range in Ludus v2 multi-range environments)
   getTestingStatus: (rangeId?: string) =>
@@ -307,9 +360,10 @@ export const ludusApi = {
   getUserMemberships: () =>
     get<import("./types").GroupObject[]>("/user/memberships"),
 
-  // Range access sharing — v2: ranges/assign, ranges/revoke
+  // Range access sharing — v2: ranges/assign (admin only), ranges/revoke
+  // POST /ranges/assign/{userID}/{rangeID} is on port 8080 with admin API key auth
   assignRange: (userId: string, rangeId: string) =>
-    post(`/ranges/assign/${userId}/${rangeId}`),
+    post(`/ranges/assign/${encodeURIComponent(userId)}/${encodeURIComponent(rangeId)}`),
   revokeRange: (userId: string, rangeId: string) =>
     del(`/ranges/revoke/${userId}/${rangeId}`),
   listRangeUsers: (rangeId: string) =>

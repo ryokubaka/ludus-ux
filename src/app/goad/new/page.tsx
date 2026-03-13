@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { GoadTerminal, useGoadStream } from "@/components/goad/goad-terminal"
 import {
@@ -21,10 +20,14 @@ import {
   ArrowLeft,
   RefreshCw,
   Info,
+  StopCircle,
+  Server,
 } from "lucide-react"
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useDeployLogs } from "@/hooks/use-deploy-logs"
+import { useRange } from "@/lib/range-context"
 
 const STEPS = ["Select Lab Type", "Select Extensions", "Review & Deploy"]
 
@@ -34,11 +37,20 @@ function shellQuote(arg: string): string {
 
 export default function NewGoadInstancePage() {
   const router = useRouter()
+  const { selectedRangeId } = useRange()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
   const [deployed, setDeployed] = useState(false)
-  const { lines, isRunning, exitCode, run, clear } = useGoadStream("goad-task-new")
+  const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new")
+  const {
+    lines: rangeLogLines,
+    isStreaming: isRangeStreaming,
+    rangeState,
+    startStreaming: startRangeStreaming,
+    stopStreaming: stopRangeStreaming,
+    clearLogs: clearRangeLogs,
+  } = useDeployLogs()
 
   // Catalog state
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
@@ -89,15 +101,28 @@ export default function NewGoadInstancePage() {
     // goad.py -l <LAB> -p ludus -m local -t install [-e ext1 -e ext2 ...]
     const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
     const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
-    await run(args)
     setDeployed(true)
+    // Start range log streaming before GOAD so we catch Ludus VM provisioning
+    startRangeStreaming(selectedRangeId ?? undefined)
+    await run(args)
+  }
+
+  const handleStop = async () => {
+    await stop()
+    stopRangeStreaming()
   }
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)
 
+  const showTerminal = step === 2 && (deployed || isRunning)
+
   return (
-    <div className="max-w-3xl space-y-6">
-      <div className="flex items-center gap-3">
+    <div className={cn(
+      showTerminal
+        ? "flex flex-col h-[calc(100vh-7rem)] gap-3 min-h-0 w-full"
+        : "max-w-3xl space-y-6"
+    )}>
+      <div className="flex items-center gap-3 flex-shrink-0">
         <Button variant="ghost" size="icon-sm" asChild>
           <Link href="/goad">
             <ArrowLeft className="h-4 w-4" />
@@ -283,7 +308,7 @@ export default function NewGoadInstancePage() {
       )}
 
       {/* Step 2: Review & Deploy */}
-      {step === 2 && (
+      {step === 2 && !showTerminal && (
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
@@ -333,50 +358,81 @@ export default function NewGoadInstancePage() {
             </AlertDescription>
           </Alert>
 
-          {!deployed ? (
-            <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep(1)}>
-                <ChevronLeft className="h-4 w-4" /> Back
-              </Button>
-              <Button onClick={handleDeploy} disabled={isRunning} className="min-w-36">
-                {isRunning ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Deploying...</>
-                ) : (
-                  <><Play className="h-4 w-4" /> Deploy Instance</>
-                )}
-              </Button>
-            </div>
-          ) : null}
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+            <Button onClick={handleDeploy} disabled={isRunning} className="min-w-36">
+              <Play className="h-4 w-4" /> Deploy Instance
+            </Button>
+          </div>
+        </div>
+      )}
 
-          {(deployed || isRunning) && (
+      {/* ── Side-by-side terminal view ─────────────────────────────────── */}
+      {step === 2 && showTerminal && (
+        <>
+          {/* Status bar */}
+          <div className="flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center gap-3 text-sm flex-wrap">
+              {isRunning && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+              <span className="text-muted-foreground">
+                Deploying <code className="text-primary font-mono">{selectedLab}</code>
+              </span>
+              {/* Range deploy phase indicator */}
+              {isRangeStreaming && (
+                <Badge variant="warning" className="gap-1">
+                  <Server className="h-3 w-3" /> Provisioning VMs
+                </Badge>
+              )}
+              {!isRangeStreaming && rangeState === "SUCCESS" && (
+                <Badge variant="success" className="gap-1">
+                  <Server className="h-3 w-3" /> VMs Ready
+                </Badge>
+              )}
+              {!isRangeStreaming && rangeState && rangeState !== "SUCCESS" && rangeLogLines.length > 0 && (
+                <Badge variant="secondary" className="gap-1">
+                  <Server className="h-3 w-3" /> {rangeState}
+                </Badge>
+              )}
+              {exitCode !== null && (exitCode === 0
+                ? <Badge variant="success">GOAD Complete</Badge>
+                : <Badge variant="destructive">GOAD Failed (exit {exitCode})</Badge>
+              )}
+            </div>
+            <div className="flex gap-2">
+              {isRunning && (
+                <Button size="sm" variant="destructive" onClick={handleStop}>
+                  <StopCircle className="h-3.5 w-3.5" /> Stop
+                </Button>
+              )}
+              {exitCode === 0 && (
+                <Button size="sm" asChild>
+                  <Link href="/goad"><Terminal className="h-3.5 w-3.5" /> View All Labs</Link>
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Side-by-side panels */}
+          <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
+            {/* Left: Ludus Range Logs */}
+            <GoadTerminal
+              lines={rangeLogLines}
+              onClear={clearRangeLogs}
+              label={`Range Logs — Ludus VM Deploy${isRangeStreaming ? " (live)" : rangeState ? ` · ${rangeState}` : ""}`}
+              className="flex flex-col min-h-0 h-full"
+            />
+
+            {/* Right: GOAD Logs */}
             <GoadTerminal
               lines={lines}
               onClear={clear}
-              className="mt-4"
+              label={`GOAD Logs — ${selectedLab ?? ""}${isRunning ? " (running)" : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+              className="flex flex-col min-h-0 h-full"
             />
-          )}
-
-          {exitCode !== null && (
-            <Alert variant={exitCode === 0 ? "success" : "destructive"}>
-              <AlertDescription>
-                {exitCode === 0
-                  ? "Deployment completed successfully! The lab is ready to use."
-                  : `Deployment failed with exit code ${exitCode}. Check the logs above for details.`}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {exitCode === 0 && (
-            <div className="flex justify-end">
-              <Button asChild>
-                <Link href="/goad">
-                  <Terminal className="h-4 w-4" />
-                  View All Labs
-                </Link>
-              </Button>
-            </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
     </div>
   )

@@ -1,9 +1,10 @@
 "use client"
 
-import { Suspense, useEffect, useRef, useState, useCallback } from "react"
+import { Suspense, useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { ludusApi } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import type { VMObject } from "@/lib/types"
 import {
   Monitor,
@@ -11,6 +12,7 @@ import {
   LayoutDashboard,
   RefreshCw,
   Circle,
+  Layers,
 } from "lucide-react"
 
 interface FlatVM extends VMObject {
@@ -27,25 +29,37 @@ export default function ConsolePage() {
 
 function ConsolePageInner() {
   const searchParams = useSearchParams()
+  const { ranges: accessibleRanges, selectedRangeId, selectRange } = useRange()
 
-  const [vms, setVms] = useState<FlatVM[]>([])
-  const [loading, setLoading] = useState(true)
+  // All VMs keyed by rangeID — fetched once per range on selection
+  const [allVms, setAllVms] = useState<FlatVM[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Range picker dropdown
+  const [rangePickerOpen, setRangePickerOpen] = useState(false)
+  const rangePickerRef = useRef<HTMLDivElement>(null)
 
   // Currently displayed VM
   const [activeVm, setActiveVm] = useState<FlatVM | null>(null)
 
-  // Iframe src keyed by vmId — changing it reloads only that iframe
+  // Iframe src — changing it reloads the iframe
   const [iframeSrc, setIframeSrc] = useState<string>("")
 
   // Whether the VM picker dropdown is open
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
 
-  // Fetch VMs from all ranges
-  const fetchVms = useCallback(async () => {
+  // VMs visible in the picker — filtered to the selected range
+  const vms = useMemo<FlatVM[]>(() => {
+    if (!selectedRangeId) return allVms
+    return allVms.filter((v) => v.rangeID === selectedRangeId)
+  }, [allVms, selectedRangeId])
+
+  // Fetch VMs for the currently selected range (or all ranges if none selected)
+  const fetchVms = useCallback(async (rangeId?: string) => {
     setLoading(true)
     try {
-      const res = await ludusApi.getRangeStatus()
+      const res = await ludusApi.getRangeStatus(rangeId)
       if (res.data) {
         const ranges = Array.isArray(res.data) ? res.data : [res.data]
         const flat: FlatVM[] = []
@@ -55,17 +69,21 @@ function ConsolePageInner() {
             flat.push({ ...vm, rangeID: range.rangeID || range.name || "range" })
           }
         }
-        setVms(flat)
+        // Merge into allVms (replace entries for this range)
+        setAllVms((prev) => {
+          const other = prev.filter((v) => !ranges.some((r) => r.rangeID === v.rangeID))
+          return [...other, ...flat]
+        })
 
-        // Pre-select VM from URL query param (e.g. ?vmId=145&vmName=DC01)
+        // Pre-select VM from URL query param
         const paramId = searchParams.get("vmId")
         const paramName = searchParams.get("vmName")
-        if (paramId) {
+        if (paramId && !activeVm) {
           const found = flat.find((v) => String(v.proxmoxID) === paramId)
           const vm = found || ({
             proxmoxID: parseInt(paramId),
             name: paramName || `vm-${paramId}`,
-            rangeID: "",
+            rangeID: rangeId || "",
           } as FlatVM)
           activateVm(vm)
         }
@@ -74,17 +92,21 @@ function ConsolePageInner() {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [searchParams])
 
+  // Fetch VMs whenever the selected range changes
   useEffect(() => {
-    fetchVms()
-  }, [fetchVms])
+    fetchVms(selectedRangeId ?? undefined)
+  }, [fetchVms, selectedRangeId])
 
-  // Close picker when clicking outside
+  // Close VM picker when clicking outside
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setPickerOpen(false)
+      }
+      if (rangePickerRef.current && !rangePickerRef.current.contains(e.target as Node)) {
+        setRangePickerOpen(false)
       }
     }
     document.addEventListener("mousedown", handler)
@@ -128,6 +150,36 @@ function ConsolePageInner() {
         <Monitor className="h-3.5 w-3.5 text-purple-400 shrink-0" />
         <span className="text-xs text-zinc-400 shrink-0">Console</span>
 
+        {/* Range picker */}
+        {accessibleRanges.length > 1 && (
+          <div ref={rangePickerRef} className="relative ml-2">
+            <button
+              onClick={() => setRangePickerOpen((o) => !o)}
+              className="flex items-center gap-2 px-3 py-1 rounded border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 transition-colors"
+            >
+              <Layers className="h-3 w-3 text-purple-400 shrink-0" />
+              <span className="max-w-[140px] truncate">{selectedRangeId ?? "All ranges"}</span>
+              <ChevronDown className="h-3 w-3 text-zinc-400 ml-1" />
+            </button>
+            {rangePickerOpen && (
+              <div className="absolute left-0 top-full mt-1 w-52 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-64 overflow-y-auto">
+                {accessibleRanges.map((r) => (
+                  <button
+                    key={r.rangeID}
+                    onClick={() => { selectRange(r.rangeID); setRangePickerOpen(false) }}
+                    className={`w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-zinc-800 transition-colors text-xs ${
+                      selectedRangeId === r.rangeID ? "text-purple-400 bg-zinc-800/80" : "text-zinc-200"
+                    }`}
+                  >
+                    <span className="font-mono truncate">{r.rangeID}</span>
+                    {selectedRangeId === r.rangeID && <span className="ml-auto text-[10px] text-purple-400">active</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* VM picker */}
         <div ref={pickerRef} className="relative ml-2">
           <button
@@ -152,11 +204,11 @@ function ConsolePageInner() {
               {loading ? (
                 <div className="px-4 py-3 text-xs text-zinc-500">Loading VMs…</div>
               ) : vms.length === 0 ? (
-                <div className="px-4 py-3 text-xs text-zinc-500">No VMs found. Deploy a range first.</div>
+                <div className="px-4 py-3 text-xs text-zinc-500">No VMs found. Select a range or deploy first.</div>
               ) : (
                 vms.map((vm) => (
                   <button
-                    key={vm.proxmoxID}
+                    key={`${vm.rangeID}-${vm.proxmoxID}`}
                     onClick={() => activateVm(vm)}
                     className={`w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-zinc-800 transition-colors ${
                       activeVm?.proxmoxID === vm.proxmoxID ? "bg-zinc-800/80" : ""
@@ -168,7 +220,7 @@ function ConsolePageInner() {
                     <div className="flex-1 min-w-0">
                       <div className="text-xs text-zinc-200 truncate">{vm.name}</div>
                       <div className="text-[10px] text-zinc-500 truncate">
-                        ID {vm.proxmoxID} · {vm.ip || "—"}
+                        {vm.rangeID} · ID {vm.proxmoxID} · {vm.ip || "—"}
                       </div>
                     </div>
                     {activeVm?.proxmoxID === vm.proxmoxID && (

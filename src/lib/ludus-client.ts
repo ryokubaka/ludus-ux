@@ -29,9 +29,14 @@ export async function ludusRequest<T = unknown>(
   } = options
 
   const settings = getSettings()
-  const baseUrl = useAdminEndpoint && settings.ludusAdminUrl
-    ? settings.ludusAdminUrl
-    : settings.ludusUrl
+  let baseUrl = settings.ludusUrl
+  if (useAdminEndpoint) {
+    if (settings.ludusAdminUrl) {
+      baseUrl = settings.ludusAdminUrl
+    } else {
+      baseUrl = settings.ludusUrl.replace(/:8080\b/, ":8081")
+    }
+  }
 
   // Build URL — prepend /api/v2 for Ludus v2 API.
   // The root path "/" maps to "/api/v2/" (the version endpoint).

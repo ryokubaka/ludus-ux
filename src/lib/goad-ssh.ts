@@ -241,8 +241,9 @@ export async function streamGoadCommand(
       let lineBuffer = "";
 
       function flushBuffer(raw: string, isFinal = false) {
-        // Auto-answer interactive yes/no prompts
-        if (/\([yY]\/[nN]\)\s*$/.test(raw.trim())) {
+        // Auto-answer interactive yes/no prompts (handles both "(y/N) " and "(y/N): " formats)
+        const trimmed = raw.trim();
+        if (/\([yY]\/[nN]\)[:\s]*$/.test(trimmed) || /\bDo you want to continue\?\s*$/i.test(trimmed)) {
           try { stream.write("y\n"); } catch {}
         }
         const text = stripAnsi(lineBuffer + raw);

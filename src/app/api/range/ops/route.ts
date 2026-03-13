@@ -54,6 +54,7 @@ function getEffective(request: NextRequest, session: { apiKey: string; username:
 async function checkCompletion(
   op: ReturnType<typeof getActiveRangeOp> & object,
   effectiveApiKey: string,
+  rangeId: string,
 ) {
   if (!op || op.status === "completed" || op.status === "error") return op
 
@@ -61,7 +62,7 @@ async function checkCompletion(
     const result = await ludusRequest<{
       rangeState?: string
       testingEnabled?: boolean
-    }>("/range", { apiKey: effectiveApiKey })
+    }>(`/range?rangeID=${encodeURIComponent(rangeId)}`, { apiKey: effectiveApiKey })
 
     if (!result.data) return op
 
@@ -120,7 +121,7 @@ export async function GET(request: NextRequest) {
 
   let op = getActiveRangeOp(rangeId, effectiveUsername)
   if (op) {
-    op = await checkCompletion(op, effectiveApiKey)
+    op = await checkCompletion(op, effectiveApiKey, rangeId)
   }
 
   return NextResponse.json({ op })
@@ -154,8 +155,9 @@ export async function POST(request: NextRequest) {
   // after triggering sees the pending state.
   const op = createRangeOp(rangeId, effectiveUsername, opType as RangeOpType)
 
-  // Call the Ludus testing API
-  const ludusPath = opType === "testing_start" ? "/testing/start" : "/testing/stop"
+  const ludusPath = opType === "testing_start"
+    ? `/testing/start?rangeID=${encodeURIComponent(rangeId)}`
+    : `/testing/stop?rangeID=${encodeURIComponent(rangeId)}`
   const result = await ludusRequest(ludusPath, {
     method: "PUT",
     apiKey: effectiveApiKey,

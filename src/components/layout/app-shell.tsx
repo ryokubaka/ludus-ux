@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
 import { ImpersonationProvider, useImpersonation } from "@/lib/impersonation-context"
+import { RangeProvider } from "@/lib/range-context"
 import { UserCheck, LogOut } from "lucide-react"
 
 /**
@@ -56,14 +57,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ImpersonationProvider>
-      <div className="min-h-screen bg-background">
-        <Sidebar />
-        <Header />
-        <main className="pl-64 pt-16 min-h-screen flex flex-col">
-          <ImpersonationBanner />
-          <div className="p-6 flex-1">{children}</div>
-        </main>
-      </div>
+      <RangeProvider>
+        <div className="min-h-screen bg-background">
+          <Sidebar />
+          <Header />
+          <main className="pl-64 pt-16 min-h-screen flex flex-col">
+            <ImpersonationBanner />
+            <div className="p-6 flex-1">{children}</div>
+          </main>
+        </div>
+      </RangeProvider>
     </ImpersonationProvider>
   )
 }

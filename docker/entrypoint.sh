@@ -128,7 +128,7 @@ NEEDS_REGEN=false
 if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
     NEEDS_REGEN=true
 else
-    for CHECK_IP in "$LUDUS_SSH_HOST" "$LUDUS_SERVER_IP" "$HOST_GW_IP"; do
+    for CHECK_IP in "$LUDUS_SSH_HOST" "$LUDUS_SERVER_IP" "$TLS_HOSTNAME"; do
         if [ -n "$CHECK_IP" ] && is_ip "$CHECK_IP" && ! cert_covers_ip "$CHECK_IP"; then
             echo "[entrypoint] Cert missing iPAddress SAN for $CHECK_IP — regenerating"
             rm -f "$TLS_CERT" "$TLS_KEY"

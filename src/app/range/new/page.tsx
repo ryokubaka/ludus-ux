@@ -64,12 +64,15 @@ function inferOS(templateName: string): { isLinux: boolean; isWindows: boolean; 
 
 function defaultsForTemplate(template: string): VMEntry {
   const { isLinux, isWindows, isServer } = inferOS(template)
+  // hostname is the user-supplied suffix only (no {{ range_id }}- prefix).
+  // The prefix is added by generateYaml and shown read-only in the UI.
   const shortName = template.replace(/-template$/, "").replace(/-x64|-x86/g, "")
+  const hostnameSuffix = shortName.slice(0, isWindows ? 10 : 50)
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     template,
-    vmName: `{{ range_id }}-${shortName}`,
-    hostname: `{{ range_id }}-${shortName}`.slice(0, isWindows ? 15 : 64),
+    vmName: `{{ range_id }}-${hostnameSuffix}`,
+    hostname: hostnameSuffix,
     vlan: 10,
     ipLastOctet: 10,
     ramGb: isServer ? 8 : isLinux ? 4 : 8,
@@ -88,10 +91,11 @@ function defaultsForTemplate(template: string): VMEntry {
 function generateYaml(vms: VMEntry[], domainFqdn: string | null): string {
   const lines: string[] = ["ludus:"]
   for (const vm of vms) {
-    // Ensure vmName is always derived from hostname
+    // vmName = "{{ range_id }}-<suffix>"; hostname in Ludus YAML uses the same pattern
     const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
+    const hostname = `{{ range_id }}-${vm.hostname}`
     lines.push(`  - vm_name: "${vmName}"`)
-    lines.push(`    hostname: "${vm.hostname}"`)
+    lines.push(`    hostname: "${hostname}"`)
     lines.push(`    template: ${vm.template}`)
     lines.push(`    vlan: ${vm.vlan}`)
     lines.push(`    ip_last_octet: ${vm.ipLastOctet}`)
@@ -131,11 +135,15 @@ function parseConfigYaml(yamlText: string): VMEntry[] {
     if (!vmName) continue
     const template = get("template")
     const { isLinux, isWindows, isServer } = inferOS(template || vmName)
+    // Strip any "{{ range_id }}-" prefix from the hostname so the field only
+    // holds the user-editable suffix (matching our split-field UX).
+    const rawHostname = get("hostname") || vmName
+    const hostnameSuffix = rawHostname.replace(/^\{\{\s*range_id\s*\}\}-/, "")
     entries.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       template: template || vmName,
       vmName,
-      hostname: get("hostname") || vmName.slice(0, 15),
+      hostname: hostnameSuffix.slice(0, isWindows ? 10 : 50),
       vlan: parseInt(get("vlan")) || 10,
       ipLastOctet: parseInt(get("ip_last_octet")) || 10,
       ramGb: parseInt(get("ram_gb")) || 4,
@@ -280,10 +288,9 @@ export default function NewRangePage() {
     setVms((prev) => prev.map((v) => {
       if (v.id !== id) return v
       const updated = { ...v, ...patch }
-      // Auto-sync vmName from hostname (vm_name = {{ range_id }}-<hostname>)
+      // Keep vmName in sync whenever the hostname suffix changes
       if ("hostname" in patch) {
-        const cleaned = patch.hostname ?? ""
-        updated.vmName = `{{ range_id }}-${cleaned}`
+        updated.vmName = `{{ range_id }}-${patch.hostname ?? ""}`
       }
       return updated
     }))
@@ -383,10 +390,20 @@ export default function NewRangePage() {
       if (deployRes.error) {
         toast({ title: "Deploy failed", description: deployRes.error, variant: "destructive" })
         setDeployResult("error")
-      } else {
-        setDeployResult("success")
-        toast({ title: "Deployment started", description: "VMs are being provisioned. Check Range Logs for progress." })
+        setDeploying(false)
+        return
       }
+      // For a brand-new range, select it and navigate straight to its logs.
+      // For an existing range (re-deploy), stay on the page and let the user choose.
+      if (mode === "new" && effectiveRangeId) {
+        await refreshRanges()
+        selectRange(effectiveRangeId)
+        toast({ title: "Deployment started", description: `Range ${effectiveRangeId} is being provisioned.` })
+        router.push("/")
+        return
+      }
+      setDeployResult("success")
+      toast({ title: "Deployment started", description: "VMs are being provisioned. Check Range Logs for progress." })
     } catch (err) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" })
       setDeployResult("error")
@@ -605,19 +622,33 @@ export default function NewRangePage() {
                     </div>
                     {vm.showAdvanced && (
                       <div className="pt-2 border-t space-y-2">
-                        {/* Hostname (single editable field; vm_name auto-derives from it) */}
+                        {/* Hostname suffix (editable) + VM Name preview (read-only) */}
                         <div className="grid grid-cols-3 gap-2">
-                          <div className="space-y-1 col-span-2">
-                            <Label className="text-[10px]">
-                              Hostname
-                              {vm.isWindows && <span className="text-muted-foreground ml-1">(max 15 chars)</span>}
-                            </Label>
-                            <Input value={vm.hostname}
-                              onChange={(e) => updateVM(vm.id, {
-                                hostname: vm.isWindows ? e.target.value.slice(0, 15) : e.target.value
-                              })}
-                              maxLength={vm.isWindows ? 15 : 64}
-                              className="h-7 text-xs font-mono" placeholder="my-server" />
+                          <div className="col-span-2 space-y-2">
+                            <div className="space-y-1">
+                              <Label className="text-[10px]">
+                                Hostname
+                                {vm.isWindows && <span className="text-muted-foreground ml-1">(max 15 chars)</span>}
+                              </Label>
+                              <Input
+                                value={vm.hostname}
+                                onChange={(e) => updateVM(vm.id, {
+                                  hostname: e.target.value.slice(0, vm.isWindows ? 15 : 63)
+                                })}
+                                maxLength={vm.isWindows ? 15 : 63}
+                                className="h-7 text-xs font-mono"
+                                placeholder="server-01"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-[10px] text-muted-foreground">VM Name (Proxmox)</Label>
+                              <Input
+                                value={vm.vmName}
+                                readOnly
+                                className="h-7 text-xs font-mono bg-muted/30 text-muted-foreground cursor-default"
+                                tabIndex={-1}
+                              />
+                            </div>
                           </div>
                           <div className="space-y-1">
                             <Label className="text-[10px]">IP Last Octet</Label>

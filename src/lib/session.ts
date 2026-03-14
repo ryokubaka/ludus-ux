@@ -113,7 +113,12 @@ export async function setSessionCookie(
   const token = await encryptSession(data)
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    sameSite: "strict",
+    // "lax" (not "strict") allows the cookie to be sent on top-level
+    // same-site navigations (e.g. clicking a link from Proxmox UI back to
+    // our app).  With "strict", navigating here from any external page
+    // strips the session cookie → forced re-login → browser re-prompts for
+    // the self-signed cert.  "lax" still blocks CSRF on non-safe methods.
+    sameSite: "lax",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
     secure: process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true",

@@ -26,6 +26,7 @@ import {
 import type { GoadInstance } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useImpersonation } from "@/lib/impersonation-context"
+import { useRange } from "@/lib/range-context"
 
 export interface ImpersonationContext {
   username: string
@@ -58,6 +59,7 @@ export default function GoadPage() {
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null)
   const { lines: taskLines, resumeTask } = useGoadStream()
   const { impersonationHeaders } = useImpersonation()
+  const { selectedRangeId } = useRange()
 
   const fetchInstances = useCallback(async () => {
     setLoading(true)
@@ -179,35 +181,34 @@ export default function GoadPage() {
       <div className="grid grid-cols-5 gap-6">
         {/* Instances column (3/5) */}
         <div className="col-span-3 space-y-3">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Instances
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Instances
+            </p>
+            {selectedRangeId && (
+              <span className="text-xs text-muted-foreground">
+                Range: <code className="text-primary font-mono">{selectedRangeId}</code>
+              </span>
+            )}
+          </div>
 
           {loading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : instances.length === 0 && configured ? (
-            <Card>
-              <CardContent className="flex flex-col items-center py-16 text-muted-foreground">
-                <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
-                  <Terminal className="h-8 w-8 text-green-400" />
-                </div>
-                <p className="font-medium">No GOAD instances found</p>
-                <p className="text-sm mt-2 text-center max-w-sm">
-                  Deploy a new GOAD instance to start building vulnerable Active Directory
-                  environments for penetration testing practice
-                </p>
-                <Button className="mt-6" asChild>
-                  <Link href="/goad/new">
-                    <Plus className="h-4 w-4" />
-                    Deploy New Instance
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            instances.map((instance) => (
+          ) : (() => {
+            // Instances scoped to the currently selected Ludus range.
+            // Instances with no ludusRangeId are legacy/unscoped — shown separately.
+            const rangeInstances = selectedRangeId
+              ? instances.filter((i) => i.ludusRangeId === selectedRangeId)
+              : instances
+            const unscopedInstances = selectedRangeId
+              ? instances.filter((i) => !i.ludusRangeId)
+              : []
+
+            if (!configured) return null
+
+            const renderCard = (instance: typeof instances[number]) => (
               <Link key={instance.instanceId} href={`/goad/${encodeURIComponent(instance.instanceId)}`}>
                 <Card className="hover:border-primary/50 transition-colors cursor-pointer group">
                   <CardContent className="p-4">
@@ -262,8 +263,46 @@ export default function GoadPage() {
                   </CardContent>
                 </Card>
               </Link>
-            ))
-          )}
+            )
+
+            return (
+              <>
+                {rangeInstances.length === 0 ? (
+                  <Card>
+                    <CardContent className="flex flex-col items-center py-16 text-muted-foreground">
+                      <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
+                        <Terminal className="h-8 w-8 text-green-400" />
+                      </div>
+                      <p className="font-medium">No GOAD instances in this range</p>
+                      <p className="text-sm mt-2 text-center max-w-sm">
+                        {selectedRangeId
+                          ? "Deploy a new instance — it will be assigned its own dedicated range automatically."
+                          : "Deploy a new GOAD instance to start building vulnerable Active Directory environments."}
+                      </p>
+                      <Button className="mt-6" asChild>
+                        <Link href="/goad/new">
+                          <Plus className="h-4 w-4" />
+                          Deploy New Instance
+                        </Link>
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  rangeInstances.map(renderCard)
+                )}
+
+                {unscopedInstances.length > 0 && (
+                  <div className="pt-2">
+                    <p className="text-xs text-muted-foreground/60 mb-2 flex items-center gap-1">
+                      <Info className="h-3 w-3" />
+                      Legacy instances (no range assigned) — switch ranges to manage
+                    </p>
+                    {unscopedInstances.map(renderCard)}
+                  </div>
+                )}
+              </>
+            )
+          })()}
         </div>
 
         {/* Recent activity column (2/5) */}

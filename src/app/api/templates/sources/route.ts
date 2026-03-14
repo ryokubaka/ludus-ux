@@ -22,16 +22,6 @@ interface CacheEntry { data: unknown; ts: number }
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 5 * 60 * 1000
 
-async function cachedFetch(url: string): Promise<unknown> {
-  const hit = cache.get(url)
-  if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.data
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
-  if (!res.ok) throw new Error(`GitLab API error ${res.status} for ${url}`)
-  const data = await res.json()
-  cache.set(url, { data, ts: Date.now() })
-  return data
-}
-
 interface GitLabTreeItem {
   id: string
   name: string
@@ -39,12 +29,91 @@ interface GitLabTreeItem {
   path: string
 }
 
+/** Fetch a URL with a per-attempt timeout and exponential-backoff retry.
+ *  Returns parsed JSON. */
+async function fetchWithRetry(
+  url: string,
+  maxAttempts = 3,
+  timeoutMs = 12_000,
+): Promise<unknown> {
+  let lastErr: Error = new Error("Unknown error")
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+      const res = await fetch(url, {
+        headers: { "User-Agent": "ludus-ux/1.0" },
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+
+      if (res.ok) return await res.json()
+
+      // Don't retry client errors (4xx) except 429 (rate limit)
+      if (res.status !== 429 && res.status < 500) {
+        throw new Error(`GitLab API ${res.status} for ${url}`)
+      }
+
+      lastErr = new Error(
+        res.status === 429
+          ? `GitLab rate limit hit (429). Wait a moment and try again.`
+          : `GitLab server error ${res.status} for ${url}`
+      )
+    } catch (err) {
+      clearTimeout(timer)
+      const msg = (err as Error).message
+      if (msg.includes("abort") || msg.includes("timeout")) {
+        lastErr = new Error(`GitLab API timed out after ${timeoutMs / 1000}s — check internet connectivity or try again.`)
+      } else {
+        lastErr = err as Error
+      }
+    }
+
+    if (attempt < maxAttempts) {
+      // Exponential backoff: 1 s, 2 s, 4 s …
+      await new Promise((r) => setTimeout(r, 1_000 * attempt))
+    }
+  }
+
+  throw lastErr
+}
+
+/** Run up to `limit` async tasks concurrently. */
+async function pLimit<T>(
+  tasks: Array<() => Promise<T>>,
+  limit: number,
+): Promise<T[]> {
+  const results: T[] = new Array(tasks.length)
+  let next = 0
+
+  async function worker() {
+    while (next < tasks.length) {
+      const i = next++
+      results[i] = await tasks[i]()
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, worker),
+  )
+  return results
+}
+
+async function cachedFetch(url: string): Promise<unknown> {
+  const hit = cache.get(url)
+  if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.data
+  const data = await fetchWithRetry(url)
+  cache.set(url, { data, ts: Date.now() })
+  return data
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const source   = searchParams.get("source")   || "badsectorlabs"
-  const repoUrl  = searchParams.get("repoUrl")  || ""  // custom GitLab project API base URL
+  const repoUrl  = searchParams.get("repoUrl")  || ""
 
-  // Determine the GitLab repository API base and templates path prefix
   let apiBase: string
   let templatesPath: string
   let ref: string
@@ -54,8 +123,6 @@ export async function GET(request: NextRequest) {
     templatesPath  = "templates"
     ref            = BADSL_REF
   } else if (repoUrl) {
-    // Expect the caller to pass the full GitLab API base, e.g.
-    // https://gitlab.com/api/v4/projects/owner%2Frepo/repository
     apiBase        = repoUrl.replace(/\/$/, "")
     templatesPath  = searchParams.get("path") || "templates"
     ref            = searchParams.get("ref")  || "main"
@@ -69,21 +136,24 @@ export async function GET(request: NextRequest) {
     const topTree = (await cachedFetch(topUrl)) as GitLabTreeItem[]
     const dirs    = topTree.filter((i) => i.type === "tree")
 
-    // For each directory, list the files it contains (one level deep)
-    const templates = await Promise.all(
-      dirs.map(async (dir) => {
+    // Fetch each directory's file listing concurrently but cap at 5 in-flight
+    // to avoid hammering GitLab and triggering rate limits.
+    const templates = await pLimit(
+      dirs.map((dir) => async () => {
         const fileUrl  = `${apiBase}/tree?path=${encodeURIComponent(dir.path)}&ref=${ref}&per_page=100`
         const fileTree = (await cachedFetch(fileUrl)) as GitLabTreeItem[]
         const files    = fileTree.filter((i) => i.type === "blob").map((i) => i.name)
         return { name: dir.name, path: dir.path, files, ref, apiBase }
-      })
+      }),
+      5,
     )
 
     return NextResponse.json({ templates })
   } catch (err) {
+    const msg = (err as Error).message
     return NextResponse.json(
-      { error: `Failed to fetch template source: ${(err as Error).message}` },
-      { status: 502 }
+      { error: `Failed to fetch template source: ${msg}` },
+      { status: 502 },
     )
   }
 }

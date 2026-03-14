@@ -23,12 +23,14 @@ import { readGoadRangeId, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh
 
 export const dynamic = "force-dynamic"
 
-/** Derive a safe Ludus rangeID from a GOAD instanceId.
- *  Keep it alphanumeric and ≤20 chars (Ludus constraint). */
-function deriveRangeId(instanceId: string): string {
-  const sanitized = instanceId.replace(/[^a-zA-Z0-9]/g, "")
-  // Prefix "G" ensures it never starts with a digit
-  return ("G" + sanitized).substring(0, 20)
+/** Derive a Ludus rangeID and display name from a GOAD instanceId + username.
+ *  Format: <user>-<instanceSlug>  e.g. "melchior-GOAD-Mini-LDQ8" */
+function deriveRangeInfo(instanceId: string, username: string): { rangeId: string; name: string } {
+  const user     = username.toLowerCase().replace(/[^a-z0-9]/g, "")
+  const instSlug = instanceId.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
+  const rangeId  = `${user}-${instSlug}`
+  const name     = rangeId
+  return { rangeId, name }
 }
 
 export async function POST(
@@ -47,10 +49,14 @@ export async function POST(
     ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
     : undefined
 
-  const impersonateApiKey = session.isAdmin
+  const impersonateApiKey  = session.isAdmin
     ? request.headers.get("X-Impersonate-Apikey") || null
     : null
-  const effectiveApiKey = impersonateApiKey || session.apiKey
+  const impersonateAs      = session.isAdmin
+    ? request.headers.get("X-Impersonate-As") || null
+    : null
+  const effectiveApiKey    = impersonateApiKey  || session.apiKey
+  const effectiveUsername  = (session.isAdmin && impersonateAs) ? impersonateAs : session.username
 
   // ── 1. Idempotency check ──────────────────────────────────────────────────
   const existing = await readGoadRangeId(instanceId, rootCreds)
@@ -58,8 +64,9 @@ export async function POST(
     return NextResponse.json({ rangeId: existing, created: false })
   }
 
-  // ── 2. Derive rangeID ─────────────────────────────────────────────────────
-  const rangeId = deriveRangeId(instanceId)
+  // ── 2. Derive rangeID and display name ────────────────────────────────────
+  // Naming: GOAD-<user>-<workspaceDirectoryName> (instanceId IS the workspace dir)
+  const { rangeId, name: rangeName } = deriveRangeInfo(instanceId, effectiveUsername)
 
   // ── 3. Create the Ludus range (admin port, user's own API key) ─────────────
   const adminBase = (settings.ludusAdminUrl || settings.ludusUrl.replace(/:8080\b/, ":8081")).replace(/\/$/, "")
@@ -76,8 +83,10 @@ export async function POST(
       },
       body: JSON.stringify({
         rangeID: rangeId,
-        name: `GOAD ${instanceId}`,
+        name: rangeName,
         description: `Dedicated range for GOAD instance ${instanceId}`,
+        // Assign to the effective user so the range appears in their account immediately
+        userID: [effectiveUsername],
       }),
       cache: "no-store",
     })

@@ -4,18 +4,19 @@
  * Adds one or more templates from a remote source to the connected Ludus server.
  *
  * Workflow:
- *  1. Fetch each template's files from the source (GitLab raw API) on the
- *     Next.js server (no CORS issues, no internet requirement on the Ludus box).
- *  2. Write the files to a temp directory on the Ludus server via root SSH
- *     (base64-encoded to avoid shell-quoting issues with arbitrary file content).
- *  3. Run `ludus templates add -d <tmpdir>` on the server to register the
- *     template with the Ludus API.
- *  4. Clean up the temp directory.
+ *  1. Recursively list ALL files under the template path (blobs only, all
+ *     subdirs included via recursive=true + pagination).
+ *  2. Fetch each file's raw content from GitLab.
+ *  3. Discover the Ludus packer templates directory on the server.
+ *  4. Create the full directory tree on the server (iso/, ansible/, etc.).
+ *  5. Write each file preserving its relative path within the template.
+ *  6. Fix ownership/permissions to ludus:ludus 755.
+ *  7. Register the template with `ludus templates add -d <destDir>`.
  *
  * Request body:
  *   {
  *     templates: {
- *       name: string;          // directory name, used as the temp dir name
+ *       name: string;          // directory name, used as the template sub-dir
  *       path: string;          // relative path in the repo, e.g. "templates/debian10"
  *       apiBase: string;       // GitLab repository API base URL
  *       ref:     string;       // git ref (branch/tag/sha)
@@ -50,34 +51,100 @@ async function fetchRaw(url: string): Promise<string> {
   return res.text()
 }
 
+/** ──────────────────────────────────────────────────────────────────────────
+ *  Discover the Ludus packer templates directory on the server.
+ *
+ *  Strategy (in order):
+ *    1. Find where an existing *.pkr.hcl template file lives and derive the
+ *       parent-of-parent dir (i.e. the top-level templates folder).
+ *    2. Fall back to the standard Ludus installation paths.
+ * ──────────────────────────────────────────────────────────────────────────*/
+let cachedTemplatesDir: string | null = null
+
+async function findTemplatesDir(): Promise<string> {
+  if (cachedTemplatesDir) return cachedTemplatesDir
+
+  // Try to locate an existing .pkr.hcl file and derive the templates root
+  const findResult = await sshExec(
+    "find /opt/ludus /root/.config/ludus /home -maxdepth 10 -name '*.pkr.hcl' 2>/dev/null | head -3"
+  )
+  const found = (findResult.stdout || "").trim()
+  if (found) {
+    // Each line is a path like /opt/ludus/packer/templates/debian12/debian12.pkr.hcl
+    // Walk up two levels to get the templates root (/opt/ludus/packer/templates)
+    const firstPath = found.split("\n")[0].trim()
+    const dir = firstPath.split("/").slice(0, -2).join("/")
+    if (dir) {
+      cachedTemplatesDir = dir
+      return dir
+    }
+  }
+
+  // Standard Ludus v2 installation paths to try in order
+  const candidates = [
+    "/opt/ludus/packer/templates",
+    "/opt/ludus/templates",
+    "/opt/ludus/packer-templates",
+    "/root/.config/ludus/packer/templates",
+  ]
+  for (const candidate of candidates) {
+    const check = await sshExec(`test -d '${candidate}' && echo ok`)
+    if ((check.stdout || "").trim() === "ok") {
+      cachedTemplatesDir = candidate
+      return candidate
+    }
+  }
+
+  // Last resort: use /opt/ludus (Ludus CLI should still find files under here)
+  cachedTemplatesDir = "/opt/ludus/packer/templates"
+  return cachedTemplatesDir
+}
+
+/** Collect ALL blobs under a GitLab path recursively, handling pagination. */
+async function fetchAllBlobs(apiBase: string, path: string, ref: string): Promise<GitLabTreeItem[]> {
+  const blobs: GitLabTreeItem[] = []
+  let page = 1
+  while (true) {
+    const url = `${apiBase}/tree?path=${encodeURIComponent(path)}&ref=${ref}&per_page=100&recursive=true&page=${page}`
+    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+    if (!res.ok) throw new Error(`Could not list template tree (HTTP ${res.status})`)
+    const items = (await res.json()) as GitLabTreeItem[]
+    blobs.push(...items.filter((i) => i.type === "blob"))
+    if (items.length < 100) break  // reached the last page
+    page++
+  }
+  return blobs
+}
+
 async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
-  const tmpDir = `/tmp/ludus-template-add-${name}-${Date.now()}`
 
-  // 1. List files in the template directory from the source
-  const treeUrl  = `${apiBase}/tree?path=${encodeURIComponent(templatePath)}&ref=${ref}&per_page=100`
-  const treeRes  = await fetch(treeUrl, { headers: { "User-Agent": "ludus-ux/1.0" } })
-  if (!treeRes.ok) throw new Error(`Could not list template files (HTTP ${treeRes.status})`)
-  const treeData = (await treeRes.json()) as GitLabTreeItem[]
-  const blobs    = treeData.filter((i) => i.type === "blob")
+  // ── Step 1: Recursively list ALL files in the template directory ──────────
+  // Using recursive=true ensures subdirs like iso/, ansible/, scripts/ are included.
+  const blobs = await fetchAllBlobs(apiBase, templatePath, ref)
 
   if (blobs.length === 0) {
     throw new Error(`No files found in ${templatePath}`)
   }
 
-  // 2. Fetch each file's content
-  const files: { name: string; b64: string }[] = []
+  // ── Step 2: Fetch every file's content, preserving relative paths ─────────
+  // blob.path = "templates/win2019-server-x64/ansible/tasks/main.yml"
+  // relativePath = "ansible/tasks/main.yml"  (strip the templatePath prefix)
+  const prefix = templatePath.endsWith("/") ? templatePath : templatePath + "/"
+  const files: { relativePath: string; b64: string }[] = []
   for (const blob of blobs) {
+    const relativePath = blob.path.startsWith(prefix)
+      ? blob.path.slice(prefix.length)
+      : blob.name
     const rawUrl = `${apiBase}/files/${encodeURIComponent(blob.path)}/raw?ref=${ref}`
     const content = await fetchRaw(rawUrl)
-    files.push({ name: blob.name, b64: Buffer.from(content).toString("base64") })
+    files.push({ relativePath, b64: Buffer.from(content).toString("base64") })
   }
 
-  // 3. Write files to the Ludus server via root SSH
-  //    a. Create temp dir
-  let mkdirResult
+  // ── Step 3: Discover the server's templates directory ────────────────────
+  let templatesDir: string
   try {
-    mkdirResult = await sshExec(`rm -rf '${tmpDir}' && mkdir -p '${tmpDir}'`)
+    templatesDir = await findTemplatesDir()
   } catch (err) {
     const msg = (err as Error).message
     if (/all configured authentication methods failed/i.test(msg) || /authentication/i.test(msg)) {
@@ -89,34 +156,61 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     }
     throw err
   }
+
+  // ── Step 4: Create the destination directory tree on the server ───────────
+  const destDir = `${templatesDir}/${name}`
+
+  // Collect all unique sub-directories needed and create them in a single call
+  const subdirs = new Set<string>()
+  subdirs.add(destDir)
+  for (const file of files) {
+    const parts = file.relativePath.split("/").slice(0, -1)
+    if (parts.length > 0) {
+      // Add every ancestor dir (mkdir -p handles this, but we still need the leaf)
+      subdirs.add(`${destDir}/${parts.join("/")}`)
+    }
+  }
+  const mkdirCmd = Array.from(subdirs).map((d) => `'${d}'`).join(" ")
+  const mkdirResult = await sshExec(`mkdir -p ${mkdirCmd}`)
   if (mkdirResult.code !== 0) {
-    throw new Error(`Failed to create temp dir on server: ${mkdirResult.stderr}`)
+    throw new Error(`Failed to create template dirs under ${destDir}: ${mkdirResult.stderr}`)
   }
 
-  //    b. Write each file (base64-decode on the server to handle arbitrary content)
+  // ── Step 5: Write each file to its correct relative path ─────────────────
   for (const file of files) {
-    // Split into 60-char base64 lines to avoid ARG_MAX limits on very large files
-    const cmd = `printf '%s' '${file.b64.replace(/'/g, "'\\''")}' | base64 -d > '${tmpDir}/${file.name}'`
+    const destPath = `${destDir}/${file.relativePath}`
+    const cmd = `printf '%s' '${file.b64.replace(/'/g, "'\\''")}' | base64 -d > '${destPath}'`
     const writeResult = await sshExec(cmd)
     if (writeResult.code !== 0) {
-      await sshExec(`rm -rf '${tmpDir}'`).catch(() => {})
-      throw new Error(`Failed to write ${file.name}: ${writeResult.stderr}`)
+      await sshExec(`rm -rf '${destDir}'`).catch(() => {})
+      throw new Error(`Failed to write ${file.relativePath}: ${writeResult.stderr}`)
     }
   }
 
-  // 4. Add the template via the Ludus CLI
-  //    The CLI uses the root user's configured API key and server URL.
-  const addResult = await sshExec(`ludus templates add -d '${tmpDir}' 2>&1`)
-  const msg       = (addResult.stdout + addResult.stderr).trim()
+  // ── Step 6: Fix ownership + permissions ──────────────────────────────────
+  // Files are written as root; the ludus service user needs read access.
+  // Existing templates are ludus:ludus 755 — match that.
+  await sshExec(`chown -R ludus:ludus '${destDir}' && chmod -R 755 '${destDir}'`).catch(() => {
+    // Non-fatal if the ludus user doesn't exist under that name.
+  })
 
-  // 5. Clean up regardless of outcome
-  await sshExec(`rm -rf '${tmpDir}'`).catch(() => {})
+  // ── Step 7: Register the template with the Ludus CLI ─────────────────────
+  // `ludus templates add -d <dir>` registers the template in PocketBase.
+  // The command prints [ERROR] lines when it tries to LIST templates afterwards
+  // (root's Ludus CLI lacks list permissions), but the registration itself
+  // succeeds — exit code 0 is the reliable success indicator.
+  const addResult = await sshExec(`ludus templates add -d '${destDir}' 2>&1`)
 
   if (addResult.code !== 0) {
-    throw new Error(msg || `ludus templates add exited with code ${addResult.code}`)
+    const rawMsg = (addResult.stdout + addResult.stderr).trim()
+    throw new Error(
+      `ludus templates add failed (exit ${addResult.code}).\n` +
+      `Output: ${rawMsg || "(none)"}\n` +
+      `Template files are on disk at: ${destDir}`
+    )
   }
 
-  return { success: true, message: msg || "Template added successfully" }
+  return { success: true, message: `Template "${name}" added successfully` }
 }
 
 export async function POST(request: NextRequest) {

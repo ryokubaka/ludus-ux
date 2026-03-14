@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -131,7 +131,10 @@ function AddFromSource({ installedNames, onAdded }: {
       const err = results.filter((r) => !r.success).length
       if (ok > 0)  toast({ title: `${ok} template${ok > 1 ? "s" : ""} added`, description: "You can now build them from the list above." })
       if (err > 0) toast({ variant: "destructive", title: `${err} template${err > 1 ? "s" : ""} failed`, description: "See details below." })
-      if (ok > 0) { onAdded(); setSelected(new Set()) }
+      if (ok > 0) {
+        setSelected(new Set())
+        onAdded()
+      }
     } catch (err) {
       toast({ variant: "destructive", title: "Add failed", description: (err as Error).message })
     } finally {
@@ -355,6 +358,14 @@ function AddFromSource({ installedNames, onAdded }: {
 export default function TemplatesPage() {
   const { toast } = useToast()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
+  const confirmBarRef = useRef<HTMLDivElement>(null)
+
+  // Scroll the confirm bar into view whenever a new confirmation is requested
+  useEffect(() => {
+    if (pendingAction) {
+      confirmBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
+    }
+  }, [pendingAction])
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const [loading, setLoading] = useState(true)
   const [building, setBuilding] = useState(false)
@@ -507,7 +518,7 @@ export default function TemplatesPage() {
       </div>
 
       {/* Actions */}
-      <Card>
+      <Card ref={confirmBarRef}>
         <CardContent className="p-3 space-y-2">
           <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
           <div className="flex flex-wrap gap-2 items-center">

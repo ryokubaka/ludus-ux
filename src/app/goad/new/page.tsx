@@ -26,6 +26,7 @@ import {
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useRange } from "@/lib/range-context"
 
@@ -37,13 +38,22 @@ function shellQuote(arg: string): string {
 
 export default function NewGoadInstancePage() {
   const router = useRouter()
-  const { selectedRangeId } = useRange()
+  const { selectRange, refreshRanges } = useRange()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
   const [deployed, setDeployed] = useState(false)
   const [creatingRange, setCreatingRange] = useState(false)
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
+  const [currentUsername, setCurrentUsername] = useState<string>("")
+
+  // Fetch session username for range naming convention
+  useEffect(() => {
+    fetch("/api/auth/session")
+      .then((r) => r.json())
+      .then((d) => { if (d.username) setCurrentUsername(d.username) })
+      .catch(() => {})
+  }, [])
   const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new")
   const {
     lines: rangeLogLines,
@@ -97,53 +107,114 @@ export default function NewGoadInstancePage() {
     return ext.compatibility.includes("*") || ext.compatibility.includes(selectedLab)
   })
 
-  const handleDeploy = async () => {
-    if (!selectedLab) return
-
-    // ── Create a dedicated Ludus range for this deployment ───────────────────
-    // Each GOAD instance gets its own range so destroying it never touches
-    // other Ludus ranges (VMs deployed outside GOAD, other lab instances, etc.)
-    setCreatingRange(true)
-    let rangeId: string | null = null
+  /**
+   * Determine which Ludus range to use for this deployment:
+   *  - If the user has no ranges → create a new dedicated one
+   *  - If all existing ranges already have VMs → create a new dedicated one
+   *  - If there's an empty range (0 VMs) → reuse it (no creation)
+   *
+   * Returns { rangeId, created } or null if range setup fails.
+   */
+  const resolveDeployRange = async (): Promise<{ rangeId: string; created: boolean } | null> => {
+    // Check the user's existing ranges for VM occupancy
     try {
-      // Generate a short unique rangeID (alphanumeric, ≤20 chars)
-      const slug = selectedLab.replace(/[^a-zA-Z0-9]/g, "").substring(0, 8)
-      const ts = Date.now().toString(36).toUpperCase().substring(0, 8)
-      const candidateId = `G${slug}${ts}`.substring(0, 20)
+      const res = await fetch("/api/proxy/range")
+      if (res.ok) {
+        const data = await res.json()
+        type RangeObj = { rangeID?: string; VMs?: unknown[]; vms?: unknown[]; numberOfVMs?: number }
+        const ranges: RangeObj[] = Array.isArray(data) ? data : data?.rangeID ? [data] : []
+        const emptyRange = ranges.find((r) => {
+          const vmCount = (r.VMs ?? r.vms ?? []).length || r.numberOfVMs || 0
+          return r.rangeID && vmCount === 0
+        })
+        if (emptyRange?.rangeID) {
+          return { rangeId: emptyRange.rangeID, created: false }
+        }
+      }
+    } catch {
+      // Can't read ranges — proceed to create a new one
+    }
+
+    // No usable empty range found — create a dedicated one.
+    // Naming convention: <user>-<labname>-<uid>  e.g. "melchior-GOAD-Mini-LDQ8"
+    const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
+    const labSlug = (selectedLab ?? "").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
+    // Short 4-char base36 uniquifier to avoid collisions for multiple instances of the same lab
+    const uid = Date.now().toString(36).toUpperCase().slice(-4)
+
+    const candidateId = `${user}-${labSlug}-${uid}`
+    const displayName = candidateId
+
+    try {
+      // Include impersonation headers so the route assigns the range to the
+      // correct user (admin impersonation is forwarded transparently).
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...getImpersonationHeaders(),
+      }
 
       const res = await fetch("/api/range/create", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rangeID: candidateId, name: `GOAD ${selectedLab} ${ts}`, description: `Dedicated range for GOAD ${selectedLab} instance` }),
+        headers,
+        body: JSON.stringify({
+          rangeID: candidateId,
+          name: displayName,
+          description: `Dedicated Ludus range for GOAD ${selectedLab} instance`,
+        }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (res.ok || res.status === 409) {
-        rangeId = candidateId
-        setDedicatedRangeId(rangeId)
-      } else {
-        console.warn("Could not pre-create dedicated range:", data.error)
-        // Continue anyway — GOAD will use the user's current default range
+        return { rangeId: candidateId, created: true }
       }
+      console.warn("Range creation failed:", data.error)
     } catch (err) {
-      console.warn("Range pre-creation failed:", err)
+      console.warn("Range creation error:", err)
+    }
+    return null
+  }
+
+  const handleDeploy = async () => {
+    if (!selectedLab) return
+
+    setCreatingRange(true)
+    let rangeId: string | null = null
+    try {
+      const result = await resolveDeployRange()
+      if (result) {
+        rangeId = result.rangeId
+        setDedicatedRangeId(rangeId)
+        // Switch the global range context so the UI reflects the new GOAD range
+        await refreshRanges()
+        selectRange(rangeId)
+      }
+      // If null, proceed without a rangeId — GOAD will use its default range
     } finally {
       setCreatingRange(false)
     }
 
     const exts = Array.from(selectedExtensions)
-    // goad.py -l <LAB> -p ludus -m local -t install [-e ext1 -e ext2 ...]
     const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
     const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
     setDeployed(true)
-    // Start range log streaming before GOAD so we catch Ludus VM provisioning
-    startRangeStreaming(selectedRangeId ?? undefined)
-    // Pass rangeId so GOAD injects LUDUS_RANGE_ID and targets the dedicated range
+    // Poll range logs scoped to the target range (not the sidebar selection)
+    startRangeStreaming(rangeId ?? undefined)
     await run(args, undefined, undefined, rangeId ?? undefined)
   }
 
   const handleStop = async () => {
     await stop()
     stopRangeStreaming()
+    // Also abort the Ludus range deployment so VMs stop being created
+    if (dedicatedRangeId) {
+      try {
+        await fetch(
+          `/api/proxy/range/abort?rangeID=${encodeURIComponent(dedicatedRangeId)}`,
+          { method: "POST" }
+        )
+      } catch {
+        // Best-effort; user can abort manually from the Dashboard if this fails
+      }
+    }
   }
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)

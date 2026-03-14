@@ -214,6 +214,22 @@ export default function GoadInstancePage() {
     confirm("Start all VMs?", () => runAction("start", `-i ${instanceId} -t start`))
   const handleStop = () =>
     confirm("Stop all VMs?", () => runAction("stop", `-i ${instanceId} -t stop`))
+
+  /** Stop the running GOAD command AND abort the Ludus range deployment if active. */
+  const handleStopCommand = async () => {
+    await stop()
+    const rangeId = instance?.ludusRangeId
+    if (rangeId) {
+      try {
+        await fetch(
+          `/api/proxy/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
+          { method: "POST" }
+        )
+      } catch {
+        // Best-effort abort; user can abort manually from the Dashboard
+      }
+    }
+  }
   /** Ensure this instance has a dedicated Ludus range before running any
    *  infrastructure command. Creates one via Ludus v2 multi-range API if
    *  not already set. Idempotent — no-ops if already initialised. */
@@ -482,7 +498,7 @@ export default function GoadInstancePage() {
             </div>
 
             {isRunning && (
-              <Button size="sm" variant="destructive" onClick={stop}>
+              <Button size="sm" variant="destructive" onClick={handleStopCommand}>
                 <StopCircle className="h-3.5 w-3.5" />
                 Stop Command
               </Button>

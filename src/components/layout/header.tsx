@@ -13,6 +13,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { User, Shield, LogOut, ChevronDown } from "lucide-react"
+import { useSidebar } from "@/lib/sidebar-context"
+import { cn } from "@/lib/utils"
 
 const pageTitles: Record<string, { title: string; description: string }> = {
   "/": { title: "Dashboard", description: "Overview of your Ludus range" },
@@ -39,6 +41,7 @@ export function Header() {
   const pathname = usePathname()
   const router = useRouter()
   const [session, setSession] = useState<SessionInfo | null>(null)
+  const { collapsed } = useSidebar()
 
   useEffect(() => {
     fetch("/api/auth/session")
@@ -66,7 +69,13 @@ export function Header() {
   }
 
   return (
-    <header className="fixed top-0 right-0 left-64 z-30 h-16 bg-background/80 backdrop-blur-sm border-b border-border flex items-center px-6 gap-4">
+    <header
+      className={cn(
+        "fixed top-0 right-0 z-30 h-16 bg-background/80 backdrop-blur-sm border-b border-border flex items-center px-6 gap-4",
+        "transition-[left] duration-200 ease-in-out",
+        collapsed ? "left-16" : "left-64",
+      )}
+    >
       <div className="flex-1">
         <h1 className="text-base font-semibold text-foreground">{pageInfo.title}</h1>
         <p className="text-xs text-muted-foreground">{pageInfo.description}</p>

@@ -2,12 +2,51 @@
  * Session management using AES-256-GCM encrypted HTTP-only cookies.
  * Uses the Web Crypto API (crypto.subtle) so it works in both the
  * Next.js Edge runtime (middleware) and Node.js API routes.
+ *
+ * Cookie isolation on shared-hostname deployments
+ * ─────────────────────────────────────────────────
+ * Ludus UX and Proxmox commonly run on the same host at different ports
+ * (e.g. :443 and :8006).  HTTP cookies are domain-scoped, NOT port-scoped,
+ * so Proxmox's PVEAuthCookie arrives in every request to our app.
+ *
+ * On HTTPS (production) we use the "__Host-" cookie prefix (RFC 6265bis).
+ * This instructs the browser to enforce three hard constraints:
+ *   1. Secure attribute is required — cookie only travels over HTTPS.
+ *   2. Path must be "/" — no path-scoping loopholes.
+ *   3. No Domain attribute allowed — cookie is bound to the exact origin.
+ * The net effect: no other service on the same hostname (including Proxmox
+ * on a different port) can set or overwrite our session cookie.  The
+ * PVEAuthCookie continues to coexist harmlessly in browser requests; our
+ * session token is cryptographically isolated from it.
+ *
+ * On plain HTTP (development / DISABLE_HTTPS=true) the __Host- prefix
+ * requires Secure which isn't available, so we fall back to the
+ * unprefixed name "ludus_session" for local development only.
  */
 
 import { cookies } from "next/headers"
 import { NextRequest, NextResponse } from "next/server"
 
-const SESSION_COOKIE = "ludus_session"
+/**
+ * Whether the runtime environment serves over HTTPS.
+ * The __Host- prefix REQUIRES the Secure attribute; using it on plain HTTP
+ * causes browsers to silently drop the Set-Cookie entirely.
+ */
+const IS_SECURE_CONTEXT =
+  process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true"
+
+/**
+ * Cookie name.
+ * Production HTTPS  → "__Host-ludus_session" (browser-enforced origin binding)
+ * Development HTTP  → "ludus_session"        (standard cookie, no prefix guards)
+ *
+ * Legacy fallback: if a browser still holds the old unprefixed "ludus_session"
+ * from a previous version, getSessionFromRequest will try it as a fallback so
+ * users aren't silently logged out on upgrade.
+ */
+const SESSION_COOKIE = IS_SECURE_CONTEXT ? "__Host-ludus_session" : "ludus_session"
+const LEGACY_SESSION_COOKIE = "ludus_session"
+
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 const SALT = new TextEncoder().encode("ludus-ui-session-salt-v1")
 
@@ -93,16 +132,32 @@ export async function decryptSession(token: string): Promise<SessionData | null>
 export async function getSessionFromRequest(
   request: NextRequest
 ): Promise<SessionData | null> {
+  // Try the canonical (possibly __Host-prefixed) cookie first.
   const token = request.cookies.get(SESSION_COOKIE)?.value
-  if (!token) return null
-  return decryptSession(token)
+  if (token) return decryptSession(token)
+
+  // Legacy fallback: if upgrading from a version that used the unprefixed name,
+  // accept the old cookie for one request so the user isn't silently logged out.
+  // setSessionCookie() will re-issue under the new name in the same response.
+  if (IS_SECURE_CONTEXT) {
+    const legacyToken = request.cookies.get(LEGACY_SESSION_COOKIE)?.value
+    if (legacyToken) return decryptSession(legacyToken)
+  }
+
+  return null
 }
 
 /** Read and decrypt the session from the Next.js cookie store (server components) */
 export async function getSession(): Promise<SessionData | null> {
   const token = cookies().get(SESSION_COOKIE)?.value
-  if (!token) return null
-  return decryptSession(token)
+  if (token) return decryptSession(token)
+
+  if (IS_SECURE_CONTEXT) {
+    const legacyToken = cookies().get(LEGACY_SESSION_COOKIE)?.value
+    if (legacyToken) return decryptSession(legacyToken)
+  }
+
+  return null
 }
 
 /** Encrypt and attach the session cookie to a response */
@@ -113,16 +168,27 @@ export async function setSessionCookie(
   const token = await encryptSession(data)
   response.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    // "lax" (not "strict") allows the cookie to be sent on top-level
-    // same-site navigations (e.g. clicking a link from Proxmox UI back to
-    // our app).  With "strict", navigating here from any external page
-    // strips the session cookie → forced re-login → browser re-prompts for
-    // the self-signed cert.  "lax" still blocks CSRF on non-safe methods.
+    // "lax" allows the cookie to be sent on top-level same-site navigations
+    // (e.g. clicking a link from Proxmox UI back to our app).  "strict" would
+    // strip it on every cross-origin navigation and force re-login.
+    // The __Host- prefix already provides origin binding; Lax handles UX.
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
-    secure: process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true",
+    secure: IS_SECURE_CONTEXT,
   })
+
+  // If we just issued a prefixed cookie, also expire the legacy unprefixed one
+  // so browsers don't accumulate both names after an upgrade.
+  if (IS_SECURE_CONTEXT) {
+    response.cookies.set(LEGACY_SESSION_COOKIE, "", {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+      secure: true,
+    })
+  }
 }
 
 /** Clear the session cookie on a response */
@@ -132,5 +198,16 @@ export function clearSessionCookie(response: NextResponse): void {
     sameSite: "strict",
     path: "/",
     maxAge: 0,
+    secure: IS_SECURE_CONTEXT,
   })
+  // Clear legacy name too, in case it's still in the browser
+  if (IS_SECURE_CONTEXT) {
+    response.cookies.set(LEGACY_SESSION_COOKIE, "", {
+      httpOnly: true,
+      sameSite: "strict",
+      path: "/",
+      maxAge: 0,
+      secure: true,
+    })
+  }
 }

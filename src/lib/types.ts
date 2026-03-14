@@ -256,6 +256,8 @@ export interface GoadLabDef {
   domains: number
   /** Ludus packer template names required to deploy this lab */
   requiredTemplates: string[]
+  /** Whether a providers/ludus/ directory exists for this lab */
+  ludusSupported: boolean
 }
 
 /** An extension discovered from <goadPath>/extensions/<ext>/config.json */

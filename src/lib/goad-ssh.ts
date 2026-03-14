@@ -536,33 +536,71 @@ def read_readme_description(lab_dir):
                 pass
     return ""
 
-def extract_templates_from_ludus_yaml(path):
-    """Parse providers/ludus/config.yml (or ludus.yml) to get unique template names.
-    Uses a minimal YAML parser — just look for lines like '  template: win2019-server-x64'
-    to avoid requiring PyYAML."""
+def extract_templates_from_yaml_file(path):
+    """Scan any YAML file for template/packer_template field values.
+    Uses a line-regex approach — no PyYAML dependency required.
+    Handles any indentation depth and both 'template:' and 'packer_template:' keys."""
     templates = set()
     if not os.path.isfile(path):
         return templates
     try:
         with open(path) as f:
             for line in f:
-                m = re.match(r'^\\s+template:\\s*([\\w.-]+)', line)
+                # Match:  template: some-value  OR  packer_template: some-value
+                # at any indentation level.  Template names in GOAD Ludus configs
+                # are always bare identifiers (win2019-server-x64, etc.) so we
+                # match word chars, dots, slashes, and dashes — no quote handling
+                # needed, which also avoids JS-template-literal escape issues.
+                m = re.match(r'^\\s+(?:packer_)?template:\\s+([\\w][\\w./-]*)', line)
                 if m:
                     templates.add(m.group(1).strip())
     except Exception:
         pass
     return templates
 
-def get_required_templates(base_dir):
-    """Try several known locations for Ludus provider template definitions."""
+def extract_templates_from_json(path):
+    """Scan data/config.json host entries for template / packer_template fields."""
     templates = set()
-    candidates = [
-        os.path.join(base_dir, "providers", "ludus", "config.yml"),
-        os.path.join(base_dir, "providers", "ludus", "ludus.yml"),
-        os.path.join(base_dir, "providers", "ludus", "range.yml"),
-    ]
-    for c in candidates:
-        templates |= extract_templates_from_ludus_yaml(c)
+    if not os.path.isfile(path):
+        return templates
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        hosts = data.get("lab", {}).get("hosts", {})
+        for h in hosts.values():
+            for key in ("template", "packer_template", "ludus_template"):
+                val = h.get(key, "")
+                if val and isinstance(val, str):
+                    templates.add(val.strip())
+    except Exception:
+        pass
+    return templates
+
+def get_required_templates(base_dir):
+    """Collect required Ludus packer template names for a lab or extension.
+
+    Priority order:
+      1. Any *.yml / *.yaml under providers/ludus/   (direct Ludus config)
+      2. data/config.json host entries                (fallback for labs without a
+                                                       dedicated Ludus provider dir)
+    """
+    templates = set()
+
+    # 1. Scan every YAML file under providers/ludus/
+    ludus_dir = os.path.join(base_dir, "providers", "ludus")
+    if os.path.isdir(ludus_dir):
+        for fname in os.listdir(ludus_dir):
+            if fname.endswith((".yml", ".yaml")):
+                templates |= extract_templates_from_yaml_file(
+                    os.path.join(ludus_dir, fname)
+                )
+
+    # 2. Fall back to data/config.json when no Ludus provider dir exists
+    if not templates:
+        templates |= extract_templates_from_json(
+            os.path.join(base_dir, "data", "config.json")
+        )
+
     return sorted(templates)
 
 def discover(goad_path):
@@ -594,12 +632,15 @@ def discover(goad_path):
                     pass
             description = read_readme_description(lab_dir)
             required_templates = get_required_templates(lab_dir)
+            ludus_dir = os.path.join(lab_dir, "providers", "ludus")
+            ludus_supported = os.path.isdir(ludus_dir)
             result["labs"].append({
                 "name": lab_name,
                 "description": description,
                 "vmCount": vm_count,
                 "domains": domain_count,
                 "requiredTemplates": required_templates,
+                "ludusSupported": ludus_supported,
             })
 
     ext_path = os.path.join(goad_path, "extensions")

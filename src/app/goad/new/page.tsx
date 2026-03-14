@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "@/lib/types"
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
@@ -60,33 +61,60 @@ function TemplateChips({
 }) {
   if (required.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-1 mt-1.5">
-      {required.map((t) => {
-        const built = builtNames.has(t)
-        const installed = allNames.has(t)
-        return (
-          <span
-            key={t}
-            title={built ? "Template ready" : installed ? "Installed but not yet built" : "Template not installed"}
-            className={cn(
-              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border",
-              built
-                ? "bg-green-500/10 border-green-500/30 text-green-400"
+    <TooltipProvider delayDuration={200}>
+      <div className="flex flex-wrap gap-1 mt-1.5">
+        {required.map((t) => {
+          const built = builtNames.has(t)
+          const installed = allNames.has(t)
+
+          const chip = (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border",
+                built
+                  ? "bg-green-500/10 border-green-500/30 text-green-400"
+                  : installed
+                  ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                  : "bg-red-500/10 border-red-500/30 text-red-400"
+              )}
+            >
+              {built
+                ? <Check className="h-2.5 w-2.5 flex-shrink-0" />
                 : installed
-                ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
-                : "bg-red-500/10 border-red-500/30 text-red-400"
-            )}
-          >
-            {built
-              ? <Check className="h-2.5 w-2.5 flex-shrink-0" />
-              : installed
-              ? <CircleAlert className="h-2.5 w-2.5 flex-shrink-0" />
-              : <PackageX className="h-2.5 w-2.5 flex-shrink-0" />}
-            {t}
-          </span>
-        )
-      })}
-    </div>
+                ? <CircleAlert className="h-2.5 w-2.5 flex-shrink-0" />
+                : <PackageX className="h-2.5 w-2.5 flex-shrink-0" />}
+              {t}
+            </span>
+          )
+
+          if (built) {
+            return (
+              <Tooltip key={t}>
+                <TooltipTrigger asChild>{chip}</TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  className="border-green-500/30 bg-green-950/90 text-green-300 text-xs px-2.5 py-1.5"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Check className="h-3 w-3 text-green-400 flex-shrink-0" />
+                    <span><span className="font-mono font-semibold">{t}</span> — installed &amp; built</span>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )
+          }
+
+          return (
+            <span
+              key={t}
+              title={installed ? "Installed but not yet built — go to Templates to build" : "Not installed — go to Templates to add"}
+            >
+              {chip}
+            </span>
+          )
+        })}
+      </div>
+    </TooltipProvider>
   )
 }
 
@@ -181,34 +209,18 @@ export default function NewGoadInstancePage() {
   })
 
   /**
-   * Determine which Ludus range to use for this deployment:
-   *  - If the user has no ranges → create a new dedicated one
-   *  - If all existing ranges already have VMs → create a new dedicated one
-   *  - If there's an empty range (0 VMs) → reuse it (no creation)
+   * Always creates a fresh dedicated Ludus range for this GOAD deployment.
    *
-   * Returns { rangeId, created } or null if range setup fails.
+   * We intentionally never reuse an existing range — even an empty one.
+   * The "reuse empty range" optimisation was removed because GET /range only
+   * returns the user's *default* range, so an empty `melchior` would be
+   * mistakenly picked, setting LUDUS_RANGE_ID=melchior and causing GOAD's
+   * internal `ludus range rm` to destroy the user's primary range.
+   *
+   * Returns { rangeId, created } or null if range creation fails.
    */
   const resolveDeployRange = async (): Promise<{ rangeId: string; created: boolean } | null> => {
-    // Check the user's existing ranges for VM occupancy
-    try {
-      const res = await fetch("/api/proxy/range")
-      if (res.ok) {
-        const data = await res.json()
-        type RangeObj = { rangeID?: string; VMs?: unknown[]; vms?: unknown[]; numberOfVMs?: number }
-        const ranges: RangeObj[] = Array.isArray(data) ? data : data?.rangeID ? [data] : []
-        const emptyRange = ranges.find((r) => {
-          const vmCount = (r.VMs ?? r.vms ?? []).length || r.numberOfVMs || 0
-          return r.rangeID && vmCount === 0
-        })
-        if (emptyRange?.rangeID) {
-          return { rangeId: emptyRange.rangeID, created: false }
-        }
-      }
-    } catch {
-      // Can't read ranges — proceed to create a new one
-    }
-
-    // No usable empty range found — create a dedicated one.
+    // Always create a new dedicated range.
     // Naming convention: <user>-<labname>-<uid>  e.g. "melchior-GOAD-Mini-LDQ8"
     const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
     const labSlug = (selectedLab ?? "").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
@@ -404,8 +416,10 @@ export default function NewGoadInstancePage() {
           ) : !catalogError && catalog ? (
             <div className="grid gap-2">
               {catalog.labs.map((lab) => {
-                const tpl = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
-                const canSelect = tpl.ready || (lab.requiredTemplates ?? []).length === 0
+                const ludusOk  = lab.ludusSupported !== false  // treat missing field as true (older catalog)
+                const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
+                const tplOk    = tpl.ready || (lab.requiredTemplates ?? []).length === 0
+                const canSelect = ludusOk && tplOk
                 const isSelected = selectedLab === lab.name
                 return (
                   <button
@@ -434,7 +448,13 @@ export default function NewGoadInstancePage() {
                           {lab.domains > 0 && (
                             <Badge variant="secondary" className="text-xs">{lab.domains} domain{lab.domains !== 1 ? "s" : ""}</Badge>
                           )}
-                          {!canSelect && (
+                          {/* Incompatible takes priority over missing-templates */}
+                          {!ludusOk && (
+                            <Badge variant="secondary" className="text-xs gap-1 text-muted-foreground">
+                              No Ludus provider
+                            </Badge>
+                          )}
+                          {ludusOk && !tplOk && (
                             <Badge variant="destructive" className="text-xs gap-1">
                               <PackageX className="h-2.5 w-2.5" /> Missing templates
                             </Badge>
@@ -448,9 +468,14 @@ export default function NewGoadInstancePage() {
                         {lab.description && (
                           <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{lab.description}</p>
                         )}
-                        {(lab.requiredTemplates ?? []).length > 0 && (
-                          <TemplateChips required={lab.requiredTemplates} builtNames={builtNames} allNames={allNames} />
-                        )}
+                        {!ludusOk ? (
+                          <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">
+                            No <code>providers/ludus/</code> directory — this lab cannot be deployed with Ludus
+                          </p>
+                        ) : (lab.requiredTemplates ?? []).length > 0
+                          ? <TemplateChips required={lab.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                          : <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">No template requirements detected — hit Refresh if this seems wrong</p>
+                        }
                       </div>
                       {isSelected && (
                         <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />

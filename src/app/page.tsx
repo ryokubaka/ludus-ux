@@ -45,7 +45,7 @@ export default function DashboardPage() {
   const { toast } = useToast()
   const router = useRouter()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const { selectedRangeId, ranges: accessibleRanges, loading: rangeCtxLoading } = useRange()
+  const { selectedRangeId, ranges: accessibleRanges, loading: rangeCtxLoading, selectRange, refreshRanges } = useRange()
 
   // ── Global ─────────────────────────────────────────────────────────────────
   const [ranges, setRanges] = useState<RangeObject[]>([])
@@ -219,6 +219,18 @@ export default function DashboardPage() {
       toast({ variant: "destructive", title: "Delete failed", description: result.error })
     } else {
       toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
+
+      // Refresh the global range context — this updates the sidebar selector and
+      // automatically switches away from the deleted range if it was selected.
+      await refreshRanges()
+
+      // If the deleted range was active, switch the context explicitly before the
+      // local fetchRanges re-renders, so we never hit the "Range not found" error.
+      if (rangeId === selectedRangeId) {
+        const remaining = accessibleRanges.filter((r) => r.rangeID !== rangeId)
+        if (remaining.length > 0) selectRange(remaining[0].rangeID)
+      }
+
       fetchRanges()
     }
   }

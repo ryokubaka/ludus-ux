@@ -42,6 +42,7 @@ RUN npx esbuild server/ws-server.ts \
     --external:./server \
     --external:bufferutil \
     --external:utf-8-validate \
+    --external:ssh2 \
     --outfile=.next/standalone/ws-server.js
 
 # Production image, copy all the files and run next

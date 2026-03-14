@@ -58,7 +58,14 @@ async function handler(
   })
 
   if (result.error) {
-    return NextResponse.json({ error: result.error }, { status: result.status || 500 })
+    // Annotate connection failures on the admin endpoint with an actionable hint so the
+    // user knows why it failed rather than seeing a raw ECONNREFUSED message.
+    const isConnectionError = result.status === 0
+    const errorMessage =
+      useAdmin && isConnectionError
+        ? `${result.error} — admin API (port 8081) unreachable. Ensure the app is deployed on the Ludus/Proxmox server itself, or set LUDUS_ADMIN_URL in your .env to an accessible address.`
+        : result.error
+    return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
   }
 
   return NextResponse.json(result.data, { status: result.status || 200 })

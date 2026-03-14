@@ -2,19 +2,19 @@ import { NextRequest, NextResponse } from "next/server"
 import { authenticateUser, saveApiKeyToBashrc } from "@/lib/auth-ssh"
 import { setSessionCookie, type SessionData } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
-import type { UserObject } from "@/lib/types"
 
 /** Ask Ludus for this user's info using their API key. Returns null if the key is invalid. */
 async function checkLudusUser(apiKey: string): Promise<{ isAdmin: boolean; valid: boolean }> {
   try {
-    const result = await ludusRequest<UserObject[]>("/user", { apiKey })
-    if (result.data && Array.isArray(result.data) && result.data.length > 0) {
-      return { isAdmin: result.data[0].isAdmin === true, valid: true }
+    const result = await ludusRequest<unknown>("/user", { apiKey })
+    if (result.error || result.status !== 200) {
+      return { isAdmin: false, valid: false }
     }
-    // Got a response but empty data — key is accepted but user list empty
-    if (result.status === 200) return { isAdmin: false, valid: true }
-    // 401 or other error → key is invalid
-    return { isAdmin: false, valid: false }
+    const raw = result.data
+    // Ludus v2 may return a single UserObject or UserObject[] — handle both
+    const user = Array.isArray(raw) ? raw[0] : raw
+    if (!user || typeof user !== "object") return { isAdmin: false, valid: true }
+    return { isAdmin: (user as Record<string, unknown>).isAdmin === true, valid: true }
   } catch {
     return { isAdmin: false, valid: false }
   }

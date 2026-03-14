@@ -17,8 +17,10 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
 
 import http from "http"
 import https from "https"
+import net from "net"
 import fs from "fs"
 import { WebSocketServer, WebSocket } from "ws"
+import { Client as SSHClient } from "ssh2"
 import { getVncSession } from "../src/lib/vnc-token-store"
 import { proxmoxCreateVncProxy, proxmoxLogin } from "../src/lib/proxmox-http"
 
@@ -27,7 +29,7 @@ const tlsCertPath = process.env.TLS_CERT_PATH || "/app/certificates/cert.pem"
 const tlsKeyPath  = process.env.TLS_KEY_PATH  || "/app/certificates/key.pem"
 
 let tlsOptions: https.ServerOptions | null = null
-if (fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath)) {
+if (process.env.DISABLE_HTTPS !== "true" && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath)) {
   try {
     tlsOptions = {
       cert: fs.readFileSync(tlsCertPath),
@@ -224,5 +226,85 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
   })
 }
 
+// ── Admin API SSH tunnel ──────────────────────────────────────────────────────
+//
+// The Ludus admin API (port 8081) typically binds only to 127.0.0.1 on the
+// Proxmox host.  A Docker bridge-networked container cannot reach that
+// loopback address directly.  We work around this by setting up a local TCP
+// server (on ADMIN_TUNNEL_PORT inside the container) that forwards each
+// connection through an SSH channel to the remote host's 127.0.0.1:8081.
+// The LUDUS_ADMIN_URL env var is then updated so that the settings-store
+// (which reads it on every getSettings() call) uses the tunneled address.
+//
+// A new SSH channel is opened for each TCP connection.  Admin operations are
+// infrequent so the per-call SSH overhead is acceptable and avoids having to
+// maintain a persistent reconnecting SSH connection.
+const ADMIN_TUNNEL_PORT = 18081
+
+function startAdminTunnel(): Promise<void> {
+  const sshHost     = (process.env.LUDUS_SSH_HOST       || "").replace(/\r/g, "")
+  const sshPort     = parseInt(process.env.LUDUS_SSH_PORT || "22", 10)
+  const sshUser     = (process.env.PROXMOX_SSH_USER      || "root").replace(/\r/g, "")
+  const sshPassword = (process.env.PROXMOX_SSH_PASSWORD  || "").replace(/\r/g, "")
+
+  if (!sshHost || !sshPassword) {
+    console.log("[admin-tunnel] SSH credentials not configured — skipping tunnel")
+    return Promise.resolve()
+  }
+
+  return new Promise<void>((resolve) => {
+    const server = net.createServer((socket) => {
+      const conn = new SSHClient()
+
+      conn.on("ready", () => {
+        // Ask the remote SSH server to open a channel to its own localhost:8081
+        conn.forwardOut("127.0.0.1", ADMIN_TUNNEL_PORT, "127.0.0.1", 8081, (err, stream) => {
+          if (err) {
+            console.error("[admin-tunnel] forwardOut error:", err.message)
+            socket.destroy()
+            conn.end()
+            return
+          }
+          socket.pipe(stream)
+          stream.pipe(socket)
+          socket.on("error", () => { stream.destroy(); conn.end() })
+          stream.on("close", () => { socket.destroy(); conn.end() })
+        })
+      })
+
+      conn.on("error", (err) => {
+        console.error("[admin-tunnel] SSH error:", err.message)
+        socket.destroy()
+      })
+
+      conn.connect({
+        host: sshHost,
+        port: sshPort,
+        username: sshUser,
+        password: sshPassword,
+        readyTimeout: 10_000,
+        authHandler: ["password"],
+      })
+    })
+
+    server.on("error", (err) => {
+      console.error("[admin-tunnel] Server error:", err.message)
+      resolve() // Don't block startup; admin ops will fail with a clear error
+    })
+
+    server.listen(ADMIN_TUNNEL_PORT, "127.0.0.1", () => {
+      // Point the admin URL at our local tunnel endpoint.
+      // settings-store.defaults() reads process.env on every getSettings() call,
+      // so this change takes effect immediately for all subsequent API calls.
+      process.env.LUDUS_ADMIN_URL = `https://127.0.0.1:${ADMIN_TUNNEL_PORT}`
+      console.log(`[admin-tunnel] Listening on 127.0.0.1:${ADMIN_TUNNEL_PORT} → ${sshHost}:8081`)
+      resolve()
+    })
+  })
+}
+
 // ── Boot Next.js standalone server ───────────────────────────────────────────
-require("./server")
+;(async () => {
+  await startAdminTunnel()
+  require("./server")
+})()

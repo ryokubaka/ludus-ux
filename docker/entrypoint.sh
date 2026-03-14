@@ -50,15 +50,17 @@ fi
 # generate a self-signed certificate so the app always serves HTTPS.
 # The certificates/ directory is volume-mounted, so generated certs persist
 # across container restarts.
+#
+# Set DISABLE_HTTPS=true to skip TLS entirely and run on plain HTTP.
+# This is useful for local/localhost testing where browser self-signed cert
+# bypass behaviour is unreliable.
 # ---------------------------------------------------------------------------
 
 TLS_CERT="${TLS_CERT_PATH:-/app/certificates/cert.pem}"
 TLS_KEY="${TLS_KEY_PATH:-/app/certificates/key.pem}"
 
-mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
-
 # ---------------------------------------------------------------------------
-# TLS helpers
+# TLS helpers (defined unconditionally — used in both HTTPS and DISABLE_HTTPS paths)
 # ---------------------------------------------------------------------------
 
 # Strip carriage returns from a value.
@@ -68,6 +70,14 @@ mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
 strip_cr() {
     printf '%s' "${1:-}" | tr -d '\r'
 }
+
+if [ "$(strip_cr "${DISABLE_HTTPS:-false}")" = "true" ]; then
+    echo "[entrypoint] DISABLE_HTTPS=true — skipping TLS, running on plain HTTP"
+    # Remove any existing cert so ws-server.ts falls back to HTTP mode
+    rm -f "$TLS_CERT" "$TLS_KEY"
+else
+
+mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
 
 # Returns 0 if $1 looks like an IPv4 address (digits and dots only, n.n.n.n).
 # Uses shell case patterns — no grep, no external tools, immune to CRLF/locale.
@@ -167,6 +177,8 @@ if [ "$NEEDS_REGEN" = "true" ]; then
 else
     echo "[entrypoint] Using existing TLS certificate: $TLS_CERT"
 fi
+
+fi # end DISABLE_HTTPS check
 
 # ---------------------------------------------------------------------------
 # Ensure the volume-mounted data directory is writable by the nextjs user.

@@ -18,9 +18,10 @@ services:
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
       # Session encryption secret (change this!)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}
-      # Ludus API endpoints — constructed from LUDUS_SSH_HOST so only one var is needed
+      # Ludus API endpoints — constructed from LUDUS_SSH_HOST so only one var is needed.
+      # Override LUDUS_ADMIN_URL in .env if the admin API is not reachable via the SSH host IP.
       - LUDUS_URL=https://${LUDUS_SSH_HOST}:8080
-      - LUDUS_ADMIN_URL=https://${LUDUS_SSH_HOST}:8081
+      - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
       - LUDUS_VERIFY_TLS=${LUDUS_VERIFY_TLS:-false}
       # ROOT API key for Ludus v2 admin operations (user management)
       - LUDUS_ROOT_API_KEY=${LUDUS_ROOT_API_KEY:-}
@@ -36,6 +37,8 @@ services:
       - GOAD_PATH=${GOAD_PATH:-/opt/goad-mod}
       # TLS — place your own cert.pem + key.pem in ./certificates/, or leave
       # empty and the container will auto-generate a self-signed certificate.
+      # Set DISABLE_HTTPS=true to run on plain HTTP (useful for localhost testing).
+      - DISABLE_HTTPS=${DISABLE_HTTPS:-false}
       - TLS_CERT_PATH=${TLS_CERT_PATH:-/app/certificates/cert.pem}
       - TLS_KEY_PATH=${TLS_KEY_PATH:-/app/certificates/key.pem}
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
@@ -47,7 +50,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://127.0.0.1:3000/api/health"]
+      # Try HTTPS first (normal mode); fall back to HTTP when DISABLE_HTTPS=true.
+      test: ["CMD-SHELL", "wget -q --spider --no-check-certificate https://127.0.0.1:3000/api/health 2>/dev/null || wget -q --spider http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

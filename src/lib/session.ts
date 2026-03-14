@@ -116,7 +116,7 @@ export async function setSessionCookie(
     sameSite: "strict",
     path: "/",
     maxAge: SESSION_TTL_MS / 1000,
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true",
   })
 }
 

@@ -240,9 +240,10 @@ export interface GoadInstance {
   /** Linux username that owns the instance workspace directory */
   ownerUserId?: string
   /**
-   * Ludus rangeID (Proxmox pool name, e.g. "smeowden") for the range this
-   * GOAD instance was deployed to. Populated by correlating ipRange with
-   * GET /range/all — set once the instance has been "provided" (ip_range known).
+   * Dedicated Ludus rangeID for this GOAD instance.
+   * Populated from <workspace>/<instanceId>/.goad_range_id (written by our
+   * init-range flow) or from the `range_id` field GOAD stores in instance.json.
+   * When set, all Ludus operations for this instance target only this range.
    */
   ludusRangeId?: string
 }

@@ -178,7 +178,11 @@ export async function streamGoadCommand(
   /** When set, the command is wrapped with `sudo -H -u {username}` and the
    *  impersonated user's API key replaces the caller's key.  The SSH connection
    *  itself uses root credentials (creds is ignored and falls back to root/key). */
-  impersonateAs?: { username: string; apiKey: string }
+  impersonateAs?: { username: string; apiKey: string },
+  /** Dedicated Ludus rangeID for this GOAD instance. When set, LUDUS_RANGE_ID
+   *  is injected into the GOAD environment so Ludus operations target only
+   *  this range — leaving other ranges completely untouched. */
+  rangeId?: string
 ): Promise<() => void> {
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
@@ -190,7 +194,41 @@ export async function streamGoadCommand(
   let command: string;
   // PYTHONUNBUFFERED=1 prevents Python from block-buffering stdout when stdin is a pipe,
   // ensuring ansible output is flushed to the SSH stream line-by-line in real time.
-  const pyEnv = `PYTHONUNBUFFERED=1 LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}' LUDUS_VERSION=2`;
+  // LUDUS_RANGE_ID scopes all Ludus API calls to this instance's dedicated range so
+  // that destroy/deploy operations never touch the operator's other ranges.
+  const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
+  const pyEnv = `PYTHONUNBUFFERED=1 LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}' LUDUS_VERSION=2${safeRangeId ? ` LUDUS_RANGE_ID='${safeRangeId}'` : ""}`;
+
+  // ── Pre-flight: ensure workspace is writable (as root, separate SSH) ────────
+  //
+  // The GOAD workspace directory is typically owned by root after installation.
+  // Non-root SSH users cannot create instance sub-directories in it, which
+  // causes goad.py to crash with "Instance dir creation error".
+  //
+  // We open a *separate* root SSH connection (reusing the root credentials in
+  // the settings store) and create+chmod the directory before the user's command
+  // starts.  This runs as actual root — no sudo required.
+  //
+  // The await adds ~1-2 s of setup latency, which is negligible for a 30-90 min
+  // GOAD deployment.  Failure is silenced here; the preamble below still checks
+  // writability and prints a clear actionable error if it isn't writable.
+  const GOAD_WORKSPACE = `${goadPath}/workspace`;
+  try {
+    await sshExec(`mkdir -p '${GOAD_WORKSPACE}' && chmod 777 '${GOAD_WORKSPACE}'`);
+  } catch {
+    // Root SSH may not be configured; writability check in preamble below handles it
+  }
+
+  // ── Per-command preamble (runs in the user's SSH context) ────────────────────
+  //
+  // 1. Idempotent bashrc check — ensures LUDUS_VERSION=2 is set for interactive
+  //    and UI-triggered commands alike.
+  // 2. Writability gate — emits a clear, actionable message if root SSH above
+  //    didn't succeed (e.g. root creds not configured).
+  const setupPreamble = [
+    `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
+    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Ensure PROXMOX_SSH_PASSWORD is set in your .env (used for root SSH workspace setup)."; exit 1; fi`,
+  ].join("; ");
 
   // Build the inner goad command (same as before)
   let innerCommand: string;
@@ -199,12 +237,13 @@ export async function streamGoadCommand(
     const stdinCmds = rawCmds.split(";").join("\n");
     const escaped = stdinCmds.replace(/'/g, "'\\''");
     innerCommand = [
+      setupPreamble,
       `cd ${goadPath}`,
       `. ${goadPath}/.venv/bin/activate 2>/dev/null || true`,
       `${pyEnv} printf '${escaped}\nexit\n' | python3 -u ${goadPath}/goad.py`,
-    ].join(" && ");
+    ].join("; ");
   } else {
-    innerCommand = `cd ${goadPath} && ${pyEnv} ${goadPath}/goad.sh ${goadArgs}`;
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} ${goadPath}/goad.sh ${goadArgs}`;
   }
 
   if (impersonateAs) {
@@ -301,6 +340,47 @@ export async function streamGoadCommand(
   };
 }
 
+// ── Per-instance Ludus range tracking ────────────────────────────────────────
+//
+// Each GOAD instance should have its own dedicated Ludus range so that
+// destroying it only removes that instance's VMs — not the operator's
+// other ranges.
+//
+// The range ID is stored in <goadPath>/workspace/<instanceId>/.goad_range_id
+// as a plain string. GOAD is invoked with LUDUS_RANGE_ID=<rangeId> so it
+// targets the correct range for all Ludus API calls.
+
+/** Write the dedicated Ludus rangeID for a GOAD instance workspace. */
+export async function writeGoadRangeId(
+  instanceId: string,
+  rangeId: string,
+  creds?: SSHCreds
+): Promise<void> {
+  const goadPath = getSettings().goadPath || "/opt/goad-mod"
+  const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
+  const dir = `${goadPath}/workspace/${safeId}`
+  const filePath = `${dir}/.goad_range_id`
+  const safeRangeId = rangeId.replace(/'/g, "")
+  await sshExec(`mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`, creds)
+}
+
+/** Read the dedicated Ludus rangeID for a GOAD instance. Returns null if not set. */
+export async function readGoadRangeId(
+  instanceId: string,
+  creds?: SSHCreds
+): Promise<string | null> {
+  try {
+    const goadPath = getSettings().goadPath || "/opt/goad-mod"
+    const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
+    const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
+    const { stdout, code } = await sshExec(`cat '${filePath}' 2>/dev/null`, creds)
+    if (code !== 0 || !stdout.trim()) return null
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
 // Python script that reads the entire workspace in one SSH call.
 // Encoded as base64 and piped through the existing SSH connection to avoid
 // shell-quoting issues.  Returns a JSON array of instance objects, each with
@@ -336,11 +416,22 @@ for d in entries:
         except Exception:
             pass
 
+    # Read dedicated Ludus rangeID from our tracking file (.goad_range_id)
+    goad_range_id = ''
+    range_id_path = os.path.join(dp, '.goad_range_id')
+    if os.path.isfile(range_id_path):
+        try:
+            with open(range_id_path) as rf:
+                goad_range_id = rf.read().strip()
+        except Exception:
+            pass
+
     try:
         with open(fp) as f:
             data = json.load(f)
-        data['__owner__'] = owner
-        data['__dir__']   = d
+        data['__owner__']         = owner
+        data['__dir__']           = d
+        data['__goad_range_id__'] = goad_range_id
         results.append(data)
     except Exception:
         pass
@@ -382,16 +473,25 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
     for (const data of parsed) {
       const instanceId = (data.id as string) || (data.__dir__ as string) || ""
       if (!instanceId) continue
+      // ludusRangeId: prefer our .goad_range_id file (explicit tracking),
+      // fall back to range_id/ludus_range_id that GOAD itself may write to instance.json.
+      const ludusRangeId =
+        (data.__goad_range_id__ as string) ||
+        (data.range_id         as string) ||
+        (data.ludus_range_id   as string) ||
+        ""
+
       instances.push({
         instanceId,
-        lab:         ((data.lab         as string) || "") as import("./types").GoadLabType,
-        provider:    (data.provider    as string) || "",
-        provisioner: (data.provisioner as string) || "",
-        ipRange:     (data.ip_range    as string) || "",
-        status:      ((data.status      as string) || "CREATED") as import("./types").GoadInstanceStatus,
-        isDefault:   Boolean(data.is_default),
-        extensions:  ((data.extensions as string[]) || []) as import("./types").GoadExtension[],
-        ownerUserId: (data.__owner__   as string) || "",
+        lab:          ((data.lab         as string) || "") as import("./types").GoadLabType,
+        provider:     (data.provider    as string) || "",
+        provisioner:  (data.provisioner as string) || "",
+        ipRange:      (data.ip_range    as string) || "",
+        status:       ((data.status      as string) || "CREATED") as import("./types").GoadInstanceStatus,
+        isDefault:    Boolean(data.is_default),
+        extensions:   ((data.extensions as string[]) || []) as import("./types").GoadExtension[],
+        ownerUserId:  (data.__owner__   as string) || "",
+        ludusRangeId: ludusRangeId || undefined,
       })
     }
 

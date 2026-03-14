@@ -33,7 +33,7 @@ A web UI for [Ludus](https://docs.ludus.cloud) cyber range management. Replaces 
 |---|---|
 | User management | Admin API (port 8081) + ROOT API key |
 | VM consoles | Proxmox root SSH credentials |
-| GOAD labs | SSH access + [goad-mod](https://github.com/Orange-Cyberdefense/GOAD) installed on the Ludus server |
+| GOAD labs | SSH access + [goad-mod](https://github.com/Orange-Cyberdefense/GOAD) installed on the Ludus server + `python3.11-venv` on the Ludus server |
 
 ---
 
@@ -63,6 +63,12 @@ docker compose up -d --build
 ```
 
 Log in with your Ludus SSH username and password. The UI reads your API key from `~/.bashrc` automatically.
+
+> **GOAD prerequisite:** If you plan to use GOAD lab deployments, you must first clone the GOAD repository onto your Ludus server and install the Python venv package:
+> ```bash
+> git clone https://github.com/Orange-Cyberdefense/GOAD.git /opt/GOAD
+> apt install python3.11-venv
+> ```
 
 ---
 
@@ -116,7 +122,7 @@ If `LUDUS_SSH_HOST` is a hostname that Docker can't resolve (e.g., it's only in 
 - **Users & Groups** — Admin user management, WireGuard config, group access control
 - **Blueprints** — Save and share range configurations
 - **Ansible Roles** — Manage Galaxy roles and collections
-- **GOAD** — Deploy and manage Game of Active Directory labs
+- **GOAD** — Deploy and manage Game of Active Directory labs (requires `python3.11-venv` on the Ludus server: `apt install python3.11-venv`)
 - **Admin Impersonation** — Manage any user's ranges as an admin
 - **Range Logs** — Live SSE log streaming during deployments
 

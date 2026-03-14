@@ -42,6 +42,8 @@ export default function NewGoadInstancePage() {
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
   const [deployed, setDeployed] = useState(false)
+  const [creatingRange, setCreatingRange] = useState(false)
+  const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new")
   const {
     lines: rangeLogLines,
@@ -97,6 +99,37 @@ export default function NewGoadInstancePage() {
 
   const handleDeploy = async () => {
     if (!selectedLab) return
+
+    // ── Create a dedicated Ludus range for this deployment ───────────────────
+    // Each GOAD instance gets its own range so destroying it never touches
+    // other Ludus ranges (VMs deployed outside GOAD, other lab instances, etc.)
+    setCreatingRange(true)
+    let rangeId: string | null = null
+    try {
+      // Generate a short unique rangeID (alphanumeric, ≤20 chars)
+      const slug = selectedLab.replace(/[^a-zA-Z0-9]/g, "").substring(0, 8)
+      const ts = Date.now().toString(36).toUpperCase().substring(0, 8)
+      const candidateId = `G${slug}${ts}`.substring(0, 20)
+
+      const res = await fetch("/api/range/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rangeID: candidateId, name: `GOAD ${selectedLab} ${ts}`, description: `Dedicated range for GOAD ${selectedLab} instance` }),
+      })
+      const data = await res.json()
+      if (res.ok || res.status === 409) {
+        rangeId = candidateId
+        setDedicatedRangeId(rangeId)
+      } else {
+        console.warn("Could not pre-create dedicated range:", data.error)
+        // Continue anyway — GOAD will use the user's current default range
+      }
+    } catch (err) {
+      console.warn("Range pre-creation failed:", err)
+    } finally {
+      setCreatingRange(false)
+    }
+
     const exts = Array.from(selectedExtensions)
     // goad.py -l <LAB> -p ludus -m local -t install [-e ext1 -e ext2 ...]
     const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
@@ -104,7 +137,8 @@ export default function NewGoadInstancePage() {
     setDeployed(true)
     // Start range log streaming before GOAD so we catch Ludus VM provisioning
     startRangeStreaming(selectedRangeId ?? undefined)
-    await run(args)
+    // Pass rangeId so GOAD injects LUDUS_RANGE_ID and targets the dedicated range
+    await run(args, undefined, undefined, rangeId ?? undefined)
   }
 
   const handleStop = async () => {
@@ -362,8 +396,10 @@ export default function NewGoadInstancePage() {
             <Button variant="ghost" onClick={() => setStep(1)}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
-            <Button onClick={handleDeploy} disabled={isRunning} className="min-w-36">
-              <Play className="h-4 w-4" /> Deploy Instance
+            <Button onClick={handleDeploy} disabled={isRunning || creatingRange} className="min-w-36">
+              {creatingRange
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating range...</>
+                : <><Play className="h-4 w-4" /> Deploy Instance</>}
             </Button>
           </div>
         </div>
@@ -379,6 +415,11 @@ export default function NewGoadInstancePage() {
               <span className="text-muted-foreground">
                 Deploying <code className="text-primary font-mono">{selectedLab}</code>
               </span>
+              {dedicatedRangeId && (
+                <Badge variant="success" className="gap-1">
+                  <Server className="h-3 w-3" /> range: {dedicatedRangeId}
+                </Badge>
+              )}
               {/* Range deploy phase indicator */}
               {isRangeStreaming && (
                 <Badge variant="warning" className="gap-1">

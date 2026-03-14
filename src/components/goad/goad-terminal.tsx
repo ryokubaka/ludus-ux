@@ -254,7 +254,10 @@ export function useGoadStream(storageKey?: string) {
   const run = useCallback(async (
     args: string,
     instanceId?: string,
-    impersonateAs?: { username: string; apiKey: string }
+    impersonateAs?: { username: string; apiKey: string },
+    /** Dedicated Ludus rangeID — injected as LUDUS_RANGE_ID so GOAD targets
+     *  only this instance's range, leaving other ranges untouched. */
+    rangeId?: string
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -266,7 +269,7 @@ export function useGoadStream(storageKey?: string) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ args, instanceId, impersonateAs }),
+        body: JSON.stringify({ args, instanceId, impersonateAs, rangeId }),
         signal: controller.signal,
       },
       true

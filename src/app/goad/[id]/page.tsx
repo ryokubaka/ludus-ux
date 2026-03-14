@@ -79,6 +79,7 @@ export default function GoadInstancePage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const initialInstanceLoadDone = useRef(false)
+  const [initializingRange, setInitializingRange] = useState(false)
   // Unified confirmation: holds the label + callback for the pending action
   const [pendingAction, setPendingAction] = useState<{ label: string; fn: () => void } | null>(null)
 
@@ -213,9 +214,43 @@ export default function GoadInstancePage() {
     confirm("Start all VMs?", () => runAction("start", `-i ${instanceId} -t start`))
   const handleStop = () =>
     confirm("Stop all VMs?", () => runAction("stop", `-i ${instanceId} -t stop`))
-  // `provide` is a REPL command, not a -t task — use REPL mode so LUDUS_API_KEY is injected
+  /** Ensure this instance has a dedicated Ludus range before running any
+   *  infrastructure command. Creates one via Ludus v2 multi-range API if
+   *  not already set. Idempotent — no-ops if already initialised. */
+  const ensureRangeIsolation = async (): Promise<string | null> => {
+    if (instance?.ludusRangeId) return instance.ludusRangeId
+    setInitializingRange(true)
+    try {
+      const res = await fetch(
+        `/api/goad/instances/${encodeURIComponent(instanceId)}/init-range`,
+        { method: "POST", headers: { "Content-Type": "application/json", ...impersonationHeaders() } }
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        toast({ variant: "destructive", title: "Range creation failed", description: data.error || "Could not create a dedicated Ludus range for this instance." })
+        return null
+      }
+      if (data.created) {
+        toast({ title: "Dedicated range created", description: `Ludus range "${data.rangeId}" created for this instance.` })
+      }
+      fetchInstances() // refresh so ludusRangeId shows up
+      return data.rangeId as string
+    } catch (err) {
+      toast({ variant: "destructive", title: "Range creation failed", description: (err as Error).message })
+      return null
+    } finally {
+      setInitializingRange(false)
+    }
+  }
+
+  // `provide` is a REPL command, not a -t task — use REPL mode so LUDUS_API_KEY is injected.
+  // Ensure a dedicated range exists first so GOAD targets only this instance's range.
   const handleProvide = () =>
-    confirm("Provide (create Ludus infrastructure)?", () => runAction("provide", `--repl "use ${instanceId};provide"`))
+    confirm("Provide (create Ludus infrastructure)?", async () => {
+      const rangeId = await ensureRangeIsolation()
+      if (!rangeId) return
+      await runAction("provide", `--repl "use ${instanceId};provide"`)
+    })
   const handleProvisionLab = () =>
     confirm("Run full Ansible provisioning? This can take 30–90 minutes.", () =>
       runAction("provision-lab", `--repl "use ${instanceId};provision_lab"`)
@@ -242,20 +277,27 @@ export default function GoadInstancePage() {
       }
     )
 
-  const handleDestroy = () =>
-    confirm(`Permanently destroy instance ${instanceId}? This cannot be undone.`, async () => {
-      await runAction("destroy", `-i ${instanceId} -t destroy`)
-      // Clean up the GOAD workspace directory so the instance disappears from the list
-      try {
-        await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...impersonationHeaders() },
-          body: JSON.stringify({}),
-        })
-      } catch {}
-      toast({ title: "Lab destroyed" })
-      router.push("/goad")
-    })
+  const handleDestroy = () => {
+    const rangeInfo = instance?.ludusRangeId
+      ? `This will delete dedicated Ludus range "${instance.ludusRangeId}" and all its VMs.`
+      : "All VMs provisioned by this instance will be destroyed. Run Provide first to isolate this instance to its own range."
+    confirm(
+      `Permanently destroy "${instanceId}"? ${rangeInfo} This cannot be undone.`,
+      async () => {
+        await runAction("destroy", `-i ${instanceId} -t destroy`)
+        // Clean up workspace after GOAD destroy
+        try {
+          await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+            body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+          })
+        } catch {}
+        toast({ title: "Lab destroyed" })
+        router.push("/goad")
+      }
+    )
+  }
 
   const handleForceDelete = () =>
     confirm(
@@ -354,13 +396,14 @@ export default function GoadInstancePage() {
               <Wifi className="h-3 w-3" /> {instance.ipRange || "IP not yet assigned"}
             </span>
             {instance.ludusRangeId ? (
-              <span className="text-xs text-muted-foreground flex items-center gap-1" title="Ludus range ID (Proxmox pool)">
+              <span className="text-xs text-green-400 flex items-center gap-1" title="This instance has its own dedicated Ludus range — destroying it will not affect other ranges">
                 <Server className="h-3 w-3" />
-                range: <code className="text-primary ml-0.5">{instance.ludusRangeId}</code>
+                range: <code className="ml-0.5">{instance.ludusRangeId}</code>
               </span>
             ) : (
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <Server className="h-3 w-3" /> {instance.provider} / {instance.provisioner}
+              <span className="text-xs text-yellow-400 flex items-center gap-1" title="No dedicated range yet — click Provide to create an isolated range for this instance">
+                <Server className="h-3 w-3" />
+                {instance.provider} / {instance.provisioner} (no dedicated range)
               </span>
             )}
           </div>
@@ -391,13 +434,13 @@ export default function GoadInstancePage() {
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm" variant="outline"
-                onClick={handleProvide} disabled={isRunning || !!pendingAction}
-                title="Deploy/update Ludus infrastructure (no Ansible)"
+                onClick={handleProvide} disabled={isRunning || initializingRange || !!pendingAction}
+                title="Deploy/update Ludus infrastructure (no Ansible). Creates a dedicated range if needed."
               >
-                {isRunning && currentAction === "provide"
+                {(isRunning && currentAction === "provide") || initializingRange
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   : <Server className="h-3.5 w-3.5" />}
-                Provide
+                {initializingRange ? "Creating range..." : "Provide"}
               </Button>
               <Button
                 size="sm" variant="success"

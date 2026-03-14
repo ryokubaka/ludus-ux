@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server"
-import { streamGoadCommand, isGoadConfigured } from "@/lib/goad-ssh"
+import { streamGoadCommand, isGoadConfigured, readGoadRangeId } from "@/lib/goad-ssh"
 import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
+import { getSettings } from "@/lib/settings-store"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 
 export const dynamic = "force-dynamic"
@@ -22,10 +23,13 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({ args: "", instanceId: undefined }))
-  const { args, instanceId, impersonateAs } = body as {
+  const { args, instanceId, impersonateAs, rangeId: bodyRangeId } = body as {
     args?: string
     instanceId?: string
     impersonateAs?: { username: string; apiKey: string }
+    /** Explicit rangeID to target — passed by the caller when a dedicated range
+     *  is known up-front (e.g. new-instance flow where the range was pre-created). */
+    rangeId?: string
   }
 
   if (!args) {
@@ -46,10 +50,28 @@ export async function POST(request: NextRequest) {
     })
   }
 
+  // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────
+  // Priority: 1) explicit in request body (new-instance flow)
+  //           2) read from .goad_range_id file in workspace (existing instance)
+  //           3) omit (GOAD uses its own default range selection)
+  let effectiveRangeId: string | undefined = bodyRangeId || undefined
+  if (!effectiveRangeId && instanceId && !impersonateAs) {
+    try {
+      const settings = getSettings()
+      const rootCreds = settings.proxmoxSshPassword
+        ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
+        : undefined
+      effectiveRangeId = (await readGoadRangeId(instanceId, rootCreds)) ?? undefined
+    } catch {
+      // SSH unavailable — proceed without range targeting
+    }
+  }
+
+  const apiKey = session?.apiKey ?? null
+
   // Use the session's own credentials so GOAD runs as the logged-in user,
   // using their personal LUDUS_API_KEY and their own GOAD workspace.
   // When impersonating, creds are ignored — root SSH + sudo handles auth.
-  const apiKey = session?.apiKey ?? null
   const creds = (!impersonateAs && session?.sshPassword)
     ? { username: session.username, password: session.sshPassword }
     : undefined
@@ -91,7 +113,8 @@ export async function POST(request: NextRequest) {
             resolve()
           },
           creds,
-          impersonateAs
+          impersonateAs,
+          effectiveRangeId
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

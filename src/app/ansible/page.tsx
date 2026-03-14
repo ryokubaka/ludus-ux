@@ -38,6 +38,7 @@ export default function AnsiblePage() {
   const [newRoleName, setNewRoleName] = useState("")
   const [newRoleVersion, setNewRoleVersion] = useState("")
   const [newCollName, setNewCollName] = useState("")
+  const [newCollVersion, setNewCollVersion] = useState("")
   const [adding, setAdding] = useState(false)
 
   const fetchData = useCallback(async () => {
@@ -58,7 +59,18 @@ export default function AnsiblePage() {
     setAdding(true)
     const result = await ludusApi.addRole(newRoleName, newRoleVersion || undefined)
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      const alreadyInstalled =
+        /already installed/i.test(result.error) ||
+        /nothing to do/i.test(result.error)
+      if (alreadyInstalled) {
+        toast({ title: "Already installed", description: `${newRoleName} is already present on the server.` })
+        setAddRoleDialog(false)
+        setNewRoleName("")
+        setNewRoleVersion("")
+        fetchData()
+      } else {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else {
       toast({ title: "Role added", description: newRoleName })
       setAddRoleDialog(false)
@@ -83,13 +95,27 @@ export default function AnsiblePage() {
   const handleAddCollection = async () => {
     if (!newCollName.trim()) return
     setAdding(true)
-    const result = await ludusApi.addCollection(newCollName)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+    const result = await ludusApi.addCollection(newCollName, newCollVersion.trim() || undefined)
+    if (result.status === 409 || (result.error && /already installed/i.test(result.error))) {
+      toast({ title: "Already installed", description: `${newCollName} is already installed on the server.` })
+      setAddCollDialog(false)
+      setNewCollName("")
+      setNewCollVersion("")
+      fetchData()
+    } else if (result.error) {
+      const isPreRelease = /pre-release|pre_release|--pre/i.test(result.error)
+      toast({
+        variant: "destructive",
+        title: "Error installing collection",
+        description: isPreRelease
+          ? `${newCollName} is only available as a pre-release. Specify a concrete version number (e.g. 0.1.0) in the Version field and try again.`
+          : result.error,
+      })
     } else {
       toast({ title: "Collection added", description: newCollName })
       setAddCollDialog(false)
       setNewCollName("")
+      setNewCollVersion("")
       fetchData()
     }
     setAdding(false)
@@ -274,7 +300,7 @@ export default function AnsiblePage() {
       </Dialog>
 
       {/* Add Collection Dialog */}
-      <Dialog open={addCollDialog} onOpenChange={setAddCollDialog}>
+      <Dialog open={addCollDialog} onOpenChange={(open) => { setAddCollDialog(open); if (!open) { setNewCollName(""); setNewCollVersion("") } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Ansible Collection</DialogTitle>
@@ -286,8 +312,22 @@ export default function AnsiblePage() {
                 placeholder="community.general or namespace.collection"
                 value={newCollName}
                 onChange={(e) => setNewCollName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !adding && newCollName.trim() && handleAddCollection()}
                 className="font-mono text-sm"
               />
+              <p className="text-xs text-muted-foreground">FQCN format: namespace.collection_name</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Version (optional)</Label>
+              <Input
+                placeholder="latest or 1.2.3"
+                value={newCollVersion}
+                onChange={(e) => setNewCollVersion(e.target.value)}
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Required for pre-release collections — specify a version like <code className="text-primary">0.1.0</code>
+              </p>
             </div>
           </div>
           <DialogFooter>

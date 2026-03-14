@@ -228,13 +228,16 @@ export const ludusApi = {
   listAnsible: () => get<import("./types").AnsibleItem[]>("/ansible"),
   listRoles: () => get<import("./types").AnsibleItem[]>("/ansible"),
   listCollections: () => get<import("./types").AnsibleItem[]>("/ansible"),
+  // Ludus v2 role endpoint: POST /ansible/role — field "role", action "install"|"remove"
   addRole: (name: string, version?: string) =>
-    post("/ansible/role", { roleName: name, version }),
-  removeRole: (name: string) => del("/ansible/role", { roleName: name }),
-  addCollection: (name: string) =>
-    post("/ansible/collection", { collectionName: name }),
+    post("/ansible/role", { role: name, action: "install", ...(version ? { version } : {}) }),
+  removeRole: (name: string) =>
+    post("/ansible/role", { role: name, action: "remove" }),
+  // Ludus v2 collection endpoint: POST /ansible/collection — field "collection" (no action field)
+  addCollection: (name: string, version?: string) =>
+    post("/ansible/collection", { collection: name, ...(version ? { version } : {}) }),
   removeCollection: (name: string) =>
-    del("/ansible/collection", { collectionName: name }),
+    post("/ansible/collection", { collection: name, force: true }),
 
   // Wireguard — GET /user/wireguard
   getUserWireguard: (_userId?: string) =>

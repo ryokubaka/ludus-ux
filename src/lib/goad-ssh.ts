@@ -536,6 +536,35 @@ def read_readme_description(lab_dir):
                 pass
     return ""
 
+def extract_templates_from_ludus_yaml(path):
+    """Parse providers/ludus/config.yml (or ludus.yml) to get unique template names.
+    Uses a minimal YAML parser — just look for lines like '  template: win2019-server-x64'
+    to avoid requiring PyYAML."""
+    templates = set()
+    if not os.path.isfile(path):
+        return templates
+    try:
+        with open(path) as f:
+            for line in f:
+                m = re.match(r'^\\s+template:\\s*([\\w.-]+)', line)
+                if m:
+                    templates.add(m.group(1).strip())
+    except Exception:
+        pass
+    return templates
+
+def get_required_templates(base_dir):
+    """Try several known locations for Ludus provider template definitions."""
+    templates = set()
+    candidates = [
+        os.path.join(base_dir, "providers", "ludus", "config.yml"),
+        os.path.join(base_dir, "providers", "ludus", "ludus.yml"),
+        os.path.join(base_dir, "providers", "ludus", "range.yml"),
+    ]
+    for c in candidates:
+        templates |= extract_templates_from_ludus_yaml(c)
+    return sorted(templates)
+
 def discover(goad_path):
     result = {"labs": [], "extensions": []}
 
@@ -564,11 +593,13 @@ def discover(goad_path):
                 except Exception:
                     pass
             description = read_readme_description(lab_dir)
+            required_templates = get_required_templates(lab_dir)
             result["labs"].append({
                 "name": lab_name,
                 "description": description,
                 "vmCount": vm_count,
                 "domains": domain_count,
+                "requiredTemplates": required_templates,
             })
 
     ext_path = os.path.join(goad_path, "extensions")
@@ -587,12 +618,14 @@ def discover(goad_path):
                 try:
                     with open(cfg_file) as f:
                         cfg = json.load(f)
+                    required_templates = get_required_templates(ext_dir)
                     result["extensions"].append({
                         "name": cfg.get("name", ext_name),
                         "description": cfg.get("description", ""),
                         "machines": cfg.get("machines", []),
                         "compatibility": cfg.get("compatibility", ["*"]),
                         "impact": cfg.get("impact", ""),
+                        "requiredTemplates": required_templates,
                     })
                 except Exception:
                     pass

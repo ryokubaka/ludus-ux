@@ -20,6 +20,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { readGoadRangeId, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { ludusRequest } from "@/lib/ludus-client"
+import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
 
@@ -107,7 +109,20 @@ export async function POST(
     )
   }
 
-  // ── 4. Write rangeID to workspace ─────────────────────────────────────────
+  // ── 4. Assign the range to the user ──────────────────────────────────────
+  // Ludus create body ignores userID; assignment requires a separate call.
+  const assignRes = await ludusRequest(
+    `/ranges/assign/${encodeURIComponent(effectiveUsername)}/${encodeURIComponent(rangeId)}`,
+    { method: "POST", apiKey: effectiveApiKey },
+  )
+  const alreadyOwned =
+    typeof assignRes.error === "string" &&
+    assignRes.error.toLowerCase().includes("already has access")
+  if (!assignRes.error || alreadyOwned) {
+    setOwnership(rangeId, effectiveUsername, session.username)
+  }
+
+  // ── 5. Write rangeID to workspace ─────────────────────────────────────────
   try {
     await writeGoadRangeId(instanceId, rangeId, rootCreds)
   } catch (err) {

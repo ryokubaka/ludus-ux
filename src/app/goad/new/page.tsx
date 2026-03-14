@@ -22,13 +22,73 @@ import {
   Info,
   StopCircle,
   Server,
+  PackageCheck,
+  PackageX,
+  CircleAlert,
 } from "lucide-react"
 import Link from "next/link"
-import type { GoadLabDef, GoadExtensionDef, GoadCatalog } from "@/lib/types"
+import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useRange } from "@/lib/range-context"
+
+// ── Template readiness helpers ────────────────────────────────────────────────
+
+/** Returns { present, missing } template lists for a given set of required names */
+function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
+  const present: string[] = []
+  const missingUnbuilt: string[] = [] // installed but not yet built
+  const missingAbsent: string[] = []  // not installed at all
+  for (const t of required) {
+    if (builtNames.has(t)) present.push(t)
+    else if (allNames.has(t)) missingUnbuilt.push(t)
+    else missingAbsent.push(t)
+  }
+  return { present, missingUnbuilt, missingAbsent, ready: missingUnbuilt.length === 0 && missingAbsent.length === 0 }
+}
+
+/** Inline template chip list for a lab card or extension row */
+function TemplateChips({
+  required,
+  builtNames,
+  allNames,
+}: {
+  required: string[]
+  builtNames: Set<string>
+  allNames: Set<string>
+}) {
+  if (required.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1 mt-1.5">
+      {required.map((t) => {
+        const built = builtNames.has(t)
+        const installed = allNames.has(t)
+        return (
+          <span
+            key={t}
+            title={built ? "Template ready" : installed ? "Installed but not yet built" : "Template not installed"}
+            className={cn(
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border",
+              built
+                ? "bg-green-500/10 border-green-500/30 text-green-400"
+                : installed
+                ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                : "bg-red-500/10 border-red-500/30 text-red-400"
+            )}
+          >
+            {built
+              ? <Check className="h-2.5 w-2.5 flex-shrink-0" />
+              : installed
+              ? <CircleAlert className="h-2.5 w-2.5 flex-shrink-0" />
+              : <PackageX className="h-2.5 w-2.5 flex-shrink-0" />}
+            {t}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 const STEPS = ["Select Lab Type", "Select Extensions", "Review & Deploy"]
 
@@ -47,11 +107,24 @@ export default function NewGoadInstancePage() {
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const [currentUsername, setCurrentUsername] = useState<string>("")
 
-  // Fetch session username for range naming convention
+  // Template readiness
+  const [templates, setTemplates] = useState<TemplateObject[]>([])
+  const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
+  const allNames   = new Set(templates.map((t) => t.name))
+
+  // Fetch session username for range naming convention + installed templates
   useEffect(() => {
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => { if (d.username) setCurrentUsername(d.username) })
+      .catch(() => {})
+
+    fetch("/api/proxy/templates")
+      .then((r) => r.ok ? r.json() : [])
+      .then((d) => {
+        const list: TemplateObject[] = Array.isArray(d) ? d : (d?.result ?? [])
+        setTemplates(list)
+      })
       .catch(() => {})
   }, [])
   const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new")
@@ -176,6 +249,18 @@ export default function NewGoadInstancePage() {
   const handleDeploy = async () => {
     if (!selectedLab) return
 
+    // Snapshot existing instance IDs so we can diff after deploy to find the new one
+    let instanceIdsBefore: Set<string> = new Set()
+    try {
+      const snap = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+      if (snap.ok) {
+        const snapData = await snap.json()
+        instanceIdsBefore = new Set(
+          (snapData.instances ?? []).map((i: { instanceId: string }) => i.instanceId)
+        )
+      }
+    } catch { /* best-effort */ }
+
     setCreatingRange(true)
     let rangeId: string | null = null
     try {
@@ -199,6 +284,28 @@ export default function NewGoadInstancePage() {
     // Poll range logs scoped to the target range (not the sidebar selection)
     startRangeStreaming(rangeId ?? undefined)
     await run(args, undefined, undefined, rangeId ?? undefined)
+
+    // After deploy completes, link any newly created instance to the dedicated range
+    if (rangeId) {
+      try {
+        const after = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+        if (after.ok) {
+          const afterData = await after.json()
+          const newIds: string[] = (afterData.instances ?? [])
+            .filter((i: { instanceId: string; ludusRangeId?: string }) =>
+              !instanceIdsBefore.has(i.instanceId) || !i.ludusRangeId
+            )
+            .map((i: { instanceId: string }) => i.instanceId)
+          if (newIds.length > 0) {
+            await fetch("/api/goad/instances/set-range", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+              body: JSON.stringify({ rangeId, instanceIds: newIds }),
+            })
+          }
+        }
+      } catch { /* best-effort — user can manually init-range if needed */ }
+    }
   }
 
   const handleStop = async () => {
@@ -291,47 +398,69 @@ export default function NewGoadInstancePage() {
           {catalogLoading ? (
             <div className="space-y-2">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-16 w-full rounded-lg bg-muted/50 animate-pulse" />
+                <div key={i} className="h-20 w-full rounded-lg bg-muted/50 animate-pulse" />
               ))}
             </div>
           ) : !catalogError && catalog ? (
-            <div className="grid gap-3">
-              {catalog.labs.map((lab) => (
-                <button
-                  key={lab.name}
-                  className={cn(
-                    "text-left p-4 rounded-lg border-2 transition-all",
-                    selectedLab === lab.name
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:border-primary/50"
-                  )}
-                  onClick={() => {
-                    setSelectedLab(lab.name)
-                    // Clear extension selections that aren't compatible with new lab
-                    setSelectedExtensions(new Set())
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <code className="font-mono font-bold text-primary">{lab.name}</code>
-                        <Badge variant="secondary" className="text-xs">{lab.vmCount} VMs</Badge>
-                        {lab.domains > 0 && (
-                          <Badge variant="secondary" className="text-xs">{lab.domains} domain{lab.domains !== 1 ? "s" : ""}</Badge>
+            <div className="grid gap-2">
+              {catalog.labs.map((lab) => {
+                const tpl = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
+                const canSelect = tpl.ready || (lab.requiredTemplates ?? []).length === 0
+                const isSelected = selectedLab === lab.name
+                return (
+                  <button
+                    key={lab.name}
+                    disabled={!canSelect}
+                    className={cn(
+                      "text-left p-4 rounded-lg border-2 transition-all",
+                      !canSelect && "opacity-50 cursor-not-allowed",
+                      isSelected
+                        ? "border-primary bg-primary/10"
+                        : canSelect
+                        ? "border-border hover:border-primary/50"
+                        : "border-border"
+                    )}
+                    onClick={() => {
+                      if (!canSelect) return
+                      setSelectedLab(lab.name)
+                      setSelectedExtensions(new Set())
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <code className="font-mono font-bold text-primary">{lab.name}</code>
+                          <Badge variant="secondary" className="text-xs">{lab.vmCount} VMs</Badge>
+                          {lab.domains > 0 && (
+                            <Badge variant="secondary" className="text-xs">{lab.domains} domain{lab.domains !== 1 ? "s" : ""}</Badge>
+                          )}
+                          {!canSelect && (
+                            <Badge variant="destructive" className="text-xs gap-1">
+                              <PackageX className="h-2.5 w-2.5" /> Missing templates
+                            </Badge>
+                          )}
+                          {canSelect && (lab.requiredTemplates ?? []).length > 0 && (
+                            <Badge variant="success" className="text-xs gap-1">
+                              <PackageCheck className="h-2.5 w-2.5" /> Ready
+                            </Badge>
+                          )}
+                        </div>
+                        {lab.description && (
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{lab.description}</p>
+                        )}
+                        {(lab.requiredTemplates ?? []).length > 0 && (
+                          <TemplateChips required={lab.requiredTemplates} builtNames={builtNames} allNames={allNames} />
                         )}
                       </div>
-                      {lab.description && (
-                        <p className="text-xs text-muted-foreground mt-1 truncate">{lab.description}</p>
+                      {isSelected && (
+                        <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
                       )}
                     </div>
-                    {selectedLab === lab.name && (
-                      <Check className="h-5 w-5 text-primary flex-shrink-0 ml-3" />
-                    )}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                )
+              })}
 
-              {catalog.labs.length === 0 && !catalogError && (
+              {catalog.labs.length === 0 && (
                 <div className="text-center py-8 text-muted-foreground text-sm">
                   No labs found in <code className="text-primary">{catalog.goadPath}/ad/</code>
                 </div>
@@ -363,41 +492,58 @@ export default function NewGoadInstancePage() {
             </div>
           ) : (
             <div className="grid gap-2">
-              {compatExtensions.map((ext) => (
-                <div
-                  key={ext.name}
-                  className={cn(
-                    "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all",
-                    selectedExtensions.has(ext.name)
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/30"
-                  )}
-                  onClick={() => toggleExtension(ext.name)}
-                >
-                  <Checkbox
-                    checked={selectedExtensions.has(ext.name)}
-                    onCheckedChange={() => toggleExtension(ext.name)}
-                    className="mt-0.5"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Puzzle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                      <code className="font-mono text-xs font-medium text-primary">{ext.name}</code>
-                      {ext.machines.length > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
-                        </span>
+              {compatExtensions.map((ext) => {
+                const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                const canEnable = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                const isSelected = selectedExtensions.has(ext.name)
+                return (
+                  <div
+                    key={ext.name}
+                    className={cn(
+                      "flex items-start gap-3 p-3 rounded-lg border transition-all",
+                      !canEnable && "opacity-50 cursor-not-allowed",
+                      isSelected && canEnable
+                        ? "border-primary bg-primary/5"
+                        : canEnable
+                        ? "border-border hover:border-primary/30 cursor-pointer"
+                        : "border-border"
+                    )}
+                    onClick={() => canEnable && toggleExtension(ext.name)}
+                  >
+                    <Checkbox
+                      checked={isSelected}
+                      disabled={!canEnable}
+                      onCheckedChange={() => canEnable && toggleExtension(ext.name)}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Puzzle className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <code className="font-mono text-xs font-medium text-primary">{ext.name}</code>
+                        {ext.machines.length > 0 && (
+                          <span className="text-xs text-muted-foreground">
+                            +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
+                          </span>
+                        )}
+                        {!canEnable && (
+                          <Badge variant="destructive" className="text-xs gap-1">
+                            <PackageX className="h-2.5 w-2.5" /> Missing templates
+                          </Badge>
+                        )}
+                      </div>
+                      {ext.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
+                      )}
+                      {ext.impact && (
+                        <p className="text-xs text-muted-foreground/70 mt-0.5 italic">{ext.impact}</p>
+                      )}
+                      {(ext.requiredTemplates ?? []).length > 0 && (
+                        <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
                       )}
                     </div>
-                    {ext.description && (
-                      <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
-                    )}
-                    {ext.impact && (
-                      <p className="text-xs text-muted-foreground/70 mt-0.5 italic">{ext.impact}</p>
-                    )}
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
 
@@ -453,6 +599,42 @@ export default function NewGoadInstancePage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Template readiness summary */}
+          {(() => {
+            const allRequired = [
+              ...(labInfo?.requiredTemplates ?? []),
+              ...Array.from(selectedExtensions).flatMap(
+                (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
+              ),
+            ]
+            const unique = [...new Set(allRequired)]
+            if (unique.length === 0) return null
+            const summary = checkTemplates(unique, builtNames, allNames)
+            return (
+              <Card className={cn(
+                "border",
+                summary.ready ? "border-green-500/30" : "border-red-500/30"
+              )}>
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    {summary.ready
+                      ? <PackageCheck className="h-3.5 w-3.5 text-green-400 flex-shrink-0" />
+                      : <PackageX className="h-3.5 w-3.5 text-red-400 flex-shrink-0" />}
+                    <span className={cn("text-xs font-medium", summary.ready ? "text-green-400" : "text-red-400")}>
+                      {summary.ready
+                        ? "All required templates are built and ready"
+                        : `${summary.missingAbsent.length + summary.missingUnbuilt.length} template${summary.missingAbsent.length + summary.missingUnbuilt.length !== 1 ? "s" : ""} not ready`}
+                    </span>
+                    <Link href="/templates" className="ml-auto text-[10px] text-primary/70 hover:text-primary underline underline-offset-2">
+                      Manage Templates →
+                    </Link>
+                  </div>
+                  <TemplateChips required={unique} builtNames={builtNames} allNames={allNames} />
+                </CardContent>
+              </Card>
+            )
+          })()}
 
           <Alert variant="warning">
             <AlertTriangle className="h-4 w-4" />

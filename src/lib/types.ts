@@ -254,6 +254,8 @@ export interface GoadLabDef {
   description: string
   vmCount: number
   domains: number
+  /** Ludus packer template names required to deploy this lab */
+  requiredTemplates: string[]
 }
 
 /** An extension discovered from <goadPath>/extensions/<ext>/config.json */
@@ -264,6 +266,8 @@ export interface GoadExtensionDef {
   /** Lab names this extension is compatible with; "*" means all */
   compatibility: string[]
   impact: string
+  /** Ludus packer template names required by this extension (beyond the base lab) */
+  requiredTemplates: string[]
 }
 
 /** Full catalog returned by GET /api/goad/catalog */

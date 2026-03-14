@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
+import { ludusRequest } from "@/lib/ludus-client"
+import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
 
@@ -62,6 +64,23 @@ export async function POST(request: NextRequest) {
         { status: res.status }
       )
     }
+
+    // ── Assign the range to the effective user ────────────────────────────────
+    // Ludus ignores the `userID` field in the create body; assignment requires
+    // a dedicated POST /ranges/assign/<user>/<rangeID> call on the standard port.
+    const assignRes = await ludusRequest(
+      `/ranges/assign/${encodeURIComponent(effectiveUsername)}/${encodeURIComponent(body.rangeID)}`,
+      { method: "POST", apiKey: effectiveApiKey },
+    )
+    const alreadyOwned =
+      typeof assignRes.error === "string" &&
+      assignRes.error.toLowerCase().includes("already has access")
+
+    if (!assignRes.error || alreadyOwned) {
+      // Persist to SQLite so Ranges Overview reflects it immediately
+      setOwnership(body.rangeID, effectiveUsername, session.username)
+    }
+
     return NextResponse.json(data, { status: res.status })
   } catch (err) {
     return NextResponse.json(

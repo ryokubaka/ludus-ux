@@ -61,14 +61,30 @@ mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
 # TLS helpers
 # ---------------------------------------------------------------------------
 
-# Returns 0 if $1 looks like an IPv4 address.
-is_ip() {
-    echo "$1" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
+# Strip carriage returns from a value.
+# .env files created on Windows have CRLF line endings; Docker Compose passes
+# the \r through into the container environment, silently breaking regex anchors
+# and openssl SAN parsing.  Always clean values before using them.
+strip_cr() {
+    printf '%s' "${1:-}" | tr -d '\r'
 }
 
-# Appends a value to SAN using IP: or DNS: based on its format.
+# Returns 0 if $1 looks like an IPv4 address (digits and dots only, n.n.n.n).
+# Uses shell case patterns — no grep, no external tools, immune to CRLF/locale.
+is_ip() {
+    local v
+    v=$(strip_cr "$1")
+    case "$v" in
+        *[!0-9.]*              ) return 1 ;;   # non-digit/dot character present
+        [0-9]*.[0-9]*.[0-9]*.[0-9]*) return 0 ;;   # matches n.n.n.n shape
+        *                      ) return 1 ;;
+    esac
+}
+
+# Appends a value to the SAN string, choosing IP: or DNS: based on its format.
 add_san() {
-    local VALUE="$1"
+    local VALUE
+    VALUE=$(strip_cr "$1")
     [ -z "$VALUE" ] && return
     if is_ip "$VALUE"; then
         SAN="$SAN,IP:$VALUE"
@@ -77,16 +93,24 @@ add_san() {
     fi
 }
 
-# Returns 0 if the cert at $TLS_CERT has an iPAddress SAN covering $1.
+# Returns 0 if the cert has an iPAddress SAN covering the given IP.
 cert_covers_ip() {
     openssl x509 -in "$TLS_CERT" -noout -ext subjectAltName 2>/dev/null \
         | grep -q "IP Address:$1"
 }
 
 # ---------------------------------------------------------------------------
-# Determine the Docker host gateway IP (the LAN IP users connect to).
+# Sanitise key env vars (strip Windows \r).
+# Do this once here rather than scattering strip_cr calls everywhere.
+# ---------------------------------------------------------------------------
+LUDUS_SSH_HOST=$(strip_cr "$LUDUS_SSH_HOST")
+LUDUS_SERVER_IP=$(strip_cr "$LUDUS_SERVER_IP")
+TLS_HOSTNAME=$(strip_cr "$TLS_HOSTNAME")
+
+# ---------------------------------------------------------------------------
+# Determine the Docker host gateway IP.
 # docker-compose.yml maps host.docker.internal → host-gateway, so this
-# resolves to the host machine's IP without any extra configuration.
+# resolves to the host machine's LAN IP without any extra configuration.
 # ---------------------------------------------------------------------------
 HOST_GW_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}')
 
@@ -95,19 +119,18 @@ HOST_GW_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}')
 #
 # We regenerate if:
 #   a) No cert/key files exist yet, OR
-#   b) An existing cert was generated with an IP address listed as a dNSName
-#      SAN instead of an iPAddress SAN (a common misconfiguration that causes
-#      ERR_CERT_AUTHORITY_INVALID when connecting by IP).
+#   b) An existing cert is missing an iPAddress SAN for an IP we need —
+#      e.g. it was previously generated with DNS:x.x.x.x instead of IP:x.x.x.x
+#      (caused by CRLF-corrupted env vars breaking the old is_ip check).
 # ---------------------------------------------------------------------------
 NEEDS_REGEN=false
 
 if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
     NEEDS_REGEN=true
 else
-    # Check that every IP we need is present as an iPAddress SAN.
     for CHECK_IP in "$LUDUS_SSH_HOST" "$LUDUS_SERVER_IP" "$HOST_GW_IP"; do
         if [ -n "$CHECK_IP" ] && is_ip "$CHECK_IP" && ! cert_covers_ip "$CHECK_IP"; then
-            echo "[entrypoint] Cert missing iPAddress SAN for $CHECK_IP (was likely added as dNSName) — regenerating"
+            echo "[entrypoint] Cert missing iPAddress SAN for $CHECK_IP — regenerating"
             rm -f "$TLS_CERT" "$TLS_KEY"
             NEEDS_REGEN=true
             break
@@ -116,14 +139,12 @@ else
 fi
 
 if [ "$NEEDS_REGEN" = "true" ]; then
-    # Build Subject Alternative Names.
-    #
-    # Entries:
-    #   DNS:localhost / IP:127.0.0.1   — always present
-    #   LUDUS_SSH_HOST                 — auto IP: or DNS: depending on format
-    #   LUDUS_SERVER_IP                — always an IP
-    #   TLS_HOSTNAME                   — user-supplied app hostname/IP
-    #   HOST_GW_IP                     — Docker host's LAN IP (auto-detected)
+    # Build Subject Alternative Names:
+    #   DNS:localhost / IP:127.0.0.1  — always
+    #   LUDUS_SSH_HOST                — IP: or DNS: auto-detected
+    #   LUDUS_SERVER_IP               — always IP:
+    #   TLS_HOSTNAME                  — IP: or DNS: auto-detected
+    #   HOST_GW_IP                    — Docker host LAN IP, always IP:
     SAN="DNS:localhost,IP:127.0.0.1"
     add_san "$LUDUS_SSH_HOST"
     [ -n "$LUDUS_SERVER_IP" ] && SAN="$SAN,IP:$LUDUS_SERVER_IP"

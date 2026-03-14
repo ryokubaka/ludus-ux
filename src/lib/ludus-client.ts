@@ -55,11 +55,15 @@ export async function ludusRequest<T = unknown>(
     headers["X-Impersonate-User"] = userOverride
   }
 
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 30_000)
+
   try {
     const fetchOptions: RequestInit = {
       method,
       headers,
       cache: "no-store",
+      signal: controller.signal,
     }
 
     if (body !== undefined) {
@@ -67,6 +71,7 @@ export async function ludusRequest<T = unknown>(
     }
 
     const response = await fetch(url, fetchOptions)
+    clearTimeout(timeoutId)
     const status = response.status
 
     if (status === 204) {
@@ -88,6 +93,10 @@ export async function ludusRequest<T = unknown>(
       return { data: text as unknown as T, status }
     }
   } catch (err) {
+    clearTimeout(timeoutId)
+    if (err instanceof Error && err.name === "AbortError") {
+      return { error: "Connection timed out after 30 s — is the Ludus server reachable?", status: 0 }
+    }
     const message = err instanceof Error ? err.message : String(err)
     return { error: `Connection failed: ${message}`, status: 0 }
   }

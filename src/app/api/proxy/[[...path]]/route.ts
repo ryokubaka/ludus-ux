@@ -6,6 +6,7 @@ async function handler(
   request: NextRequest,
   { params }: { params: { path?: string[] } }
 ) {
+  try {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -61,6 +62,11 @@ async function handler(
   }
 
   return NextResponse.json(result.data, { status: result.status || 200 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error("[proxy] Unexpected error:", message)
+    return NextResponse.json({ error: `Internal proxy error: ${message}` }, { status: 500 })
+  }
 }
 
 export const GET = handler

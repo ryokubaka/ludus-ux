@@ -58,15 +58,29 @@ TLS_KEY="${TLS_KEY_PATH:-/app/certificates/key.pem}"
 mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
 
 if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
-    # Build a Subject Alternative Name from available hostnames
+    # Build a Subject Alternative Name from available hostnames.
+    #
+    # We include:
+    #   - localhost / 127.0.0.1 (always)
+    #   - LUDUS_SSH_HOST        (Ludus server hostname, if it's also the app host)
+    #   - LUDUS_SERVER_IP       (explicit server IP override)
+    #   - TLS_HOSTNAME          (user-supplied app access hostname/IP)
+    #   - host.docker.internal  (the Docker host machine's IP on all platforms)
+    #     This covers the common case where users access the app via the host
+    #     machine's LAN IP (e.g. https://10.0.20.100) without needing extra config.
     SAN="DNS:localhost,IP:127.0.0.1"
     [ -n "$LUDUS_SSH_HOST" ] && SAN="$SAN,DNS:$LUDUS_SSH_HOST"
     [ -n "$LUDUS_SERVER_IP" ] && SAN="$SAN,IP:$LUDUS_SERVER_IP"
     [ -n "$TLS_HOSTNAME" ] && SAN="$SAN,DNS:$TLS_HOSTNAME"
 
+    # Auto-include the Docker host gateway IP so the cert is valid when
+    # accessed via the host machine's LAN/VPN IP out of the box.
+    HOST_GW_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}')
+    [ -n "$HOST_GW_IP" ] && SAN="$SAN,IP:$HOST_GW_IP"
+
     CN="${TLS_HOSTNAME:-${LUDUS_SSH_HOST:-ludus-ui}}"
 
-    echo "[entrypoint] No TLS certificate found — generating self-signed cert (CN=$CN)"
+    echo "[entrypoint] No TLS certificate found — generating self-signed cert (CN=$CN, SAN=$SAN)"
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "$TLS_KEY" \
         -out "$TLS_CERT" \
@@ -79,6 +93,7 @@ if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
     echo "[entrypoint] Self-signed certificate generated at $TLS_CERT"
 else
     echo "[entrypoint] Using existing TLS certificate: $TLS_CERT"
+    echo "[entrypoint] NOTE: If you changed the access hostname/IP, delete $TLS_CERT and $TLS_KEY to regenerate."
 fi
 
 # ---------------------------------------------------------------------------

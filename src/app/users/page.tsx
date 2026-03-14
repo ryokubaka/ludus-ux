@@ -44,10 +44,13 @@ export default function UsersPage() {
   const [addDialog, setAddDialog] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newUserId, setNewUserId] = useState("")
-  const [newUserName, setNewUserName] = useState("")
   const [newUserPassword, setNewUserPassword] = useState("")
   const [newUserAdmin, setNewUserAdmin] = useState(false)
   const [showNewPassword, setShowNewPassword] = useState(false)
+
+  /** Strip any character that is not a lowercase letter, digit, hyphen, or underscore. */
+  const sanitizeUserId = (value: string) =>
+    value.toLowerCase().replace(/[^a-z0-9_-]/g, "")
 
   // ── Delete user ────────────────────────────────────────────────────────────
   const [confirmDelete, setConfirmDelete] = useState<{ userId: string; rangeIds?: string[] } | null>(null)
@@ -104,8 +107,9 @@ export default function UsersPage() {
     if (!newUserId.trim()) return
     setAdding(true)
 
-    // Step 1: Create the user account
-    const result = await ludusApi.addUser(newUserId, newUserName || undefined, newUserAdmin)
+    // Step 1: Create the user account.
+    // Pass userId as the `name` field so the Linux home directory matches /home/<userId>.
+    const result = await ludusApi.addUser(newUserId, newUserId, newUserAdmin)
     if (result.error) {
       toast({ variant: "destructive", title: "Error creating user", description: result.error })
       setAdding(false)
@@ -157,7 +161,7 @@ export default function UsersPage() {
       description: `${newUserId}${notes.length ? ` — ${notes.join(", ")}` : ""}`,
     })
     setAddDialog(false)
-    setNewUserId(""); setNewUserName(""); setNewUserPassword("")
+    setNewUserId(""); setNewUserPassword("")
     setNewUserAdmin(false); setShowNewPassword(false)
     fetchUsers()
     setAdding(false)
@@ -430,12 +434,16 @@ export default function UsersPage() {
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label>User ID <span className="text-red-400">*</span></Label>
-              <Input placeholder="jd" value={newUserId} onChange={(e) => setNewUserId(e.target.value)} className="font-mono" />
-              <p className="text-xs text-muted-foreground">Typically 2-3 character initials (lowercase)</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Display Name</Label>
-              <Input placeholder="John Doe" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} />
+              <Input
+                placeholder="jd"
+                value={newUserId}
+                onChange={(e) => setNewUserId(sanitizeUserId(e.target.value))}
+                className="font-mono"
+                maxLength={32}
+              />
+              <p className="text-xs text-muted-foreground">
+                Lowercase letters, numbers, hyphens, underscores only — becomes the Linux username and home directory
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label>Password <span className="text-red-400">*</span></Label>

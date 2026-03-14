@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -29,6 +29,7 @@ import {
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "@/lib/types"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
@@ -118,7 +119,7 @@ function TemplateChips({
   )
 }
 
-const STEPS = ["Select Lab Type", "Select Extensions", "Review & Deploy"]
+const STEPS = ["Select Lab Type", "Select Extensions", "Select Range", "Review & Deploy"]
 
 function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
@@ -126,7 +127,7 @@ function shellQuote(arg: string): string {
 
 export default function NewGoadInstancePage() {
   const router = useRouter()
-  const { selectRange, refreshRanges } = useRange()
+  const { ranges: accessibleRanges, selectRange, refreshRanges } = useRange()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
@@ -134,6 +135,12 @@ export default function NewGoadInstancePage() {
   const [creatingRange, setCreatingRange] = useState(false)
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const [currentUsername, setCurrentUsername] = useState<string>("")
+
+  // Range selection (step 2)
+  const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
+  const [selectedExistingRange, setSelectedExistingRange] = useState<string>("")
+  // Stable UID for the auto-generated range name preview — generated once on mount
+  const [newRangeUid] = useState(() => Date.now().toString(36).toUpperCase().slice(-4))
 
   // Template readiness
   const [templates, setTemplates] = useState<TemplateObject[]>([])
@@ -208,6 +215,13 @@ export default function NewGoadInstancePage() {
     return ext.compatibility.includes("*") || ext.compatibility.includes(selectedLab)
   })
 
+  // Preview of the auto-generated range ID for the "Create New Range" option
+  const autoRangeId = useMemo(() => {
+    const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
+    const labSlug = (selectedLab ?? "lab").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
+    return `${user}-${labSlug}-${newRangeUid}`
+  }, [currentUsername, selectedLab, newRangeUid])
+
   /**
    * Always creates a fresh dedicated Ludus range for this GOAD deployment.
    *
@@ -222,12 +236,8 @@ export default function NewGoadInstancePage() {
   const resolveDeployRange = async (): Promise<{ rangeId: string; created: boolean } | null> => {
     // Always create a new dedicated range.
     // Naming convention: <user>-<labname>-<uid>  e.g. "melchior-GOAD-Mini-LDQ8"
-    const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
-    const labSlug = (selectedLab ?? "").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
-    // Short 4-char base36 uniquifier to avoid collisions for multiple instances of the same lab
-    const uid = Date.now().toString(36).toUpperCase().slice(-4)
-
-    const candidateId = `${user}-${labSlug}-${uid}`
+    // Uses the stable newRangeUid so the preview shown in step 2 matches the actual ID.
+    const candidateId = autoRangeId
     const displayName = candidateId
 
     try {
@@ -273,20 +283,27 @@ export default function NewGoadInstancePage() {
       }
     } catch { /* best-effort */ }
 
-    setCreatingRange(true)
     let rangeId: string | null = null
-    try {
-      const result = await resolveDeployRange()
-      if (result) {
-        rangeId = result.rangeId
-        setDedicatedRangeId(rangeId)
-        // Switch the global range context so the UI reflects the new GOAD range
-        await refreshRanges()
-        selectRange(rangeId)
+    if (rangeMode === "existing" && selectedExistingRange) {
+      // User chose an existing range — use it directly, no creation needed
+      rangeId = selectedExistingRange
+      setDedicatedRangeId(rangeId)
+      selectRange(rangeId)
+    } else {
+      // Create a new dedicated range for this GOAD instance
+      setCreatingRange(true)
+      try {
+        const result = await resolveDeployRange()
+        if (result) {
+          rangeId = result.rangeId
+          setDedicatedRangeId(rangeId)
+          await refreshRanges()
+          selectRange(rangeId)
+        }
+        // If null, proceed without a rangeId — GOAD will use its default range
+      } finally {
+        setCreatingRange(false)
       }
-      // If null, proceed without a rangeId — GOAD will use its default range
-    } finally {
-      setCreatingRange(false)
     }
 
     const exts = Array.from(selectedExtensions)
@@ -338,7 +355,7 @@ export default function NewGoadInstancePage() {
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)
 
-  const showTerminal = step === 2 && (deployed || isRunning)
+  const showTerminal = step === 3 && (deployed || isRunning)
 
   return (
     <div className={cn(
@@ -498,6 +515,7 @@ export default function NewGoadInstancePage() {
               Next <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
+
         </div>
       )}
 
@@ -583,8 +601,85 @@ export default function NewGoadInstancePage() {
         </div>
       )}
 
-      {/* Step 2: Review & Deploy */}
-      {step === 2 && !showTerminal && (
+      {/* Step 2: Select Range */}
+      {step === 2 && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Target Range</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex gap-2">
+                <Button variant={rangeMode === "new" ? "default" : "outline"} size="sm"
+                  onClick={() => setRangeMode("new")}>
+                  Create New Range
+                </Button>
+                <Button variant={rangeMode === "existing" ? "default" : "outline"} size="sm"
+                  onClick={() => setRangeMode("existing")}>
+                  Use Existing Range
+                </Button>
+              </div>
+
+              <Separator />
+
+              {rangeMode === "new" ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    A new dedicated Ludus range will be created for this GOAD instance:
+                  </p>
+                  <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
+                    <Server className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                    <code className="text-sm font-mono text-primary">{autoRangeId}</code>
+                    <Badge variant="secondary" className="ml-auto text-[10px]">new</Badge>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Deploy this GOAD instance into an existing range:
+                  </p>
+                  {accessibleRanges.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No accessible ranges found. Create a new one instead.</p>
+                  ) : (
+                    <div className="grid gap-2">
+                      {accessibleRanges.map((r) => (
+                        <button key={r.rangeID} onClick={() => setSelectedExistingRange(r.rangeID)}
+                          className={cn(
+                            "text-left p-3 rounded-lg border-2 transition-all",
+                            selectedExistingRange === r.rangeID
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:border-primary/50"
+                          )}>
+                          <div className="flex items-center justify-between">
+                            <code className="font-mono font-bold text-primary text-sm">{r.rangeID}</code>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="secondary" className="text-[10px]">{r.accessType}</Badge>
+                              {selectedExistingRange === r.rangeID && <Check className="h-4 w-4 text-primary" />}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+            <Button
+              onClick={() => setStep(3)}
+              disabled={rangeMode === "existing" && !selectedExistingRange}
+            >
+              Next <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3: Review & Deploy */}
+      {step === 3 && !showTerminal && (
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
@@ -595,6 +690,15 @@ export default function NewGoadInstancePage() {
                 <span className="text-xs text-muted-foreground w-24">Lab</span>
                 <code className="font-mono text-sm font-bold text-primary">{selectedLab}</code>
                 {labInfo && <Badge variant="secondary">{labInfo.vmCount} VMs</Badge>}
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground w-24">Range</span>
+                <code className="font-mono text-sm text-primary">
+                  {rangeMode === "existing" ? selectedExistingRange : autoRangeId}
+                </code>
+                <Badge variant="secondary" className="text-[10px]">
+                  {rangeMode === "existing" ? "existing" : "new"}
+                </Badge>
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted-foreground w-24">Provider</span>
@@ -664,14 +768,17 @@ export default function NewGoadInstancePage() {
           <Alert variant="warning">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="text-xs">
-              This will create a new GOAD instance and deploy{" "}
-              {labInfo?.vmCount ?? "multiple"} VMs to your Ludus range. The deployment can take
-              30–90 minutes depending on the lab and extensions selected.
+              This will {rangeMode === "new" ? "create a new Ludus range and deploy" : "deploy"}{" "}
+              {labInfo?.vmCount ?? "multiple"} VMs
+              {rangeMode === "existing" && selectedExistingRange
+                ? <> to range <strong>{selectedExistingRange}</strong></>
+                : " to a new dedicated Ludus range"}
+              . The deployment can take 30–90 minutes depending on the lab and extensions selected.
             </AlertDescription>
           </Alert>
 
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(1)}>
+            <Button variant="ghost" onClick={() => setStep(2)}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
             <Button onClick={handleDeploy} disabled={isRunning || creatingRange} className="min-w-36">
@@ -684,7 +791,7 @@ export default function NewGoadInstancePage() {
       )}
 
       {/* ── Side-by-side terminal view ─────────────────────────────────── */}
-      {step === 2 && showTerminal && (
+      {step === 3 && showTerminal && (
         <>
           {/* Status bar */}
           <div className="flex items-center justify-between flex-shrink-0">

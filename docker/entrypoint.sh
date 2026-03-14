@@ -57,30 +57,82 @@ TLS_KEY="${TLS_KEY_PATH:-/app/certificates/key.pem}"
 
 mkdir -p "$(dirname "$TLS_CERT")" "$(dirname "$TLS_KEY")"
 
-if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
-    # Build a Subject Alternative Name from available hostnames.
-    #
-    # We include:
-    #   - localhost / 127.0.0.1 (always)
-    #   - LUDUS_SSH_HOST        (Ludus server hostname, if it's also the app host)
-    #   - LUDUS_SERVER_IP       (explicit server IP override)
-    #   - TLS_HOSTNAME          (user-supplied app access hostname/IP)
-    #   - host.docker.internal  (the Docker host machine's IP on all platforms)
-    #     This covers the common case where users access the app via the host
-    #     machine's LAN IP (e.g. https://10.0.20.100) without needing extra config.
-    SAN="DNS:localhost,IP:127.0.0.1"
-    [ -n "$LUDUS_SSH_HOST" ] && SAN="$SAN,DNS:$LUDUS_SSH_HOST"
-    [ -n "$LUDUS_SERVER_IP" ] && SAN="$SAN,IP:$LUDUS_SERVER_IP"
-    [ -n "$TLS_HOSTNAME" ] && SAN="$SAN,DNS:$TLS_HOSTNAME"
+# ---------------------------------------------------------------------------
+# TLS helpers
+# ---------------------------------------------------------------------------
 
-    # Auto-include the Docker host gateway IP so the cert is valid when
-    # accessed via the host machine's LAN/VPN IP out of the box.
-    HOST_GW_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}')
+# Returns 0 if $1 looks like an IPv4 address.
+is_ip() {
+    echo "$1" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
+}
+
+# Appends a value to SAN using IP: or DNS: based on its format.
+add_san() {
+    local VALUE="$1"
+    [ -z "$VALUE" ] && return
+    if is_ip "$VALUE"; then
+        SAN="$SAN,IP:$VALUE"
+    else
+        SAN="$SAN,DNS:$VALUE"
+    fi
+}
+
+# Returns 0 if the cert at $TLS_CERT has an iPAddress SAN covering $1.
+cert_covers_ip() {
+    openssl x509 -in "$TLS_CERT" -noout -ext subjectAltName 2>/dev/null \
+        | grep -q "IP Address:$1"
+}
+
+# ---------------------------------------------------------------------------
+# Determine the Docker host gateway IP (the LAN IP users connect to).
+# docker-compose.yml maps host.docker.internal → host-gateway, so this
+# resolves to the host machine's IP without any extra configuration.
+# ---------------------------------------------------------------------------
+HOST_GW_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{print $1}')
+
+# ---------------------------------------------------------------------------
+# Decide whether to (re-)generate the certificate.
+#
+# We regenerate if:
+#   a) No cert/key files exist yet, OR
+#   b) An existing cert was generated with an IP address listed as a dNSName
+#      SAN instead of an iPAddress SAN (a common misconfiguration that causes
+#      ERR_CERT_AUTHORITY_INVALID when connecting by IP).
+# ---------------------------------------------------------------------------
+NEEDS_REGEN=false
+
+if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
+    NEEDS_REGEN=true
+else
+    # Check that every IP we need is present as an iPAddress SAN.
+    for CHECK_IP in "$LUDUS_SSH_HOST" "$LUDUS_SERVER_IP" "$HOST_GW_IP"; do
+        if [ -n "$CHECK_IP" ] && is_ip "$CHECK_IP" && ! cert_covers_ip "$CHECK_IP"; then
+            echo "[entrypoint] Cert missing iPAddress SAN for $CHECK_IP (was likely added as dNSName) — regenerating"
+            rm -f "$TLS_CERT" "$TLS_KEY"
+            NEEDS_REGEN=true
+            break
+        fi
+    done
+fi
+
+if [ "$NEEDS_REGEN" = "true" ]; then
+    # Build Subject Alternative Names.
+    #
+    # Entries:
+    #   DNS:localhost / IP:127.0.0.1   — always present
+    #   LUDUS_SSH_HOST                 — auto IP: or DNS: depending on format
+    #   LUDUS_SERVER_IP                — always an IP
+    #   TLS_HOSTNAME                   — user-supplied app hostname/IP
+    #   HOST_GW_IP                     — Docker host's LAN IP (auto-detected)
+    SAN="DNS:localhost,IP:127.0.0.1"
+    add_san "$LUDUS_SSH_HOST"
+    [ -n "$LUDUS_SERVER_IP" ] && SAN="$SAN,IP:$LUDUS_SERVER_IP"
+    add_san "$TLS_HOSTNAME"
     [ -n "$HOST_GW_IP" ] && SAN="$SAN,IP:$HOST_GW_IP"
 
     CN="${TLS_HOSTNAME:-${LUDUS_SSH_HOST:-ludus-ui}}"
 
-    echo "[entrypoint] No TLS certificate found — generating self-signed cert (CN=$CN, SAN=$SAN)"
+    echo "[entrypoint] Generating self-signed cert (CN=$CN, SAN=$SAN)"
     openssl req -x509 -newkey rsa:2048 -nodes \
         -keyout "$TLS_KEY" \
         -out "$TLS_CERT" \
@@ -90,10 +142,9 @@ if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
         2>/dev/null
 
     chown nextjs:nodejs "$TLS_CERT" "$TLS_KEY"
-    echo "[entrypoint] Self-signed certificate generated at $TLS_CERT"
+    echo "[entrypoint] Certificate written to $TLS_CERT"
 else
     echo "[entrypoint] Using existing TLS certificate: $TLS_CERT"
-    echo "[entrypoint] NOTE: If you changed the access hostname/IP, delete $TLS_CERT and $TLS_KEY to regenerate."
 fi
 
 # ---------------------------------------------------------------------------

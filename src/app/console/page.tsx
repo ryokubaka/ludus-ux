@@ -13,6 +13,8 @@ import {
   RefreshCw,
   Circle,
   Layers,
+  Download,
+  ExternalLink,
 } from "lucide-react"
 
 interface FlatVM extends VMObject {
@@ -49,10 +51,19 @@ function ConsolePageInner() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
 
-  // VMs visible in the picker — filtered to the selected range
+  // .vv download state
+  const [downloadingVv, setDownloadingVv] = useState(false)
+
+  // VMs visible in the picker — filtered to the selected range, deduplicated by proxmoxID
   const vms = useMemo<FlatVM[]>(() => {
-    if (!selectedRangeId) return allVms
-    return allVms.filter((v) => v.rangeID === selectedRangeId)
+    const list = selectedRangeId ? allVms.filter((v) => v.rangeID === selectedRangeId) : allVms
+    const seen = new Set<number | string>()
+    return list.filter((v) => {
+      const key = v.proxmoxID ?? v.ID
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
   }, [allVms, selectedRangeId])
 
   // Fetch VMs for the currently selected range (or all ranges if none selected)
@@ -69,9 +80,12 @@ function ConsolePageInner() {
             flat.push({ ...vm, rangeID: range.rangeID || range.name || "range" })
           }
         }
-        // Merge into allVms (replace entries for this range)
+        // Merge into allVms (replace entries for this range).
+        // Use the same fallback key that was stamped onto each FlatVM so the
+        // filter correctly removes stale entries before inserting fresh ones.
         setAllVms((prev) => {
-          const other = prev.filter((v) => !ranges.some((r) => r.rangeID === v.rangeID))
+          const freshKeys = new Set(ranges.map((r) => r.rangeID || r.name || "range"))
+          const other = prev.filter((v) => !freshKeys.has(v.rangeID))
           return [...other, ...flat]
         })
 
@@ -119,6 +133,30 @@ function ConsolePageInner() {
     const name = encodeURIComponent(vm.name)
     setIframeSrc(`/novnc-console.html?vmId=${vmid}&vmName=${name}`)
     setPickerOpen(false)
+  }
+
+  async function downloadVv() {
+    if (!activeVm) return
+    const vmid = String(activeVm.proxmoxID)
+    const name = encodeURIComponent(activeVm.name)
+    setDownloadingVv(true)
+    try {
+      const res = await fetch(`/api/console/spice?vmId=${vmid}&vmName=${name}`)
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({})) as { error?: string }
+        console.error("SPICE download failed:", d.error || `HTTP ${res.status}`)
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${activeVm.name.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } finally {
+      setDownloadingVv(false)
+    }
   }
 
   function reloadConsole() {
@@ -244,6 +282,32 @@ function ConsolePageInner() {
           </button>
         )}
 
+        {/* Download .vv + virt-viewer hint */}
+        {activeVm && (
+          <>
+            <div className="h-4 w-px bg-zinc-700 mx-1" />
+            <button
+              onClick={downloadVv}
+              disabled={downloadingVv}
+              title="Download SPICE .vv file — open with virt-viewer for a native console"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-50 transition-colors"
+            >
+              <Download className="h-3 w-3" />
+              {downloadingVv ? "…" : ".vv"}
+            </button>
+            <a
+              href="https://virt-manager.org/download/"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Download virt-viewer to open .vv files natively"
+              className="flex items-center gap-1 text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors whitespace-nowrap"
+            >
+              <ExternalLink className="h-2.5 w-2.5" />
+              virt-viewer
+            </a>
+          </>
+        )}
+
         <div className="flex-1" />
 
         {/* Hint when no VM selected */}
@@ -260,11 +324,22 @@ function ConsolePageInner() {
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center space-y-3">
               <Monitor className="h-12 w-12 text-zinc-700 mx-auto" />
-              <p className="text-sm text-zinc-500">
-                No VM selected
-              </p>
+              <p className="text-sm text-zinc-500">No VM selected</p>
               <p className="text-xs text-zinc-600">
-                Use the dropdown above to pick a VM and open its console.
+                Use the dropdown above to pick a VM and open its browser console.
+              </p>
+              <p className="text-xs text-zinc-700">
+                For a native desktop experience, download the{" "}
+                <span className="text-zinc-500">.vv</span> file and open it with{" "}
+                <a
+                  href="https://virt-manager.org/download/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition-colors"
+                >
+                  virt-viewer
+                </a>
+                .
               </p>
             </div>
           </div>

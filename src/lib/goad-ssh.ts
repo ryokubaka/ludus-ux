@@ -196,8 +196,19 @@ export async function streamGoadCommand(
   // ensuring ansible output is flushed to the SSH stream line-by-line in real time.
   // LUDUS_RANGE_ID is passed as an env var so the ludus wrapper (see below) can
   // inject --range into every ludus CLI call made by GOAD subprocesses.
+  //
+  // LUDUS_API_KEY is only injected when we actually have a key.  Passing an
+  // empty string causes the ludus CLI to reject it with "Malformed API Key"
+  // instead of falling back to reading the key from ~/.config/ludus/config.yml
+  // (which is set up correctly during `goad -t install`).
   const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
-  const pyEnv = `PYTHONUNBUFFERED=1 LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}' LUDUS_VERSION=2${safeRangeId ? ` LUDUS_RANGE_ID='${safeRangeId}'` : ""}`;
+  const pyEnvParts = [
+    "PYTHONUNBUFFERED=1",
+    "LUDUS_VERSION=2",
+    ...(ludusApiKey ? [`LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}'`] : []),
+    ...(safeRangeId ? [`LUDUS_RANGE_ID='${safeRangeId}'`] : []),
+  ]
+  const pyEnv = pyEnvParts.join(" ")
 
   // ── Pre-flight: ensure workspace is writable (as root, separate SSH) ────────
   //
@@ -259,15 +270,55 @@ export async function streamGoadCommand(
   //    and UI-triggered commands alike.
   // 2. Writability gate — emits a clear, actionable message if root SSH above
   //    didn't succeed (e.g. root creds not configured).
-  // 3. ludus wrapper — prepends a range-scoping shim to $PATH (only when
+  // 3. goad.sh venv activation — activates $HOME/.goad/.venv if it already
+  //    exists.  goad.sh itself creates the venv on first run, so this is only
+  //    for subsequent invocations where we want the activated PATH before the
+  //    actual command runs (e.g. so the ludus wrapper step can find the right
+  //    python3 / ansible on PATH).  Silently skipped on first run — goad.sh
+  //    will create the venv as part of the main command.
+  // 4. ludus wrapper — prepends a range-scoping shim to $PATH (only when
   //    a dedicated rangeId is known for this operation).
+  const pythonEnvSetup =
+    `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
+
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
     `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Ensure PROXMOX_SSH_PASSWORD is set in your .env (used for root SSH workspace setup)."; exit 1; fi`,
+    pythonEnvSetup,
     ...(ludusWrapSetup ? [ludusWrapSetup] : []),
   ].join("; ");
 
-  // Build the inner goad command (same as before)
+  // ── pyEnv as export statements ───────────────────────────────────────────────
+  //
+  // The pyEnv vars are needed by goad.sh, python3 goad.py, and all subprocesses
+  // (including the ludus CLI called by GOAD's provide command).
+  //
+  // For the non-REPL path `${pyEnv} bash goad.sh` works fine — env var prefixes
+  // are inherited by the named command and all its children.
+  //
+  // For the REPL path the command is `${pyEnv} printf '...' | bash goad.sh`.
+  // In bash, `VAR=value cmd1 | cmd2` only sets VAR for cmd1 (printf) — NOT for
+  // cmd2 (bash goad.sh).  printf doesn't use these vars, so GOAD never sees
+  // LUDUS_API_KEY and falls back to its config file (which may be stale/wrong).
+  //
+  // Solution: export the vars into the shell's environment BEFORE the pipeline
+  // runs.  Exported vars are inherited by every subsequent command including the
+  // right-hand side of pipes.
+  const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
+
+  // Build the inner goad command.
+  //
+  // Both paths go through goad.sh rather than invoking python3 goad.py directly.
+  // This is critical: goad.sh creates $HOME/.goad/.venv on first run and activates
+  // it on every run (source $venv/bin/activate).  The venv contains the correct
+  // versions of ansible-playbook and all Python deps.  If we bypass goad.sh and
+  // call python3 directly, the system ansible at /usr/local/bin/ansible-playbook
+  // (which may have a broken/incompatible installation) is used instead.
+  //
+  // For REPL mode we pipe the GOAD REPL commands to goad.sh via stdin.  bash
+  // propagates stdin to child processes, so goad.sh → python3 goad.py all see
+  // the piped input.  goad.py reads from stdin when no args are given, entering
+  // interactive REPL mode where our commands are executed.
   let innerCommand: string;
   if (goadArgs.startsWith("--repl ")) {
     const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "");
@@ -275,12 +326,12 @@ export async function streamGoadCommand(
     const escaped = stdinCmds.replace(/'/g, "'\\''");
     innerCommand = [
       setupPreamble,
+      pyEnvExports,
       `cd ${goadPath}`,
-      `. ${goadPath}/.venv/bin/activate 2>/dev/null || true`,
-      `${pyEnv} printf '${escaped}\nexit\n' | python3 -u ${goadPath}/goad.py`,
+      `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
     ].join("; ");
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} ${goadPath}/goad.sh ${goadArgs}`;
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`;
   }
 
   if (impersonateAs) {

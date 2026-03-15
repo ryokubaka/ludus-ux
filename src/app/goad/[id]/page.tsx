@@ -77,6 +77,14 @@ export default function GoadInstancePage() {
   const { toast } = useToast()
   const instanceId = decodeURIComponent(params.id as string)
   const storageKey = `goad-task-${instanceId}`
+  // Persists the type of the running action so the auto-resume effect can decide
+  // whether to switch to the Deploy Status tab on page (re-)load.
+  const actionStorageKey = `goad-task-${instanceId}-action`
+  // Only "provide" runs `ludus range deploy` and benefits from the range log
+  // panel on the Deploy tab.  Every other action (start, stop, status, provision-lab,
+  // install/provision-extension, destroy) outputs pure GOAD/ansible text and should
+  // stay on the Terminal tab where the user can see it directly.
+  const DEPLOY_TAB_ACTIONS = new Set(["provide"])
 
   const [instance, setInstance] = useState<GoadInstance | null>(null)
   const [loading, setLoading] = useState(true)
@@ -117,19 +125,29 @@ export default function GoadInstancePage() {
     if (tab) setActiveTab(tab)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-start range log streaming and switch to Deploy Status tab whenever a
-  // task becomes running.  Covers two scenarios:
-  //   1. runAction() — startRangeStreaming + setActiveTab("deploy") are already
-  //      called there, but instance data may not be loaded yet on first render.
+  // Auto-start range log streaming and (conditionally) switch to Deploy Status
+  // tab whenever a task is running.  Covers two scenarios:
+  //   1. runAction() — startRangeStreaming is already called there, but instance
+  //      data may not be loaded yet on first render so we re-check here.
   //   2. Auto-resume from sessionStorage — useGoadStream detects a running task
-  //      on mount and sets isRunning=true; this effect kicks in so the Deploy
-  //      Status tab becomes live without requiring any user action.
+  //      on mount and sets isRunning=true; this effect kicks in.
+  //
+  // Tab-switching rules:
+  //   • Only switch to "deploy" if the running action is one that involves Ludus
+  //     range provisioning (DEPLOY_TAB_ACTIONS). Other actions (start, stop, …)
+  //     should leave the user on the Terminal tab so they can see GOAD output.
+  //   • New GOAD instance deployments (from goad/new) land here via ?tab=deploy
+  //     in the URL and are already handled by the URL-param effect above.
   const autoTabRef = useRef(false)
   useEffect(() => {
     if (!isRunning) {
       autoTabRef.current = false // reset so next run can auto-switch again
       return
     }
+    // Determine the running action from sessionStorage (written by runAction).
+    const runningAction = sessionStorage.getItem(actionStorageKey) ?? ""
+    const isDeployAction = DEPLOY_TAB_ACTIONS.has(runningAction)
+
     // Start range streaming as soon as we have both a running task AND a known rangeId.
     // We watch both `isRunning` and `instance?.ludusRangeId` because the two values
     // arrive at different times:
@@ -137,10 +155,10 @@ export default function GoadInstancePage() {
     //   • instance.ludusRangeId arrives later (fetchInstances is async)
     // Without this dual dep, the effect would fire while instance is still null and
     // never restart once the data loads — resulting in "Waiting for output..." forever.
-    if (instance?.ludusRangeId && !isRangeStreaming) {
+    if (isDeployAction && instance?.ludusRangeId && !isRangeStreaming) {
       startRangeStreaming(instance.ludusRangeId)
     }
-    if (!autoTabRef.current) {
+    if (!autoTabRef.current && isDeployAction) {
       autoTabRef.current = true
       setActiveTab("deploy")
     }
@@ -254,11 +272,19 @@ export default function GoadInstancePage() {
   const runAction = async (action: string, goadArgs: string) => {
     setCurrentAction(action)
     clear()
-    // Switch to Deploy Status tab so range logs + GOAD terminal are visible side by side
-    setActiveTab("deploy")
-    // Start streaming Ludus range logs so the user can see VM provisioning progress
-    if (instance?.ludusRangeId) startRangeStreaming(instance.ludusRangeId)
+    // Only switch to the Deploy Status tab (and start range streaming) for actions
+    // that involve Ludus VM provisioning — where range logs are meaningful.
+    // Other actions (start, stop, status, destroy) output to the terminal and
+    // should leave the user on whatever tab they are currently viewing.
+    if (DEPLOY_TAB_ACTIONS.has(action)) {
+      setActiveTab("deploy")
+      if (instance?.ludusRangeId) startRangeStreaming(instance.ludusRangeId)
+    }
+    // Persist action type so the auto-resume effect on page reload can decide
+    // whether to switch to Deploy tab (only for deploy-relevant actions).
+    sessionStorage.setItem(actionStorageKey, action)
     await run(goadArgs, instanceId, impersonation ?? undefined, instance?.ludusRangeId ?? undefined)
+    sessionStorage.removeItem(actionStorageKey)
     setCurrentAction(null)
     fetchInstances()
   }

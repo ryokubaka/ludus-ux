@@ -177,9 +177,13 @@ export const ludusApi = {
     del(`/range/${encodeURIComponent(rangeId)}/vms`),
 
   // Deployment
+  // Ludus expects tags as a comma-separated string (not an array).  Sending
+  // an array causes Go JSON to silently fail to unmarshal the field, leaving
+  // it empty and triggering a full "all" deploy instead of the requested tags.
   deployRange: (tags?: string[], limit?: string, rangeId?: string) => {
     const q = rangeId ? `?rangeID=${rangeId}` : ""
-    return post(`/range/deploy${q}`, tags?.length || limit ? { tags, limit } : undefined)
+    const tagsStr = tags?.length ? tags.join(",") : undefined
+    return post(`/range/deploy${q}`, tagsStr || limit ? { tags: tagsStr, limit } : undefined)
   },
   abortDeploy: (rangeId?: string) =>
     post(rangeId ? `/range/abort?rangeID=${rangeId}` : "/range/abort"),

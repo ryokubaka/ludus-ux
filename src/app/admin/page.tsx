@@ -119,20 +119,33 @@ export default function AdminRangesPage() {
   const deploySharedService = async (service: "nexus" | "share") => {
     setDeployingShared(service)
     try {
-      // Call the deploy endpoint directly WITHOUT impersonation headers so that
-      // the request always uses the admin's own API key and targets the admin's
-      // own range — not whatever range an active impersonation session would target.
-      const res = await fetch("/api/proxy/range/deploy", {
+      // Use the dedicated admin endpoint — it calls Ludus directly with the
+      // admin's own session API key (no impersonation headers), sends only the
+      // requested tag, and logs the exact Ludus request server-side for tracing.
+      const res = await fetch("/api/admin/deploy-shared-service", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tags: [service] }),
+        body: JSON.stringify({ service }),
       })
-      const data = await res.json() as { error?: string }
+      const data = await res.json() as {
+        ok?: boolean
+        error?: string
+        debug?: { ludusPath: string; ludusBody: unknown; adminUser: string; ludusResponse?: unknown }
+      }
       if (!res.ok || data.error) {
-        toast({ variant: "destructive", title: `Failed to start ${service} deployment`, description: data.error || `HTTP ${res.status}` })
+        // Surface the debug info so the user can see exactly what was sent
+        const debugStr = data.debug
+          ? ` (called Ludus: POST ${data.debug.ludusPath} body=${JSON.stringify(data.debug.ludusBody)})`
+          : ""
+        toast({
+          variant: "destructive",
+          title: `Failed to start ${service} deployment`,
+          description: `${data.error || `HTTP ${res.status}`}${debugStr}`,
+        })
       } else {
-        toast({ title: `${service === "nexus" ? "Nexus cache" : "Ludus Share"} deployment started`, description: "Redirecting to range logs…" })
-        // Redirect to the dashboard so the admin can watch the deployment progress
+        const label = service === "nexus" ? "Nexus cache" : "Ludus Share"
+        console.log(`[${label}] deploy triggered:`, data.debug)
+        toast({ title: `${label} deployment started`, description: `Running: ludus range deploy -t ${service} → redirecting to logs…` })
         router.push("/")
       }
     } catch (err) {

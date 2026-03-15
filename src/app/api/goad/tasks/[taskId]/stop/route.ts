@@ -23,6 +23,19 @@ export async function POST(
 
   const { taskId } = params
 
+  // Enforce ownership: only the task owner (or an admin) may stop it.
+  const { getTask } = await import("@/lib/goad-task-store")
+  const task = getTask(taskId)
+  if (task) {
+    const impersonateAs = session.isAdmin
+      ? request.headers.get("X-Impersonate-As") || null
+      : null
+    const effectiveUser = impersonateAs || session.username
+    if (!session.isAdmin && task.username && task.username !== effectiveUser) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 })
+    }
+  }
+
   // Send SIGINT to the remote process via the SSH PTY cleanup function
   const killed = invokeCleanup(taskId)
 

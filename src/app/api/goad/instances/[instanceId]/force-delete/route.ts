@@ -30,6 +30,17 @@ export async function POST(
   }
 
   const { instanceId } = params
+
+  // Non-admins may only delete instances that belong to their own username.
+  // Instance IDs contain the username prefix (e.g. "alice-goad-mini-ludus"),
+  // so this is a lightweight ownership guard; admins bypass it.
+  if (!session.isAdmin) {
+    const impersonateAs = request.headers.get("X-Impersonate-As")
+    const effectiveUser = impersonateAs || session.username
+    if (!instanceId.toLowerCase().startsWith(effectiveUser.toLowerCase() + "-")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    }
+  }
   const body = await request.json().catch(() => ({}))
   const { ludusRangeId: bodyRangeId, skipRangeDeletion } = body as {
     ludusRangeId?: string

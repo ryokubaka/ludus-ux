@@ -6,19 +6,19 @@ export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
   // When an admin is impersonating, show tasks attributed to the target user.
-  const impersonateAs = session?.isAdmin
+  const impersonateAs = session.isAdmin
     ? request.headers.get("X-Impersonate-As") || null
     : null
-  const myUsername = impersonateAs || session?.username
+  const myUsername = impersonateAs || session.username
 
   const all = listTasks()
-  // Show only the current user's tasks.
-  // Tasks created before username tracking (no username field) are hidden
-  // to avoid leaking historical cross-user data.
-  const filtered = myUsername
-    ? all.filter((t) => !t.username || t.username === myUsername)
-    : all
+  // Show only the current user's tasks (always filtered — never return all tasks).
+  const filtered = all.filter((t) => !t.username || t.username === myUsername)
 
   const tasks = filtered.map((t) => ({
     id: t.id,

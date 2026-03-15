@@ -53,6 +53,25 @@ function applySecurityHeaders(response: NextResponse): void {
       "max-age=63072000; includeSubDomains",
     )
   }
+
+  // Content-Security-Policy: restrict resource origins.
+  // 'unsafe-inline' is required for Tailwind's style injections.
+  // blob: is required for noVNC's dynamic WebWorker creation.
+  // wss: is required for the VNC WebSocket proxy.
+  // connect-src 'self' wss: covers both the VNC WS and SSE streams.
+  response.headers.set(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self' wss: ws:",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'self'",
+    ].join("; "),
+  )
 }
 
 export async function middleware(request: NextRequest) {

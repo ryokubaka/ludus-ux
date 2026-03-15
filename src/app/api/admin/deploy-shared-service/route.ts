@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
   console.log(
     `[deploy-shared-service] Calling Ludus: POST ${ludusPath}`,
     `body=${JSON.stringify(ludusBody)}`,
-    `apiKey=...${session.apiKey.slice(-6)}`,
+    `user=${session.username}`,
   )
 
   const result = await ludusRequest(ludusPath, {

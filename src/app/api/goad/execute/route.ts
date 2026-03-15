@@ -41,12 +41,19 @@ export async function POST(request: NextRequest) {
 
   const session = await getSessionFromRequest(request)
 
+  if (!session) {
+    return new Response("data: [ERROR] Not authenticated\n\n", {
+      status: 401,
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    })
+  }
+
   // Impersonation: admin SSHes as root and runs commands via sudo.
   // Verify the caller is an admin before allowing impersonation.
-  if (impersonateAs && !session?.isAdmin) {
+  if (impersonateAs && !session.isAdmin) {
     return new Response("data: [ERROR] Admin session required for impersonation\n\n", {
-      status: 200,
-      headers: { "Content-Type": "text/event-stream" },
+      status: 403,
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
     })
   }
 

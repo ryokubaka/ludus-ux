@@ -8,7 +8,16 @@ export async function GET(request: NextRequest) {
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
-  return NextResponse.json(getSettings())
+
+  const settings = getSettings()
+
+  // Non-admins receive a restricted view — sensitive credentials are omitted.
+  if (!session.isAdmin) {
+    const { proxmoxSshPassword: _p, rootApiKey: _r, proxmoxSshUser: _u, ...safeSettings } = settings
+    return NextResponse.json(safeSettings)
+  }
+
+  return NextResponse.json(settings)
 }
 
 export async function POST(request: NextRequest) {

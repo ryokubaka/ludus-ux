@@ -29,6 +29,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { sshExec } from "@/lib/goad-ssh"
+import { getSessionFromRequest } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
@@ -214,6 +215,14 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
 }
 
 export async function POST(request: NextRequest) {
+  const session = await getSessionFromRequest(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+  if (!session.isAdmin) {
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+  }
+
   let body: { templates: TemplateSpec[] }
   try {
     body = await request.json()
@@ -224,6 +233,18 @@ export async function POST(request: NextRequest) {
   const { templates } = body
   if (!Array.isArray(templates) || templates.length === 0) {
     return NextResponse.json({ error: "No templates specified" }, { status: 400 })
+  }
+
+  // Sanitize template names to prevent path traversal / shell injection via destDir.
+  // Names must be alphanumeric with dashes, underscores, or dots only.
+  const NAME_RE = /^[a-zA-Z0-9._-]{1,120}$/
+  for (const spec of templates) {
+    if (!NAME_RE.test(spec.name ?? "")) {
+      return NextResponse.json(
+        { error: `Invalid template name "${spec.name}". Use only letters, numbers, hyphens, underscores, and dots.` },
+        { status: 400 },
+      )
+    }
   }
 
   const results = await Promise.allSettled(

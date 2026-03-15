@@ -31,7 +31,10 @@ type Step = "credentials" | "set-api-key"
 export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const nextPath = searchParams.get("next") || "/"
+  // Only allow relative paths starting with "/" to prevent open-redirect abuse
+  // (e.g. /login?next=//evil.com or /login?next=https://attacker.com).
+  const rawNext = searchParams.get("next") || "/"
+  const nextPath = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/"
 
   const [step, setStep] = useState<Step>("credentials")
   const [username, setUsername] = useState("")

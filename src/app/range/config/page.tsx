@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -90,6 +90,8 @@ export default function RangeConfigPage() {
     onComplete: () => setDeploying(false),
   })
 
+  const logsRef = useRef<HTMLDivElement>(null)
+
   const fetchConfig = useCallback(async () => {
     setLoading(true)
     const result = await ludusApi.getRangeConfig(selectedRangeId ?? undefined)
@@ -145,6 +147,8 @@ export default function RangeConfigPage() {
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
+    // Scroll to the logs panel after React renders it
+    setTimeout(() => logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
     const result = await ludusApi.deployRange(
       selectedTags.length > 0 ? selectedTags : undefined,
       limitVM || undefined,
@@ -325,7 +329,7 @@ export default function RangeConfigPage() {
 
       {/* Deploy Logs */}
       {showLogs && (
-        <Card>
+        <Card ref={logsRef}>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">

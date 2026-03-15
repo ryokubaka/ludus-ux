@@ -79,42 +79,33 @@ export default function AdminRangesPage() {
   // vmName → action currently in flight ("poweron" | "poweroff" | "delete")
   const [vmActionLoading, setVmActionLoading] = useState<Map<string, string>>(new Map())
 
-  interface SharedServiceVM {
-    serviceType: "nexus" | "share"
-    vmName: string
-    vmId: number        // Ludus internal ID
-    proxmoxId: number   // Proxmox VMID — used for console + delete
+  // VMs from the Proxmox ADMIN pool — discovered via pvesh, NOT from /range/all
+  interface SharedAdminVM {
+    vmid: number
+    name: string
+    node: string
+    status: "running" | "stopped" | "unknown"
     ip: string
-    poweredOn: boolean
-    rangeId: string
+    serviceType: "nexus" | "share" | "other"
   }
+  const [adminPoolVMs, setAdminPoolVMs] = useState<SharedAdminVM[]>([])
+  const [loadingAdminVMs, setLoadingAdminVMs] = useState(false)
 
-  // Scan all ranges for VMs whose names match nexus / share patterns.
-  const sharedServiceVMs = useMemo((): SharedServiceVM[] => {
-    const result: SharedServiceVM[] = []
-    for (const range of ranges) {
-      for (const vm of (range.VMs || [])) {
-        let serviceType: "nexus" | "share" | null = null
-        if (/nexus/i.test(vm.name)) serviceType = "nexus"
-        else if (/(^|-)share($|-)/i.test(vm.name) || /ludus-share/i.test(vm.name)) serviceType = "share"
-        if (serviceType) {
-          result.push({
-            serviceType,
-            vmName: vm.name,
-            vmId: vm.ID,
-            proxmoxId: vm.proxmoxID,
-            ip: vm.ip || "",
-            poweredOn: vm.poweredOn ?? false,
-            rangeId: range.rangeID,
-          })
-        }
+  const fetchAdminPoolVMs = useCallback(async () => {
+    setLoadingAdminVMs(true)
+    try {
+      const res = await fetch("/api/admin/shared-vms")
+      if (res.ok) {
+        const data = await res.json() as { vms?: SharedAdminVM[] }
+        setAdminPoolVMs(data.vms ?? [])
       }
+    } catch { /* non-fatal */ } finally {
+      setLoadingAdminVMs(false)
     }
-    return result
-  }, [ranges])
+  }, [])
 
-  const nexusVMs   = useMemo(() => sharedServiceVMs.filter((v) => v.serviceType === "nexus"),  [sharedServiceVMs])
-  const shareVMs   = useMemo(() => sharedServiceVMs.filter((v) => v.serviceType === "share"),  [sharedServiceVMs])
+  const nexusVMs = useMemo(() => adminPoolVMs.filter((v) => v.serviceType === "nexus"), [adminPoolVMs])
+  const shareVMs = useMemo(() => adminPoolVMs.filter((v) => v.serviceType === "share"), [adminPoolVMs])
 
   const deploySharedService = async (service: "nexus" | "share") => {
     setDeployingShared(service)
@@ -145,7 +136,9 @@ export default function AdminRangesPage() {
       } else {
         const label = service === "nexus" ? "Nexus cache" : "Ludus Share"
         console.log(`[${label}] deploy triggered:`, data.debug)
-        toast({ title: `${label} deployment started`, description: `Running: ludus range deploy -t ${service} → redirecting to logs…` })
+        toast({ title: `${label} deployment started`, description: `Running: ludus range deploy -t ${service} — redirecting to logs…` })
+        // Refresh pool detection after returning so the new VM shows up
+        setTimeout(() => fetchAdminPoolVMs(), 15_000)
         router.push("/")
       }
     } catch (err) {
@@ -155,46 +148,48 @@ export default function AdminRangesPage() {
     }
   }
 
-  const handleVmPower = async (vm: SharedServiceVM, action: "poweron" | "poweroff") => {
-    setVmActionLoading((m) => new Map(m).set(vm.vmName, action))
+  const handleVmPower = async (vm: SharedAdminVM, action: "start" | "stop") => {
+    setVmActionLoading((m) => new Map(m).set(vm.name, action))
     try {
-      const res = action === "poweron"
-        ? await ludusApi.powerOn([vm.vmName], vm.rangeId)
-        : await ludusApi.powerOff([vm.vmName], vm.rangeId)
-      if (res.error) {
-        toast({ variant: "destructive", title: `Power ${action} failed`, description: res.error })
+      const res = await fetch(
+        `/api/admin/vm?proxmoxId=${encodeURIComponent(String(vm.vmid))}&action=${action}`,
+        { method: "PUT" },
+      )
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!res.ok || data.error) {
+        toast({ variant: "destructive", title: `Power ${action} failed`, description: data.error || `HTTP ${res.status}` })
       } else {
-        toast({ title: `${vm.vmName} ${action === "poweron" ? "starting" : "stopping"}…` })
-        setTimeout(() => fetchData({ silent: true }), 3000)
+        toast({ title: `${vm.name} ${action === "start" ? "starting" : "stopping"}…` })
+        setTimeout(() => fetchAdminPoolVMs(), 3000)
       }
     } catch (err) {
       toast({ variant: "destructive", title: "Error", description: (err as Error).message })
     } finally {
-      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.vmName); return n })
+      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.name); return n })
     }
   }
 
-  const handleVmConsole = (vm: SharedServiceVM) => {
-    const url = `/console?vmId=${encodeURIComponent(String(vm.proxmoxId))}&vmName=${encodeURIComponent(vm.vmName)}`
+  const handleVmConsole = (vm: SharedAdminVM) => {
+    const url = `/console?vmId=${encodeURIComponent(String(vm.vmid))}&vmName=${encodeURIComponent(vm.name)}`
     window.open(url, "_blank", "noopener,noreferrer")
   }
 
-  const handleVmDelete = async (vm: SharedServiceVM) => {
-    if (!window.confirm(`Delete VM "${vm.vmName}" from Proxmox? This cannot be undone.`)) return
-    setVmActionLoading((m) => new Map(m).set(vm.vmName, "delete"))
+  const handleVmDelete = async (vm: SharedAdminVM) => {
+    if (!window.confirm(`Delete VM "${vm.name}" from Proxmox? This cannot be undone.`)) return
+    setVmActionLoading((m) => new Map(m).set(vm.name, "delete"))
     try {
-      const res = await fetch(`/api/admin/vm?proxmoxId=${encodeURIComponent(String(vm.proxmoxId))}`, { method: "DELETE" })
+      const res = await fetch(`/api/admin/vm?proxmoxId=${encodeURIComponent(String(vm.vmid))}`, { method: "DELETE" })
       const data = await res.json() as { ok?: boolean; error?: string }
       if (!res.ok || data.error) {
         toast({ variant: "destructive", title: "Delete failed", description: data.error || `HTTP ${res.status}` })
       } else {
-        toast({ title: `${vm.vmName} deleted` })
-        fetchData({ silent: true })
+        toast({ title: `${vm.name} deleted` })
+        fetchAdminPoolVMs()
       }
     } catch (err) {
       toast({ variant: "destructive", title: "Error", description: (err as Error).message })
     } finally {
-      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.vmName); return n })
+      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.name); return n })
     }
   }
 
@@ -254,7 +249,7 @@ export default function AdminRangesPage() {
     }
   }, [applyData])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { fetchData(); fetchAdminPoolVMs() }, [fetchData, fetchAdminPoolVMs])
 
   const toggleExpanded = (userID: string) =>
     setExpandedUsers((prev) => {
@@ -507,7 +502,12 @@ export default function AdminRangesPage() {
               <Share2 className="h-4 w-4 text-primary" />
               Shared Services
             </CardTitle>
-            <span className="text-xs text-muted-foreground">Live in the admin Proxmox pool — accessible to all users</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Live in the admin Proxmox pool — accessible to all users</span>
+              <Button variant="ghost" size="icon" onClick={fetchAdminPoolVMs} disabled={loadingAdminVMs} title="Refresh">
+                <RefreshCw className={cn("h-3.5 w-3.5", loadingAdminVMs && "animate-spin")} />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -554,43 +554,48 @@ export default function AdminRangesPage() {
                 </div>
 
                 {/* VM rows when deployed */}
-                {svcVMs.length === 0 ? (
+                {loadingAdminVMs && svcVMs.length === 0 ? (
                   <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 pl-7">
-                    <XCircle className="h-3 w-3" /> Not detected in any range
+                    <Loader2 className="h-3 w-3 animate-spin" /> Checking ADMIN pool…
+                  </p>
+                ) : svcVMs.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 pl-7">
+                    <XCircle className="h-3 w-3" /> Not detected in ADMIN pool
                   </p>
                 ) : (
                   <div className="space-y-1.5 pl-0">
                     {svcVMs.map((vm) => {
-                      const loadingAction = vmActionLoading.get(vm.vmName)
+                      const poweredOn = vm.status === "running"
+                      const loadingAction = vmActionLoading.get(vm.name)
                       return (
                         <div
-                          key={vm.vmName}
+                          key={vm.name}
                           className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5"
                         >
                           {/* Power indicator */}
                           <span
                             className={cn(
                               "h-1.5 w-1.5 rounded-full shrink-0",
-                              vm.poweredOn ? "bg-green-400" : "bg-zinc-500",
+                              poweredOn ? "bg-green-400" : "bg-zinc-500",
                             )}
                           />
                           {/* VM info */}
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-mono font-medium truncate">{vm.vmName}</p>
+                            <p className="text-xs font-mono font-medium truncate">{vm.name}</p>
                             <p className="text-[10px] text-muted-foreground font-mono">{vm.ip || "—"}</p>
                           </div>
                           {/* Actions */}
                           <div className="flex items-center gap-1">
                             {/* Power toggle */}
-                            {vm.poweredOn ? (
+                            {poweredOn ? (
                               <Button
                                 size="icon-sm" variant="ghost"
                                 className="h-6 w-6 text-muted-foreground hover:text-yellow-400"
                                 disabled={!!loadingAction}
                                 title="Power off"
-                                onClick={() => handleVmPower(vm, "poweroff")}
+                                onClick={() => handleVmPower(vm, "stop")}
                               >
-                                {loadingAction === "poweroff"
+                                {loadingAction === "stop"
                                   ? <Loader2 className="h-3 w-3 animate-spin" />
                                   : <XCircle className="h-3 w-3" />}
                               </Button>
@@ -600,9 +605,9 @@ export default function AdminRangesPage() {
                                 className="h-6 w-6 text-muted-foreground hover:text-green-400"
                                 disabled={!!loadingAction}
                                 title="Power on"
-                                onClick={() => handleVmPower(vm, "poweron")}
+                                onClick={() => handleVmPower(vm, "start")}
                               >
-                                {loadingAction === "poweron"
+                                {loadingAction === "start"
                                   ? <Loader2 className="h-3 w-3 animate-spin" />
                                   : <Play className="h-3 w-3" />}
                               </Button>
@@ -611,8 +616,8 @@ export default function AdminRangesPage() {
                             <Button
                               size="icon-sm" variant="ghost"
                               className="h-6 w-6 text-muted-foreground hover:text-primary"
-                              disabled={!vm.poweredOn || !!loadingAction}
-                              title={vm.poweredOn ? "Open console" : "VM must be powered on"}
+                              disabled={!poweredOn || !!loadingAction}
+                              title={poweredOn ? "Open console" : "VM must be powered on"}
                               onClick={() => handleVmConsole(vm)}
                             >
                               <Terminal className="h-3 w-3" />

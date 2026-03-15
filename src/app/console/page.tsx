@@ -205,7 +205,7 @@ function ConsolePageInner() {
             <ChevronDown className="h-3 w-3 text-zinc-400 ml-1" />
           </button>
           {rangePickerOpen && accessibleRanges.length > 0 && (
-            <div className="absolute left-0 top-full mt-1 w-56 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-64 overflow-y-auto">
+            <div className="absolute left-0 top-full mt-1 min-w-full w-max max-w-[32rem] bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-64 overflow-y-auto">
               {accessibleRanges.map((r) => (
                 <button
                   key={r.rangeID}
@@ -214,8 +214,8 @@ function ConsolePageInner() {
                     selectedRangeId === r.rangeID ? "text-purple-400 bg-zinc-800/80" : "text-zinc-200"
                   }`}
                 >
-                  <span className="font-mono truncate">{r.rangeID}</span>
-                  {selectedRangeId === r.rangeID && <span className="ml-auto text-[10px] text-purple-400">active</span>}
+                  <span className="font-mono whitespace-nowrap">{r.rangeID}</span>
+                  {selectedRangeId === r.rangeID && <span className="ml-4 text-[10px] text-purple-400 shrink-0">active</span>}
                 </button>
               ))}
             </div>
@@ -242,13 +242,13 @@ function ConsolePageInner() {
           </button>
 
           {pickerOpen && (
-            <div className="absolute left-0 top-full mt-1 w-72 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-80 overflow-y-auto">
+            <div className="absolute left-0 top-full mt-1 min-w-full w-max max-w-[min(90vw,_48rem)] bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-80 overflow-y-auto">
               {loading ? (
-                <div className="px-4 py-3 text-xs text-zinc-500">Loading VMs…</div>
+                <div className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">Loading VMs…</div>
               ) : !selectedRangeId ? (
-                <div className="px-4 py-3 text-xs text-zinc-500">Select a range first using the range picker.</div>
+                <div className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">Select a range first using the range picker.</div>
               ) : vms.length === 0 ? (
-                <div className="px-4 py-3 text-xs text-zinc-500">No VMs in <span className="font-mono text-zinc-400">{selectedRangeId}</span>. Deploy first.</div>
+                <div className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">No VMs in <span className="font-mono text-zinc-400">{selectedRangeId}</span>. Deploy first.</div>
               ) : (
                 vms.map((vm) => (
                   <button
@@ -261,14 +261,14 @@ function ConsolePageInner() {
                     <Circle
                       className={`h-2 w-2 shrink-0 ${vm.poweredOn ? "fill-green-400 text-green-400" : "fill-zinc-600 text-zinc-600"}`}
                     />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs text-zinc-200 truncate">{vm.name}</div>
-                      <div className="text-[10px] text-zinc-500 truncate">
+                    <div className="flex-1">
+                      <div className="text-xs text-zinc-200 whitespace-nowrap">{vm.name}</div>
+                      <div className="text-[10px] text-zinc-500 whitespace-nowrap">
                         {vm.rangeID} · ID {vm.proxmoxID} · {vm.ip || "—"}
                       </div>
                     </div>
                     {activeVm?.proxmoxID === vm.proxmoxID && (
-                      <span className="text-[10px] text-purple-400">active</span>
+                      <span className="ml-4 text-[10px] text-purple-400 shrink-0">active</span>
                     )}
                   </button>
                 ))
@@ -302,7 +302,7 @@ function ConsolePageInner() {
               {downloadingVv ? "…" : ".vv"}
             </button>
             <a
-              href="https://virt-manager.org/download/"
+              href="https://virt-manager.org/download.html"
               target="_blank"
               rel="noopener noreferrer"
               title="Download virt-viewer to open .vv files natively"

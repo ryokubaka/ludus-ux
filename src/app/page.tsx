@@ -66,6 +66,11 @@ export default function DashboardPage() {
   const [inventoryText, setInventoryText] = useState<string | null>(null)
   const [showInventory, setShowInventory] = useState(false)
 
+  // ── Range deletion ─────────────────────────────────────────────────────────
+  // Tracks which rangeId is currently being deleted so the button can show a
+  // spinner and all other actions can be gated.
+  const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
+
   // ── Deploy ─────────────────────────────────────────────────────────────────
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -257,24 +262,54 @@ export default function DashboardPage() {
   const handleAbort = () => confirm("Abort the running deployment?", doAbort)
 
   const doDeleteRange = async (rangeId: string, vmCount: number) => {
-    const result = await ludusApi.deleteRange(rangeId)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Delete failed", description: result.error })
-    } else {
+    setDeletingRangeId(rangeId)
+    try {
+      const result = await ludusApi.deleteRange(rangeId)
+      if (result.error) {
+        toast({ variant: "destructive", title: "Delete failed", description: result.error })
+        return
+      }
+
+      // ── GOAD workspace cleanup ──────────────────────────────────────────────
+      // If this range belonged to a GOAD instance, remove the workspace directory
+      // and local DB entry.  We skip the range deletion step since it already
+      // happened above.  Failures are non-fatal — the range is already gone.
+      try {
+        const instRes = await fetch("/api/goad/instances")
+        if (instRes.ok) {
+          const instData = await instRes.json()
+          const instances: { instanceId: string; ludusRangeId?: string }[] = instData.instances ?? []
+          const associated = instances.filter((i) => i.ludusRangeId === rangeId)
+          await Promise.all(
+            associated.map((inst) =>
+              fetch(`/api/goad/instances/${encodeURIComponent(inst.instanceId)}/force-delete`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ludusRangeId: rangeId, skipRangeDeletion: true }),
+              }).catch(() => {})
+            )
+          )
+        }
+      } catch {
+        // Non-fatal — workspace cleanup failure doesn't affect the range deletion success
+      }
+
       toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
 
-      // Refresh the global range context — this updates the sidebar selector and
-      // automatically switches away from the deleted range if it was selected.
+      // Refresh the global range context.  refreshRanges() updates the accessible
+      // list and auto-selects the first remaining range when the deleted one was active.
       await refreshRanges()
 
-      // If the deleted range was active, switch the context explicitly before the
-      // local fetchRanges re-renders, so we never hit the "Range not found" error.
+      // Belt-and-suspenders: if the deleted range is still "selected" after refresh
+      // (e.g. context hasn't re-rendered yet), explicitly switch to the first available.
       if (rangeId === selectedRangeId) {
         const remaining = accessibleRanges.filter((r) => r.rangeID !== rangeId)
         if (remaining.length > 0) selectRange(remaining[0].rangeID)
       }
 
       fetchRanges()
+    } finally {
+      setDeletingRangeId(null)
     }
   }
   const handleDeleteRange = (rangeId: string, rangeName: string, vmCount: number) =>
@@ -533,13 +568,18 @@ export default function DashboardPage() {
                       variant="ghost"
                       size="sm"
                       className="gap-1.5 text-red-400/70 hover:text-red-400 hover:bg-red-400/10 border border-transparent hover:border-red-400/30"
-                      disabled={!!pendingAction || state === "DEPLOYING"}
+                      disabled={!!pendingAction || state === "DEPLOYING" || !!deletingRangeId}
                       onClick={(e) => {
                         e.stopPropagation()
                         handleDeleteRange(range.rangeID || rangeKey, range.name || range.rangeID || rangeKey, vms.length)
                       }}
                     >
-                      <Trash2 className="h-3.5 w-3.5" /> Delete Range
+                      {deletingRangeId === (range.rangeID || rangeKey) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                      {deletingRangeId === (range.rangeID || rangeKey) ? "Deleting…" : "Delete Range"}
                     </Button>
                   </div>
 

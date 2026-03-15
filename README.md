@@ -141,6 +141,39 @@ All persistent data is stored in the `data/` directory (volume-mounted):
 
 ---
 
+## API Reference
+
+The full OpenAPI 3.1 spec lives at [`docs/openapi.yaml`](docs/openapi.yaml).
+
+### Browsing with Swagger UI
+
+The quickest way to explore the API interactively is to paste the spec into the hosted Swagger editor:
+
+1. Open [editor.swagger.io](https://editor.swagger.io) in your browser.
+2. Click **File → Import file** and select `docs/openapi.yaml`.
+3. The rendered UI appears on the right-hand side — expand any endpoint, fill in parameters, and click **Execute** to try requests against a running instance.
+
+Alternatively, if you have Docker available you can spin up a local Swagger UI in one command:
+
+```bash
+docker run --rm -p 8088:8080 \
+  -e SWAGGER_JSON=/docs/openapi.yaml \
+  -v "$(pwd)/docs:/docs" \
+  swaggerapi/swagger-ui
+# Open http://localhost:8088
+```
+
+Or with `npx`:
+
+```bash
+npx @stoplight/elements-dev-portal
+# Then point it at docs/openapi.yaml when prompted
+```
+
+> **Authentication note:** Most endpoints require a valid session cookie (`ludus_session`) set by `POST /api/auth/login`. Swagger UI's **Authorize** button (lock icon, top right) lets you paste the cookie value so authenticated requests work from the UI.
+
+---
+
 ## Development
 
 ```bash
@@ -161,7 +194,7 @@ src/                    Next.js application source
   hooks/                Custom React hooks
 server/                 Custom WebSocket server (VNC proxy)
 docker/                 Dockerfile and container entrypoint
-docs/                   Developer documentation
+docs/                   Developer documentation and OpenAPI spec (openapi.yaml)
 ```
 
 ---

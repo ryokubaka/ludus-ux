@@ -36,6 +36,7 @@ import {
   Download,
   X,
   Activity,
+  MapPin,
 } from "lucide-react"
 import type { GoadInstance, GoadCatalog, GoadExtensionDef, GoadLabDef } from "@/lib/types"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
@@ -353,6 +354,49 @@ export default function GoadInstancePage() {
     )
   const handleStatus = () => runAction("status", `-i ${instanceId} -t status`)
 
+  // ── Sync Range IPs ──────────────────────────────────────────────────────────
+  // After a timed-out `provide`, the Ludus VMs are deployed but the workspace
+  // inventory files still have the old placeholder IPs (192.168.56.X).
+  // This calls the sync-ips endpoint which reads the real rangeNumber from Ludus
+  // and rewrites instance.json + all inventory files without touching the VMs.
+  const [syncingIps, setSyncingIps] = useState(false)
+  const handleSyncIps = () =>
+    confirm(
+      "Sync Range IPs?\n\nThis reads the actual rangeNumber from Ludus and rewrites the inventory files with the correct 10.X.10.X IP addresses.\n\nSafe to run at any time — does not redeploy or modify any VMs.",
+      async () => {
+        setSyncingIps(true)
+        try {
+          const res = await fetch(
+            `/api/goad/instances/${encodeURIComponent(instanceId)}/sync-ips`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+            }
+          )
+          const data = await res.json()
+          if (!res.ok || data.error) {
+            toast({ variant: "destructive", title: "Sync failed", description: data.error ?? `HTTP ${res.status}` })
+          } else if (data.success) {
+            toast({
+              title: "Range IPs synced",
+              description: `Updated ${data.oldIpRange} → ${data.newIpRange} in ${data.updates.length} file(s)`,
+            })
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Sync completed with errors",
+              description: data.errors?.join("; ") ?? "Check SSH configuration",
+            })
+          }
+        } catch (err) {
+          toast({ variant: "destructive", title: "Sync error", description: (err as Error).message })
+        } finally {
+          setSyncingIps(false)
+        }
+      }
+    )
+
   const handleInstallExtension = (ext: string) =>
     confirm(`Install extension "${ext}"?`, async () => {
       setInstallingExtension(ext)
@@ -542,6 +586,20 @@ export default function GoadInstancePage() {
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   : <Server className="h-3.5 w-3.5" />}
                 {initializingRange ? "Creating range..." : "Provide"}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={handleSyncIps} disabled={isRunning || syncingIps || !!pendingAction || !instance?.ludusRangeId}
+                title={
+                  !instance?.ludusRangeId
+                    ? "No dedicated range yet — run Provide first"
+                    : "Sync inventory files with the actual Ludus range IPs (use after a timed-out provide)"
+                }
+              >
+                {syncingIps
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <MapPin className="h-3.5 w-3.5" />}
+                Sync IPs
               </Button>
               <Button
                 size="sm" variant="success"

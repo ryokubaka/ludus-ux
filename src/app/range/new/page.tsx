@@ -27,6 +27,8 @@ import {
   Play,
   AlertTriangle,
   Settings2,
+  Tag,
+  Info,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { useRange } from "@/lib/range-context"
@@ -34,7 +36,35 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
 
-const STEPS = ["Select Range", "Configure VMs", "Domain Setup", "Review & Deploy"]
+const STEPS = ["Select Range", "Configure VMs", "Domain Setup", "Deploy Tags", "Review & Deploy"]
+
+const ALL_TAGS = [
+  "vm-deploy", "network", "dns-rewrites", "assign-ip", "windows", "dcs",
+  "domain-join", "sysprep", "user-defined-roles", "custom-choco",
+  "linux-packages", "additional-tools", "install-office", "install-visual-studio",
+  "allow-share-access", "custom-groups", "share", "nexus",
+]
+
+const TAG_DESCRIPTIONS: Record<string, string> = {
+  "vm-deploy": "Create all VMs defined in config",
+  network: "Set up VLANs and firewall rules",
+  "dns-rewrites": "Configure DNS rewrites",
+  "assign-ip": "Set static IPs and hostnames",
+  windows: "Configure Windows VMs (RDP, WinRM, etc.)",
+  dcs: "Set up domain controllers",
+  "domain-join": "Join Windows VMs to domain",
+  sysprep: "Run sysprep on Windows VMs",
+  "user-defined-roles": "Apply Ansible roles",
+  "custom-choco": "Install chocolatey packages",
+  "linux-packages": "Install Linux packages",
+  "additional-tools": "Install Firefox, Chrome, Burp, etc.",
+  "install-office": "Install Microsoft Office",
+  "install-visual-studio": "Install Visual Studio",
+  "allow-share-access": "Enable anonymous SMB share access",
+  "custom-groups": "Set custom Ansible groups",
+  share: "Deploy Ludus Share VM",
+  nexus: "Deploy Nexus cache VM",
+}
 
 interface VMEntry {
   id: string
@@ -67,7 +97,12 @@ function defaultsForTemplate(template: string): VMEntry {
   // hostname is the user-supplied suffix only (no {{ range_id }}- prefix).
   // The prefix is added by generateYaml and shown read-only in the UI.
   const shortName = template.replace(/-template$/, "").replace(/-x64|-x86/g, "")
-  const hostnameSuffix = shortName.slice(0, isWindows ? 10 : 50)
+  // For Windows produce a cleaner default that fits in 15 chars:
+  //   win2022-server → win2022-srv   win2022-workstation → win2022-ws
+  const windowsShort = isWindows
+    ? shortName.replace(/-?workstation$/i, "-ws").replace(/-?server$/i, "-srv")
+    : shortName
+  const hostnameSuffix = windowsShort.slice(0, isWindows ? 15 : 50)
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     template,
@@ -194,6 +229,10 @@ export default function NewRangePage() {
   // Step 3: Deploy
   const [deploying, setDeploying] = useState(false)
   const [deployResult, setDeployResult] = useState<"success" | "error" | null>(null)
+  const [deployStatus, setDeployStatus] = useState("")
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [showTagSelector, setShowTagSelector] = useState(false)
+  const [deletingVMs, setDeletingVMs] = useState(false)
 
   // Auto-generate rangeId from name (must start with a letter)
   useEffect(() => {
@@ -268,14 +307,15 @@ export default function NewRangePage() {
     existingDeployedVMs.length > 0 &&
     existingDeployedVlans.has(rangeVlan)
 
-  // Auto-initialize rangeVlan to next available VLAN (only when ranges first load)
+  // Auto-initialize rangeVlan to next available VLAN (only for *new* ranges —
+  // existing range configs seed the VLAN from their loaded YAML).
   useEffect(() => {
-    if (usedVlans.size === 0 || vms.length > 0) return
+    if (mode !== "new" || usedVlans.size === 0 || vms.length > 0) return
     let v = 10
     while (usedVlans.has(v) && v < 250) v++
     setRangeVlan(v)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usedVlans])
+  }, [usedVlans, mode])
 
   // Compute the next available rangeNumber (10.x second octet)
   // Ludus assigns this server-side, but we can predict it for display purposes.
@@ -417,21 +457,62 @@ export default function NewRangePage() {
     [vms, enableDomain, domainFqdn]
   )
 
+  const toggleTag = (tag: string) =>
+    setSelectedTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
+
   const handleDeploy = async () => {
     setDeploying(true)
     setDeployResult(null)
+    setDeployStatus("")
     try {
+      // When redeploying to an existing range that has live VMs, destroy them first
+      // so the new config starts from a clean slate.
+      if (mode === "existing" && existingDeployedVMs.length > 0) {
+        setDeletingVMs(true)
+        setDeployStatus("Destroying existing VMs…")
+        const delRes = await ludusApi.deleteRangeVMs(selectedExistingRange)
+        if (delRes.error) {
+          toast({ title: "VM deletion failed", description: delRes.error, variant: "destructive" })
+          setDeploying(false)
+          setDeletingVMs(false)
+          setDeployStatus("")
+          return
+        }
+        // Poll until the range reports 0 VMs (up to ~90 s)
+        const maxWait = 90_000
+        const poll = 4_000
+        const start = Date.now()
+        while (Date.now() - start < maxWait) {
+          await new Promise((r) => setTimeout(r, poll))
+          const check = await ludusApi.getRanges()
+          const updated = (Array.isArray(check.data) ? check.data : [])
+            .find((r: RangeObject) => r.rangeID === selectedExistingRange)
+          const remaining = (updated?.VMs || (updated as (RangeObject & { vms?: RangeObject["VMs"] }) | undefined)?.vms || []).length
+          if (remaining === 0) break
+          setDeployStatus(`Waiting for ${remaining} VM${remaining !== 1 ? "s" : ""} to be destroyed…`)
+        }
+        setDeletingVMs(false)
+        setDeployStatus("Uploading configuration…")
+      }
+
       const configRes = await ludusApi.setRangeConfig(yaml, effectiveRangeId || undefined)
       if (configRes.error) {
         toast({ title: "Config upload failed", description: configRes.error, variant: "destructive" })
         setDeploying(false)
+        setDeployStatus("")
         return
       }
-      const deployRes = await ludusApi.deployRange(undefined, undefined, effectiveRangeId || undefined)
+      setDeployStatus("Starting deployment…")
+      const deployRes = await ludusApi.deployRange(
+        selectedTags.length > 0 ? selectedTags : undefined,
+        undefined,
+        effectiveRangeId || undefined,
+      )
       if (deployRes.error) {
         toast({ title: "Deploy failed", description: deployRes.error, variant: "destructive" })
         setDeployResult("error")
         setDeploying(false)
+        setDeployStatus("")
         return
       }
       // Select the target range and go straight to the dashboard for live status.
@@ -444,6 +525,7 @@ export default function NewRangePage() {
       setDeployResult("error")
     }
     setDeploying(false)
+    setDeployStatus("")
   }
 
   const rangeIdConflict = mode === "new" && !!rangeId && usedRangeIds.has(rangeId)
@@ -496,9 +578,24 @@ export default function NewRangePage() {
 
             {mode === "existing" ? (
               <div className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Select a range to view and modify its configuration:
-                </p>
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertDescription className="text-xs space-y-1">
+                    <p>
+                      Continuing through this wizard will <strong>destroy all existing VMs</strong> in the selected
+                      range and redeploy from scratch.
+                    </p>
+                    <p>
+                      To update configuration or run individual deployment steps <em>without</em> deleting VMs,
+                      use the{" "}
+                      <Link href="/range/config" className="underline text-primary font-medium">
+                        Config &amp; Deploy
+                      </Link>{" "}
+                      page instead.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+                <p className="text-xs text-muted-foreground">Select a range to rebuild:</p>
                 {accessibleRanges.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No accessible ranges found. Create a new one instead.</p>
                 ) : (
@@ -778,8 +875,67 @@ export default function NewRangePage() {
         </div>
       )}
 
-      {/* ── Step 3: Review & Deploy ─────────────────────────────────────────── */}
+      {/* ── Step 3: Deploy Tags ──────────────────────────────────────────────── */}
       {step === 3 && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Tag className="h-4 w-4" />
+                Deploy Tags
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Optionally limit the deployment to specific Ansible steps. Leave all unchecked for a full
+                deployment (recommended for first-time deploys).
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
+                {ALL_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    className={cn(
+                      "flex items-center gap-2 p-2 rounded border text-left transition-colors",
+                      selectedTags.includes(tag)
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:border-primary/50"
+                    )}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    <Checkbox
+                      checked={selectedTags.includes(tag)}
+                      onCheckedChange={() => toggleTag(tag)}
+                      className="shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <code className="text-xs font-mono text-primary">{tag}</code>
+                      <p className="text-[10px] text-muted-foreground truncate">{TAG_DESCRIPTIONS[tag] || ""}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {selectedTags.length > 0 && (
+                <div className="flex items-center justify-between pt-1 border-t">
+                  <p className="text-xs text-muted-foreground">
+                    {selectedTags.length} tag{selectedTags.length !== 1 ? "s" : ""} selected — only these steps will run
+                  </p>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedTags([])}>
+                    Clear all
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(4)}>Next <ChevronRight className="h-4 w-4" /></Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 4: Review & Deploy ──────────────────────────────────────────── */}
+      {step === 4 && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Deployment Summary</CardTitle></CardHeader>
@@ -803,6 +959,16 @@ export default function NewRangePage() {
                   <span className="text-xs text-muted-foreground">Domain</span>
                   <p>{enableDomain ? domainFqdn : "None"}</p>
                 </div>
+                {selectedTags.length > 0 && (
+                  <div className="col-span-2">
+                    <span className="text-xs text-muted-foreground">Tags</span>
+                    <p className="flex flex-wrap gap-1 mt-0.5">
+                      {selectedTags.map((t) => (
+                        <code key={t} className="font-mono text-[11px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{t}</code>
+                      ))}
+                    </p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -823,16 +989,16 @@ export default function NewRangePage() {
             </CardContent>
           </Card>
 
-          {willDestroyExistingVMs && (
+          {mode === "existing" && existingDeployedVMs.length > 0 && (
             <Alert variant="destructive">
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription className="text-xs space-y-1">
                 <p>
-                  <strong>Range {selectedExistingRange} already has {existingDeployedVMs.length} deployed VM{existingDeployedVMs.length !== 1 ? "s" : ""} on VLAN {rangeVlan}.</strong>
+                  <strong>Range {selectedExistingRange} has {existingDeployedVMs.length} deployed VM{existingDeployedVMs.length !== 1 ? "s" : ""}.</strong>
                 </p>
                 <p>
-                  Deploying this configuration will <strong>destroy all existing VMs</strong> in this range
-                  before provisioning the new ones. This cannot be undone.
+                  Deploying will <strong>destroy all existing VMs</strong> in this range before provisioning
+                  the new configuration. This cannot be undone.
                 </p>
               </AlertDescription>
             </Alert>
@@ -842,17 +1008,28 @@ export default function NewRangePage() {
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="text-xs">
               This will upload the configuration and start deploying {vms.length} VMs to range{" "}
-              <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15-60+ minutes depending on VM count and templates.
+              <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes depending on VM count and templates.
             </AlertDescription>
           </Alert>
 
-          <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={handleDeploy} disabled={deploying} className="min-w-36">
-              {deploying ? <><Loader2 className="h-4 w-4 animate-spin" /> Deploying...</>
-                : deployResult === "success" ? <><Check className="h-4 w-4" /> Deployed</>
-                : <><Play className="h-4 w-4" /> Deploy Range</>}
+          <div className="flex justify-between items-center">
+            <Button variant="ghost" onClick={() => setStep(3)} disabled={deploying}>
+              <ChevronLeft className="h-4 w-4" /> Back
             </Button>
+            <div className="flex items-center gap-3">
+              {deployStatus && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {deployStatus}
+                </span>
+              )}
+              <Button onClick={handleDeploy} disabled={deploying} className="min-w-36">
+                {deploying
+                  ? <><Loader2 className="h-4 w-4 animate-spin" /> {deletingVMs ? "Destroying VMs…" : "Deploying…"}</>
+                  : deployResult === "success" ? <><Check className="h-4 w-4" /> Deployed</>
+                  : <><Play className="h-4 w-4" /> Deploy Range</>}
+              </Button>
+            </div>
           </div>
 
           {deployResult === "error" && (

@@ -50,9 +50,17 @@ export async function GET(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // HH:MM:SS wall-clock — close enough to when the Ansible task ran (within 2 s poll)
+      const nowHMS = () => new Date().toISOString().slice(11, 19)
+
       const send = (prefix: string, data: string) => {
         try {
-          controller.enqueue(encoder.encode(`data: [${prefix}] ${data}\n\n`))
+          // Prepend a timestamp to human-readable log lines; leave control
+          // messages (STATE / DONE / ERROR) unmodified so the client can parse them.
+          const payload = (prefix === "LUDUS" || prefix === "GOAD")
+            ? `[${prefix}] [${nowHMS()}] ${data}`
+            : `[${prefix}] ${data}`
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
         } catch {
           // Controller already closed (client disconnected)
         }

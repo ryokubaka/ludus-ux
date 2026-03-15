@@ -30,6 +30,9 @@ import {
   ChevronRight,
   ChevronDown,
   Trash2,
+  Database,
+  Share2,
+  Play,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
@@ -70,6 +73,117 @@ export default function AdminRangesPage() {
   const [assigningRange, setAssigningRange] = useState<string | null>(null)
   const [assignTarget, setAssignTarget] = useState<string>("")
   const [assignInProgress, setAssignInProgress] = useState(false)
+
+  // ── Shared services (Nexus cache + Ludus Share) ───────────────────────────
+  const [deployingShared, setDeployingShared] = useState<"nexus" | "share" | null>(null)
+  // vmName → action currently in flight ("poweron" | "poweroff" | "delete")
+  const [vmActionLoading, setVmActionLoading] = useState<Map<string, string>>(new Map())
+
+  interface SharedServiceVM {
+    serviceType: "nexus" | "share"
+    vmName: string
+    vmId: number        // Ludus internal ID
+    proxmoxId: number   // Proxmox VMID — used for console + delete
+    ip: string
+    poweredOn: boolean
+    rangeId: string
+  }
+
+  // Scan all ranges for VMs whose names match nexus / share patterns.
+  const sharedServiceVMs = useMemo((): SharedServiceVM[] => {
+    const result: SharedServiceVM[] = []
+    for (const range of ranges) {
+      for (const vm of (range.VMs || [])) {
+        let serviceType: "nexus" | "share" | null = null
+        if (/nexus/i.test(vm.name)) serviceType = "nexus"
+        else if (/(^|-)share($|-)/i.test(vm.name) || /ludus-share/i.test(vm.name)) serviceType = "share"
+        if (serviceType) {
+          result.push({
+            serviceType,
+            vmName: vm.name,
+            vmId: vm.ID,
+            proxmoxId: vm.proxmoxID,
+            ip: vm.ip || "",
+            poweredOn: vm.poweredOn ?? false,
+            rangeId: range.rangeID,
+          })
+        }
+      }
+    }
+    return result
+  }, [ranges])
+
+  const nexusVMs   = useMemo(() => sharedServiceVMs.filter((v) => v.serviceType === "nexus"),  [sharedServiceVMs])
+  const shareVMs   = useMemo(() => sharedServiceVMs.filter((v) => v.serviceType === "share"),  [sharedServiceVMs])
+
+  const deploySharedService = async (service: "nexus" | "share") => {
+    setDeployingShared(service)
+    try {
+      // Call the deploy endpoint directly WITHOUT impersonation headers so that
+      // the request always uses the admin's own API key and targets the admin's
+      // own range — not whatever range an active impersonation session would target.
+      const res = await fetch("/api/proxy/range/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tags: [service] }),
+      })
+      const data = await res.json() as { error?: string }
+      if (!res.ok || data.error) {
+        toast({ variant: "destructive", title: `Failed to start ${service} deployment`, description: data.error || `HTTP ${res.status}` })
+      } else {
+        toast({ title: `${service === "nexus" ? "Nexus cache" : "Ludus Share"} deployment started`, description: "Redirecting to range logs…" })
+        // Redirect to the dashboard so the admin can watch the deployment progress
+        router.push("/")
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Error", description: (err as Error).message })
+    } finally {
+      setDeployingShared(null)
+    }
+  }
+
+  const handleVmPower = async (vm: SharedServiceVM, action: "poweron" | "poweroff") => {
+    setVmActionLoading((m) => new Map(m).set(vm.vmName, action))
+    try {
+      const res = action === "poweron"
+        ? await ludusApi.powerOn([vm.vmName], vm.rangeId)
+        : await ludusApi.powerOff([vm.vmName], vm.rangeId)
+      if (res.error) {
+        toast({ variant: "destructive", title: `Power ${action} failed`, description: res.error })
+      } else {
+        toast({ title: `${vm.vmName} ${action === "poweron" ? "starting" : "stopping"}…` })
+        setTimeout(() => fetchData({ silent: true }), 3000)
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Error", description: (err as Error).message })
+    } finally {
+      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.vmName); return n })
+    }
+  }
+
+  const handleVmConsole = (vm: SharedServiceVM) => {
+    const url = `/console?vmId=${encodeURIComponent(String(vm.proxmoxId))}&vmName=${encodeURIComponent(vm.vmName)}`
+    window.open(url, "_blank", "noopener,noreferrer")
+  }
+
+  const handleVmDelete = async (vm: SharedServiceVM) => {
+    if (!window.confirm(`Delete VM "${vm.vmName}" from Proxmox? This cannot be undone.`)) return
+    setVmActionLoading((m) => new Map(m).set(vm.vmName, "delete"))
+    try {
+      const res = await fetch(`/api/admin/vm?proxmoxId=${encodeURIComponent(String(vm.proxmoxId))}`, { method: "DELETE" })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!res.ok || data.error) {
+        toast({ variant: "destructive", title: "Delete failed", description: data.error || `HTTP ${res.status}` })
+      } else {
+        toast({ title: `${vm.vmName} deleted` })
+        fetchData({ silent: true })
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Error", description: (err as Error).message })
+    } finally {
+      setVmActionLoading((m) => { const n = new Map(m); n.delete(vm.vmName); return n })
+    }
+  }
 
   // Apply server-returned data + merge optimistic pinned assignments for the current session.
   const applyData = useCallback((
@@ -371,6 +485,148 @@ export default function AdminRangesPage() {
           </Card>
         ))}
       </div>
+
+      {/* Shared Services — one-time admin deployments for Nexus cache and Ludus Share */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Share2 className="h-4 w-4 text-primary" />
+              Shared Services
+            </CardTitle>
+            <span className="text-xs text-muted-foreground">Live in the admin Proxmox pool — accessible to all users</span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            {(
+              [
+                {
+                  key: "nexus" as const,
+                  label: "Nexus Cache",
+                  description: "Caches packages, ISOs, and apt/yum repos to speed up all range deployments.",
+                  icon: <Database className="h-5 w-5 text-blue-400 shrink-0" />,
+                  vms: nexusVMs,
+                },
+                {
+                  key: "share" as const,
+                  label: "Ludus File Share",
+                  description: "Exposes read-only and read-write SMB shares accessible from all range VMs.",
+                  icon: <Share2 className="h-5 w-5 text-purple-400 shrink-0" />,
+                  vms: shareVMs,
+                },
+              ] as const
+            ).map(({ key, label, description, icon, vms: svcVMs }) => (
+              <div key={key} className="rounded-lg border border-border p-3 space-y-2">
+                {/* Header row */}
+                <div className="flex items-center gap-2">
+                  {icon}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-muted-foreground leading-tight">{description}</p>
+                  </div>
+                  {svcVMs.length === 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2.5 shrink-0"
+                      disabled={!!deployingShared}
+                      onClick={() => deploySharedService(key)}
+                    >
+                      {deployingShared === key
+                        ? <><Loader2 className="h-3 w-3 animate-spin" /> Deploying…</>
+                        : <><Play className="h-3 w-3" /> Deploy</>}
+                    </Button>
+                  )}
+                </div>
+
+                {/* VM rows when deployed */}
+                {svcVMs.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 pl-7">
+                    <XCircle className="h-3 w-3" /> Not detected in any range
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 pl-0">
+                    {svcVMs.map((vm) => {
+                      const loadingAction = vmActionLoading.get(vm.vmName)
+                      return (
+                        <div
+                          key={vm.vmName}
+                          className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5"
+                        >
+                          {/* Power indicator */}
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 rounded-full shrink-0",
+                              vm.poweredOn ? "bg-green-400" : "bg-zinc-500",
+                            )}
+                          />
+                          {/* VM info */}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-mono font-medium truncate">{vm.vmName}</p>
+                            <p className="text-[10px] text-muted-foreground font-mono">{vm.ip || "—"}</p>
+                          </div>
+                          {/* Actions */}
+                          <div className="flex items-center gap-1">
+                            {/* Power toggle */}
+                            {vm.poweredOn ? (
+                              <Button
+                                size="icon-sm" variant="ghost"
+                                className="h-6 w-6 text-muted-foreground hover:text-yellow-400"
+                                disabled={!!loadingAction}
+                                title="Power off"
+                                onClick={() => handleVmPower(vm, "poweroff")}
+                              >
+                                {loadingAction === "poweroff"
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <XCircle className="h-3 w-3" />}
+                              </Button>
+                            ) : (
+                              <Button
+                                size="icon-sm" variant="ghost"
+                                className="h-6 w-6 text-muted-foreground hover:text-green-400"
+                                disabled={!!loadingAction}
+                                title="Power on"
+                                onClick={() => handleVmPower(vm, "poweron")}
+                              >
+                                {loadingAction === "poweron"
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <Play className="h-3 w-3" />}
+                              </Button>
+                            )}
+                            {/* Console */}
+                            <Button
+                              size="icon-sm" variant="ghost"
+                              className="h-6 w-6 text-muted-foreground hover:text-primary"
+                              disabled={!vm.poweredOn || !!loadingAction}
+                              title={vm.poweredOn ? "Open console" : "VM must be powered on"}
+                              onClick={() => handleVmConsole(vm)}
+                            >
+                              <Terminal className="h-3 w-3" />
+                            </Button>
+                            {/* Delete */}
+                            <Button
+                              size="icon-sm" variant="ghost"
+                              className="h-6 w-6 text-muted-foreground hover:text-red-400"
+                              disabled={!!loadingAction}
+                              title="Delete VM from Proxmox"
+                              onClick={() => handleVmDelete(vm)}
+                            >
+                              {loadingAction === "delete"
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Trash2 className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Users + Ranges table — user-centric, ranges as sub-rows */}
       <Card>

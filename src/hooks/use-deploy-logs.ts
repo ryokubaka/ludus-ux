@@ -55,7 +55,11 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
           const newLines = allLines.slice(lastCountRef.current)
           lastCountRef.current = allLines.length
           if (newLines.length > 0) {
-            setLines((prev) => [...prev, ...newLines])
+            // Prepend a wall-clock timestamp to each newly-received line.
+            // Lines within the same poll window share the same timestamp, which
+            // is within POLL_INTERVAL_MS of when they were actually written.
+            const ts = new Date().toISOString().slice(11, 19)
+            setLines((prev) => [...prev, ...newLines.map((l) => `[${ts}] ${l}`)])
           }
         }
 

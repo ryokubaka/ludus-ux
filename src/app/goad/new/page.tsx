@@ -31,7 +31,7 @@ import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-import { getImpersonationHeaders } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useRange } from "@/lib/range-context"
 
@@ -141,6 +141,8 @@ export default function NewGoadInstancePage() {
   const [selectedExistingRange, setSelectedExistingRange] = useState<string>("")
   // Stable UID for the auto-generated range name preview — generated once on mount
   const [newRangeUid] = useState(() => Date.now().toString(36).toUpperCase().slice(-4))
+  // True while we are deleting existing VMs before a GOAD install into an existing range
+  const [clearingRange, setClearingRange] = useState(false)
 
   // Template readiness
   const [templates, setTemplates] = useState<TemplateObject[]>([])
@@ -306,12 +308,37 @@ export default function NewGoadInstancePage() {
       }
     }
 
+    // Show the terminal view and start streaming range logs early
+    setDeployed(true)
+    startRangeStreaming(rangeId ?? undefined)
+
+    // For existing ranges: call DELETE /range/{id}/vms first so GOAD gets a clean
+    // slate. Without this, `ludus range deploy` fails on conflicting existing VMs.
+    if (rangeMode === "existing" && rangeId) {
+      // Capture as a non-nullable const so TypeScript keeps the narrowing across awaits
+      const targetRangeId: string = rangeId
+      setClearingRange(true)
+      try {
+        await ludusApi.deleteRangeVMs(targetRangeId)
+        // Poll until the range reports no VMs (max 10 minutes)
+        const deadline = Date.now() + 10 * 60 * 1000
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 8000))
+          const status = await ludusApi.getRangeStatus(targetRangeId)
+          const rangeData = status.data as { VMs?: unknown[]; vms?: unknown[] } | undefined
+          const vms = rangeData?.VMs ?? rangeData?.vms ?? []
+          if (vms.length === 0) break
+        }
+      } catch {
+        // Non-fatal — proceed so GOAD can attempt the deploy anyway
+      } finally {
+        setClearingRange(false)
+      }
+    }
+
     const exts = Array.from(selectedExtensions)
     const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
     const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
-    setDeployed(true)
-    // Poll range logs scoped to the target range (not the sidebar selection)
-    startRangeStreaming(rangeId ?? undefined)
     await run(args, undefined, undefined, rangeId ?? undefined)
 
     // After deploy completes, link any newly created instance to the dedicated range
@@ -634,7 +661,7 @@ export default function NewGoadInstancePage() {
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">
-                    Deploy this GOAD instance into an existing range:
+                    Select the range to deploy this GOAD instance into:
                   </p>
                   {accessibleRanges.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No accessible ranges found. Create a new one instead.</p>
@@ -659,6 +686,17 @@ export default function NewGoadInstancePage() {
                       ))}
                     </div>
                   )}
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription className="text-xs space-y-1">
+                      <p><strong>All existing VMs in the selected range will be destroyed.</strong></p>
+                      <p>
+                        GOAD runs <code className="font-mono">ludus range rm</code> on the target range before deploying,
+                        which deletes every VM currently in it. The range itself is preserved.
+                        Only choose an existing range if you are comfortable losing its current VMs.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
                 </div>
               )}
             </CardContent>
@@ -765,25 +803,41 @@ export default function NewGoadInstancePage() {
             )
           })()}
 
-          <Alert variant="warning">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription className="text-xs">
-              This will {rangeMode === "new" ? "create a new Ludus range and deploy" : "deploy"}{" "}
-              {labInfo?.vmCount ?? "multiple"} VMs
-              {rangeMode === "existing" && selectedExistingRange
-                ? <> to range <strong>{selectedExistingRange}</strong></>
-                : " to a new dedicated Ludus range"}
-              . The deployment can take 30–90 minutes depending on the lab and extensions selected.
-            </AlertDescription>
-          </Alert>
+          {rangeMode === "existing" ? (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-xs space-y-1">
+                <p>
+                  <strong>All existing VMs in range <code className="font-mono">{selectedExistingRange}</code> will be permanently destroyed</strong> before deployment begins.
+                </p>
+                <p>
+                  GOAD runs <code className="font-mono">ludus range rm</code> on the target range to clear it,
+                  then deploys {labInfo?.vmCount ?? "the"} new VMs and configures the lab.
+                  The range itself is not deleted. This cannot be undone.
+                  Deployment can take 30–90 minutes.
+                </p>
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Alert variant="warning">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                This will create a new Ludus range and deploy {labInfo?.vmCount ?? "multiple"} VMs
+                to <code className="font-mono">{autoRangeId}</code>.
+                Deployment can take 30–90 minutes depending on the lab and extensions selected.
+              </AlertDescription>
+            </Alert>
+          )}
 
           <div className="flex justify-between">
             <Button variant="ghost" onClick={() => setStep(2)}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
-            <Button onClick={handleDeploy} disabled={isRunning || creatingRange} className="min-w-36">
+            <Button onClick={handleDeploy} disabled={isRunning || creatingRange || clearingRange} className="min-w-36">
               {creatingRange
                 ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating range...</>
+                : clearingRange
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Clearing VMs...</>
                 : <><Play className="h-4 w-4" /> Deploy Instance</>}
             </Button>
           </div>
@@ -796,17 +850,25 @@ export default function NewGoadInstancePage() {
           {/* Status bar */}
           <div className="flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-3 text-sm flex-wrap">
-              {isRunning && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+              {(isRunning || clearingRange || creatingRange) && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
               <span className="text-muted-foreground">
-                Deploying <code className="text-primary font-mono">{selectedLab}</code>
+                {clearingRange
+                  ? <>Clearing VMs from range <code className="text-primary font-mono">{dedicatedRangeId}</code>…</>
+                  : <>Deploying <code className="text-primary font-mono">{selectedLab}</code></>}
               </span>
               {dedicatedRangeId && (
                 <Badge variant="success" className="gap-1">
                   <Server className="h-3 w-3" /> range: {dedicatedRangeId}
                 </Badge>
               )}
+              {/* VM clearing phase */}
+              {clearingRange && (
+                <Badge variant="warning" className="gap-1">
+                  <Server className="h-3 w-3" /> Clearing existing VMs
+                </Badge>
+              )}
               {/* Range deploy phase indicator */}
-              {isRangeStreaming && (
+              {!clearingRange && isRangeStreaming && (
                 <Badge variant="warning" className="gap-1">
                   <Server className="h-3 w-3" /> Provisioning VMs
                 </Badge>

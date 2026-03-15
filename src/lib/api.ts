@@ -171,6 +171,11 @@ export const ludusApi = {
   deleteRange: (rangeId: string) =>
     del(`/range?rangeID=${encodeURIComponent(rangeId)}&force=true`),
 
+  // Stop and delete all VMs in a range WITHOUT removing the range object itself.
+  // DELETE /range/{rangeID}/vms — returns 201 when destroy is in progress.
+  deleteRangeVMs: (rangeId: string) =>
+    del(`/range/${encodeURIComponent(rangeId)}/vms`),
+
   // Deployment
   deployRange: (tags?: string[], limit?: string, rangeId?: string) => {
     const q = rangeId ? `?rangeID=${rangeId}` : ""

@@ -250,7 +250,7 @@ export default function NewRangePage() {
   // Ludus assigns this server-side, but we can predict it for display purposes.
   const nextRangeNumber = useMemo(() => {
     const used = new Set(allRanges.map((r) => r.rangeNumber).filter((n) => typeof n === "number" && n > 0))
-    let n = 10
+    let n = 1  // Ludus assigns second octets starting from 2 (10.1.*, 10.2.*, …)
     while (used.has(n) && n < 254) n++
     return n
   }, [allRanges])
@@ -517,7 +517,7 @@ export default function NewRangePage() {
                 <div className="space-y-1.5">
                   <Label htmlFor="rangeDesc">Description (optional)</Label>
                   <Input id="rangeDesc" value={rangeDesc} onChange={(e) => setRangeDesc(e.target.value)}
-                    placeholder="Range for red team exercises" disabled={rangeCreated} />
+                    placeholder="Range for labs" disabled={rangeCreated} />
                 </div>
                 {!rangeCreated && allRanges.length > 0 && (
                   <p className="text-[11px] text-muted-foreground flex items-center gap-1">

@@ -472,26 +472,18 @@ export default function NewGoadInstancePage() {
     await stop()
     stopRangeStreaming()
 
-    // Abort every range that may have been affected.  GOAD may not always
-    // respect LUDUS_RANGE_ID (e.g. if its subprocess env is restricted), so
-    // the actual Ludus deploy might have landed in the user's default/selected
-    // range instead of the intended dedicated range.  We fire abort calls in
-    // parallel for every plausible candidate so nothing is left running.
+    // Abort only the ranges we explicitly know are associated with this GOAD
+    // deployment.  Never send a bare /range/abort (no rangeID) — that targets
+    // the server-side default range and can accidentally abort a completely
+    // different, concurrently-deploying range owned by the same user.
     const rangesToAbort = new Set<string>()
     if (dedicatedRangeId) rangesToAbort.add(dedicatedRangeId)
-    if (selectedRangeId)  rangesToAbort.add(selectedRangeId)
 
-    // Also fire an abort without an explicit rangeID — this targets the user's
-    // server-side default range as a final catch-all.
-    const abortCalls: Promise<unknown>[] = [
-      fetch("/api/proxy/range/abort", { method: "POST" }).catch(() => {}),
-    ]
-    for (const rid of rangesToAbort) {
-      abortCalls.push(
+    await Promise.all(
+      Array.from(rangesToAbort).map((rid) =>
         fetch(`/api/proxy/range/abort?rangeID=${encodeURIComponent(rid)}`, { method: "POST" }).catch(() => {})
       )
-    }
-    await Promise.all(abortCalls)
+    )
   }
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)

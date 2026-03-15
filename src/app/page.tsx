@@ -216,7 +216,13 @@ export default function DashboardPage() {
   const handleDeploy = () => confirm("Start range deployment?", doDeploy)
 
   const doAbort = async () => {
-    const result = await ludusApi.abortDeploy(selectedRangeId ?? undefined)
+    // Always require an explicit rangeID — a bare abort (no rangeID) targets the
+    // server-side default range and can interfere with other concurrently-deploying ranges.
+    if (!selectedRangeId) {
+      toast({ variant: "destructive", title: "No range selected", description: "Select a range before aborting." })
+      return
+    }
+    const result = await ludusApi.abortDeploy(selectedRangeId)
     if (result.error) {
       // Ludus returns this when no ansible process is running but the range is
       // stuck in DEPLOYING state (e.g. after a failed/interrupted GOAD deploy).

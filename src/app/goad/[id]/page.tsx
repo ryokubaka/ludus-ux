@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
+import { useDeployLogContext } from "@/lib/deploy-log-context"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -34,12 +35,14 @@ import {
   Copy,
   Download,
   X,
+  Activity,
 } from "lucide-react"
 import type { GoadInstance, GoadCatalog, GoadExtensionDef, GoadLabDef } from "@/lib/types"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useImpersonation } from "@/lib/impersonation-context"
+import { useRange } from "@/lib/range-context"
 
 interface TaskSummary {
   id: string
@@ -94,10 +97,54 @@ export default function GoadInstancePage() {
   const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream(storageKey)
   const [currentAction, setCurrentAction] = useState<string | null>(null)
   const { impersonation, impersonationHeaders } = useImpersonation()
+  const { refreshRanges } = useRange()
+  const {
+    lines: rangeLogLines,
+    isStreaming: isRangeStreaming,
+    rangeState,
+    startStreaming: startRangeStreaming,
+    stopStreaming: stopRangeStreaming,
+    clearLogs: clearRangeLogs,
+  } = useDeployLogContext()
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
   const [taskHistory, setTaskHistory] = useState<TaskSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("terminal")
+
+  // Read ?tab=<value> from the URL on first mount (e.g. redirected from goad/new)
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab")
+    if (tab) setActiveTab(tab)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-start range log streaming and switch to Deploy Status tab whenever a
+  // task becomes running.  Covers two scenarios:
+  //   1. runAction() — startRangeStreaming + setActiveTab("deploy") are already
+  //      called there, but instance data may not be loaded yet on first render.
+  //   2. Auto-resume from sessionStorage — useGoadStream detects a running task
+  //      on mount and sets isRunning=true; this effect kicks in so the Deploy
+  //      Status tab becomes live without requiring any user action.
+  const autoTabRef = useRef(false)
+  useEffect(() => {
+    if (!isRunning) {
+      autoTabRef.current = false // reset so next run can auto-switch again
+      return
+    }
+    // Start range streaming as soon as we have both a running task AND a known rangeId.
+    // We watch both `isRunning` and `instance?.ludusRangeId` because the two values
+    // arrive at different times:
+    //   • isRunning goes true quickly (useGoadStream reads sessionStorage on mount)
+    //   • instance.ludusRangeId arrives later (fetchInstances is async)
+    // Without this dual dep, the effect would fire while instance is still null and
+    // never restart once the data loads — resulting in "Waiting for output..." forever.
+    if (instance?.ludusRangeId && !isRangeStreaming) {
+      startRangeStreaming(instance.ludusRangeId)
+    }
+    if (!autoTabRef.current) {
+      autoTabRef.current = true
+      setActiveTab("deploy")
+    }
+  }, [isRunning, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
   const [installingExtension, setInstallingExtension] = useState<string | null>(null)
   const [reprovisioningExtension, setReprovisioningExtension] = useState<string | null>(null)
   const [inventories, setInventories] = useState<InstanceInventoryFile[]>([])
@@ -201,11 +248,17 @@ export default function GoadInstancePage() {
    * REPL-only commands (provide, provision_lab, install_extension) use stdin piping.
    * When an impersonation context is active the execute route will use root SSH + sudo.
    */
+  // Always pass the instance's dedicated ludusRangeId so the server can inject
+  // LUDUS_RANGE_ID and the ludus wrapper can add --range to every ludus CLI call
+  // made inside GOAD.  Without this, GOAD targets the user's DEFAULT range.
   const runAction = async (action: string, goadArgs: string) => {
     setCurrentAction(action)
     clear()
-    setActiveTab("terminal")
-    await run(goadArgs, instanceId, impersonation ?? undefined)
+    // Switch to Deploy Status tab so range logs + GOAD terminal are visible side by side
+    setActiveTab("deploy")
+    // Start streaming Ludus range logs so the user can see VM provisioning progress
+    if (instance?.ludusRangeId) startRangeStreaming(instance.ludusRangeId)
+    await run(goadArgs, instanceId, impersonation ?? undefined, instance?.ludusRangeId ?? undefined)
     setCurrentAction(null)
     fetchInstances()
   }
@@ -218,6 +271,7 @@ export default function GoadInstancePage() {
   /** Stop the running GOAD command AND abort the Ludus range deployment if active. */
   const handleStopCommand = async () => {
     await stop()
+    stopRangeStreaming()
     const rangeId = instance?.ludusRangeId
     if (rangeId) {
       try {
@@ -309,6 +363,9 @@ export default function GoadInstancePage() {
             body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
           })
         } catch {}
+        // Refresh the range list so the deleted range is dropped from context
+        // and the UI automatically switches to the next available range.
+        await refreshRanges()
         toast({ title: "Lab destroyed" })
         router.push("/goad")
       }
@@ -326,6 +383,8 @@ export default function GoadInstancePage() {
             body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
           })
           const result = await res.json()
+          // Refresh range list so the deleted range is dropped and UI auto-switches
+          await refreshRanges()
           if (result.errors?.length) {
             toast({ title: "Force delete partially succeeded", description: result.errors.join("; "), variant: "destructive" })
           } else {
@@ -530,12 +589,16 @@ export default function GoadInstancePage() {
       {/* Tabs — flex-1 so terminal tab can fill remaining height */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0">
         <TabsList>
+          <TabsTrigger value="deploy">
+            <Activity className="h-3.5 w-3.5 mr-1.5" />
+            Deploy Status
+            {(isRunning || isRangeStreaming) && (
+              <span className="ml-1.5 h-2 w-2 rounded-full bg-green-400 animate-pulse inline-block" />
+            )}
+          </TabsTrigger>
           <TabsTrigger value="terminal">
             <Terminal className="h-3.5 w-3.5 mr-1.5" />
             Terminal
-            {isRunning && (
-              <span className="ml-1.5 h-2 w-2 rounded-full bg-green-400 animate-pulse inline-block" />
-            )}
           </TabsTrigger>
           <TabsTrigger value="info">
             <Server className="h-3.5 w-3.5 mr-1.5" />
@@ -558,14 +621,75 @@ export default function GoadInstancePage() {
           </TabsTrigger>
         </TabsList>
 
-        {/* Terminal */}
+        {/* Deploy Status — side-by-side Range Logs + GOAD terminal */}
+        <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1">
+          {/* Status bar */}
+          <div className="flex items-center gap-3 mb-3 flex-shrink-0 flex-wrap">
+            {isRunning && currentAction && (
+              <>
+                <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-sm text-green-400">Running: {currentAction}</span>
+              </>
+            )}
+            {instance.ludusRangeId && rangeState && (
+              <Badge
+                variant={
+                  rangeState === "SUCCESS" ? "success"
+                  : rangeState === "ERROR" || rangeState === "ABORTED" ? "destructive"
+                  : "warning"
+                }
+              >
+                <Server className="h-3 w-3 mr-1" />
+                Range: {rangeState}
+              </Badge>
+            )}
+            {!instance.ludusRangeId && (
+              <span className="text-xs text-yellow-400">
+                No dedicated range — click Provide to create one before provisioning.
+              </span>
+            )}
+            {exitCode !== null && (
+              <Badge variant={exitCode === 0 ? "success" : "destructive"}>
+                GOAD {exitCode === 0 ? "Completed ✓" : `Failed (exit ${exitCode})`}
+              </Badge>
+            )}
+            {(lines.length === 0 && rangeLogLines.length === 0 && !isRunning) && (
+              <span className="text-xs text-muted-foreground">
+                Use an action button above to start — output will appear here.
+              </span>
+            )}
+            {isRunning && (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="ml-auto"
+                onClick={handleStopCommand}
+              >
+                <StopCircle className="h-3.5 w-3.5" />
+                Stop Deployment
+              </Button>
+            )}
+          </div>
+
+          {/* Side-by-side panels */}
+          <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
+            <GoadTerminal
+              lines={rangeLogLines}
+              onClear={clearRangeLogs}
+              label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? " (live)" : rangeState ? ` · ${rangeState}` : ""}`}
+              className="flex flex-col min-h-0 h-full"
+            />
+            <GoadTerminal
+              lines={lines}
+              onClear={clear}
+              label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+              className="flex flex-col min-h-0 h-full"
+            />
+          </div>
+        </TabsContent>
+
+        {/* Terminal (GOAD output only — kept for backward compat / manual inspection) */}
         <TabsContent value="terminal" className="mt-4 flex flex-col min-h-0 flex-1">
-          {isRunning && (
-            <div className="flex items-center gap-2 mb-3 flex-shrink-0">
-              <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-sm text-green-400">Running: {currentAction}</span>
-            </div>
-          )}
           {lines.length === 0 && !isRunning && (
             <p className="text-xs text-muted-foreground mb-3 flex-shrink-0">
               Use the action buttons above to run GOAD commands. Output will appear here and persist if you navigate away.

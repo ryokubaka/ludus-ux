@@ -51,22 +51,29 @@ export async function GET(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       const send = (prefix: string, data: string) => {
-        controller.enqueue(encoder.encode(`data: [${prefix}] ${data}\n\n`))
+        try {
+          controller.enqueue(encoder.encode(`data: [${prefix}] ${data}\n\n`))
+        } catch {
+          // Controller already closed (client disconnected)
+        }
       }
 
       try {
         let lastLudusCount = 0
         let lastGoadCount = 0
         let rangeId = rangeIdParam || ""
-        let maxPolls = 360  // 12 min max
+        let maxPolls = 900  // 30 min max (GOAD installs can take 30–90 min but range deploy itself is ≤15 min)
 
         // Warmup: don't terminate just because the range isn't DEPLOYING yet on
-        // the first few checks.  A testing-mode toggle takes a few seconds for
-        // Ludus to queue and start.  We allow up to WARMUP_POLLS iterations
-        // (each 2 s) before giving up if we never see DEPLOYING.
-        const WARMUP_POLLS = 20  // 40 s warmup window
+        // the first few checks.  GOAD's install flow creates the workspace first
+        // then runs `ludus range deploy` internally — the range may be in ERROR
+        // (empty, no VMs) or SUCCESS for several minutes before transitioning to
+        // DEPLOYING.  We allow up to WARMUP_POLLS iterations (each 2 s) before
+        // giving up if DEPLOYING never appears.
+        const WARMUP_POLLS = 150  // 5 min warmup window
         let warmupRemaining  = WARMUP_POLLS
         let wasDeploying     = false
+        let lastEmittedState = ""
 
         while (maxPolls-- > 0) {
           if (request.signal.aborted) break
@@ -101,6 +108,12 @@ export async function GET(request: NextRequest) {
             rangeId = rangeResult.data.rangeID
           }
 
+          // ── Emit state changes so the client doesn't need a separate poll ──
+          if (state && state !== lastEmittedState) {
+            send("STATE", state)
+            lastEmittedState = state
+          }
+
           // ── GOAD ansible logs (SSH) ─────────────────────────────────────────
           if (rangeId) {
             const goadResult = await readGoadLog(settings, rangeId, lastGoadCount)
@@ -118,19 +131,19 @@ export async function GET(request: NextRequest) {
             // Not deploying — decide whether to keep waiting or exit
             if (wasDeploying) {
               // We saw DEPLOYING earlier and it has now finished — done
-              send("LUDUS", `[DEPLOY_COMPLETE] Range state: ${state}`)
+              send("DONE", state)
               break
             }
-            if (state === "ERROR" || state === "ABORTED") {
-              // Hard failure — exit immediately
-              send("LUDUS", `[DEPLOY_COMPLETE] Range state: ${state}`)
-              break
-            }
-            // Still warming up (operation hasn't started yet)
+            // During warmup we intentionally do NOT exit immediately on ERROR/ABORTED.
+            // GOAD deployments leave the range in ERROR (empty, no VMs) for several
+            // minutes while it sets up the workspace and before `ludus range deploy`
+            // starts.  Exiting early here would kill the stream before any useful
+            // logs arrive.  We just count down the warmup and give up only if
+            // DEPLOYING never appears within the window.
             warmupRemaining--
             if (warmupRemaining <= 0) {
               // Gave up waiting for the operation to begin
-              send("LUDUS", `[DEPLOY_COMPLETE] Range state: ${state}`)
+              send("DONE", state)
               break
             }
           }
@@ -138,11 +151,9 @@ export async function GET(request: NextRequest) {
           await new Promise((r) => setTimeout(r, 2000))
         }
       } catch (err) {
-        controller.enqueue(
-          encoder.encode(`data: [ERROR] Stream error: ${(err as Error).message}\n\n`)
-        )
+        send("ERROR", `Stream error: ${(err as Error).message}`)
       } finally {
-        controller.close()
+        try { controller.close() } catch { /* already closed */ }
       }
     },
     cancel() {},

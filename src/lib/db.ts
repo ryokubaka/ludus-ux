@@ -208,6 +208,20 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON range_ownership(userID);
       `)
     },
+
+    // v6 — Local GOAD instance→range mapping.
+    // Written by set-range whenever a new GOAD instance is created so that the
+    // instances API can reliably return ludusRangeId without relying solely on
+    // the SSH-written .goad_range_id file (which requires root SSH credentials).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS goad_instance_ranges (
+          instance_id TEXT    NOT NULL PRIMARY KEY,
+          range_id    TEXT    NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

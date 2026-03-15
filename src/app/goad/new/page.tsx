@@ -32,7 +32,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders } from "@/lib/api"
-import { useDeployLogs } from "@/hooks/use-deploy-logs"
+import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
@@ -127,7 +127,7 @@ function shellQuote(arg: string): string {
 
 export default function NewGoadInstancePage() {
   const router = useRouter()
-  const { ranges: accessibleRanges, selectRange, refreshRanges } = useRange()
+  const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
@@ -139,10 +139,33 @@ export default function NewGoadInstancePage() {
   // Range selection (step 2)
   const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
   const [selectedExistingRange, setSelectedExistingRange] = useState<string>("")
-  // Stable UID for the auto-generated range name preview — generated once on mount
-  const [newRangeUid] = useState(() => Date.now().toString(36).toUpperCase().slice(-4))
+  // Stable UID shared between the auto-generated range name and GOAD instance ID.
+  // Using the same UID means the range suffix visually matches the instance name suffix,
+  // making it easy to see which range belongs to which instance.
+  // 6 chars gives ~2 billion combinations — low collision risk per user.
+  const [newRangeUid] = useState(() => Math.random().toString(36).slice(2, 8).toUpperCase())
   // True while we are deleting existing VMs before a GOAD install into an existing range
   const [clearingRange, setClearingRange] = useState(false)
+  // Existing GOAD instance that lives in the currently-selected existing range (if any)
+  const [existingInstanceInSelectedRange, setExistingInstanceInSelectedRange] = useState<string | null>(null)
+
+  // When the user picks an existing range, check if there is already a GOAD instance
+  // in it.  This drives the review step copy ("re-deploy" vs "fresh install").
+  useEffect(() => {
+    if (rangeMode !== "existing" || !selectedExistingRange) {
+      setExistingInstanceInSelectedRange(null)
+      return
+    }
+    fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+      .then((r) => r.ok ? r.json() : { instances: [] })
+      .then((d) => {
+        const found = (d.instances ?? []).find(
+          (i: { instanceId: string; ludusRangeId?: string }) => i.ludusRangeId === selectedExistingRange
+        )
+        setExistingInstanceInSelectedRange(found?.instanceId ?? null)
+      })
+      .catch(() => setExistingInstanceInSelectedRange(null))
+  }, [rangeMode, selectedExistingRange]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Template readiness
   const [templates, setTemplates] = useState<TemplateObject[]>([])
@@ -172,7 +195,7 @@ export default function NewGoadInstancePage() {
     startStreaming: startRangeStreaming,
     stopStreaming: stopRangeStreaming,
     clearLogs: clearRangeLogs,
-  } = useDeployLogs()
+  } = useDeployLogContext()
 
   // Catalog state
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
@@ -217,7 +240,8 @@ export default function NewGoadInstancePage() {
     return ext.compatibility.includes("*") || ext.compatibility.includes(selectedLab)
   })
 
-  // Preview of the auto-generated range ID for the "Create New Range" option
+  // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
+  // e.g. "melchior-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
   const autoRangeId = useMemo(() => {
     const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
     const labSlug = (selectedLab ?? "lab").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
@@ -273,26 +297,25 @@ export default function NewGoadInstancePage() {
   const handleDeploy = async () => {
     if (!selectedLab) return
 
-    // Snapshot existing instance IDs so we can diff after deploy to find the new one
-    let instanceIdsBefore: Set<string> = new Set()
+    // Snapshot full instance list so we can find any pre-existing instance in the
+    // selected range (to reuse it) and diff for new instances when needed.
+    type InstanceSnapshot = { instanceId: string; ludusRangeId?: string }
+    let instancesBefore: InstanceSnapshot[] = []
     try {
       const snap = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
       if (snap.ok) {
         const snapData = await snap.json()
-        instanceIdsBefore = new Set(
-          (snapData.instances ?? []).map((i: { instanceId: string }) => i.instanceId)
-        )
+        instancesBefore = snapData.instances ?? []
       }
     } catch { /* best-effort */ }
+    const instanceIdsBefore = new Set(instancesBefore.map((i) => i.instanceId))
 
     let rangeId: string | null = null
     if (rangeMode === "existing" && selectedExistingRange) {
-      // User chose an existing range — use it directly, no creation needed
       rangeId = selectedExistingRange
       setDedicatedRangeId(rangeId)
       selectRange(rangeId)
     } else {
-      // Create a new dedicated range for this GOAD instance
       setCreatingRange(true)
       try {
         const result = await resolveDeployRange()
@@ -302,25 +325,41 @@ export default function NewGoadInstancePage() {
           await refreshRanges()
           selectRange(rangeId)
         }
-        // If null, proceed without a rangeId — GOAD will use its default range
       } finally {
         setCreatingRange(false)
       }
     }
 
-    // Show the terminal view and start streaming range logs early
+    // Show the terminal view.  Range log streaming is started by /goad/[id]'s
+    // useEffect once isRunning becomes true after the redirect.
     setDeployed(true)
-    startRangeStreaming(rangeId ?? undefined)
 
-    // For existing ranges: call DELETE /range/{id}/vms first so GOAD gets a clean
-    // slate. Without this, `ludus range deploy` fails on conflicting existing VMs.
-    if (rangeMode === "existing" && rangeId) {
-      // Capture as a non-nullable const so TypeScript keeps the narrowing across awaits
-      const targetRangeId: string = rangeId
+    const exts = Array.from(selectedExtensions)
+    const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
+
+    // ── Determine whether we're reusing an existing instance ─────────────────
+    // When the user picks "existing range", there may already be a GOAD instance
+    // associated with that range.  In that case we want to keep the same instance
+    // ID — we just delete the VMs and re-run install targeting the same workspace
+    // (goad -i <id> -t install overwrites the lab/extension config in-place).
+    // No polling is needed: we know the destination before GOAD even starts.
+    //
+    // If there is no prior instance in the range (or this is a new range), we fall
+    // through to the normal "fresh install + poll for new instance" path.
+    const existingInstance =
+      rangeMode === "existing" && rangeId
+        ? (instancesBefore.find((i) => i.ludusRangeId === rangeId) ?? null)
+        : null
+
+    if (existingInstance) {
+      // ── Re-deploy path: reuse existing GOAD instance ────────────────────────
+      // 1. Delete VMs for a clean Ludus slate (keep the workspace — GOAD updates it).
+      // 2. Run `goad -i <id> -t install -l <lab>` to overwrite the workspace config.
+      // 3. Transfer the task ID and redirect immediately — no polling needed.
+      const targetRangeId: string = rangeId!
       setClearingRange(true)
       try {
         await ludusApi.deleteRangeVMs(targetRangeId)
-        // Poll until the range reports no VMs (max 10 minutes)
         const deadline = Date.now() + 10 * 60 * 1000
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 8000))
@@ -329,55 +368,130 @@ export default function NewGoadInstancePage() {
           const vms = rangeData?.VMs ?? rangeData?.vms ?? []
           if (vms.length === 0) break
         }
-      } catch {
-        // Non-fatal — proceed so GOAD can attempt the deploy anyway
-      } finally {
+      } catch { /* Non-fatal — let GOAD attempt the deploy anyway */ } finally {
         setClearingRange(false)
       }
-    }
 
-    const exts = Array.from(selectedExtensions)
-    const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
-    const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
-    await run(args, undefined, undefined, rangeId ?? undefined)
+      const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(existingInstance.instanceId)} -t install${extArgs ? ` ${extArgs}` : ""}`
+      run(args, undefined, undefined, rangeId ?? undefined)
 
-    // After deploy completes, link any newly created instance to the dedicated range
-    if (rangeId) {
-      try {
-        const after = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
-        if (after.ok) {
-          const afterData = await after.json()
-          const newIds: string[] = (afterData.instances ?? [])
-            .filter((i: { instanceId: string; ludusRangeId?: string }) =>
-              !instanceIdsBefore.has(i.instanceId) || !i.ludusRangeId
-            )
-            .map((i: { instanceId: string }) => i.instanceId)
-          if (newIds.length > 0) {
-            await fetch("/api/goad/instances/set-range", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
-              body: JSON.stringify({ rangeId, instanceIds: newIds }),
-            })
-          }
+      // Wait for useGoadStream to write the [TASKID] into sessionStorage ("goad-task-new"),
+      // then transfer it to the instance-scoped key so /goad/[id] can auto-resume.
+      const existingId = existingInstance.instanceId
+      const capturedRangeId = rangeId
+      ;(async () => {
+        const deadline = Date.now() + 30_000
+        let taskId: string | null = null
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500))
+          try { taskId = sessionStorage.getItem("goad-task-new") } catch { /* SSR */ }
+          if (taskId) break
         }
-      } catch { /* best-effort — user can manually init-range if needed */ }
+        if (taskId) {
+          try { sessionStorage.setItem(`goad-task-${existingId}`, taskId) } catch { /* SSR */ }
+        }
+        if (capturedRangeId) {
+          fetch("/api/goad/instances/set-range", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+            body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [existingId] }),
+          }).catch(() => {})
+        }
+        router.push(`/goad/${encodeURIComponent(existingId)}?tab=deploy`)
+      })()
+
+    } else {
+      // ── Fresh install path ───────────────────────────────────────────────────
+      // No prior instance in this range.  Delete VMs if using an existing range,
+      // then run a normal install and poll until GOAD creates the new workspace.
+      // GOAD generates its own instance ID — we cannot predetermine it.
+
+      if (rangeMode === "existing" && rangeId) {
+        const targetRangeId: string = rangeId
+        setClearingRange(true)
+        try {
+          await ludusApi.deleteRangeVMs(targetRangeId)
+          const deadline = Date.now() + 10 * 60 * 1000
+          while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 8000))
+            const status = await ludusApi.getRangeStatus(targetRangeId)
+            const rangeData = status.data as { VMs?: unknown[]; vms?: unknown[] } | undefined
+            const vms = rangeData?.VMs ?? rangeData?.vms ?? []
+            if (vms.length === 0) break
+          }
+        } catch { /* proceed */ } finally {
+          setClearingRange(false)
+        }
+      }
+
+      const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
+      run(args, undefined, undefined, rangeId ?? undefined)
+
+      // Poll until GOAD creates the new workspace directory, then redirect.
+      // GOAD writes instance.json early in the install flow (within ~30-60 s).
+      const capturedRangeId = rangeId
+      const capturedBefore = new Set(instanceIdsBefore)
+      let redirected = false
+
+      const pollForInstance = async () => {
+        const deadline = Date.now() + 30 * 60 * 1000
+        while (Date.now() < deadline && !redirected) {
+          await new Promise((r) => setTimeout(r, 10_000))
+          try {
+            const res = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+            if (!res.ok) continue
+            const data = await res.json()
+            const newInst = (data.instances ?? []).find(
+              (i: { instanceId: string }) => !capturedBefore.has(i.instanceId)
+            )
+            if (newInst && !redirected) {
+              redirected = true
+              const newId = newInst.instanceId as string
+              if (capturedRangeId) {
+                fetch("/api/goad/instances/set-range", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+                  body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [newId] }),
+                }).catch(() => {})
+              }
+              try {
+                const taskId = sessionStorage.getItem("goad-task-new")
+                if (taskId) sessionStorage.setItem(`goad-task-${newId}`, taskId)
+              } catch { /* SSR */ }
+              router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy`)
+            }
+          } catch { /* retry */ }
+        }
+      }
+
+      pollForInstance()
     }
   }
 
   const handleStop = async () => {
     await stop()
     stopRangeStreaming()
-    // Also abort the Ludus range deployment so VMs stop being created
-    if (dedicatedRangeId) {
-      try {
-        await fetch(
-          `/api/proxy/range/abort?rangeID=${encodeURIComponent(dedicatedRangeId)}`,
-          { method: "POST" }
-        )
-      } catch {
-        // Best-effort; user can abort manually from the Dashboard if this fails
-      }
+
+    // Abort every range that may have been affected.  GOAD may not always
+    // respect LUDUS_RANGE_ID (e.g. if its subprocess env is restricted), so
+    // the actual Ludus deploy might have landed in the user's default/selected
+    // range instead of the intended dedicated range.  We fire abort calls in
+    // parallel for every plausible candidate so nothing is left running.
+    const rangesToAbort = new Set<string>()
+    if (dedicatedRangeId) rangesToAbort.add(dedicatedRangeId)
+    if (selectedRangeId)  rangesToAbort.add(selectedRangeId)
+
+    // Also fire an abort without an explicit rangeID — this targets the user's
+    // server-side default range as a final catch-all.
+    const abortCalls: Promise<unknown>[] = [
+      fetch("/api/proxy/range/abort", { method: "POST" }).catch(() => {}),
+    ]
+    for (const rid of rangesToAbort) {
+      abortCalls.push(
+        fetch(`/api/proxy/range/abort?rangeID=${encodeURIComponent(rid)}`, { method: "POST" }).catch(() => {})
+      )
     }
+    await Promise.all(abortCalls)
   }
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)
@@ -738,6 +852,13 @@ export default function NewGoadInstancePage() {
                   {rangeMode === "existing" ? "existing" : "new"}
                 </Badge>
               </div>
+              {existingInstanceInSelectedRange && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground w-24">Instance</span>
+                  <code className="font-mono text-sm text-primary">{existingInstanceInSelectedRange}</code>
+                  <Badge variant="info" className="text-[10px]">reuse</Badge>
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted-foreground w-24">Provider</span>
                 <span className="text-sm">Ludus</span>
@@ -810,12 +931,18 @@ export default function NewGoadInstancePage() {
                 <p>
                   <strong>All existing VMs in range <code className="font-mono">{selectedExistingRange}</code> will be permanently destroyed</strong> before deployment begins.
                 </p>
-                <p>
-                  GOAD runs <code className="font-mono">ludus range rm</code> on the target range to clear it,
-                  then deploys {labInfo?.vmCount ?? "the"} new VMs and configures the lab.
-                  The range itself is not deleted. This cannot be undone.
-                  Deployment can take 30–90 minutes.
-                </p>
+                {existingInstanceInSelectedRange ? (
+                  <p>
+                    Instance <code className="font-mono">{existingInstanceInSelectedRange}</code> will be <strong>re-deployed</strong> in-place —
+                    its lab configuration and inventory files will be overwritten with the new selection.
+                    The instance ID is preserved. This cannot be undone. Deployment can take 30–90 minutes.
+                  </p>
+                ) : (
+                  <p>
+                    A new GOAD instance will be created in range <code className="font-mono">{selectedExistingRange}</code>.
+                    The range itself is not deleted. This cannot be undone. Deployment can take 30–90 minutes.
+                  </p>
+                )}
               </AlertDescription>
             </Alert>
           ) : (
@@ -847,6 +974,15 @@ export default function NewGoadInstancePage() {
       {/* ── Side-by-side terminal view ─────────────────────────────────── */}
       {step === 3 && showTerminal && (
         <>
+          {/* Redirect notice */}
+          <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 flex-shrink-0">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary flex-shrink-0" />
+            <p className="text-xs text-muted-foreground">
+              Deployment is running in the background.
+              You will be <strong className="text-foreground">automatically redirected</strong> to the GOAD instance&apos;s Deploy Status page as soon as the instance is detected.
+            </p>
+          </div>
+
           {/* Status bar */}
           <div className="flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-3 text-sm flex-wrap">

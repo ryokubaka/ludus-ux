@@ -3,6 +3,7 @@ import { listGoadInstances, isGoadConfigured } from "@/lib/goad-ssh"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusGet } from "@/lib/ludus-client"
 import type { RangeObject } from "@/lib/types"
+import { getAllInstanceRangesLocal } from "@/lib/goad-instance-range-store"
 
 // Must be dynamic: reads env vars + SSH at runtime.
 // Without this Next.js pre-renders at build time (when LUDUS_SSH_HOST is unset)
@@ -70,9 +71,33 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Local DB map: instance_id → range_id (written by set-range, survives restarts)
+    const localRangeMap = getAllInstanceRangesLocal()
+
     // Enrich each GOAD instance with its Ludus rangeID.
-    // GOAD encodes the range number in ipRange as "10.<rangeNumber>.10".
+    // Three authoritative sources are used, in priority order:
+    //
+    //  0. Local SQLite DB — written by /api/goad/instances/set-range immediately on
+    //     assignment.  No SSH dependency; survives container restarts.  Highest
+    //     priority because it's always current and doesn't require root SSH creds.
+    //  1. instance.ludusRangeId — read from .goad_range_id SSH file by listGoadInstances.
+    //     Also reliable but requires root SSH write at assignment time.
+    //  2. ipRange → rangeNumber → rangeID — GOAD stores the Ludus IP block as
+    //     "10.<rangeNumber>.10" in instance.json; we reverse-map that to the rangeID.
+    //
+    // Deliberately NO "user has only one range" fallback: that heuristic caused
+    // newly created Ludus ranges to appear to own existing GOAD instances that
+    // were in CREATED state (no IP, no tracking file).  A CREATED instance has
+    // no range assignment yet and should show as unscoped until Provide is run.
     const enriched = allInstances.map((inst) => {
+      // Source 0: local DB (highest priority — no SSH dependency)
+      const localRangeId = localRangeMap.get(inst.instanceId)
+      if (localRangeId) return { ...inst, ludusRangeId: localRangeId }
+
+      // Source 1: already set from the .goad_range_id SSH file
+      if (inst.ludusRangeId) return inst
+
+      // Source 2: derive from the IP range that GOAD itself records
       if (inst.ipRange) {
         const parts = inst.ipRange.split(".")
         const rangeNum = parseInt(parts[1] ?? "", 10)
@@ -81,14 +106,7 @@ export async function GET(request: NextRequest) {
           if (ludusRangeId) return { ...inst, ludusRangeId }
         }
       }
-      // Fallback: when ipRange is not populated yet (e.g. CREATED instances),
-      // infer range only if the owner maps to exactly one known Ludus range.
-      if (inst.ownerUserId) {
-        const ownerRanges = userToRangeIds.get(inst.ownerUserId.toLowerCase()) ?? []
-        if (ownerRanges.length === 1) {
-          return { ...inst, ludusRangeId: ownerRanges[0] }
-        }
-      }
+
       return inst
     })
 

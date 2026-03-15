@@ -1,7 +1,9 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import { ludusApi } from "@/lib/api"
+
+const POLL_INTERVAL_MS = 5000
 
 interface UseDeployLogsOptions {
   onComplete?: () => void
@@ -13,6 +15,7 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
   const [rangeState, setRangeState] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastCountRef = useRef(0)
+  const isStreamingRef = useRef(false)
   const onCompleteRef = useRef(options.onComplete)
   onCompleteRef.current = options.onComplete
 
@@ -21,20 +24,25 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
+    isStreamingRef.current = false
     setIsStreaming(false)
   }, [])
 
-  /**
-   * Start polling range logs. Pass an optional `rangeId` to scope to a
-   * specific range (e.g. from the GOAD deploy page where the range is known).
-   */
+  // Stop the interval when the component that owns this hook unmounts
+  useEffect(() => () => stopStreaming(), [stopStreaming])
+
   const startStreaming = useCallback((rangeId?: string) => {
     stopStreaming()
     lastCountRef.current = 0
+    isStreamingRef.current = true
     setIsStreaming(true)
     setRangeState(null)
 
     const poll = async () => {
+      // Skip fetches when the tab is not visible
+      if (typeof document !== "undefined" && document.hidden) return
+      if (!isStreamingRef.current) return
+
       try {
         const [logsResult, rangeResult] = await Promise.all([
           ludusApi.getRangeLogs(rangeId),
@@ -62,9 +70,8 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
       }
     }
 
-    // Immediate first poll, then every 2 s
     poll()
-    timerRef.current = setInterval(poll, 2000)
+    timerRef.current = setInterval(poll, POLL_INTERVAL_MS)
   }, [stopStreaming])
 
   const clearLogs = useCallback(() => {

@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 
 export const dynamic = "force-dynamic"
 
@@ -37,11 +38,20 @@ export async function POST(request: NextRequest) {
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
   for (const instanceId of instanceIds) {
+    // Write to local DB first — reliable, no SSH dependency.
+    // This ensures the instances API returns the correct ludusRangeId even when
+    // root SSH credentials are not configured (SSH write is best-effort only).
+    setInstanceRangeLocal(instanceId, rangeId)
+
+    // Best-effort SSH write to the .goad_range_id file on the remote server.
+    // This keeps the on-server record in sync for any tooling that reads it directly.
     try {
       await writeGoadRangeId(instanceId, rangeId, rootCreds)
       results.push({ instanceId, ok: true })
     } catch (err) {
-      results.push({ instanceId, ok: false, error: (err as Error).message })
+      // SSH write failed — local DB is already updated so the UI will still show
+      // the correct association.
+      results.push({ instanceId, ok: true, error: (err as Error).message })
     }
   }
 

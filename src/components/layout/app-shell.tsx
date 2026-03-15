@@ -6,6 +6,7 @@ import { Header } from "./header"
 import { ImpersonationProvider, useImpersonation } from "@/lib/impersonation-context"
 import { RangeProvider } from "@/lib/range-context"
 import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
+import { DeployLogProvider } from "@/lib/deploy-log-context"
 import { UserCheck, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -79,9 +80,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <ImpersonationProvider>
       <RangeProvider>
-        <SidebarProvider>
-          <ShellContent>{children}</ShellContent>
-        </SidebarProvider>
+        <DeployLogProvider>
+          <SidebarProvider>
+            <ShellContent>{children}</ShellContent>
+          </SidebarProvider>
+        </DeployLogProvider>
       </RangeProvider>
     </ImpersonationProvider>
   )

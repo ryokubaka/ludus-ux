@@ -237,6 +237,37 @@ export default function NewRangePage() {
     return vlans
   }, [allRanges, mode, selectedExistingRange])
 
+  // VMs already deployed in the selected existing range (for destroy warning + IP display)
+  const existingRangeData = useMemo(() => {
+    if (!selectedExistingRange) return null
+    return allRanges.find((r) => r.rangeID === selectedExistingRange) ?? null
+  }, [allRanges, selectedExistingRange])
+
+  const existingDeployedVMs = useMemo(
+    () => existingRangeData?.VMs || (existingRangeData as (RangeObject & { vms?: RangeObject["VMs"] }) | null)?.vms || [],
+    [existingRangeData]
+  )
+
+  // VLANs (3rd IP octet) occupied by the already-deployed VMs in the selected existing range
+  const existingDeployedVlans = useMemo(() => {
+    const vlans = new Set<number>()
+    for (const vm of existingDeployedVMs) {
+      const parts = vm.ip?.split(".")
+      if (parts?.length === 4) {
+        const v = parseInt(parts[2])
+        if (!isNaN(v)) vlans.add(v)
+      }
+    }
+    return vlans
+  }, [existingDeployedVMs])
+
+  // True when the user is about to deploy into a VLAN that already has live VMs —
+  // those VMs will be destroyed by the deployment.
+  const willDestroyExistingVMs =
+    mode === "existing" &&
+    existingDeployedVMs.length > 0 &&
+    existingDeployedVlans.has(rangeVlan)
+
   // Auto-initialize rangeVlan to next available VLAN (only when ranges first load)
   useEffect(() => {
     if (usedVlans.size === 0 || vms.length > 0) return
@@ -258,6 +289,16 @@ export default function NewRangePage() {
   const usedRangeIds = useMemo(() => {
     return new Set(allRanges.map((r) => r.rangeID).filter(Boolean))
   }, [allRanges])
+
+  // The second IP octet (range number) to show in the preview "10.<n>.<vlan>.<octet>".
+  // For an existing range we know the real number; for a new range we predict it.
+  const displayRangeNumber = useMemo((): number | string => {
+    if (mode === "existing" && existingRangeData?.rangeNumber != null) {
+      return existingRangeData.rangeNumber
+    }
+    if (mode === "new") return nextRangeNumber
+    return "?"
+  }, [mode, existingRangeData, nextRangeNumber])
 
   const effectiveRangeId = mode === "existing" ? selectedExistingRange : rangeId
 
@@ -468,23 +509,36 @@ export default function NewRangePage() {
                   <p className="text-sm text-muted-foreground">No accessible ranges found. Create a new one instead.</p>
                 ) : (
                   <div className="grid gap-2">
-                    {accessibleRanges.map((r) => (
-                      <button key={r.rangeID} onClick={() => setSelectedExistingRange(r.rangeID)}
-                        className={cn(
-                          "text-left p-3 rounded-lg border-2 transition-all",
-                          selectedExistingRange === r.rangeID
-                            ? "border-primary bg-primary/10"
-                            : "border-border hover:border-primary/50"
-                        )}>
-                        <div className="flex items-center justify-between">
-                          <code className="font-mono font-bold text-primary text-sm">{r.rangeID}</code>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="secondary" className="text-[10px]">{r.accessType}</Badge>
-                            {selectedExistingRange === r.rangeID && <Check className="h-4 w-4 text-primary" />}
+                    {accessibleRanges.map((r) => {
+                      const rd = allRanges.find((x) => x.rangeID === r.rangeID)
+                      const vmCount = (rd?.VMs || (rd as (RangeObject & { vms?: RangeObject["VMs"] }) | undefined)?.vms || []).length
+                      const rn = rd?.rangeNumber
+                      return (
+                        <button key={r.rangeID} onClick={() => setSelectedExistingRange(r.rangeID)}
+                          className={cn(
+                            "text-left p-3 rounded-lg border-2 transition-all",
+                            selectedExistingRange === r.rangeID
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:border-primary/50"
+                          )}>
+                          <div className="flex items-center justify-between">
+                            <code className="font-mono font-bold text-primary text-sm">{r.rangeID}</code>
+                            <div className="flex items-center gap-2">
+                              {vmCount > 0 && (
+                                <Badge variant="warning" className="text-[10px]">{vmCount} VMs</Badge>
+                              )}
+                              <Badge variant="secondary" className="text-[10px]">{r.accessType}</Badge>
+                              {selectedExistingRange === r.rangeID && <Check className="h-4 w-4 text-primary" />}
+                            </div>
                           </div>
-                        </div>
-                      </button>
-                    ))}
+                          {rn != null && (
+                            <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
+                              10.{rn}.* network
+                            </p>
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                 )}
                 <div className="flex justify-end">
@@ -611,7 +665,7 @@ export default function NewRangePage() {
                         <span className="mx-1">|</span>
                         <MemoryStick className="h-3 w-3" /> {vm.ramGb}GB
                         <span className="mx-1">|</span>
-                        <span className="font-mono">10.*.{vm.vlan}.{vm.ipLastOctet}</span>
+                        <span className="font-mono">10.{displayRangeNumber}.{vm.vlan}.{vm.ipLastOctet}</span>
                       </div>
                       <Button size="icon-sm" variant="ghost" onClick={() => updateVM(vm.id, { showAdvanced: !vm.showAdvanced })}>
                         <Settings2 className="h-3 w-3" />
@@ -774,6 +828,21 @@ export default function NewRangePage() {
               </pre>
             </CardContent>
           </Card>
+
+          {willDestroyExistingVMs && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="text-xs space-y-1">
+                <p>
+                  <strong>Range {selectedExistingRange} already has {existingDeployedVMs.length} deployed VM{existingDeployedVMs.length !== 1 ? "s" : ""} on VLAN {rangeVlan}.</strong>
+                </p>
+                <p>
+                  Deploying this configuration will <strong>destroy all existing VMs</strong> in this range
+                  before provisioning the new ones. This cannot be undone.
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Alert variant="warning">
             <AlertTriangle className="h-4 w-4" />

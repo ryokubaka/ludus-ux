@@ -66,13 +66,23 @@ export default function LogsPage() {
             .split("\n")
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
-          if (newLines.length) setLines((prev) => [...prev, ...newLines])
-          const completeLine = newLines.find((l) => l.startsWith("[DEPLOY_COMPLETE]"))
-          if (completeLine) {
-            // Extract the state from the completion message and refresh status
-            const match = completeLine.match(/Range state: (\w+)/)
-            if (match) setRangeState(match[1])
+          // Update state badge from server-pushed STATE/DONE events; filter
+          // internal control lines so they never appear as log output.
+          const displayLines = newLines.filter(
+            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ")
+          )
+          if (displayLines.length) setLines((prev) => [...prev, ...displayLines])
+          // [DONE] <state> — new sentinel (replaces legacy [DEPLOY_COMPLETE])
+          const doneLine = newLines.find((l) => l.startsWith("[DONE] "))
+          if (doneLine) {
+            setRangeState(doneLine.slice(7).trim())
             loadLogs()
+          }
+          // [STATE] <state> — intermediate state update
+          const stateLine = newLines.findLast?.((l) => l.startsWith("[STATE] ")) ??
+            [...newLines].reverse().find((l) => l.startsWith("[STATE] "))
+          if (stateLine) {
+            setRangeState(stateLine.slice(8).trim())
           }
         }
       } catch (err) {

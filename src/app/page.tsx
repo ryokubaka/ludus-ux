@@ -37,7 +37,7 @@ import { useRange } from "@/lib/range-context"
 import type { RangeObject, VMObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
-import { useDeployLogs } from "@/hooks/use-deploy-logs"
+import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 
@@ -69,14 +69,17 @@ export default function DashboardPage() {
   // ── Deploy ─────────────────────────────────────────────────────────────────
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
-  const { lines: logLines, isStreaming, startStreaming, clearLogs } = useDeployLogs({
-    onComplete: () => {
+  const { lines: logLines, isStreaming, rangeState: streamRangeState, activeRangeId: streamingRangeId, startStreaming, stopStreaming, clearLogs } = useDeployLogContext()
+
+  // When the global stream completes (moved out of DEPLOYING/WAITING), sync local UI state
+  useEffect(() => {
+    if (!isStreaming && streamRangeState && streamRangeState !== "DEPLOYING" && streamRangeState !== "WAITING") {
       setDeploying(false)
       fetchRanges()
-      // Auto-hide the log panel after a short delay so the user sees the final lines
       setTimeout(() => setShowLogs(false), 5000)
-    },
-  })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming, streamRangeState])
 
   // ── Console ────────────────────────────────────────────────────────────────
   const [downloadingVm, setDownloadingVm] = useState<string | null>(null)
@@ -163,6 +166,16 @@ export default function DashboardPage() {
   useEffect(() => {
     if (rangeCtxLoading) return
 
+    // The global stream may be for the new range (navigated back while still deploying)
+    // or for a different range entirely. Only preserve it when it matches.
+    const streamIsForThisRange = isStreaming && streamingRangeId === (selectedRangeId ?? null)
+    if (!streamIsForThisRange) {
+      stopStreaming()
+      clearLogs()
+    }
+    setShowLogs(streamIsForThisRange)
+    setDeploying(streamIsForThisRange)
+
     initialLoadDoneRef.current = false
     setRanges([])
     setError(null)
@@ -175,7 +188,8 @@ export default function DashboardPage() {
         if (r.data?.rangeState === "DEPLOYING") {
           setDeploying(true)
           setShowLogs(true)
-          startStreaming(selectedRangeId ?? undefined)
+          // Only start a new stream if one isn't already running for this range
+          if (!streamIsForThisRange) startStreaming(selectedRangeId ?? undefined)
         }
       }
       checkDeploy()
@@ -204,7 +218,30 @@ export default function DashboardPage() {
   const doAbort = async () => {
     const result = await ludusApi.abortDeploy(selectedRangeId ?? undefined)
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      // Ludus returns this when no ansible process is running but the range is
+      // stuck in DEPLOYING state (e.g. after a failed/interrupted GOAD deploy).
+      // There is no API call to reset range state without affecting VMs, so we
+      // surface a clear message and let the user decide their next action.
+      const noProcess =
+        typeof result.error === "string" &&
+        /no ansible/i.test(result.error)
+
+      if (noProcess) {
+        toast({
+          title: "Range state is stale",
+          description:
+            "Ludus reports no ansible process running, but the range is still marked DEPLOYING. " +
+            "This is a Ludus server-side state inconsistency — no VMs were touched. " +
+            "To reset, log in to the Pocketbase DB (Ludus server port 8081) and log in with the root@ludus.internal (password is the root API key), " +
+            "or contact your Ludus admin to manually update the range record.",
+          duration: 15000,
+        })
+        // Optimistically refresh — Ludus may have self-corrected between abort calls
+        fetchRanges()
+        return
+      }
+
+      toast({ variant: "destructive", title: "Abort failed", description: result.error })
     } else {
       toast({ title: "Deploy aborted" })
       setDeploying(false)

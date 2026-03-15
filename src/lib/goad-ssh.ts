@@ -194,8 +194,8 @@ export async function streamGoadCommand(
   let command: string;
   // PYTHONUNBUFFERED=1 prevents Python from block-buffering stdout when stdin is a pipe,
   // ensuring ansible output is flushed to the SSH stream line-by-line in real time.
-  // LUDUS_RANGE_ID scopes all Ludus API calls to this instance's dedicated range so
-  // that destroy/deploy operations never touch the operator's other ranges.
+  // LUDUS_RANGE_ID is passed as an env var so the ludus wrapper (see below) can
+  // inject --range into every ludus CLI call made by GOAD subprocesses.
   const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
   const pyEnv = `PYTHONUNBUFFERED=1 LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}' LUDUS_VERSION=2${safeRangeId ? ` LUDUS_RANGE_ID='${safeRangeId}'` : ""}`;
 
@@ -219,15 +219,52 @@ export async function streamGoadCommand(
     // Root SSH may not be configured; writability check in preamble below handles it
   }
 
+  // ── ludus CLI wrapper ────────────────────────────────────────────────────────
+  //
+  // The Ludus CLI's --range flag is NOT readable from any environment variable
+  // (confirmed from ludus-client/cmd/root.go: viper.BindPFlag is never called for
+  // the "range" flag).  Without the wrapper, every `ludus range rm / deploy /
+  // status` call inside GOAD targets the user's DEFAULT Ludus range regardless of
+  // what LUDUS_RANGE_ID is set to — causing destructive cross-range contamination.
+  //
+  // Solution: when a rangeId is known, create a tiny sh wrapper script at a
+  // temporary path and prepend that path to $PATH.  GOAD's Python code does
+  // `env = os.environ.copy()` before every subprocess.run(), so the modified PATH
+  // (and LUDUS_RANGE_ID) propagate into every `ludus` call inside GOAD.
+  //
+  // The wrapper intercepts `ludus …` calls and rewrites them to
+  // `ludus --range $LUDUS_RANGE_ID …` unless --range/-r was already supplied.
+  // $LUDUS_RANGE_ID is evaluated at wrapper-execution time (from the inherited
+  // env), so the wrapper file itself is range-agnostic and safe to reuse.
+  // Written as a single inline string so that `then` is never followed by `;`
+  // (bash treats `then;` as a syntax error — only `fi;`, `done;`, etc. are valid).
+  // The two nested `if` guards are spelled out in one expression with each
+  // `then` followed directly by the next command (space-separated, no `;`).
+  const ludusWrapSetup = safeRangeId
+    ? `_LUDUS_REAL=$(command -v ludus 2>/dev/null || true);` +
+      ` if [ -n "$_LUDUS_REAL" ]; then` +
+      ` _LUDUS_WRAP=$(mktemp -d 2>/dev/null || true);` +
+      ` if [ -n "$_LUDUS_WRAP" ]; then` +
+      // printf %s embeds the real binary path at wrapper-creation time.
+      // $LUDUS_RANGE_ID is evaluated at wrapper-execution time from the env.
+      ` printf '#!/bin/sh\\n_R="%s"\\nfor _a in "$@"; do case "$_a" in --range|-r) exec "$_R" "$@";; esac; done\\nexec "$_R" --range "$LUDUS_RANGE_ID" "$@"\\n' "$_LUDUS_REAL" > "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
+      ` chmod +x "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
+      ` export PATH="$_LUDUS_WRAP:$PATH";` +
+      ` fi; fi`
+    : "";
+
   // ── Per-command preamble (runs in the user's SSH context) ────────────────────
   //
   // 1. Idempotent bashrc check — ensures LUDUS_VERSION=2 is set for interactive
   //    and UI-triggered commands alike.
   // 2. Writability gate — emits a clear, actionable message if root SSH above
   //    didn't succeed (e.g. root creds not configured).
+  // 3. ludus wrapper — prepends a range-scoping shim to $PATH (only when
+  //    a dedicated rangeId is known for this operation).
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
     `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Ensure PROXMOX_SSH_PASSWORD is set in your .env (used for root SSH workspace setup)."; exit 1; fi`,
+    ...(ludusWrapSetup ? [ludusWrapSetup] : []),
   ].join("; ");
 
   // Build the inner goad command (same as before)

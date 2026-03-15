@@ -16,6 +16,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
 import { getSettings } from "@/lib/settings-store"
+import { getDb } from "@/lib/db"
 
 export const dynamic = "force-dynamic"
 
@@ -30,7 +31,12 @@ export async function POST(
 
   const { instanceId } = params
   const body = await request.json().catch(() => ({}))
-  const { ludusRangeId: bodyRangeId } = body as { ludusRangeId?: string }
+  const { ludusRangeId: bodyRangeId, skipRangeDeletion } = body as {
+    ludusRangeId?: string
+    /** When true, only removes the workspace — does NOT delete the Ludus range.
+     *  Used when re-deploying into an existing range (range is reused, not deleted). */
+    skipRangeDeletion?: boolean
+  }
 
   const impersonateApiKey = session.isAdmin
     ? request.headers.get("X-Impersonate-Apikey") || null
@@ -59,7 +65,11 @@ export async function POST(
   }
 
   // Step 1: Delete the dedicated Ludus range (force=true destroys its VMs)
-  if (ludusRangeId) {
+  // Skipped when skipRangeDeletion=true — e.g. re-deploying into an existing range.
+  if (skipRangeDeletion) {
+    results.errors.push("Range deletion skipped (skipRangeDeletion=true)")
+    results.rangeDeleted = false
+  } else if (ludusRangeId) {
     try {
       const res = await ludusRequest(
         `/range?rangeID=${encodeURIComponent(ludusRangeId)}&force=true`,
@@ -89,6 +99,15 @@ export async function POST(
     }
   } catch (err) {
     results.errors.push(`Workspace removal failed: ${(err as Error).message}`)
+  }
+
+  // Step 3: Remove local DB entry so the instance no longer appears in the list
+  try {
+    getDb()
+      .prepare("DELETE FROM goad_instance_ranges WHERE instance_id = ?")
+      .run(instanceId)
+  } catch {
+    // Non-fatal — old entry will be harmlessly ignored since workspace is gone
   }
 
   return NextResponse.json(results)

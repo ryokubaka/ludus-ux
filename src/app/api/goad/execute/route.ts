@@ -51,11 +51,16 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────
-  // Priority: 1) explicit in request body (new-instance flow)
+  // Priority: 1) explicit in request body (client passes instance.ludusRangeId)
   //           2) read from .goad_range_id file in workspace (existing instance)
-  //           3) omit (GOAD uses its own default range selection)
+  //           3) omit — no range scoping (falls back to user's default range)
+  //
+  // Note: we intentionally read the .goad_range_id file even when impersonating.
+  //       The previous guard (!impersonateAs) meant impersonated destroy/start/stop
+  //       commands never received range scoping, causing them to target the wrong
+  //       (default) range.
   let effectiveRangeId: string | undefined = bodyRangeId || undefined
-  if (!effectiveRangeId && instanceId && !impersonateAs) {
+  if (!effectiveRangeId && instanceId) {
     try {
       const settings = getSettings()
       const rootCreds = settings.proxmoxSshPassword
@@ -124,10 +129,12 @@ export async function POST(request: NextRequest) {
       })
 
       request.signal.addEventListener("abort", () => {
-        // Client disconnected — try via registry first (removes it), fallback to
-        // local reference. This handles the case where the .then hasn't resolved yet.
-        if (!invokeCleanup(taskId)) cleanup?.()
-        abortTask(taskId)
+        // Client disconnected (navigated away / closed tab).
+        // Intentionally do NOT kill the SSH/ansible process — let it keep running.
+        // Lines continue to flow into appendLine/goad-task-store so the task
+        // completes normally.  The user can reconnect via resumeTask(taskId) on
+        // the instance page (useGoadStream reads the persisted taskId from
+        // sessionStorage and calls /api/goad/tasks/${id}/stream on mount).
         try { controller.close() } catch {}
       })
 

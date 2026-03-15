@@ -384,10 +384,14 @@ export default function TestingPage() {
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
           // Filter out internal sentinel lines — show only real log content
-          const displayLines = newLines.filter((l) => !l.includes("[DEPLOY_COMPLETE]"))
+          // Filter out internal control lines — never show them as log output
+          const displayLines = newLines.filter(
+            (l) => !l.startsWith("[DONE] ") && !l.startsWith("[STATE] ")
+          )
           if (displayLines.length) setLogLines((prev) => [...prev, ...displayLines])
 
-          if (newLines.some((l) => l.includes("[DEPLOY_COMPLETE]"))) {
+          // [DONE] <state> — new sentinel; also accept legacy [DEPLOY_COMPLETE]
+          if (newLines.some((l) => l.startsWith("[DONE] ") || l.includes("[DEPLOY_COMPLETE]"))) {
             // Stream confirmed completion — do a final poll so DB gets updated
             if (rangeId) await pollOp(rangeId)
             break

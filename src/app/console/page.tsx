@@ -108,9 +108,12 @@ function ConsolePageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  // Fetch VMs whenever the selected range changes
+  // Fetch VMs whenever the selected range changes.
+  // Skip the fetch until we have a real rangeId — avoids a noisy "fetch all"
+  // call while the range context is still hydrating from sessionStorage.
   useEffect(() => {
-    fetchVms(selectedRangeId ?? undefined)
+    if (!selectedRangeId) return
+    fetchVms(selectedRangeId)
   }, [fetchVms, selectedRangeId])
 
   // Close VM picker when clicking outside
@@ -188,35 +191,36 @@ function ConsolePageInner() {
         <Monitor className="h-3.5 w-3.5 text-purple-400 shrink-0" />
         <span className="text-xs text-zinc-400 shrink-0">Console</span>
 
-        {/* Range picker */}
-        {accessibleRanges.length > 1 && (
-          <div ref={rangePickerRef} className="relative ml-2">
-            <button
-              onClick={() => setRangePickerOpen((o) => !o)}
-              className="flex items-center gap-2 px-3 py-1 rounded border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-200 transition-colors"
-            >
-              <Layers className="h-3 w-3 text-purple-400 shrink-0" />
-              <span className="max-w-[140px] truncate">{selectedRangeId ?? "All ranges"}</span>
-              <ChevronDown className="h-3 w-3 text-zinc-400 ml-1" />
-            </button>
-            {rangePickerOpen && (
-              <div className="absolute left-0 top-full mt-1 w-52 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-64 overflow-y-auto">
-                {accessibleRanges.map((r) => (
-                  <button
-                    key={r.rangeID}
-                    onClick={() => { selectRange(r.rangeID); setRangePickerOpen(false) }}
-                    className={`w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-zinc-800 transition-colors text-xs ${
-                      selectedRangeId === r.rangeID ? "text-purple-400 bg-zinc-800/80" : "text-zinc-200"
-                    }`}
-                  >
-                    <span className="font-mono truncate">{r.rangeID}</span>
-                    {selectedRangeId === r.rangeID && <span className="ml-auto text-[10px] text-purple-400">active</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        {/* Range picker — always rendered so the active range is always visible */}
+        <div ref={rangePickerRef} className="relative ml-2">
+          <button
+            onClick={() => setRangePickerOpen((o) => !o)}
+            disabled={accessibleRanges.length === 0}
+            className="flex items-center gap-2 px-3 py-1 rounded border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-default text-xs text-zinc-200 transition-colors"
+          >
+            <Layers className="h-3 w-3 text-purple-400 shrink-0" />
+            <span className="max-w-[160px] truncate">
+              {selectedRangeId ?? (accessibleRanges.length === 0 ? "Loading…" : "Select range…")}
+            </span>
+            <ChevronDown className="h-3 w-3 text-zinc-400 ml-1" />
+          </button>
+          {rangePickerOpen && accessibleRanges.length > 0 && (
+            <div className="absolute left-0 top-full mt-1 w-56 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-64 overflow-y-auto">
+              {accessibleRanges.map((r) => (
+                <button
+                  key={r.rangeID}
+                  onClick={() => { selectRange(r.rangeID); setRangePickerOpen(false) }}
+                  className={`w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-zinc-800 transition-colors text-xs ${
+                    selectedRangeId === r.rangeID ? "text-purple-400 bg-zinc-800/80" : "text-zinc-200"
+                  }`}
+                >
+                  <span className="font-mono truncate">{r.rangeID}</span>
+                  {selectedRangeId === r.rangeID && <span className="ml-auto text-[10px] text-purple-400">active</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* VM picker */}
         <div ref={pickerRef} className="relative ml-2">
@@ -241,8 +245,10 @@ function ConsolePageInner() {
             <div className="absolute left-0 top-full mt-1 w-72 bg-zinc-900 border border-zinc-700 rounded shadow-xl z-50 max-h-80 overflow-y-auto">
               {loading ? (
                 <div className="px-4 py-3 text-xs text-zinc-500">Loading VMs…</div>
+              ) : !selectedRangeId ? (
+                <div className="px-4 py-3 text-xs text-zinc-500">Select a range first using the range picker.</div>
               ) : vms.length === 0 ? (
-                <div className="px-4 py-3 text-xs text-zinc-500">No VMs found. Select a range or deploy first.</div>
+                <div className="px-4 py-3 text-xs text-zinc-500">No VMs in <span className="font-mono text-zinc-400">{selectedRangeId}</span>. Deploy first.</div>
               ) : (
                 vms.map((vm) => (
                   <button

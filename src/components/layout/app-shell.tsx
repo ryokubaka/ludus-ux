@@ -73,8 +73,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // /console is a full-screen VM console with its own minimal toolbar
   const isFullscreen = pathname === "/console" || pathname.startsWith("/console/")
 
-  if (isLoginPage || isFullscreen) {
+  if (isLoginPage) {
     return <>{children}</>
+  }
+
+  // /console is fullscreen (no sidebar/header) but still needs context providers
+  // so useRange() and useImpersonation() work correctly on that page.
+  if (isFullscreen) {
+    return (
+      <ImpersonationProvider>
+        <RangeProvider>
+          <DeployLogProvider>
+            {children}
+          </DeployLogProvider>
+        </RangeProvider>
+      </ImpersonationProvider>
+    )
   }
 
   return (

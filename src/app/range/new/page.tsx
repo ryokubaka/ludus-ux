@@ -434,17 +434,11 @@ export default function NewRangePage() {
         setDeploying(false)
         return
       }
-      // For a brand-new range, select it and navigate straight to its logs.
-      // For an existing range (re-deploy), stay on the page and let the user choose.
-      if (mode === "new" && effectiveRangeId) {
-        await refreshRanges()
-        selectRange(effectiveRangeId)
-        toast({ title: "Deployment started", description: `Range ${effectiveRangeId} is being provisioned.` })
-        router.push("/")
-        return
-      }
-      setDeployResult("success")
-      toast({ title: "Deployment started", description: "VMs are being provisioned. Check Range Logs for progress." })
+      // Select the target range and go straight to the dashboard for live status.
+      await refreshRanges()
+      if (effectiveRangeId) selectRange(effectiveRangeId)
+      toast({ title: "Deployment started", description: `Range ${effectiveRangeId ?? "default"} is being provisioned.` })
+      router.push("/")
     } catch (err) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" })
       setDeployResult("error")
@@ -854,26 +848,12 @@ export default function NewRangePage() {
 
           <div className="flex justify-between">
             <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={handleDeploy} disabled={deploying || deployResult === "success"} className="min-w-36">
+            <Button onClick={handleDeploy} disabled={deploying} className="min-w-36">
               {deploying ? <><Loader2 className="h-4 w-4 animate-spin" /> Deploying...</>
                 : deployResult === "success" ? <><Check className="h-4 w-4" /> Deployed</>
                 : <><Play className="h-4 w-4" /> Deploy Range</>}
             </Button>
           </div>
-
-          {deployResult === "success" && (
-            <Alert variant="success">
-              <AlertDescription className="flex items-center justify-between">
-                <span>Deployment started. Monitor progress in Range Logs.</span>
-                <Button size="sm" variant="ghost" onClick={() => {
-                  if (effectiveRangeId) selectRange(effectiveRangeId)
-                  router.push("/logs")
-                }}>
-                  View Logs
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
 
           {deployResult === "error" && (
             <Alert variant="destructive">

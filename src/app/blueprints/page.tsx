@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -37,8 +40,7 @@ import { cn, formatDate } from "@/lib/utils"
 
 export default function BlueprintsPage() {
   const { toast } = useToast()
-  const [blueprints, setBluePrints] = useState<BlueprintListItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [createDialog, setCreateDialog] = useState(false)
   const [viewDialog, setViewDialog] = useState<{ id: string; yaml: string } | null>(null)
   const [shareDialog, setShareDialog] = useState<string | null>(null)
@@ -49,14 +51,16 @@ export default function BlueprintsPage() {
   const [shareUsers, setShareUsers] = useState("")
   const [shareGroups, setShareGroups] = useState("")
 
-  const fetchBlueprints = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.listBlueprints()
-    if (result.data) setBluePrints(result.data)
-    setLoading(false)
-  }, [])
+  const { data: blueprints = [], isLoading: loading } = useQuery({
+    queryKey: queryKeys.blueprints(),
+    queryFn: async () => {
+      const result = await ludusApi.listBlueprints()
+      return result.data ?? []
+    },
+    staleTime: STALE.medium,
+  })
 
-  useEffect(() => { fetchBlueprints() }, [fetchBlueprints])
+  const invalidateBlueprints = () => queryClient.invalidateQueries({ queryKey: queryKeys.blueprints() })
 
   const handleCreate = async () => {
     setCreating(true)
@@ -67,7 +71,7 @@ export default function BlueprintsPage() {
     } else {
       toast({ title: "Blueprint created from current range config" })
       setCreateDialog(false)
-      fetchBlueprints()
+      invalidateBlueprints()
     }
     setCreating(false)
   }
@@ -99,7 +103,7 @@ export default function BlueprintsPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Blueprint copied" })
-      fetchBlueprints()
+      invalidateBlueprints()
     }
   }
 
@@ -110,7 +114,7 @@ export default function BlueprintsPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Blueprint deleted" })
-      fetchBlueprints()
+      invalidateBlueprints()
     }
   }
 
@@ -157,7 +161,7 @@ export default function BlueprintsPage() {
           <Plus className="h-4 w-4" />
           Create Blueprint
         </Button>
-        <Button variant="ghost" size="icon" onClick={fetchBlueprints} disabled={loading}>
+        <Button variant="ghost" size="icon" onClick={invalidateBlueprints} disabled={loading}>
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
       </div>

@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -136,9 +138,26 @@ export default function TestingPage() {
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
   // ── Range selector ────────────────────────────────────────────────────────
+  // Use a query-key scoped to the impersonated user so the cache is
+  // invalidated automatically when impersonation changes.
+  const impersonatedUser = impersonation?.username ?? "self"
+  const { data: rangesData, isLoading: rangesLoading } = useQuery({
+    queryKey: ["ranges", "user", impersonatedUser],
+    queryFn: () => ludusApi.getRangesForUser().then((r) => r.data ?? []),
+    staleTime: STALE.short,
+  })
   const [ranges, setRanges] = useState<RangeObject[]>([])
-  const [rangesLoading, setRangesLoading] = useState(true)
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
+
+  // Sync ranges + auto-select first range when the query data changes
+  useEffect(() => {
+    if (!rangesData) return
+    setRanges(rangesData)
+    setSelectedRangeId((prev) => {
+      if (prev && rangesData.some((r) => r.rangeID === prev)) return prev
+      return rangesData[0]?.rangeID ?? null
+    })
+  }, [rangesData])
 
   // Ref so closures (effects, intervals, callbacks) always read the LATEST
   // selectedRangeId without needing it in every dependency array.
@@ -285,21 +304,6 @@ export default function TestingPage() {
 
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
-  const fetchRanges = useCallback(async () => {
-    setRangesLoading(true)
-    // Use getRangesForUser (GET /range) — scoped to the current or impersonated
-    // user's API key.  getRanges() uses /range/all which returns all users'
-    // ranges for admins, making fetchStatus always show the admin's own data.
-    const result = await ludusApi.getRangesForUser()
-    if (result.data) {
-      setRanges(result.data)
-      setSelectedRangeId((prev) => {
-        if (prev && result.data!.some((r) => r.rangeID === prev)) return prev
-        return result.data![0]?.rangeID ?? null
-      })
-    }
-    setRangesLoading(false)
-  }, [])
 
   /** Fetch live status for the given range from Ludus (doesn't touch op state). */
   const fetchStatus = useCallback(async (rangeId?: string) => {
@@ -416,14 +420,8 @@ export default function TestingPage() {
   // ── Mount / range change ──────────────────────────────────────────────────
 
   useEffect(() => {
-    fetchRanges()
     return () => abortRef.current?.abort()
-  }, [fetchRanges])
-
-  // Re-fetch when impersonation changes
-  useEffect(() => {
-    fetchRanges()
-  }, [impersonation?.username, fetchRanges]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // When selected range changes: reset all per-range UI state, then load
   // the live status, allowed domains, and any active DB op simultaneously.

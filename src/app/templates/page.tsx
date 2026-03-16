@@ -1,6 +1,9 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -357,6 +360,7 @@ function AddFromSource({ installedNames, onAdded }: {
 
 export default function TemplatesPage() {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const confirmBarRef = useRef<HTMLDivElement>(null)
 
@@ -366,20 +370,22 @@ export default function TemplatesPage() {
       confirmBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
     }
   }, [pendingAction])
-  const [templates, setTemplates] = useState<TemplateObject[]>([])
-  const [loading, setLoading] = useState(true)
+
   const [building, setBuilding] = useState(false)
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set())
   const [logLines, setLogLines] = useState<string[]>([])
   const [showLogs, setShowLogs] = useState(false)
   const [filterBuilt, setFilterBuilt] = useState<"all" | "built" | "unbuilt">("all")
 
-  const fetchTemplates = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.listTemplates()
-    if (result.data) setTemplates(result.data)
-    setLoading(false)
-  }, [])
+  // Template list — cached for fast subsequent loads
+  const { data: templates = [], isLoading: loading } = useQuery({
+    queryKey: queryKeys.templates(),
+    queryFn: async () => {
+      const result = await ludusApi.listTemplates()
+      return result.data ?? []
+    },
+    staleTime: STALE.long,
+  })
 
   const fetchLogs = useCallback(async () => {
     const logsResult = await ludusApi.getTemplateLogs()
@@ -390,11 +396,23 @@ export default function TemplatesPage() {
     }
   }, [])
 
-  // On mount: check if a template build is already running so navigating
-  // away and back doesn't lose the in-progress status.
-  useEffect(() => {
-    fetchTemplates()
+  // Template build status — polls every 3 s while building, otherwise only checks on mount
+  useQuery({
+    queryKey: queryKeys.templateStatus(),
+    queryFn: async () => {
+      const result = await ludusApi.getTemplateStatus()
+      return result.data ?? null
+    },
+    refetchInterval: building ? 3000 : false,
+    staleTime: 0,
+    select: (data) => {
+      const isActive = Array.isArray(data) ? data.length > 0 : data != null
+      return isActive
+    },
+  })
 
+  // Detect and resume an in-progress build on mount / page navigation
+  useEffect(() => {
     const checkBuildStatus = async () => {
       const statusResult = await ludusApi.getTemplateStatus()
       const isActive = Array.isArray(statusResult.data)
@@ -407,28 +425,28 @@ export default function TemplatesPage() {
       }
     }
     checkBuildStatus()
-  }, [fetchTemplates, fetchLogs])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // Poll logs + build status while building
+  // Poll logs + check completion while building
   useEffect(() => {
     if (!building) return
 
     const interval = setInterval(async () => {
       fetchLogs()
 
-      // getTemplateStatus returns null/error when Packer has finished
       const statusResult = await ludusApi.getTemplateStatus()
       const stillBuilding = Array.isArray(statusResult.data)
         ? statusResult.data.length > 0
         : statusResult.data != null && !statusResult.error
       if (!stillBuilding) {
         setBuilding(false)
-        fetchTemplates()
+        queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
       }
     }, 3000)
 
     return () => clearInterval(interval)
-  }, [building, fetchTemplates, fetchLogs])
+  }, [building, fetchLogs, queryClient])
 
   const toggleSelect = (name: string) => {
     setSelectedTemplates((prev) => {
@@ -478,7 +496,7 @@ export default function TemplatesPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Template deleted" })
-      fetchTemplates()
+      queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
     }
   }
   const handleDelete = (name: string) =>
@@ -552,7 +570,7 @@ export default function TemplatesPage() {
 
           <div className="flex-1" />
 
-          <Button variant="ghost" size="icon" onClick={fetchTemplates} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates() })} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
           </div>
@@ -579,7 +597,7 @@ export default function TemplatesPage() {
       )}
 
       {/* Add from Source */}
-      <AddFromSource installedNames={installedNames} onAdded={fetchTemplates} />
+      <AddFromSource installedNames={installedNames} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates() })} />
 
       {/* Template List */}
       <Card>

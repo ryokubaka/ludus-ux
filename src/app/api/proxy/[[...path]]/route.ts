@@ -29,11 +29,13 @@ async function handler(
     ? request.headers.get("X-Ludus-User") || undefined
     : undefined
 
-  // When an admin is impersonating another user, their client sends the
-  // impersonated user's API key via X-Impersonate-Apikey so that Ludus API
-  // calls (range config, templates, etc.) are scoped to the target user.
+  // When an admin is impersonating another user, use the impersonated user's
+  // API key so that Ludus API calls are scoped to the target user.
+  // The session cookie (set by /api/auth/impersonate) is the primary source;
+  // the X-Impersonate-Apikey request header is a fallback for any in-flight
+  // requests that were dispatched before the cookie was written.
   const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
+    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
     : null
   // In Ludus v2, the ROOT API key is only for PocketBase internal operations.
   // All admin API calls (port 8081) use the logged-in admin's own API key.

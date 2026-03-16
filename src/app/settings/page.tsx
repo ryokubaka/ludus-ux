@@ -34,6 +34,7 @@ interface Settings {
   sshHost: string
   sshPort: number
   goadPath: string
+  goadEnabled: boolean
   rootApiKey?: string
   proxmoxSshUser?: string
   proxmoxSshPassword?: string
@@ -281,6 +282,22 @@ export default function SettingsPage() {
           <CardDescription>SSH server used for user login and GOAD command execution</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* GOAD enable/disable toggle */}
+          <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">GOAD Integration</p>
+              <p className="text-xs text-muted-foreground">
+                Show or hide the GOAD section in the sidebar and navigation.
+                Set <code className="text-primary">ENABLE_GOAD=false</code> in <code className="text-primary">.env</code> to disable permanently.
+              </p>
+            </div>
+            <Switch
+              checked={draft?.goadEnabled ?? true}
+              onCheckedChange={(v) => setDraft((d) => d ? { ...d, goadEnabled: v } : d)}
+              disabled={!session?.isAdmin}
+            />
+          </div>
+
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2 space-y-1.5">
               <Label htmlFor="ssh-host">

@@ -54,6 +54,17 @@ APP_SECRET=<random-32-char-string>  # openssl rand -hex 32
 LUDUS_URL=https://192.168.0.100:8080
 ```
 
+(Optional) Add your own cert + key to the `certificates/` directory:
+
+```bash
+cp <path-to-your-cert.pem> certificates/cert.pem
+cp <path-to-your-key.pem> certificates/key.pem
+chmod 600 certificates/cert.pem
+chmod 600 certificates/key.pem
+```
+
+Start the container:
+
 ```bash
 # 2. Build and start
 docker compose up -d --build
@@ -63,7 +74,13 @@ docker compose up -d --build
 #    http://localhost:3000   (plain HTTP, also available)
 ```
 
-Log in with your Ludus SSH username and password. The UI reads your `LUDUS_API_KEY` from `~/.bashrc` automatically.
+If you have not already added your LUDUS_API_KEY to your `~/.bashrc` on your Ludus server, add it now:
+
+```bash
+ssh root@<your-ludus-server> "echo 'export LUDUS_API_KEY=<your-api-key>' >> ~/.bashrc"
+```
+
+Log in with your Ludus SSH username and password. The UI reads your `LUDUS_API_KEY` from `~/.bashrc` on your Ludus server automatically.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash
@@ -258,3 +275,7 @@ docker run --rm -p 8088:8080 \
 [AGPL-3.0](LICENSE) — Copyright (C) 2026 LUX Contributors
 
 This project is not affiliated with or endorsed by [Ludus](https://github.com/badsectorlabs/ludus) or [GOAD](https://github.com/Orange-Cyberdefense/GOAD). See [NOTICE](NOTICE) for third-party attributions.
+
+## Author
+
+[ryokubaka](https://github.com/ryokubaka)

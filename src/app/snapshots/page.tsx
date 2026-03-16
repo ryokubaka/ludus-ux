@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -69,10 +72,8 @@ function formatSnaptime(snaptime?: number): string {
 
 export default function SnapshotsPage() {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const [vmGroups, setVmGroups] = useState<VMGroup[]>([])
-  const [snapGroups, setSnapGroups] = useState<SnapshotGroup[]>([])
-  const [loading, setLoading] = useState(true)
   const [view, setView] = useState<"vm" | "snapshot">("vm")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState(false)
@@ -83,67 +84,62 @@ export default function SnapshotsPage() {
   const [vmVisibleCount, setVmVisibleCount] = useState(PAGE_SIZE)
   const [snapshotVisibleCount, setSnapshotVisibleCount] = useState(PAGE_SIZE)
 
-  const fetchSnapshots = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.listSnapshots()
-    if (result.data) {
+  const { data: snapshotData, isLoading: loading } = useQuery({
+    queryKey: queryKeys.snapshots(),
+    queryFn: async () => {
+      const result = await ludusApi.listSnapshots()
+      if (!result.data) return { vmGroups: [] as VMGroup[], snapGroups: [] as SnapshotGroup[] }
       const flat = result.data.snapshots ?? []
 
-      // ── Build VM-centric groups ──────────────────────────────────────────
+      // Build VM-centric groups
       const vmMap = new Map<string, VMGroup>()
       for (const snap of flat) {
         const key = snap.vmname ?? `vm-${snap.vmid}`
-        if (!vmMap.has(key)) {
-          vmMap.set(key, { vmname: key, vmid: snap.vmid, snapshots: [] })
-        }
+        if (!vmMap.has(key)) vmMap.set(key, { vmname: key, vmid: snap.vmid, snapshots: [] })
         const group = vmMap.get(key)!
-        if (snap.name === "current") {
-          group.currentSnapshot = snap.parent
-        } else {
-          group.snapshots.push(snap)
-        }
+        if (snap.name === "current") group.currentSnapshot = snap.parent
+        else group.snapshots.push(snap)
       }
-      // Sort snapshots newest-first per VM
-      const vmList = Array.from(vmMap.values()).map((g) => ({
+      const vmGroups = Array.from(vmMap.values()).map((g) => ({
         ...g,
         snapshots: g.snapshots.sort((a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0)),
       }))
-      setVmGroups(vmList)
 
-      // ── Build snapshot-name groups ───────────────────────────────────────
+      // Build snapshot-name groups
       const snapMap = new Map<string, SnapshotGroup>()
       for (const snap of flat) {
         if (snap.name === "current") continue
         const existing = snapMap.get(snap.name)
         if (existing) {
           existing.vms.push(snap)
-          if (snap.snaptime && (!existing.snaptime || snap.snaptime < existing.snaptime)) {
+          if (snap.snaptime && (!existing.snaptime || snap.snaptime < existing.snaptime))
             existing.snaptime = snap.snaptime
-          }
         } else {
           snapMap.set(snap.name, {
-            name: snap.name,
-            description: snap.description,
-            includesRAM: snap.includesRAM ?? false,
-            snaptime: snap.snaptime,
-            vms: [snap],
+            name: snap.name, description: snap.description,
+            includesRAM: snap.includesRAM ?? false, snaptime: snap.snaptime, vms: [snap],
           })
         }
       }
-      const snapList = Array.from(snapMap.values()).sort(
+      const snapGroups = Array.from(snapMap.values()).sort(
         (a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0)
       )
-      setSnapGroups(snapList)
+      return { vmGroups, snapGroups }
+    },
+    staleTime: STALE.medium,
+  })
 
-      // Auto-expand first item
-      if (vmList.length > 0) setExpanded(new Set([vmList[0].vmname]))
+  const vmGroups = snapshotData?.vmGroups ?? []
+  const snapGroups = snapshotData?.snapGroups ?? []
+
+  // Auto-expand first VM group when data first arrives
+  useEffect(() => {
+    if (vmGroups.length > 0) {
+      setExpanded(new Set([vmGroups[0].vmname]))
       setVmVisibleCount(PAGE_SIZE)
       setSnapshotVisibleCount(PAGE_SIZE)
     }
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { fetchSnapshots() }, [fetchSnapshots])
+  }, [snapshotData]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggle = (key: string) => {
     setExpanded((prev) => {
@@ -177,7 +173,7 @@ export default function SnapshotsPage() {
       setCreateDialog(false)
       setNewSnapshotName("")
       setNewSnapshotDesc("")
-      fetchSnapshots()
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })
     }
     setCreating(false)
   }
@@ -199,7 +195,7 @@ export default function SnapshotsPage() {
       toast({ variant: "destructive", title: "Delete failed", description: result.error })
     } else {
       toast({ title: "Snapshot deleted" })
-      fetchSnapshots()
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })
     }
   }
   const handleDelete = (snapshotName: string, vmCount: number) =>
@@ -237,7 +233,7 @@ export default function SnapshotsPage() {
             <Plus className="h-4 w-4" />
             New Snapshot
           </Button>
-          <Button variant="ghost" size="icon" onClick={fetchSnapshots} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>

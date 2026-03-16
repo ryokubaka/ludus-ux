@@ -138,7 +138,7 @@ NEEDS_REGEN=false
 if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
     NEEDS_REGEN=true
 else
-    for CHECK_IP in "$LUDUS_SSH_HOST" "$LUDUS_SERVER_IP" "$TLS_HOSTNAME"; do
+    for CHECK_IP in "$LUDUS_SSH_HOST" "$TLS_HOSTNAME"; do
         if [ -n "$CHECK_IP" ] && is_ip "$CHECK_IP" && ! cert_covers_ip "$CHECK_IP"; then
             echo "[entrypoint] Cert missing iPAddress SAN for $CHECK_IP — regenerating"
             rm -f "$TLS_CERT" "$TLS_KEY"
@@ -157,7 +157,6 @@ if [ "$NEEDS_REGEN" = "true" ]; then
     #   HOST_GW_IP                    — Docker host LAN IP, always IP:
     SAN="DNS:localhost,IP:127.0.0.1"
     add_san "$LUDUS_SSH_HOST"
-    [ -n "$LUDUS_SERVER_IP" ] && SAN="$SAN,IP:$LUDUS_SERVER_IP"
     add_san "$TLS_HOSTNAME"
     [ -n "$HOST_GW_IP" ] && SAN="$SAN,IP:$HOST_GW_IP"
 

@@ -1,9 +1,9 @@
 "use client"
 
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
-import { ImpersonationProvider, useImpersonation } from "@/lib/impersonation-context"
+import { ImpersonationProvider, useImpersonation, IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
 import { RangeProvider } from "@/lib/range-context"
 import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
 import { DeployLogProvider } from "@/lib/deploy-log-context"
@@ -16,12 +16,26 @@ import { cn } from "@/lib/utils"
  */
 function ImpersonationBanner() {
   const { impersonation, exitImpersonation } = useImpersonation()
+  const router = useRouter()
   if (!impersonation) return null
+
+  const handleExit = () => {
+    exitImpersonation()
+    // Navigate to the dashboard after the event fires (which happens after the
+    // cookie DELETE completes).  This ensures the admin lands on their own
+    // dashboard with their own data, rather than staying on whatever page they
+    // were viewing as the impersonated user.
+    const onExit = () => {
+      router.push("/")
+      window.removeEventListener(IMPERSONATION_CHANGED_EVENT, onExit)
+    }
+    window.addEventListener(IMPERSONATION_CHANGED_EVENT, onExit)
+  }
 
   return (
     <div className="flex items-center gap-3 bg-yellow-950/80 border-b border-yellow-500/30 px-4 py-2.5">
       <button
-        onClick={exitImpersonation}
+        onClick={handleExit}
         className="flex items-center gap-1.5 rounded-full bg-yellow-500/20 border border-yellow-500/40
                    px-3 py-1 text-xs font-semibold text-yellow-300 hover:bg-yellow-500/30
                    hover:border-yellow-400/60 transition-colors flex-shrink-0"

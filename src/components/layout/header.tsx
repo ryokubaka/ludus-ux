@@ -56,6 +56,8 @@ export function Header() {
 
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" })
+    // Clear cached session/settings values so the next login starts fresh
+    sessionStorage.clear()
     router.push("/login")
   }
 

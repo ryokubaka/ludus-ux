@@ -116,8 +116,8 @@ function defaultsForTemplate(template: string): VMEntry {
     isWindows,
     isServer,
     domainRole: "none",
-    testingSnapshot: false,
-    testingBlockInternet: false,
+    testingSnapshot: true,
+    testingBlockInternet: true,
     showAdvanced: true,
   }
 }
@@ -237,7 +237,7 @@ export default function NewRangePage() {
   // Auto-generate rangeId from name (must start with a letter)
   useEffect(() => {
     if (!rangeCreated) {
-      const raw = rangeName.replace(/[^A-Za-z0-9]/g, "_").replace(/^[^A-Za-z]+/, "").slice(0, 20)
+      const raw = rangeName.replace(/[^A-Za-z0-9]/g, "-").replace(/^[^A-Za-z]+/, "").replace(/-+/g, "-").replace(/-$/, "").slice(0, 20)
       setRangeId(raw)
     }
   }, [rangeName, rangeCreated])
@@ -651,7 +651,7 @@ export default function NewRangePage() {
                   <div className="space-y-1.5">
                     <Label htmlFor="rangeId">Range ID</Label>
                     <Input id="rangeId" value={rangeId}
-                      onChange={(e) => setRangeId(e.target.value.replace(/[^A-Za-z0-9_-]/g, "").replace(/^[^A-Za-z]+/, ""))}
+                      onChange={(e) => setRangeId(e.target.value.replace(/[^A-Za-z0-9-]/g, "").replace(/^[^A-Za-z]+/, ""))}
                       placeholder="RedTeam" disabled={rangeCreated}
                       className={cn("font-mono", rangeIdConflict && "border-red-500")} maxLength={20} />
                     {rangeIdConflict

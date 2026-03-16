@@ -81,11 +81,11 @@ export default function GoadInstancePage() {
   // Persists the type of the running action so the auto-resume effect can decide
   // whether to switch to the Deploy Status tab on page (re-)load.
   const actionStorageKey = `goad-task-${instanceId}-action`
-  // Only "provide" runs `ludus range deploy` and benefits from the range log
-  // panel on the Deploy tab.  Every other action (start, stop, status, provision-lab,
-  // install/provision-extension, destroy) outputs pure GOAD/ansible text and should
-  // stay on the Terminal tab where the user can see it directly.
-  const DEPLOY_TAB_ACTIONS = new Set(["provide"])
+  // "provide" and "install-extension" involve Ludus VM provisioning and should
+  // switch to the Deploy Status tab so the user can follow the range deployment.
+  // "provision-extension" re-runs Ansible only → show terminal output directly.
+  const DEPLOY_TAB_ACTIONS = new Set(["provide", "install-extension"])
+  const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
 
   const [instance, setInstance] = useState<GoadInstance | null>(null)
   const [loading, setLoading] = useState(true)
@@ -280,6 +280,8 @@ export default function GoadInstancePage() {
     if (DEPLOY_TAB_ACTIONS.has(action)) {
       setActiveTab("deploy")
       if (instance?.ludusRangeId) startRangeStreaming(instance.ludusRangeId)
+    } else if (TERMINAL_TAB_ACTIONS.has(action)) {
+      setActiveTab("terminal")
     }
     // Persist action type so the auto-resume effect on page reload can decide
     // whether to switch to Deploy tab (only for deploy-relevant actions).
@@ -655,7 +657,7 @@ export default function GoadInstancePage() {
               onClick={handleDestroy} disabled={isRunning || !!pendingAction}
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Destroy
+              Delete Instance + Range
             </Button>
             <Button
               size="sm" variant="outline"

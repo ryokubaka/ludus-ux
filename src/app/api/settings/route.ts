@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
   if (typeof body.sshHost === "string") patch.sshHost = body.sshHost.trim()
   if (typeof body.sshPort === "number") patch.sshPort = body.sshPort
   if (typeof body.goadPath === "string") patch.goadPath = body.goadPath.trim()
+  if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
 

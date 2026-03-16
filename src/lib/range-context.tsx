@@ -1,7 +1,10 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
+import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { RangeAccessEntry } from "./types"
+import { queryKeys } from "./query-keys"
+import { STALE } from "./query-client"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -21,10 +24,6 @@ const RangeContext = createContext<RangeContextValue>({
 
 const STORAGE_KEY = "lux_selected_range"
 
-/**
- * Extract an array from a Ludus API response.
- * Ludus wraps most responses in {"result": ...}, so we check for that.
- */
 function extractArray(data: unknown): RangeAccessEntry[] {
   if (Array.isArray(data)) return data
   if (data && typeof data === "object" && "result" in data) {
@@ -34,81 +33,61 @@ function extractArray(data: unknown): RangeAccessEntry[] {
   return []
 }
 
+async function fetchAccessibleRanges(impersonationHeaders: Record<string, string> = {}): Promise<RangeAccessEntry[]> {
+  const res = await fetch("/api/proxy/ranges/accessible", { headers: impersonationHeaders })
+  if (!res.ok) return []
+  const data = await res.json()
+  const list = extractArray(data)
+  return [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))
+}
+
 export function RangeProvider({ children }: { children: React.ReactNode }) {
-  const [ranges, setRanges] = useState<RangeAccessEntry[]>([])
+  const queryClient = useQueryClient()
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const mountedRef = useRef(true)
+  const [impersonationHeaders, setImpersonationHeaders] = useState<Record<string, string>>({})
 
-  const fetchRanges = useCallback(async () => {
-    let list: RangeAccessEntry[] = []
+  // Read impersonation headers from sessionStorage (updated by admin page)
+  const readImpersonationHeaders = useCallback((): Record<string, string> => {
+    if (typeof window === "undefined") return {}
     try {
-      const impHeaders: Record<string, string> = {}
-      if (typeof window !== "undefined") {
-        try {
-          const raw = sessionStorage.getItem("goad_impersonation")
-          if (raw) {
-            const { apiKey, username } = JSON.parse(raw)
-            if (apiKey) impHeaders["X-Impersonate-Apikey"] = apiKey
-            if (username) impHeaders["X-Impersonate-As"] = username
-          }
-        } catch {}
-      }
-
-      const res = await fetch("/api/proxy/ranges/accessible", { headers: impHeaders })
-      if (res.ok) {
-        const data = await res.json()
-        if (mountedRef.current) list = extractArray(data)
-      }
+      const raw = sessionStorage.getItem("goad_impersonation")
+      if (!raw) return {}
+      const { apiKey, username } = JSON.parse(raw)
+      const headers: Record<string, string> = {}
+      if (apiKey) headers["X-Impersonate-Apikey"] = apiKey
+      if (username) headers["X-Impersonate-As"] = username
+      return headers
     } catch {
-      // Not authenticated or network error — list stays empty
+      return {}
     }
-
-    if (!mountedRef.current) return
-
-    // Sort by rangeNumber ascending so the first-created range (lowest number)
-    // is always list[0] — used as the fallback default when no preference is saved.
-    const sorted = [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))
-    setRanges(sorted)
-
-    if (sorted.length === 0) {
-      // No accessible ranges (endpoint unavailable, user has none, etc.)
-      // Clear any stale selection so the dashboard falls back to GET /range (default)
-      setSelectedRangeId(null)
-      sessionStorage.removeItem(STORAGE_KEY)
-    } else {
-      const saved = sessionStorage.getItem(STORAGE_KEY)
-      if (saved && sorted.some((r) => r.rangeID === saved)) {
-        // Saved preference is still valid — keep it
-        setSelectedRangeId(saved)
-      } else {
-        // No valid saved preference: default to the first-created range (lowest rangeNumber)
-        setSelectedRangeId(sorted[0].rangeID)
-        sessionStorage.setItem(STORAGE_KEY, sorted[0].rangeID)
-      }
-    }
-
-    setLoading(false)
   }, [])
 
-  useEffect(() => {
-    mountedRef.current = true
-    fetchRanges()
-    return () => { mountedRef.current = false }
-  }, [fetchRanges])
+  // The accessible ranges list — powered by TanStack Query.
+  // On the first visit this fetches from the API; on subsequent visits the
+  // cached result is returned immediately from localStorage, then revalidated
+  // in the background.
+  const { data: ranges = [], isLoading } = useQuery({
+    queryKey: [...queryKeys.accessibleRanges(), impersonationHeaders["X-Impersonate-As"] ?? "self"],
+    queryFn: () => fetchAccessibleRanges(impersonationHeaders),
+    staleTime: STALE.short,
+  })
 
-  // When impersonation changes, immediately clear stale range selection
-  // then re-fetch the new user's ranges.
+  // Sync selectedRangeId whenever the ranges list changes
   useEffect(() => {
-    const handler = () => {
+    if (isLoading) return
+    if (ranges.length === 0) {
       setSelectedRangeId(null)
       sessionStorage.removeItem(STORAGE_KEY)
-      setLoading(true)
-      fetchRanges()
+      return
     }
-    window.addEventListener("impersonation-changed", handler)
-    return () => window.removeEventListener("impersonation-changed", handler)
-  }, [fetchRanges])
+    const saved = sessionStorage.getItem(STORAGE_KEY)
+    if (saved && ranges.some((r) => r.rangeID === saved)) {
+      setSelectedRangeId(saved)
+    } else {
+      setSelectedRangeId(ranges[0].rangeID)
+      sessionStorage.setItem(STORAGE_KEY, ranges[0].rangeID)
+    }
+  }, [ranges, isLoading])
 
   const selectRange = useCallback((rangeId: string) => {
     setSelectedRangeId(rangeId)
@@ -116,8 +95,30 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     window.dispatchEvent(new Event("range-changed"))
   }, [])
 
+  const refreshRanges = useCallback(async () => {
+    // refetchQueries (not invalidateQueries) — we need to AWAIT the actual
+    // network round-trip so callers (e.g. deploy flow in range/new/page.tsx)
+    // are guaranteed the fresh list includes any newly created range before
+    // they call selectRange() and navigate away.
+    await queryClient.refetchQueries({ queryKey: queryKeys.accessibleRanges() })
+  }, [queryClient])
+
+  // When impersonation changes, clear stale range selection and re-fetch
+  useEffect(() => {
+    const handler = () => {
+      const headers = readImpersonationHeaders()
+      setImpersonationHeaders(headers)
+      setSelectedRangeId(null)
+      sessionStorage.removeItem(STORAGE_KEY)
+      // Invalidate so the query re-runs with new headers
+      queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRanges() })
+    }
+    window.addEventListener("impersonation-changed", handler)
+    return () => window.removeEventListener("impersonation-changed", handler)
+  }, [queryClient, readImpersonationHeaders])
+
   return (
-    <RangeContext.Provider value={{ ranges, selectedRangeId, loading, selectRange, refreshRanges: fetchRanges }}>
+    <RangeContext.Provider value={{ ranges, selectedRangeId, loading: isLoading, selectRange, refreshRanges }}>
       {children}
     </RangeContext.Provider>
   )

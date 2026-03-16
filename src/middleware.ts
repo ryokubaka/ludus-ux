@@ -59,15 +59,17 @@ function applySecurityHeaders(response: NextResponse): void {
   // blob: is required for noVNC's dynamic WebWorker creation.
   // wss: is required for the VNC WebSocket proxy.
   // connect-src 'self' wss: covers both the VNC WS and SSE streams.
+  // https://cdn.jsdelivr.net is required for @monaco-editor/react, which loads
+  // the Monaco AMD loader and worker bundles from jsDelivr at runtime.
   response.headers.set(
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
-      "style-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net",
+      "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
       "img-src 'self' data: blob:",
-      "font-src 'self' data:",
-      "connect-src 'self' wss: ws:",
+      "font-src 'self' data: https://cdn.jsdelivr.net",
+      "connect-src 'self' wss: ws: https://cdn.jsdelivr.net",
       "worker-src 'self' blob:",
       "frame-ancestors 'self'",
     ].join("; "),

@@ -79,6 +79,9 @@ export interface SessionData {
   loginAt: string
   /** SSH password from login — stored encrypted in the session cookie for GOAD execution */
   sshPassword?: string
+  /** Set when an admin is actively impersonating another user. */
+  impersonationApiKey?: string
+  impersonationUserId?: string
 }
 
 /** Encrypt session data into a URL-safe base64 string */

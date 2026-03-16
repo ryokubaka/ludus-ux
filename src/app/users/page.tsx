@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useMemo } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -36,9 +39,7 @@ import { cn } from "@/lib/utils"
 
 export default function UsersPage() {
   const { toast } = useToast()
-  const [users, setUsers] = useState<UserObject[]>([])
-  const [rangeMap, setRangeMap] = useState<Record<string, string[]>>({}) // userID → rangeID[]
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const [addDialog, setAddDialog] = useState(false)
@@ -73,34 +74,35 @@ export default function UsersPage() {
   const [changingPw, setChangingPw] = useState(false)
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
-  const fetchUsers = useCallback(async () => {
-    setLoading(true)
-    const [usersResult, rangesResult] = await Promise.all([
-      ludusApi.listAllUsers().catch(() => ludusApi.listUsers()),
-      ludusApi.listAllRanges().catch(() => ({ data: undefined, error: "no ranges", status: 0 })),
-    ])
-
-    const userList = usersResult.data
-      ? (Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data])
-      : []
-    setUsers(userList)
-
-    // Build userID → rangeID[] map (a user can own multiple ranges in Ludus v2)
-    if (rangesResult.data && Array.isArray(rangesResult.data)) {
-      const map: Record<string, string[]> = {}
-      for (const r of rangesResult.data as RangeObject[]) {
-        const uid = (r.userID || r.rangeID?.split("-")[0] || "").toLowerCase()
-        if (uid && r.rangeID) {
-          if (!map[uid]) map[uid] = []
-          if (!map[uid].includes(r.rangeID)) map[uid].push(r.rangeID)
+  const { data: usersData, isLoading: loading } = useQuery({
+    queryKey: queryKeys.users(),
+    queryFn: async () => {
+      const [usersResult, rangesResult] = await Promise.all([
+        ludusApi.listAllUsers().catch(() => ludusApi.listUsers()),
+        ludusApi.listAllRanges().catch(() => ({ data: undefined, error: "no ranges", status: 0 })),
+      ])
+      const userList: UserObject[] = usersResult.data
+        ? (Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data])
+        : []
+      const rangeMap: Record<string, string[]> = {}
+      if (rangesResult.data && Array.isArray(rangesResult.data)) {
+        for (const r of rangesResult.data as RangeObject[]) {
+          const uid = (r.userID || r.rangeID?.split("-")[0] || "").toLowerCase()
+          if (uid && r.rangeID) {
+            if (!rangeMap[uid]) rangeMap[uid] = []
+            if (!rangeMap[uid].includes(r.rangeID)) rangeMap[uid].push(r.rangeID)
+          }
         }
       }
-      setRangeMap(map)
-    }
-    setLoading(false)
-  }, [])
+      return { users: userList, rangeMap }
+    },
+    staleTime: STALE.long,
+  })
 
-  useEffect(() => { fetchUsers() }, [fetchUsers])
+  const users = usersData?.users ?? []
+  const rangeMap = useMemo(() => usersData?.rangeMap ?? {}, [usersData])
+
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: queryKeys.users() })
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const handleAdd = async () => {
@@ -163,7 +165,7 @@ export default function UsersPage() {
     setAddDialog(false)
     setNewUserId(""); setNewUserPassword("")
     setNewUserAdmin(false); setShowNewPassword(false)
-    fetchUsers()
+    invalidateUsers()
     setAdding(false)
   }
 
@@ -216,7 +218,7 @@ export default function UsersPage() {
         title: "Error deleting user",
         description: `${userId}: ${userResult.error}${notes.length ? ` (${notes.join("; ")})` : ""}`,
       })
-      fetchUsers()
+      invalidateUsers()
       return
     }
 
@@ -231,7 +233,7 @@ export default function UsersPage() {
         .join(" — "),
     })
 
-    fetchUsers()
+    invalidateUsers()
   }
 
   // ── Roll API key ───────────────────────────────────────────────────────────
@@ -332,7 +334,7 @@ export default function UsersPage() {
         <Button onClick={() => setAddDialog(true)}>
           <Plus className="h-4 w-4" /> Add User
         </Button>
-        <Button variant="ghost" size="icon" onClick={fetchUsers} disabled={loading}>
+        <Button variant="ghost" size="icon" onClick={invalidateUsers} disabled={loading}>
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
       </div>

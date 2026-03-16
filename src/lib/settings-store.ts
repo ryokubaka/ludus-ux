@@ -19,6 +19,8 @@ export interface RuntimeSettings {
   sshHost: string
   sshPort: number
   goadPath: string
+  /** Whether the GOAD integration is shown in the UI. Defaults to true. */
+  goadEnabled: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
   rootApiKey: string
   /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
@@ -42,6 +44,7 @@ function defaults(): RuntimeSettings {
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
     goadPath: process.env.GOAD_PATH || "/opt/goad-mod",
+    goadEnabled: process.env.ENABLE_GOAD !== "false",
     rootApiKey: process.env.LUDUS_ROOT_API_KEY || "",
     proxmoxSshUser: process.env.PROXMOX_SSH_USER || "root",
     proxmoxSshPassword: process.env.PROXMOX_SSH_PASSWORD || "",
@@ -57,6 +60,7 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "sshHost",
   "sshPort",
   "goadPath",
+  "goadEnabled",
   "rootApiKey",
   "proxmoxSshUser",
   "proxmoxSshPassword",
@@ -73,7 +77,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       if (!SETTINGS_KEYS.includes(key as keyof RuntimeSettings)) continue
       const k = key as keyof RuntimeSettings
       // Coerce stored strings back to the right type
-      if (k === "verifyTls") {
+      if (k === "verifyTls" || k === "goadEnabled") {
         (result as Record<string, unknown>)[k] = value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(value, 10)

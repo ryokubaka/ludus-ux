@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -32,8 +35,7 @@ import { cn } from "@/lib/utils"
 
 export default function GroupsPage() {
   const { toast } = useToast()
-  const [groups, setGroups] = useState<GroupObject[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState(false)
   const [newGroupName, setNewGroupName] = useState("")
@@ -42,14 +44,16 @@ export default function GroupsPage() {
   const [addRangeDialog, setAddRangeDialog] = useState<string | null>(null)
   const [addInput, setAddInput] = useState("")
 
-  const fetchGroups = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.listGroups()
-    if (result.data) setGroups(result.data)
-    setLoading(false)
-  }, [])
+  const { data: groups = [], isLoading: loading } = useQuery({
+    queryKey: queryKeys.groups(),
+    queryFn: async () => {
+      const result = await ludusApi.listGroups()
+      return result.data ?? []
+    },
+    staleTime: STALE.long,
+  })
 
-  useEffect(() => { fetchGroups() }, [fetchGroups])
+  const invalidateGroups = () => queryClient.invalidateQueries({ queryKey: queryKeys.groups() })
 
   const toggleGroup = (name: string) => {
     setExpandedGroups((prev) => {
@@ -70,7 +74,7 @@ export default function GroupsPage() {
       toast({ title: "Group created", description: newGroupName })
       setCreateDialog(false)
       setNewGroupName("")
-      fetchGroups()
+      invalidateGroups()
     }
     setCreating(false)
   }
@@ -82,7 +86,7 @@ export default function GroupsPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Group deleted" })
-      fetchGroups()
+      invalidateGroups()
     }
   }
 
@@ -96,7 +100,7 @@ export default function GroupsPage() {
       toast({ title: "Users added" })
       setAddUserDialog(null)
       setAddInput("")
-      fetchGroups()
+      invalidateGroups()
     }
   }
 
@@ -110,7 +114,7 @@ export default function GroupsPage() {
       toast({ title: "Ranges added" })
       setAddRangeDialog(null)
       setAddInput("")
-      fetchGroups()
+      invalidateGroups()
     }
   }
 
@@ -120,7 +124,7 @@ export default function GroupsPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "User removed" })
-      fetchGroups()
+      invalidateGroups()
     }
   }
 
@@ -135,7 +139,7 @@ export default function GroupsPage() {
             <Plus className="h-4 w-4" />
             New Group
           </Button>
-          <Button variant="ghost" size="icon" onClick={fetchGroups} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={invalidateGroups} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>

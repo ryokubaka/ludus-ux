@@ -42,6 +42,7 @@ interface NavItem {
   label: string
   icon: React.FC<React.SVGProps<SVGSVGElement>>
   adminOnly?: boolean
+  goadOnly?: boolean
 }
 
 interface NavGroup {
@@ -81,7 +82,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Integrations",
     items: [
-      { href: "/goad", label: "GOAD Management", icon: Terminal },
+      { href: "/goad", label: "GOAD Management", icon: Terminal, goadOnly: true },
     ],
   },
   {
@@ -92,19 +93,50 @@ const navGroups: NavGroup[] = [
   },
 ]
 
+const ADMIN_CACHE_KEY = "ludus-sidebar-is-admin"
+const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
+
 export function Sidebar() {
   const pathname = usePathname()
   const { collapsed, toggle } = useSidebar()
+
+  // Initialise from sessionStorage so cached values apply on the very first
+  // render after a page reload — eliminating the "admin items pop in later" flash.
+  // The API calls below run in the background to verify and refresh the cache.
   const [isAdmin, setIsAdmin] = useState(false)
+  const [goadEnabled, setGoadEnabled] = useState(true)
   const [hasCustomLogo, setHasCustomLogo] = useState(false)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
 
+  // On mount: apply cached values instantly, then verify in background
   useEffect(() => {
+    const cachedAdmin = sessionStorage.getItem(ADMIN_CACHE_KEY)
+    if (cachedAdmin === "true") setIsAdmin(true)
+
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data?.isAdmin) setIsAdmin(true) })
+      .then((data) => {
+        const admin = !!data?.isAdmin
+        setIsAdmin(admin)
+        sessionStorage.setItem(ADMIN_CACHE_KEY, String(admin))
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
+    if (cachedGoad !== null) setGoadEnabled(cachedGoad !== "false")
+
+    fetch("/api/settings")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data && typeof data.goadEnabled === "boolean") {
+          setGoadEnabled(data.goadEnabled)
+          sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
+        }
+      })
       .catch(() => {})
   }, [])
 
@@ -228,7 +260,7 @@ export function Sidebar() {
         <nav className={cn("flex-1 overflow-y-auto py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
           {navGroups.map((group) => {
             const visibleItems = group.items.filter(
-              (item) => !item.adminOnly || isAdmin
+              (item) => (!item.adminOnly || isAdmin) && (!item.goadOnly || goadEnabled)
             )
             if (visibleItems.length === 0) return null
 

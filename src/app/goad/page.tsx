@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -51,67 +54,58 @@ function timeAgo(ms: number): string {
 }
 
 export default function GoadPage() {
-  const [instances, setInstances] = useState<GoadInstance[]>([])
-  const [loading, setLoading] = useState(true)
-  const [configured, setConfigured] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [recentTasks, setRecentTasks] = useState<TaskSummary[]>([])
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null)
   const { lines: taskLines, resumeTask } = useGoadStream()
-  const { impersonationHeaders } = useImpersonation()
+  const { impersonation, impersonationHeaders } = useImpersonation()
   const { selectedRangeId } = useRange()
+  const queryClient = useQueryClient()
 
-  const fetchInstances = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
+  const impUser = impersonation?.username ?? "self"
+
+  // GOAD instances — cached per impersonated user
+  const {
+    data: instancesData,
+    isLoading: loading,
+  } = useQuery({
+    queryKey: [...queryKeys.goadInstances(), impUser],
+    queryFn: async () => {
       const response = await fetch("/api/goad/instances", { headers: impersonationHeaders() })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        setConfigured(true)
-        setInstances([])
-        setError(data.error || `Failed to load GOAD instances (HTTP ${response.status})`)
-        return
-      }
-      // configured:false means SSH host isn't set — show the setup warning.
-      // Any other error (SSH auth failure, runtime error) shows an error banner.
-      if (data.configured === false) {
-        setConfigured(false)
-        setInstances([])
-      } else {
-        setConfigured(true)
-        if (data.error) setError(data.error)
-        setInstances(data.instances || [])
-      }
-    } catch (err) {
-      setConfigured(true)
-      setError((err as Error).message)
-    } finally {
-      setLoading(false)
-    }
-  }, [impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
+      if (!response.ok) return { configured: true, instances: [] as GoadInstance[], error: data.error || `HTTP ${response.status}` }
+      if (data.configured === false) return { configured: false, instances: [] as GoadInstance[], error: null }
+      return { configured: true, instances: (data.instances || []) as GoadInstance[], error: data.error ?? null }
+    },
+    staleTime: STALE.short,
+  })
 
-  const fetchRecentTasks = useCallback(async () => {
-    try {
+  const instances = instancesData?.instances ?? []
+  const configured = instancesData?.configured ?? true
+  const error = instancesData?.error ?? null
+
+  // Recent GOAD tasks — polls while any task is running
+  const { data: tasksData } = useQuery({
+    queryKey: [...queryKeys.goadTasks(), impUser],
+    queryFn: async () => {
       const res = await fetch("/api/goad/tasks", { headers: impersonationHeaders() })
       const data = await res.json()
-      setRecentTasks((data.tasks ?? []).slice(0, 5))
-    } catch {}
-  }, [impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
+      return (data.tasks ?? []).slice(0, 5) as TaskSummary[]
+    },
+    staleTime: STALE.short,
+    refetchInterval: (query) => {
+      const tasks = query.state.data as TaskSummary[] | undefined
+      return tasks?.some((t) => t.status === "running") ? 3000 : false
+    },
+  })
 
-  // Refetch whenever impersonation context changes (enter or exit)
-  useEffect(() => {
-    fetchInstances()
-    fetchRecentTasks()
-  }, [fetchInstances, fetchRecentTasks])
+  const recentTasks = tasksData ?? []
 
-  // Auto-refresh while any task is running
-  useEffect(() => {
-    const running = recentTasks.some((t) => t.status === "running")
-    if (!running) return
-    const timer = setInterval(fetchRecentTasks, 3000)
-    return () => clearInterval(timer)
-  }, [recentTasks, fetchRecentTasks])
+  const invalidateGoad = () => {
+    queryClient.invalidateQueries({ queryKey: [...queryKeys.goadInstances(), impUser] })
+    queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), impUser] })
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { invalidateGoad() }, [impUser])
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -152,7 +146,7 @@ export default function GoadPage() {
               New Instance
             </Link>
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => { fetchInstances(); fetchRecentTasks() }} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={invalidateGoad} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>
@@ -312,7 +306,7 @@ export default function GoadPage() {
               <History className="h-3.5 w-3.5" />
               Recent Operations
             </p>
-            <Button variant="ghost" size="icon-sm" onClick={fetchRecentTasks}>
+            <Button variant="ghost" size="icon-sm" onClick={invalidateGoad}>
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>

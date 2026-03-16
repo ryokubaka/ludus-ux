@@ -390,6 +390,8 @@ export default function NewGoadInstancePage() {
         if (taskId) {
           try { sessionStorage.setItem(`goad-task-${existingId}`, taskId) } catch { /* SSR */ }
         }
+        // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
+        try { sessionStorage.setItem(`goad-task-${existingId}-action`, "provide") } catch { /* SSR */ }
         if (capturedRangeId) {
           fetch("/api/goad/instances/set-range", {
             method: "POST",
@@ -457,6 +459,8 @@ export default function NewGoadInstancePage() {
               try {
                 const taskId = sessionStorage.getItem("goad-task-new")
                 if (taskId) sessionStorage.setItem(`goad-task-${newId}`, taskId)
+                // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
+                sessionStorage.setItem(`goad-task-${newId}-action`, "provide")
               } catch { /* SSR */ }
               router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy`)
             }

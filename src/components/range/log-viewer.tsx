@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Trash2, Download, ArrowDown } from "lucide-react"
-import { cn, parseLogLine } from "@/lib/utils"
+import { cn } from "@/lib/utils"
+import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
 
 interface LogViewerProps {
   lines: string[]
@@ -133,7 +134,6 @@ export function LogViewer({
               const goadMatch  = line.match(/^\[GOAD\] (.*)$/)
               const errorMatch = line.match(/^\[ERROR\] (.*)$/)
               const rest = ludusMatch?.[1] ?? goadMatch?.[1] ?? errorMatch?.[1] ?? line
-              const { color } = parseLogLine(rest)
               return (
                 <div key={i} className="log-line whitespace-pre-wrap break-words flex gap-1.5">
                   {ludusMatch && (
@@ -148,7 +148,15 @@ export function LogViewer({
                   {!ludusMatch && !goadMatch && !errorMatch && (
                     <span className="flex-shrink-0 w-[18px]" />
                   )}
-                  <span className={color}>{rest}</span>
+                  {isRecapStatsLine(rest) ? (
+                    <span>
+                      {parseRecapStats(rest).map((seg, j) => (
+                        <span key={j} className={seg.cls}>{seg.text}</span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className={getAnsibleLineClass(rest)}>{rest}</span>
+                  )}
                 </div>
               )
             })

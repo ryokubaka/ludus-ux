@@ -40,6 +40,7 @@ import {
   Check,
   CircleAlert,
   PackageX,
+  AlertTriangle,
 } from "lucide-react"
 import type { GoadInstance, GoadCatalog, GoadExtensionDef, GoadLabDef, TemplateObject } from "@/lib/types"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
@@ -205,6 +206,62 @@ export default function GoadInstancePage() {
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
+
+  // ── Deploy failure watchdogs ──────────────────────────────────────────────
+  // Track whether we've seen DEPLOYING this session so we don't fire on
+  // a pre-existing ERROR state at page load.
+  const sawDeployingRef   = useRef(false)
+  // Guard against triggering both watchdogs for the same failure event.
+  const autoStoppedRef    = useRef(false)
+
+  // Reset guards whenever a new deployment run begins.
+  useEffect(() => {
+    if (isRunning) {
+      sawDeployingRef.current  = false
+      autoStoppedRef.current   = false
+    }
+  }, [isRunning])
+
+  // Watchdog A: range entered a terminal error state while GOAD is still running.
+  // Stop the GOAD SSH process so it doesn't waste time running Ansible on failed
+  // infrastructure (which would otherwise keep the command alive for 30–90 min).
+  useEffect(() => {
+    if (rangeState === "DEPLOYING" || rangeState === "WAITING") {
+      sawDeployingRef.current = true
+      return
+    }
+    const isTerminalError = rangeState === "ERROR" || rangeState === "ABORTED"
+    if (!isTerminalError || !isRunning || !sawDeployingRef.current || autoStoppedRef.current) return
+    autoStoppedRef.current = true
+    stop()
+    toast({
+      variant: "destructive",
+      title: "Range deployment failed",
+      description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
+    })
+  }, [rangeState, isRunning]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Watchdog B: GOAD exited but the range is still stuck in DEPLOYING.
+  // Use the force-state endpoint which tries both user and admin abort so it
+  // succeeds even when Ludus's internal goroutine has already exited.
+  useEffect(() => {
+    if (exitCode === null || !instance?.ludusRangeId) return
+    if (rangeState !== "DEPLOYING" && rangeState !== "WAITING") return
+    if (autoStoppedRef.current) return
+    autoStoppedRef.current = true
+    const rangeId = instance.ludusRangeId
+    fetch("/api/range/force-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rangeId }),
+    }).catch(() => {})
+    stopRangeStreaming()
+    toast({
+      variant: "destructive",
+      title: "Deployment failed",
+      description: "GOAD exited with an error while the range was still deploying. Attempting to reset the range state automatically.",
+    })
+  }, [exitCode, rangeState, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read ?tab=<value> from the URL on first mount (e.g. redirected from goad/new)
   useEffect(() => {
@@ -389,20 +446,63 @@ export default function GoadInstancePage() {
   const handleStop = () =>
     confirm("Stop all VMs?", () => runAction("stop", `-i ${instanceId} -t stop`))
 
+  /** Attempt to abort the Ludus range, retrying up to `retries` times.
+   *  Uses the force-state endpoint which tries both user-scoped and admin-scoped
+   *  abort, so it succeeds even when the deployment goroutine has already exited. */
+  const abortRange = useCallback(async (rangeId: string, retries = 3): Promise<boolean> => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const res = await fetch("/api/range/force-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rangeId }),
+        })
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}))
+          if (data.success) return true
+        }
+      } catch { /* network error — retry */ }
+      if (i < retries - 1) await new Promise((r) => setTimeout(r, 2000))
+    }
+    return false
+  }, [])
+
   /** Stop the running GOAD command AND abort the Ludus range deployment if active. */
   const handleStopCommand = async () => {
     await stop()
     stopRangeStreaming()
     const rangeId = instance?.ludusRangeId
     if (rangeId) {
-      try {
-        await fetch(
-          `/api/proxy/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
-          { method: "POST" }
-        )
-      } catch {
-        // Best-effort abort; user can abort manually from the Dashboard
+      const ok = await abortRange(rangeId)
+      if (!ok) {
+        toast({
+          variant: "destructive",
+          title: "Range abort failed",
+          description: "Ludus did not accept the abort request — the range may be stuck in DEPLOYING. Use the 'Force Abort' button below to keep retrying.",
+        })
       }
+    }
+  }
+
+  /** Force-abort a range that is stuck in DEPLOYING (e.g. after a Ludus goroutine
+   *  exits without updating PocketBase).  Retries more aggressively than the
+   *  normal stop flow and provides explicit feedback. */
+  const [forcingAbort, setForcingAbort] = useState(false)
+  const handleForceAbortRange = async () => {
+    const rangeId = instance?.ludusRangeId
+    if (!rangeId) return
+    setForcingAbort(true)
+    const ok = await abortRange(rangeId, 5)
+    setForcingAbort(false)
+    if (ok) {
+      toast({ title: "Range aborted", description: "The Ludus range has been aborted. You can now re-run Provide." })
+      startRangeStreaming(rangeId)
+    } else {
+      toast({
+        variant: "destructive",
+        title: "Force abort still failing",
+        description: "Ludus is not accepting abort requests for this range. This is a known Ludus bug when the internal goroutine exits without updating state. You can try again in a moment.",
+      })
     }
   }
   /** Ensure this instance has a dedicated Ludus range before running any
@@ -848,6 +948,33 @@ export default function GoadInstancePage() {
               </Button>
             )}
           </div>
+
+          {/* Stuck-DEPLOYING warning — shown when the stream has closed but the
+               range is still in DEPLOYING (Ludus goroutine exited without updating
+               PocketBase).  Prompts the user to force-abort and explains the issue. */}
+          {!isRangeStreaming && !isRunning && (rangeState === "DEPLOYING" || rangeState === "WAITING") && instance.ludusRangeId && (
+            <Alert variant="destructive" className="mb-3 flex-shrink-0">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription className="flex items-center justify-between gap-3">
+                <span className="text-xs">
+                  <strong>Range stuck in DEPLOYING.</strong> The Ludus deployment process appears to have
+                  finished without updating its state — a known Ludus issue after certain Ansible
+                  failures. Click <strong>Force Abort</strong> to reset the range state so you can
+                  re-run Provide.
+                </span>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="flex-shrink-0"
+                  onClick={handleForceAbortRange}
+                  disabled={forcingAbort}
+                >
+                  {forcingAbort ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <StopCircle className="h-3.5 w-3.5" />}
+                  {forcingAbort ? "Aborting…" : "Force Abort"}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* Side-by-side panels */}
           <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">

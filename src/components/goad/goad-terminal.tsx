@@ -1,9 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useCallback, useState } from "react"
+import type { ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { Download, Trash2, ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
 
 // Strip ANSI/VT100 codes so stored history with raw escape sequences renders cleanly.
 function stripAnsi(s: string): string {
@@ -14,6 +16,23 @@ function stripAnsi(s: string): string {
     .replace(/\x1b/g, "")
     .replace(/^.*\r(?!\n)/gm, "")
     .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "")
+}
+
+// Render a PLAY RECAP stats line with per-stat colouring using shared utility
+function renderRecapStats(line: string): ReactNode {
+  return (
+    <>
+      {parseRecapStats(line).map((seg, i) => (
+        <span key={i} className={seg.cls}>{seg.text}</span>
+      ))}
+    </>
+  )
+}
+
+// Colour class for all other lines (delegates to shared Ansible colour logic)
+function getLineClass(line: string): string {
+  if (line.startsWith("[TASKID]")) return "hidden"
+  return getAnsibleLineClass(line)
 }
 
 interface GoadTerminalProps {
@@ -92,20 +111,6 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
     URL.revokeObjectURL(url)
   }
 
-  const getLineClass = (line: string) => {
-    const lower = line.toLowerCase()
-    if (line.startsWith("[TASKID]")) return "hidden"
-    if (lower.includes("[fatal]") || lower.includes("fatal:")) return "text-red-500 font-bold"
-    if (lower.includes("[error]") || lower.includes("error:") || lower.includes("failed")) return "text-red-400"
-    if (lower.includes("[warning]") || lower.includes("warn:")) return "text-yellow-400"
-    if (lower.includes("[ok]") || lower.includes("ok:") || lower.includes("changed:")) return "text-green-400"
-    if (lower.includes("[play]") || lower.includes("[task]") || lower.includes("[recap]")) return "text-cyan-400 font-semibold"
-    if (lower.includes("[info]") || lower.includes("info:")) return "text-blue-400"
-    if (lower.startsWith("=>") || lower.startsWith("->")) return "text-purple-400"
-    if (lower.includes("[exit]")) return "text-yellow-500 font-bold"
-    return "text-gray-300"
-  }
-
   return (
     <div className={cn("flex flex-col min-h-0", className)}>
       <div className="flex items-center justify-between px-3 py-2 bg-gray-900 border border-gray-700 rounded-t-lg border-b-0 flex-shrink-0">
@@ -142,6 +147,9 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
               {lines.map((line, i) => {
                 const clean = stripAnsi(line)
                 if (!clean.trim()) return null
+                if (isRecapStatsLine(clean)) {
+                  return <div key={i}>{renderRecapStats(clean)}</div>
+                }
                 return (
                   <div key={i} className={getLineClass(clean)}>
                     {clean}

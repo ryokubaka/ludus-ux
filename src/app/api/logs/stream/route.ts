@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { ludusGet } from "@/lib/ludus-client"
+import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
         let lastLudusCount = 0
         let lastGoadCount = 0
         let rangeId = rangeIdParam || ""
-        let maxPolls = 900  // 30 min max (GOAD installs can take 30–90 min but range deploy itself is ≤15 min)
+        let maxPolls = 900  // 30 min hard ceiling
 
         // Warmup: don't terminate just because the range isn't DEPLOYING yet on
         // the first few checks.  GOAD's install flow creates the workspace first
@@ -82,6 +82,17 @@ export async function GET(request: NextRequest) {
         let warmupRemaining  = WARMUP_POLLS
         let wasDeploying     = false
         let lastEmittedState = ""
+
+        // Idle-timeout: Ludus can get stuck in DEPLOYING when its internal
+        // goroutine exits without updating PocketBase (e.g. after an Ansible
+        // failure on a Windows VM).  Without this guard the stream would run
+        // for the full 30 min ceiling with no useful output.
+        // We track the wall-clock time of the last new log line and emit
+        // [DONE] <state> once no activity has been seen for IDLE_TIMEOUT_MS.
+        // 10 min covers Windows reboot quiet periods while still giving timely
+        // feedback when a deployment is genuinely stuck.
+        const IDLE_TIMEOUT_MS = 10 * 60 * 1000
+        let lastActivityAt = Date.now()
 
         while (maxPolls-- > 0) {
           if (request.signal.aborted) break
@@ -100,6 +111,7 @@ export async function GET(request: NextRequest) {
             for (const line of newLines) {
               send("LUDUS", line)
             }
+            if (newLines.length > 0) lastActivityAt = Date.now()
           } else if (result.error) {
             send("ERROR", result.error)
             break
@@ -129,12 +141,34 @@ export async function GET(request: NextRequest) {
             for (const line of goadResult.lines) {
               send("GOAD", line)
             }
+            if (goadResult.lines.length > 0) lastActivityAt = Date.now()
           }
 
           // ── Termination logic ──────────────────────────────────────────────
           if (state === "DEPLOYING" || state === "WAITING") {
             wasDeploying = true
             warmupRemaining = WARMUP_POLLS  // reset warmup every time we see DEPLOYING
+
+            // Idle timeout: if no new log lines have arrived for IDLE_TIMEOUT_MS
+            // while the range is stuck in DEPLOYING, attempt a server-side abort
+            // before closing the stream so the PocketBase state gets updated.
+            if (Date.now() - lastActivityAt > IDLE_TIMEOUT_MS) {
+              // Try aborting with user key first, then root key if available
+              try {
+                const abortResult = await ludusRequest(
+                  `/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
+                  { method: "POST", apiKey: effectiveApiKey }
+                )
+                if (!abortResult.data && settings.rootApiKey) {
+                  await ludusRequest(
+                    `/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
+                    { method: "POST", apiKey: settings.rootApiKey, useAdminEndpoint: true }
+                  )
+                }
+              } catch { /* best-effort */ }
+              send("DONE", state)
+              break
+            }
           } else if (state) {
             // Not deploying — decide whether to keep waiting or exit
             if (wasDeploying) {

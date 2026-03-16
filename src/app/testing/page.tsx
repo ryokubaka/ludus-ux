@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { useImpersonation } from "@/lib/impersonation-context"
+import { useRange } from "@/lib/range-context"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
 
@@ -137,27 +138,25 @@ export default function TestingPage() {
   const { impersonation } = useImpersonation()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
-  // ── Range selector ────────────────────────────────────────────────────────
-  // Use a query-key scoped to the impersonated user so the cache is
-  // invalidated automatically when impersonation changes.
+  // ── Global range context — single source of truth for which range is active.
+  // selectedRangeId is persisted to sessionStorage and shared with the sidebar,
+  // so changing the range anywhere in the app instantly updates this page too.
+  const {
+    ranges: contextRanges,   // RangeAccessEntry[] — same list as the sidebar
+    selectedRangeId,         // string | null — driven by sidebar & local selector
+    selectRange,             // updates global context + sessionStorage
+    loading: rangesLoading,
+  } = useRange()
+
+  // ── Supplemental per-range data (testingEnabled dots in selector) ─────────
+  // GET /range returns full RangeObject[] so we can show testingEnabled status
+  // per range in the local selector.  NOT used for selection logic.
   const impersonatedUser = impersonation?.username ?? "self"
-  const { data: rangesData, isLoading: rangesLoading } = useQuery({
+  const { data: rangesData } = useQuery({
     queryKey: ["ranges", "user", impersonatedUser],
     queryFn: () => ludusApi.getRangesForUser().then((r) => r.data ?? []),
     staleTime: STALE.short,
   })
-  const [ranges, setRanges] = useState<RangeObject[]>([])
-  const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
-
-  // Sync ranges + auto-select first range when the query data changes
-  useEffect(() => {
-    if (!rangesData) return
-    setRanges(rangesData)
-    setSelectedRangeId((prev) => {
-      if (prev && rangesData.some((r) => r.rangeID === prev)) return prev
-      return rangesData[0]?.rangeID ?? null
-    })
-  }, [rangesData])
 
   // Ref so closures (effects, intervals, callbacks) always read the LATEST
   // selectedRangeId without needing it in every dependency array.
@@ -277,6 +276,9 @@ export default function TestingPage() {
   // null = no active op;  object = op is pending or running
   const [activeOp, setActiveOp] = useState<Pick<RangeOp, "id" | "opType" | "status" | "startedAt"> | null>(null)
 
+  // Elapsed-time ticker state (effect is placed after opInProgress is derived below)
+  const [elapsedSec, setElapsedSec] = useState(0)
+
   // ── Log panel ─────────────────────────────────────────────────────────────
   const [showLogs, setShowLogs] = useState(false)
   const [logLines, setLogLines] = useState<string[]>([])
@@ -302,16 +304,31 @@ export default function TestingPage() {
   // True while we should lock the button and show progress UI
   const isInProgress = toggling || opInProgress || isDeploying
 
+  // Elapsed-time ticker — updates every second while an op is in-flight so the
+  // UI shows "Xm Ys" rather than a static "waiting…" message.
+  // Placed here (after opInProgress) to avoid a temporal dead zone error.
+  useEffect(() => {
+    if (!opInProgress || !activeOp) { setElapsedSec(0); return }
+    const startMs = activeOp.startedAt
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startMs) / 1000))
+    }, 1000)
+    return () => clearInterval(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opInProgress, activeOp?.startedAt])
+
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
 
   /** Fetch live status for the given range from Ludus (doesn't touch op state). */
   const fetchStatus = useCallback(async (rangeId?: string) => {
     setStatusLoading(true)
-    // Pass rangeId so we always get the selected range's status, not just the
-    // first/default range.  GET /range?rangeID=xxx is supported by Ludus v2.
     const result = await ludusApi.getRangeStatus(rangeId)
-    if (result.data) setStatus(result.data)
+    // Guard against stale responses overwriting status when the range changed
+    // while this fetch was in-flight.
+    if (result.data && (!rangeId || selectedRangeIdRef.current === rangeId)) {
+      setStatus(result.data)
+    }
     setStatusLoading(false)
   }, [])
 
@@ -488,7 +505,7 @@ export default function TestingPage() {
 
     toast({
       title: isEnabled ? "Reverting VMs…" : "Snapshotting VMs…",
-      description: "Logs will appear below. Ludus may take a moment to begin processing.",
+      description: "Proxmox is working. The UI will watch for completion automatically — this may take several minutes on slower hardware.",
     })
 
     // Start streaming immediately — the stream waits up to 40 s for DEPLOYING
@@ -632,7 +649,7 @@ export default function TestingPage() {
 
   // ── Derived UI labels ─────────────────────────────────────────────────────
 
-  const selectedRange = ranges.find((r) => r.rangeID === selectedRangeId)
+  const selectedRange = contextRanges.find((r) => r.rangeID === selectedRangeId)
 
   const isStopping = activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)
   const progressLabel =
@@ -657,29 +674,33 @@ export default function TestingPage() {
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading ranges…
         </div>
-      ) : ranges.length > 1 && (
+      ) : contextRanges.length > 1 && (
         <div className="flex flex-wrap gap-2">
-          {ranges.map((r) => (
-            <button
-              key={r.rangeID}
-              onClick={() => setSelectedRangeId(r.rangeID)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
-                selectedRangeId === r.rangeID
-                  ? "border-primary/60 bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-              )}
-            >
-              <Server className="h-3.5 w-3.5" />
-              {r.rangeID}
-              {r.testingEnabled && (
-                <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" title="Testing enabled" />
-              )}
-              {(r.rangeState === "DEPLOYING" || r.rangeState === "WAITING") && (
-                <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="Deploying" />
-              )}
-            </button>
-          ))}
+          {contextRanges.map((r) => {
+            // Look up full RangeObject for per-range status indicators (dots)
+            const rangeStatus = rangesData?.find((rd) => rd.rangeID === r.rangeID)
+            return (
+              <button
+                key={r.rangeID}
+                onClick={() => selectRange(r.rangeID)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
+                  selectedRangeId === r.rangeID
+                    ? "border-primary/60 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                )}
+              >
+                <Server className="h-3.5 w-3.5" />
+                {r.rangeID}
+                {rangeStatus?.testingEnabled && (
+                  <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" title="Testing enabled" />
+                )}
+                {(rangeStatus?.rangeState === "DEPLOYING" || rangeStatus?.rangeState === "WAITING") && (
+                  <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="Deploying" />
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -712,7 +733,7 @@ export default function TestingPage() {
                   <div>
                     <p className="font-semibold text-sm">
                       Testing Mode
-                      {selectedRange && ranges.length > 1 && (
+                      {selectedRange && contextRanges.length > 1 && (
                         <span className="ml-2 font-mono text-xs text-muted-foreground font-normal">
                           ({selectedRange.rangeID})
                         </span>
@@ -722,7 +743,13 @@ export default function TestingPage() {
                       {isDeploying
                         ? "Range is actively processing — VMs are being snapshotted or reverted"
                         : opInProgress
-                        ? "Operation queued — waiting for Ludus to begin processing (polling every 3 s)"
+                        ? (() => {
+                            const m = Math.floor(elapsedSec / 60)
+                            const s = elapsedSec % 60
+                            const elapsed = m > 0 ? `${m}m ${s}s` : `${s}s`
+                            const verb = activeOp?.opType === "testing_start" ? "Snapshotting" : "Reverting"
+                            return `${verb} VMs on Proxmox — watching for completion… (${elapsed})`
+                          })()
                         : isEnabled
                         ? "VMs are snapshotted and internet access is blocked"
                         : "VMs have normal internet access"}

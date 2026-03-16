@@ -14,6 +14,8 @@ export interface LudusRequestOptions {
   apiKey?: string
   useAdminEndpoint?: boolean
   userOverride?: string
+  /** Milliseconds before the request is aborted. Defaults to 30 000 ms. Pass 0 for no timeout. */
+  timeout?: number
 }
 
 export async function ludusRequest<T = unknown>(
@@ -26,6 +28,7 @@ export async function ludusRequest<T = unknown>(
     apiKey = "",
     useAdminEndpoint = false,
     userOverride,
+    timeout = 30_000,
   } = options
 
   const settings = getSettings()
@@ -56,7 +59,7 @@ export async function ludusRequest<T = unknown>(
   }
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 30_000)
+  const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null
 
   try {
     const fetchOptions: RequestInit = {
@@ -71,7 +74,7 @@ export async function ludusRequest<T = unknown>(
     }
 
     const response = await fetch(url, fetchOptions)
-    clearTimeout(timeoutId)
+    if (timeoutId) clearTimeout(timeoutId)
     const status = response.status
 
     if (status === 204) {
@@ -93,7 +96,7 @@ export async function ludusRequest<T = unknown>(
       return { data: text as unknown as T, status }
     }
   } catch (err) {
-    clearTimeout(timeoutId)
+    if (timeoutId) clearTimeout(timeoutId)
     if (err instanceof Error && err.name === "AbortError") {
       return { error: "Connection timed out after 30 s — is the Ludus server reachable?", status: 0 }
     }

@@ -41,6 +41,14 @@ function getEffective(request: NextRequest, session: { apiKey: string; username:
 }
 
 /**
+ * How long we wait for a testing op to complete before declaring it stalled.
+ * Proxmox snapshot/revert is typically fast (< 5 min) but can take longer on
+ * large VMs or slow storage.  20 min is generous while still giving timely
+ * feedback instead of silently expiring via the 30-min TTL.
+ */
+const TESTING_OP_MAX_AGE_MS = 20 * 60_000
+
+/**
  * Check whether the active op has completed by inspecting the current Ludus
  * range state.  Updates the DB if completed.  Returns the (possibly updated) op.
  *
@@ -49,7 +57,7 @@ function getEffective(request: NextRequest, session: { apiKey: string; username:
  * throughout.  The ONLY reliable completion signal is testingEnabled flipping
  * to the expected value (which Ludus sets only after all VM jobs finish).
  * We therefore never use rangeState to declare an op "done" unless the range
- * itself has entered an ERROR or ABORTED state.
+ * itself has entered an ERROR or ABORTED state, or the op exceeds TESTING_OP_MAX_AGE_MS.
  */
 async function checkCompletion(
   op: ReturnType<typeof getActiveRangeOp> & object,
@@ -57,6 +65,16 @@ async function checkCompletion(
   rangeId: string,
 ) {
   if (!op || op.status === "completed" || op.status === "error") return op
+
+  // ── Max-age guard ────────────────────────────────────────────────────────
+  // If the op has been running (not just pending) for longer than the allowed
+  // window, declare it failed rather than waiting for the 30-min TTL to silently
+  // drop it from the active query.  This surfaces an explicit "error" state in
+  // the UI so the user can retry without manual PocketBase intervention.
+  if (op.status === "running" && Date.now() - op.startedAt > TESTING_OP_MAX_AGE_MS) {
+    completeRangeOp(op.id, false)
+    return { ...op, status: "error" as const }
+  }
 
   try {
     const result = await ludusRequest<{
@@ -92,8 +110,7 @@ async function checkCompletion(
       return { ...op, status: "error" as const }
     }
 
-    // Still waiting — op remains running.  The 30-min TTL in getActiveRangeOp
-    // acts as the final safety net if the operation never completes.
+    // Still waiting — op remains running.  The poller will retry every 3 s.
   } catch {
     // Non-fatal — return op unchanged; client will retry on next poll
   }
@@ -158,13 +175,24 @@ export async function POST(request: NextRequest) {
   const ludusPath = opType === "testing_start"
     ? `/testing/start?rangeID=${encodeURIComponent(rangeId)}`
     : `/testing/stop?rangeID=${encodeURIComponent(rangeId)}`
+
+  // Use a generous timeout — Proxmox snapshot/revert can take a while to queue,
+  // and on slow hardware Ludus itself may take > 30 s to acknowledge the request.
+  // We give it up to 5 min before giving up on the HTTP response.
   const result = await ludusRequest(ludusPath, {
     method: "PUT",
     apiKey: effectiveApiKey,
+    timeout: 5 * 60_000,
   })
 
-  if (result.error && result.status !== 200 && result.status !== 204) {
-    // Ludus rejected the call — mark op as error so the UI doesn't get stuck
+  // status === 0 means OUR network timeout fired before Ludus replied.
+  // In this case Ludus may have already accepted and queued the jobs but
+  // simply responded slowly.  We keep the op as "running" and let the
+  // 3-second checkCompletion poller detect the actual outcome via testingEnabled.
+  const ludusTimedOut = result.status === 0
+
+  if (!ludusTimedOut && result.error && result.status !== 200 && result.status !== 204) {
+    // Ludus explicitly rejected the call (4xx / 5xx) — fail immediately.
     completeRangeOp(op.id, false)
     return NextResponse.json(
       { error: result.error || `Ludus returned HTTP ${result.status}` },
@@ -172,7 +200,9 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Mark as running — Ludus accepted the request
+  // Accepted (or timed out but potentially in-progress) — mark as running.
+  // The client will poll GET /api/range/ops every 3 s which calls checkCompletion
+  // and watches testingEnabled until it reaches the expected value.
   markRangeOpRunning(op.id)
   return NextResponse.json({ op: { ...op, status: "running" } })
 }

@@ -37,13 +37,96 @@ import {
   X,
   Activity,
   MapPin,
+  Check,
+  CircleAlert,
+  PackageX,
 } from "lucide-react"
-import type { GoadInstance, GoadCatalog, GoadExtensionDef, GoadLabDef } from "@/lib/types"
+import type { GoadInstance, GoadCatalog, GoadExtensionDef, GoadLabDef, TemplateObject } from "@/lib/types"
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useRange } from "@/lib/range-context"
+
+// ── Template readiness helpers ────────────────────────────────────────────────
+
+function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
+  const present: string[] = []
+  const missingUnbuilt: string[] = []
+  const missingAbsent: string[] = []
+  for (const t of required) {
+    if (builtNames.has(t)) present.push(t)
+    else if (allNames.has(t)) missingUnbuilt.push(t)
+    else missingAbsent.push(t)
+  }
+  return { present, missingUnbuilt, missingAbsent, ready: missingUnbuilt.length === 0 && missingAbsent.length === 0 }
+}
+
+function TemplateChips({
+  required,
+  builtNames,
+  allNames,
+}: {
+  required: string[]
+  builtNames: Set<string>
+  allNames: Set<string>
+}) {
+  if (required.length === 0) return null
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="flex flex-wrap gap-1 mt-1.5">
+        {required.map((t) => {
+          const built = builtNames.has(t)
+          const installed = allNames.has(t)
+          const chip = (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono border",
+                built
+                  ? "bg-green-500/10 border-green-500/30 text-green-400"
+                  : installed
+                  ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400"
+                  : "bg-red-500/10 border-red-500/30 text-red-400"
+              )}
+            >
+              {built
+                ? <Check className="h-2.5 w-2.5 flex-shrink-0" />
+                : installed
+                ? <CircleAlert className="h-2.5 w-2.5 flex-shrink-0" />
+                : <PackageX className="h-2.5 w-2.5 flex-shrink-0" />}
+              {t}
+            </span>
+          )
+          if (built) {
+            return (
+              <Tooltip key={t}>
+                <TooltipTrigger asChild>{chip}</TooltipTrigger>
+                <TooltipContent
+                  side="top"
+                  className="border-green-500/30 bg-green-950/90 text-green-300 text-xs px-2.5 py-1.5"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Check className="h-3 w-3 text-green-400 flex-shrink-0" />
+                    <span><span className="font-mono font-semibold">{t}</span> — installed &amp; built</span>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )
+          }
+          return (
+            <span
+              key={t}
+              title={installed ? "Installed but not yet built — go to Templates to build" : "Not installed — go to Templates to add"}
+            >
+              {chip}
+            </span>
+          )
+        })}
+      </div>
+    </TooltipProvider>
+  )
+}
 
 interface TaskSummary {
   id: string
@@ -119,6 +202,9 @@ export default function GoadInstancePage() {
   const [taskHistory, setTaskHistory] = useState<TaskSummary[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [activeTab, setActiveTab] = useState("terminal")
+  const [templates, setTemplates] = useState<TemplateObject[]>([])
+  const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
+  const allNames   = new Set(templates.map((t) => t.name))
 
   // Read ?tab=<value> from the URL on first mount (e.g. redirected from goad/new)
   useEffect(() => {
@@ -247,13 +333,19 @@ export default function GoadInstancePage() {
     setHistoryLoading(false)
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch instance data and catalog when instanceId changes OR when impersonation changes
-  // (fetchInstances is recreated by useCallback when impersonationHeaders changes)
+  // Fetch instance data, catalog, and Ludus templates when instanceId / impersonation changes
   useEffect(() => {
     fetchInstances()
     fetch("/api/goad/catalog")
       .then((r) => r.json())
       .then((d: GoadCatalog) => { if (d.configured) setCatalog(d) })
+      .catch(() => {})
+    fetch("/api/proxy/templates")
+      .then((r) => r.ok ? r.json() : [])
+      .then((d) => {
+        const list: TemplateObject[] = Array.isArray(d) ? d : (d?.result ?? [])
+        setTemplates(list)
+      })
       .catch(() => {})
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1014,41 +1106,67 @@ export default function GoadInstancePage() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Available to Install</p>
                 <div className="grid gap-2">
-                  {uninstalledExtensions.map((ext) => (
-                    <div
-                      key={ext.name}
-                      className="flex items-center justify-between p-3 rounded-lg border border-border hover:border-primary/30"
-                    >
-                      <div className="flex items-center gap-3">
-                        <Package className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <code className="font-mono text-sm">{ext.name}</code>
-                          {ext.description && (
-                            <p className="text-xs text-muted-foreground">{ext.description}</p>
-                          )}
-                          {ext.machines.length > 0 && (
-                            <p className="text-xs text-muted-foreground/60">
-                              +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleInstallExtension(ext.name)}
-                        disabled={isRunning || !!pendingAction || instance.status === "CREATED"}
-                        title={instance.status === "CREATED" ? "Run Provide before installing extensions" : "Install extension"}
-                      >
-                        {installingExtension === ext.name ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Plus className="h-3.5 w-3.5" />
+                  {uninstalledExtensions.map((ext) => {
+                    const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                    const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                    return (
+                      <div
+                        key={ext.name}
+                        className={cn(
+                          "flex items-start justify-between p-3 rounded-lg border",
+                          !templatesReady
+                            ? "border-border opacity-70"
+                            : "border-border hover:border-primary/30"
                         )}
-                        {installingExtension === ext.name ? "Installing..." : "Install"}
-                      </Button>
-                    </div>
-                  ))}
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <Package className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <code className="font-mono text-sm">{ext.name}</code>
+                              {ext.machines.length > 0 && (
+                                <span className="text-xs text-muted-foreground">
+                                  +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
+                                </span>
+                              )}
+                              {!templatesReady && (
+                                <Badge variant="destructive" className="text-xs gap-1">
+                                  <PackageX className="h-2.5 w-2.5" /> Missing templates
+                                </Badge>
+                              )}
+                            </div>
+                            {ext.description && (
+                              <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
+                            )}
+                            {(ext.requiredTemplates ?? []).length > 0 && (
+                              <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-shrink-0 ml-3"
+                          onClick={() => handleInstallExtension(ext.name)}
+                          disabled={isRunning || !!pendingAction || instance.status === "CREATED" || !templatesReady}
+                          title={
+                            instance.status === "CREATED"
+                              ? "Run Provide before installing extensions"
+                              : !templatesReady
+                              ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
+                              : "Install extension"
+                          }
+                        >
+                          {installingExtension === ext.name ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Plus className="h-3.5 w-3.5" />
+                          )}
+                          {installingExtension === ext.name ? "Installing..." : "Install"}
+                        </Button>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}

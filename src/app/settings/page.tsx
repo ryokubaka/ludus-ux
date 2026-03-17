@@ -218,7 +218,7 @@ export default function SettingsPage() {
             />
           </div>
 
-          <div className="space-y-1.5">
+          {/* <div className="space-y-1.5">
             <Label htmlFor="admin-url">
               Admin API URL
               <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUS_ADMIN_URL</span>
@@ -234,7 +234,7 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               Required for user/group management (port 8081).
             </p>
-          </div>
+          </div> */}
 
           <div className="space-y-1.5">
             <Label htmlFor="root-api-key">

@@ -108,7 +108,7 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 
 | Variable | Description |
 |---|---|
-| `LUDUS_ADMIN_URL` | Admin API URL (port 8081) |
+| `LUDUS_ADMIN_URL` | Admin API URL (Ludus server port 8081); tunnel is automatically established between Ludus UX and Ludus server over docker bridge network port 18081 by the entrypoint script |
 | `LUDUS_ROOT_API_KEY` | Root API key (from `/opt/ludus/install/root-api-key` on the server) |
 | `PROXMOX_SSH_USER` | Root SSH user for console/GOAD access (default: `root`) |
 | `PROXMOX_SSH_PASSWORD` | Root SSH password |

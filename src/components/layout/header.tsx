@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -12,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { User, Shield, LogOut, ChevronDown } from "lucide-react"
+import { User, Shield, LogOut, ChevronDown, Settings } from "lucide-react"
 import { useSidebar } from "@/lib/sidebar-context"
 import { cn } from "@/lib/utils"
 
@@ -30,6 +31,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   "/logs": { title: "Range Logs", description: "Live and historical range deployment logs" },
   "/goad": { title: "GOAD Management", description: "Manage Game of Active Directory lab instances" },
   "/settings": { title: "Settings", description: "Configure Ludus connection and preferences" },
+  "/account": { title: "User Settings", description: "Profile picture and password" },
 }
 
 interface SessionInfo {
@@ -41,6 +43,8 @@ export function Header() {
   const pathname = usePathname()
   const router = useRouter()
   const [session, setSession] = useState<SessionInfo | null>(null)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [avatarVersion, setAvatarVersion] = useState(0)
   const { collapsed } = useSidebar()
 
   useEffect(() => {
@@ -54,9 +58,25 @@ export function Header() {
       .catch(() => {})
   }, [])
 
+  // Probe for avatar once session is known, and whenever avatarVersion bumps
+  useEffect(() => {
+    if (!session) return
+    fetch(`/api/profile/avatar?t=${avatarVersion}`, { method: "HEAD" })
+      .then((r) => {
+        setAvatarUrl(r.ok ? `/api/profile/avatar?t=${avatarVersion}` : null)
+      })
+      .catch(() => setAvatarUrl(null))
+  }, [session, avatarVersion])
+
+  // Listen for avatar uploads from the settings page
+  useEffect(() => {
+    const handler = () => setAvatarVersion((v) => v + 1)
+    window.addEventListener("profile-avatar-updated", handler)
+    return () => window.removeEventListener("profile-avatar-updated", handler)
+  }, [])
+
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST" })
-    // Clear cached session/settings values so the next login starts fresh
     sessionStorage.clear()
     router.push("/login")
   }
@@ -87,12 +107,20 @@ export function Header() {
         {session && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-2 h-8">
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 border border-primary/30">
-                  {session.isAdmin ? (
-                    <Shield className="h-3 w-3 text-primary" />
+              <Button variant="ghost" size="sm" className="gap-2.5 h-10 px-2">
+                {/* Avatar circle — larger than before */}
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/20 border-2 border-primary/30 overflow-hidden flex-shrink-0">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt={session.username}
+                      className="h-full w-full object-cover"
+                      onError={() => setAvatarUrl(null)}
+                    />
+                  ) : session.isAdmin ? (
+                    <Shield className="h-4 w-4 text-primary" />
                   ) : (
-                    <User className="h-3 w-3 text-primary" />
+                    <User className="h-4 w-4 text-primary" />
                   )}
                 </div>
                 <span className="font-mono text-xs">{session.username}</span>
@@ -104,14 +132,37 @@ export function Header() {
                 <ChevronDown className="h-3 w-3 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                Signed in as
-                <span className="block font-mono font-semibold text-foreground mt-0.5">
-                  {session.username}
-                </span>
+
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel className="flex items-center gap-2.5 py-2">
+                <div className="h-8 w-8 rounded-full bg-primary/20 border border-primary/30 overflow-hidden flex items-center justify-center flex-shrink-0">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt={session.username} className="h-full w-full object-cover" />
+                  ) : session.isAdmin ? (
+                    <Shield className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <User className="h-3.5 w-3.5 text-primary" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground leading-none">Signed in as</p>
+                  <p className="font-mono font-semibold text-foreground text-xs mt-0.5 truncate">
+                    {session.username}
+                  </p>
+                </div>
               </DropdownMenuLabel>
+
               <DropdownMenuSeparator />
+
+              <DropdownMenuItem asChild className="cursor-pointer gap-2">
+                <Link href="/account">
+                  <Settings className="h-3.5 w-3.5" />
+                  User Settings
+                </Link>
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator />
+
               <DropdownMenuItem
                 className="text-red-400 focus:text-red-400 cursor-pointer gap-2"
                 onClick={handleLogout}

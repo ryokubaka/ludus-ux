@@ -218,7 +218,7 @@ export default function SettingsPage() {
             />
           </div>
 
-          {/* <div className="space-y-1.5">
+          <div className="space-y-1.5">
             <Label htmlFor="admin-url">
               Admin API URL
               <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUS_ADMIN_URL</span>
@@ -229,12 +229,12 @@ export default function SettingsPage() {
               onChange={(e) => setDraft((d) => d ? { ...d, ludusAdminUrl: e.target.value } : d)}
               disabled={!session?.isAdmin}
               className="font-mono text-xs"
-              placeholder="https://192.168.1.1:8081 (port 8081 for admin operations)"
+              placeholder="https://127.0.0.1:18081 (Ludus server port 8081 for admin operations); port 18081 via Ludus UX container tunnel"
             />
             <p className="text-xs text-muted-foreground">
-              Required for user/group management (port 8081).
+              Required for user/group management. Port 18081 is the default port for Ludus UX container.
             </p>
-          </div> */}
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="root-api-key">

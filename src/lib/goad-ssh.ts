@@ -879,3 +879,23 @@ export async function getInstanceInventories(
     return [];
   }
 }
+
+/**
+ * Change the OS-level owner of a GOAD instance workspace directory.
+ * Runs `chown -R <targetUser>:<targetUser> <workspace>/<instanceId>` as root.
+ * Used when re-assigning a GOAD instance from one Ludus user to another.
+ */
+export async function chownGoadInstance(
+  instanceId: string,
+  targetUser: string,
+  creds?: SSHCreds,
+): Promise<void> {
+  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const safePath = `${goadPath}/workspace/${instanceId.replace(/'/g, "'\\''")}`
+  const safeUser = targetUser.replace(/'/g, "'\\''")
+  const cmd = `chown -R '${safeUser}':'${safeUser}' '${safePath}'`
+  const { code, stderr } = await sshExec(cmd, creds)
+  if (code !== 0) {
+    throw new Error(`chown failed (exit ${code}): ${stderr.trim() || "unknown error"}`)
+  }
+}

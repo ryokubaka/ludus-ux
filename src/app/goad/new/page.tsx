@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
+import { useImpersonation } from "@/lib/impersonation-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ function shellQuote(arg: string): string {
 export default function NewGoadInstancePage() {
   const router = useRouter()
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
+  const { impersonation } = useImpersonation()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
@@ -172,13 +174,24 @@ export default function NewGoadInstancePage() {
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
 
-  // Fetch session username for range naming convention + installed templates
+  // Fetch the current effective username for range naming.
+  // When impersonating, immediately use the impersonated user's ID rather than
+  // waiting for the session fetch (which always returns the admin's username).
+  // This effect re-runs whenever the impersonation state changes so the range
+  // name preview always reflects the actual owner.
   useEffect(() => {
+    if (impersonation?.username) {
+      setCurrentUsername(impersonation.username)
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => { if (d.username) setCurrentUsername(d.username) })
       .catch(() => {})
+  }, [impersonation?.username]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch installed templates (once on mount — not affected by impersonation)
+  useEffect(() => {
     fetch("/api/proxy/templates")
       .then((r) => r.ok ? r.json() : [])
       .then((d) => {
@@ -242,11 +255,18 @@ export default function NewGoadInstancePage() {
 
   // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
   // e.g. "melchior-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
+  // When impersonating, use the impersonated user's username so the range name
+  // reflects the actual owner, not the admin performing the action.
+  // impersonation?.username is listed as a direct dep so the memo updates the
+  // instant the provider loads the stored impersonation state (before the session
+  // fetch resolves and potentially sets currentUsername to the admin's name).
   const autoRangeId = useMemo(() => {
-    const user    = (currentUsername || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
+    const effective = impersonation?.username || currentUsername
+    const user    = (effective || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
     const labSlug = (selectedLab ?? "lab").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
     return `${user}-${labSlug}-${newRangeUid}`
-  }, [currentUsername, selectedLab, newRangeUid])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [impersonation?.username, currentUsername, selectedLab, newRangeUid])
 
   /**
    * Always creates a fresh dedicated Ludus range for this GOAD deployment.
@@ -299,13 +319,31 @@ export default function NewGoadInstancePage() {
 
     // Snapshot full instance list so we can find any pre-existing instance in the
     // selected range (to reuse it) and diff for new instances when needed.
+    // When impersonating, also snapshot the admin view so the fallback poll
+    // check doesn't falsely flag the admin's existing instances as new.
     type InstanceSnapshot = { instanceId: string; ludusRangeId?: string }
     let instancesBefore: InstanceSnapshot[] = []
     try {
-      const snap = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+      const impHeaders = getImpersonationHeaders()
+      const snap = await fetch("/api/goad/instances", { headers: impHeaders })
       if (snap.ok) {
         const snapData = await snap.json()
         instancesBefore = snapData.instances ?? []
+      }
+      // When impersonating, also snapshot the admin-visible list
+      if (Object.keys(impHeaders).length > 0) {
+        try {
+          const adminSnap = await fetch("/api/goad/instances")
+          if (adminSnap.ok) {
+            const adminData = await adminSnap.json()
+            const adminIds = (adminData.instances ?? []) as InstanceSnapshot[]
+            for (const inst of adminIds) {
+              if (!instancesBefore.some((i) => i.instanceId === inst.instanceId)) {
+                instancesBefore.push(inst)
+              }
+            }
+          }
+        } catch { /* best-effort */ }
       }
     } catch { /* best-effort */ }
     const instanceIdsBefore = new Set(instancesBefore.map((i) => i.instanceId))
@@ -373,7 +411,7 @@ export default function NewGoadInstancePage() {
       }
 
       const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(existingInstance.instanceId)} -t install${extArgs ? ` ${extArgs}` : ""}`
-      run(args, undefined, undefined, rangeId ?? undefined)
+      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined)
 
       // Wait for useGoadStream to write the [TASKID] into sessionStorage ("goad-task-new"),
       // then transfer it to the instance-scoped key so /goad/[id] can auto-resume.
@@ -427,7 +465,7 @@ export default function NewGoadInstancePage() {
       }
 
       const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
-      run(args, undefined, undefined, rangeId ?? undefined)
+      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined)
 
       // Poll until GOAD creates the new workspace directory, then redirect.
       // GOAD writes instance.json early in the install flow (within ~30-60 s).
@@ -440,12 +478,29 @@ export default function NewGoadInstancePage() {
         while (Date.now() < deadline && !redirected) {
           await new Promise((r) => setTimeout(r, 10_000))
           try {
-            const res = await fetch("/api/goad/instances", { headers: getImpersonationHeaders() })
+            // Primary: fetch instances visible to the impersonated user.
+            // Fallback: also fetch without impersonation headers so the admin
+            // view catches instances that GOAD may have created under the
+            // admin's identity (e.g. if there was an identity resolution race).
+            const impHeaders = getImpersonationHeaders()
+            const res = await fetch("/api/goad/instances", { headers: impHeaders })
             if (!res.ok) continue
             const data = await res.json()
-            const newInst = (data.instances ?? []).find(
+            let newInst = (data.instances ?? []).find(
               (i: { instanceId: string }) => !capturedBefore.has(i.instanceId)
             )
+            // Fallback admin-view check (only when impersonating)
+            if (!newInst && Object.keys(impHeaders).length > 0) {
+              try {
+                const adminRes = await fetch("/api/goad/instances")
+                if (adminRes.ok) {
+                  const adminData = await adminRes.json()
+                  newInst = (adminData.instances ?? []).find(
+                    (i: { instanceId: string }) => !capturedBefore.has(i.instanceId)
+                  )
+                }
+              } catch { /* best-effort */ }
+            }
             if (newInst && !redirected) {
               redirected = true
               const newId = newInst.instanceId as string

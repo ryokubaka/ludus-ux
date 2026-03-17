@@ -729,7 +729,7 @@ export function AdminPageClient() {
                             <span className="h-3.5 w-3.5 block" />
                           )}
                         </td>
-                        {/* Manage button — left of username */}
+                        {/* Manage button */}
                         <td className="p-2" onClick={(e) => e.stopPropagation()}>
                           <TooltipProvider delayDuration={200}>
                             <Tooltip>

@@ -251,26 +251,43 @@ function ConsolePageInner() {
                 <div className="px-4 py-3 text-xs text-zinc-500 whitespace-nowrap">No VMs in <span className="font-mono text-zinc-400">{selectedRangeId}</span>. Deploy first.</div>
               ) : (
                 vms.map((vm) => (
-                  <button
+                  <div
                     key={`${vm.rangeID}-${vm.proxmoxID}`}
-                    onClick={() => activateVm(vm)}
-                    className={`w-full flex items-center gap-2.5 px-4 py-2 text-left hover:bg-zinc-800 transition-colors ${
+                    className={`flex items-center group hover:bg-zinc-800 transition-colors ${
                       activeVm?.proxmoxID === vm.proxmoxID ? "bg-zinc-800/80" : ""
                     }`}
                   >
-                    <Circle
-                      className={`h-2 w-2 shrink-0 ${vm.poweredOn ? "fill-green-400 text-green-400" : "fill-zinc-600 text-zinc-600"}`}
-                    />
-                    <div className="flex-1">
-                      <div className="text-xs text-zinc-200 whitespace-nowrap">{vm.name}</div>
-                      <div className="text-[10px] text-zinc-500 whitespace-nowrap">
-                        {vm.rangeID} · ID {vm.proxmoxID} · {vm.ip || "—"}
+                    <button
+                      onClick={() => activateVm(vm)}
+                      className="flex-1 flex items-center gap-2.5 px-4 py-2 text-left"
+                    >
+                      <Circle
+                        className={`h-2 w-2 shrink-0 ${vm.poweredOn ? "fill-green-400 text-green-400" : "fill-zinc-600 text-zinc-600"}`}
+                      />
+                      <div className="flex-1">
+                        <div className="text-xs text-zinc-200 whitespace-nowrap">{vm.name}</div>
+                        <div className="text-[10px] text-zinc-500 whitespace-nowrap">
+                          {vm.rangeID} · ID {vm.proxmoxID} · {vm.ip || "—"}
+                        </div>
                       </div>
-                    </div>
-                    {activeVm?.proxmoxID === vm.proxmoxID && (
-                      <span className="ml-4 text-[10px] text-purple-400 shrink-0">active</span>
-                    )}
-                  </button>
+                      {activeVm?.proxmoxID === vm.proxmoxID && (
+                        <span className="ml-4 text-[10px] text-purple-400 shrink-0">active</span>
+                      )}
+                    </button>
+                    {/* Open in new window */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        const vmid = String(vm.proxmoxID)
+                        const name = encodeURIComponent(vm.name)
+                        window.open(`/console?vmId=${vmid}&vmName=${name}`, "_blank", "noopener,noreferrer")
+                      }}
+                      title="Open in new window"
+                      className="opacity-0 group-hover:opacity-100 px-2 py-2 text-zinc-500 hover:text-zinc-200 transition-all"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
@@ -285,6 +302,21 @@ function ConsolePageInner() {
             className="ml-1 p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+        )}
+
+        {/* Pop-out button — opens active VM console in a new window */}
+        {activeVm && (
+          <button
+            onClick={() => {
+              const vmid = String(activeVm.proxmoxID)
+              const name = encodeURIComponent(activeVm.name)
+              window.open(`/console?vmId=${vmid}&vmName=${name}`, "_blank", "noopener,noreferrer")
+            }}
+            title="Open this console in a new window"
+            className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
           </button>
         )}
 

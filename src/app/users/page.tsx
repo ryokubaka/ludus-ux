@@ -25,6 +25,8 @@ import {
   Key,
   Download,
   Shield,
+  ShieldOff,
+  ShieldCheck,
   User,
   Loader2,
   Eye,
@@ -290,6 +292,31 @@ export default function UsersPage() {
     }
   }
 
+  // ── Promote / demote admin ─────────────────────────────────────────────────
+  const [roleChanging, setRoleChanging] = useState<string | null>(null)
+
+  const handleToggleAdmin = async (userID: string, makeAdmin: boolean) => {
+    setRoleChanging(userID)
+    try {
+      const res = await fetch("/api/admin/user-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userID, isAdmin: makeAdmin }),
+      })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!res.ok) {
+        toast({ variant: "destructive", title: "Role change failed", description: data.error ?? `HTTP ${res.status}` })
+        return
+      }
+      toast({ title: makeAdmin ? `${userID} promoted to admin` : `${userID} demoted to user` })
+      invalidateUsers()
+    } catch (err) {
+      toast({ variant: "destructive", title: "Role change error", description: (err as Error).message })
+    } finally {
+      setRoleChanging(null)
+    }
+  }
+
   // ── WireGuard ──────────────────────────────────────────────────────────────
   const handleGetWireguard = async (userId: string) => {
     const result = await ludusApi.getUserWireguard(userId)
@@ -389,6 +416,22 @@ export default function UsersPage() {
                         </td>
                         <td className="p-3">
                           <div className="flex items-center justify-end gap-1">
+                            {/* Promote / demote admin */}
+                            {user.userID !== "ROOT" && (
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                onClick={() => handleToggleAdmin(user.userID, !user.isAdmin)}
+                                disabled={roleChanging === user.userID}
+                                title={user.isAdmin ? `Revoke admin from ${user.userID}` : `Promote ${user.userID} to admin`}
+                              >
+                                {roleChanging === user.userID
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : user.isAdmin
+                                    ? <ShieldOff className="h-3 w-3 text-yellow-400" />
+                                    : <ShieldCheck className="h-3 w-3 text-cyan-400" />}
+                              </Button>
+                            )}
                             {user.userID !== "ROOT" && (
                               <Button size="icon-sm" variant="ghost"
                                 onClick={() => setConfirmRoll(user.userID)}

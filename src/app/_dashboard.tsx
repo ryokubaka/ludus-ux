@@ -215,7 +215,7 @@ export function DashboardPageClient() {
           description:
             "Ludus reports no ansible process running, but the range is still marked DEPLOYING. " +
             "This is a Ludus server-side state inconsistency — no VMs were touched. " +
-            "To reset, log in to the Pocketbase DB (Ludus server port 8081) and log in with the root@ludus.internal (password is the root API key), " +
+            "To reset, log in to the Pocketbase DB (Ludus server port 8080) and log in with the root@ludus.internal (password is the root API key), " +
             "or contact your Ludus admin to manually update the range record.",
           duration: 15000,
         })
@@ -375,6 +375,13 @@ export function DashboardPageClient() {
     const id = vmId(vm)
     if (!id) { toast({ variant: "destructive", title: "No VM ID" }); return }
     router.push(`/console?vmId=${id}&vmName=${encodeURIComponent(name)}`)
+  }
+
+  const handleOpenBrowserNewWindow = (vm: VMObject) => {
+    const name = vmName(vm)
+    const id = vmId(vm)
+    if (!id) { toast({ variant: "destructive", title: "No VM ID" }); return }
+    window.open(`/console?vmId=${id}&vmName=${encodeURIComponent(name)}`, "_blank", "noopener,noreferrer")
   }
 
   // ── Derived values ──────────────────────────────────────────────────────────
@@ -616,6 +623,7 @@ export function DashboardPageClient() {
                     onRefresh={invalidateRangeStatus}
                     onDownloadVv={handleDownloadVv}
                     onOpenBrowser={handleOpenBrowser}
+                    onOpenBrowserNewWindow={handleOpenBrowserNewWindow}
                     downloadingVm={downloadingVm}
                     openingVm={openingVm}
                   />

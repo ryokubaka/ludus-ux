@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   PanelLeftClose,
   PanelLeftOpen,
+  ExternalLink,
 } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
@@ -285,35 +286,44 @@ export function Sidebar() {
                         : pathname === item.href || pathname.startsWith(item.href + "/")
 
                     if (collapsed) {
+                      const isConsoles = item.href === "/console"
                       return (
-                        <Tooltip key={item.href}>
-                          <TooltipTrigger asChild>
-                            <Link
-                              href={item.href}
-                              className={cn(
-                                "flex items-center justify-center rounded-md p-2 transition-colors",
-                                isActive
-                                  ? "bg-sidebar-accent text-sidebar-primary"
-                                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                              )}
-                            >
-                              <Icon className={cn("h-5 w-5 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
-                            </Link>
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="flex items-center gap-2">
-                            {item.label}
-                            {item.adminOnly && <Lock className="h-3 w-3 text-muted-foreground/60" />}
-                          </TooltipContent>
-                        </Tooltip>
+                        <div key={item.href} className="relative group/collapsed">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Link
+                                href={item.href}
+                                className={cn(
+                                  "flex items-center justify-center rounded-md p-2 transition-colors",
+                                  isActive
+                                    ? "bg-sidebar-accent text-sidebar-primary"
+                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                )}
+                              >
+                                <Icon className={cn("h-5 w-5 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
+                              </Link>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="flex items-center gap-2">
+                              {item.label}
+                              {item.adminOnly && <Lock className="h-3 w-3 text-muted-foreground/60" />}
+                              {isConsoles && <ExternalLink className="h-3 w-3 text-muted-foreground/60 cursor-pointer"
+                                onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open("/console", "_blank", "noopener,noreferrer") }}
+                              />}
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                       )
                     }
 
+                    // Consoles gets a special inline "open in new window" button
+                    const isConsoles = item.href === "/console"
+
                     return (
-                      <li key={item.href}>
+                      <li key={item.href} className="flex items-center gap-0.5">
                         <Link
                           href={item.href}
                           className={cn(
-                            "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors group",
+                            "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors group",
                             isActive
                               ? "bg-sidebar-accent text-sidebar-primary"
                               : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
@@ -324,10 +334,34 @@ export function Sidebar() {
                           {item.adminOnly && (
                             <Lock className="h-3 w-3 text-muted-foreground/50" />
                           )}
-                          {isActive && (
+                          {isActive && !isConsoles && (
                             <ChevronRight className="h-3 w-3 text-sidebar-primary" />
                           )}
                         </Link>
+                        {isConsoles && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  window.open("/console", "_blank", "noopener,noreferrer")
+                                }}
+                                className={cn(
+                                  "flex items-center justify-center rounded-md p-1.5 transition-colors shrink-0",
+                                  isActive
+                                    ? "text-sidebar-primary hover:bg-sidebar-accent/80"
+                                    : "text-sidebar-foreground/40 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                )}
+                                aria-label="Open Consoles in new window"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="text-xs">
+                              Open Consoles in new window
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                       </li>
                     )
                   })}

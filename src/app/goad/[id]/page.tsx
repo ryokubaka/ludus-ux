@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { GoadTerminal, useGoadStream } from "@/components/goad/goad-terminal"
 import {
   ArrowLeft,
@@ -30,6 +32,7 @@ import {
   History,
   Clock,
   User,
+  UserCog,
   RotateCcw,
   FileText,
   Copy,
@@ -313,6 +316,79 @@ export default function GoadInstancePage() {
   const [inventoriesLoading, setInventoriesLoading] = useState(false)
   const [inventoriesError, setInventoriesError] = useState<string | null>(null)
   const [selectedInventoryName, setSelectedInventoryName] = useState<string | null>(null)
+
+  // ── Admin state ───────────────────────────────────────────────────────────
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => {
+    // Prefer sessionStorage (cached on login/sidebar check) for instant display,
+    // then confirm with the session API so the button always shows for admins
+    // even on a hard-nav to this page before the sidebar has populated the cache.
+    try {
+      if (sessionStorage.getItem("isAdmin") === "true") { setIsAdmin(true); return }
+    } catch { /* SSR guard */ }
+    fetch("/api/auth/session")
+      .then((r) => r.json())
+      .then((d) => { if (d?.isAdmin) setIsAdmin(true) })
+      .catch(() => {})
+  }, [])
+
+  // ── Reassign dialog ───────────────────────────────────────────────────────
+  const [showReassign, setShowReassign] = useState(false)
+  const [reassignUsers, setReassignUsers] = useState<{ userID: string }[]>([])
+  const [reassignTargetUser, setReassignTargetUser] = useState("")
+  const [reassignTargetRange, setReassignTargetRange] = useState("")
+  const [reassigning, setReassigning] = useState(false)
+
+  const openReassignDialog = async () => {
+    setReassignTargetUser("")
+    setReassignTargetRange(instance?.ludusRangeId ?? "")
+    setShowReassign(true)
+    if (reassignUsers.length === 0) {
+      try {
+        const res = await fetch("/api/admin/ranges-data")
+        if (res.ok) {
+          const data = await res.json()
+          setReassignUsers((data.users ?? []).sort((a: { userID: string }, b: { userID: string }) => a.userID.localeCompare(b.userID)))
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
+  const handleReassign = async () => {
+    if (!reassignTargetUser) return
+    setReassigning(true)
+    try {
+      const res = await fetch("/api/goad/instances/reassign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instanceId,
+          targetUserId: reassignTargetUser,
+          rangeId: reassignTargetRange.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok && res.status !== 207) {
+        toast({ variant: "destructive", title: "Reassign failed", description: data.error ?? `HTTP ${res.status}` })
+      } else if (data.errors?.length) {
+        toast({
+          title: "Reassigned (with warnings)",
+          description: data.errors.join("; "),
+          variant: "destructive",
+        })
+        setShowReassign(false)
+        fetchInstances()
+      } else {
+        toast({ title: "Instance reassigned", description: `Now owned by ${reassignTargetUser}` })
+        setShowReassign(false)
+        fetchInstances()
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Reassign error", description: (err as Error).message })
+    } finally {
+      setReassigning(false)
+    }
+  }
 
   const fetchInstances = useCallback(async () => {
     const isInitial = !initialInstanceLoadDone.current
@@ -713,6 +789,70 @@ export default function GoadInstancePage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-7rem)] gap-6 min-h-0">
+      {/* ── Re-assign dialog ─────────────────────────────────────────────── */}
+      {showReassign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <Card className="w-full max-w-md shadow-2xl border-blue-500/30">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <UserCog className="h-4 w-4 text-blue-400" />
+                  Re-assign Instance
+                </CardTitle>
+                <Button size="icon-sm" variant="ghost" onClick={() => setShowReassign(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  This will change the OS-level file owner of the GOAD workspace on the server
+                  and reassign the associated Ludus range to the target user.
+                </AlertDescription>
+              </Alert>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Target User</Label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
+                  value={reassignTargetUser}
+                  onChange={(e) => setReassignTargetUser(e.target.value)}
+                >
+                  <option value="">— select user —</option>
+                  {reassignUsers.map((u) => (
+                    <option key={u.userID} value={u.userID}>{u.userID}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Ludus Range ID (optional — leave blank to keep current)</Label>
+                <Input
+                  className="font-mono text-xs"
+                  placeholder={instance?.ludusRangeId ?? "e.g. johndoe-GOAD-Mini-ABC123"}
+                  value={reassignTargetRange}
+                  onChange={(e) => setReassignTargetRange(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Current: <code className="text-primary">{instance?.ludusRangeId ?? "none"}</code>
+                </p>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button variant="ghost" size="sm" onClick={() => setShowReassign(false)}>Cancel</Button>
+                <Button
+                  size="sm"
+                  onClick={handleReassign}
+                  disabled={!reassignTargetUser || reassigning}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {reassigning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserCog className="h-3.5 w-3.5" />}
+                  Re-assign
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-3 flex-shrink-0">
         <Button variant="ghost" size="icon-sm" asChild>
@@ -843,6 +983,17 @@ export default function GoadInstancePage() {
 
             <div className="flex-1" />
 
+            {isAdmin && (
+              <Button
+                size="sm" variant="outline"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                onClick={openReassignDialog} disabled={isRunning || !!pendingAction}
+                title="Re-assign this GOAD instance (and its range) to a different user"
+              >
+                <UserCog className="h-3.5 w-3.5" />
+                Re-assign
+              </Button>
+            )}
             <Button
               size="sm" variant="outline"
               className="border-red-500/30 text-red-400 hover:bg-red-500/10"

@@ -57,6 +57,18 @@ export async function POST(request: NextRequest) {
     })
   }
 
+  // Defense-in-depth: if the caller didn't explicitly pass impersonateAs in the
+  // body, check whether the session cookie carries an active impersonation (set by
+  // /api/auth/impersonate POST).  This mirrors how the proxy route works and
+  // ensures that even if a caller forgets to thread impersonation through the
+  // body, the execute route still runs under the correct identity.
+  const sessionImpersonate =
+    session.isAdmin && session.impersonationApiKey && session.impersonationUserId
+      ? { username: session.impersonationUserId, apiKey: session.impersonationApiKey }
+      : null
+  // Body-provided impersonation takes precedence over session-inferred.
+  const effectiveImpersonate = impersonateAs ?? sessionImpersonate ?? null
+
   // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────
   // Priority: 1) explicit in request body (client passes instance.ludusRangeId)
   //           2) read from .goad_range_id file in workspace (existing instance)
@@ -79,17 +91,19 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const apiKey = session?.apiKey ?? null
+  // Use the impersonated user's API key as LUDUS_API_KEY when impersonating,
+  // so GOAD's `ludus` calls are authenticated as the correct user.
+  const apiKey = (effectiveImpersonate?.apiKey || session?.apiKey) ?? null
 
   // Use the session's own credentials so GOAD runs as the logged-in user,
   // using their personal LUDUS_API_KEY and their own GOAD workspace.
   // When impersonating, creds are ignored — root SSH + sudo handles auth.
-  const creds = (!impersonateAs && session?.sshPassword)
+  const creds = (!effectiveImpersonate && session?.sshPassword)
     ? { username: session.username, password: session.sshPassword }
     : undefined
 
   // Task is attributed to the impersonated user so it appears in their history
-  const taskOwner = impersonateAs?.username ?? session?.username
+  const taskOwner = effectiveImpersonate?.username ?? session?.username
   const taskId = createTask(args, instanceId, taskOwner)
   const encoder = new TextEncoder()
 
@@ -125,7 +139,7 @@ export async function POST(request: NextRequest) {
             resolve()
           },
           creds,
-          impersonateAs,
+          effectiveImpersonate ?? undefined,
           effectiveRangeId
         ).then((fn) => {
           cleanup = fn

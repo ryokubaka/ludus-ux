@@ -110,12 +110,20 @@ export async function GET(request: NextRequest) {
       return inst
     })
 
+    // Admins viewing their own context (not impersonating) see ALL instances so
+    // they can identify and assign stale/unowned instances created outside the UI.
+    // ?adminView=1 lets an impersonating admin also pull the full list (for the
+    // admin management table without ending impersonation).
+    const adminViewParam = request.nextUrl.searchParams.get("adminView") === "1"
+    const isAdminGlobalView = session?.isAdmin && (!impersonateAs || adminViewParam)
+
     // Show an instance when ANY of the following is true:
-    //   1. No session username (rare edge case) — show all
-    //   2. File owner matches the session username exactly
-    //   3. Instance has no owner recorded (workspace readable by connecting user
+    //   1. Admin in global (non-impersonating) view — see everything
+    //   2. No session username (rare edge case) — show all
+    //   3. File owner matches the session username exactly
+    //   4. Instance has no owner recorded (workspace readable by connecting user
     //      implies they own it, or it's a legacy entry)
-    //   4. The instance's IP range maps to one of the user's own Ludus ranges —
+    //   5. The instance's IP range maps to one of the user's own Ludus ranges —
     //      covers instances deployed outside ludus-ui (e.g. goad.sh run as root
     //      on behalf of the user, or with sudo) where the file owner is "root"
     //      but the GOAD range still belongs to this user's Ludus pool.
@@ -123,12 +131,14 @@ export async function GET(request: NextRequest) {
       userToRangeIds.get((viewAsUsername ?? "").toLowerCase()) ?? []
     )
 
-    const instances = enriched.filter((i) => {
-      if (!viewAsUsername) return true
-      if (!i.ownerUserId || i.ownerUserId === viewAsUsername) return true
-      if (i.ludusRangeId && myRangeIds.has(i.ludusRangeId)) return true
-      return false
-    })
+    const instances = isAdminGlobalView
+      ? enriched
+      : enriched.filter((i) => {
+          if (!viewAsUsername) return true
+          if (!i.ownerUserId || i.ownerUserId === viewAsUsername) return true
+          if (i.ludusRangeId && myRangeIds.has(i.ludusRangeId)) return true
+          return false
+        })
 
     return NextResponse.json({ configured: true, instances })
   } catch (err) {

@@ -9,7 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loader2 } from "lucide-react"
+import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loader2, ExternalLink } from "lucide-react"
 import type { VMObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { put } from "@/lib/api"
@@ -18,8 +18,10 @@ import { useToast } from "@/hooks/use-toast"
 interface VMTableProps {
   vms: VMObject[]
   onRefresh?: () => void
-  /** If provided, a "Browser" console button is shown per VM */
+  /** If provided, a "Browser" console button is shown per VM (opens in same tab) */
   onOpenBrowser?: (vm: VMObject) => void
+  /** If provided, a popout button opens the console in a new window */
+  onOpenBrowserNewWindow?: (vm: VMObject) => void
   /** If provided, a ".vv" download button is shown per VM */
   onDownloadVv?: (vm: VMObject) => void
   downloadingVm?: string | null
@@ -30,6 +32,7 @@ export function VMTable({
   vms,
   onRefresh,
   onOpenBrowser,
+  onOpenBrowserNewWindow,
   onDownloadVv,
   downloadingVm,
   openingVm,
@@ -40,7 +43,7 @@ export function VMTable({
 
   const vmName = (vm: VMObject) => vm.name || vm.vmName || `vm-${vm.ID}`
   const isRunning = (vm: VMObject) => vm.poweredOn ?? (vm.powerState === "running")
-  const showConsole = !!(onOpenBrowser || onDownloadVv)
+  const showConsole = !!(onOpenBrowser || onOpenBrowserNewWindow || onDownloadVv)
 
   const toggleSelect = (name: string) => {
     setSelectedVMs((prev) => {
@@ -195,6 +198,21 @@ export function VMTable({
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>{running ? "Browser console (noVNC)" : "Power on first"}</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {onOpenBrowserNewWindow && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="icon-sm" variant="ghost"
+                                  disabled={!running}
+                                  className={cn(!running && "opacity-30")}
+                                  onClick={() => onOpenBrowserNewWindow(vm)}
+                                >
+                                  <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>{running ? "Open console in new window" : "Power on first"}</TooltipContent>
                             </Tooltip>
                           )}
                           {onDownloadVv && (

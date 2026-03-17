@@ -58,7 +58,7 @@ export default function GoadPage() {
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null)
   const { lines: taskLines, resumeTask } = useGoadStream()
   const { impersonation, impersonationHeaders } = useImpersonation()
-  const { selectedRangeId } = useRange()
+  const { selectedRangeId, selectRange } = useRange()
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
@@ -182,13 +182,10 @@ export default function GoadPage() {
     return allInstances.filter((i) => i.ownerUserId === filterUser)
   })()
 
-  // For range-scoped card view
-  const rangeInstances = selectedRangeId
-    ? scopedInstances.filter((i) => i.ludusRangeId === selectedRangeId)
-    : scopedInstances
-  const unscopedInstances = selectedRangeId
-    ? scopedInstances.filter((i) => !i.ludusRangeId)
-    : []
+  // Show all user-scoped instances — no range filter.
+  // Instances with no range assignment are shown at the bottom.
+  const rangeInstances = scopedInstances.filter((i) => !!i.ludusRangeId)
+  const unscopedInstances = scopedInstances.filter((i) => !i.ludusRangeId)
 
   // Recent GOAD tasks — polls while any task is running
   const { data: tasksData } = useQuery({
@@ -236,7 +233,11 @@ export default function GoadPage() {
   }
 
   const renderInstanceCard = (instance: GoadInstance) => (
-    <Link key={instance.instanceId} href={`/goad/${encodeURIComponent(instance.instanceId)}`}>
+    <Link
+      key={instance.instanceId}
+      href={`/goad/${encodeURIComponent(instance.instanceId)}`}
+      onClick={() => { if (instance.ludusRangeId) selectRange(instance.ludusRangeId) }}
+    >
       <Card className="hover:border-primary/50 transition-colors cursor-pointer group">
         <CardContent className="p-4">
           <div className="flex items-center justify-between">
@@ -333,11 +334,9 @@ export default function GoadPage() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                   {sectionUsername ? `${sectionUsername}'s Instances` : "My Instances"}
                 </p>
-                {selectedRangeId && (
-                  <span className="text-xs text-muted-foreground">
-                    Range: <code className="text-primary font-mono">{selectedRangeId}</code>
-                  </span>
-                )}
+                <span className="text-xs text-muted-foreground">
+                  {scopedInstances.length} instance{scopedInstances.length !== 1 ? "s" : ""}
+                </span>
               </div>
 
               {loading ? (

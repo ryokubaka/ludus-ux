@@ -427,6 +427,13 @@ export default function NewGoadInstancePage() {
         }
         if (taskId) {
           try { sessionStorage.setItem(`goad-task-${existingId}`, taskId) } catch { /* SSR */ }
+          // Link the task to the instance on the server (instanceId may be absent
+          // on the task if the execute route was called without it).
+          fetch(`/api/goad/tasks/${taskId}/link-instance`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ instanceId: existingId }),
+          }).catch(() => {})
         }
         // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
         try { sessionStorage.setItem(`goad-task-${existingId}-action`, "provide") } catch { /* SSR */ }
@@ -513,7 +520,16 @@ export default function NewGoadInstancePage() {
               }
               try {
                 const taskId = sessionStorage.getItem("goad-task-new")
-                if (taskId) sessionStorage.setItem(`goad-task-${newId}`, taskId)
+                if (taskId) {
+                  sessionStorage.setItem(`goad-task-${newId}`, taskId)
+                  // Link the creation task to the new instance on the server so it
+                  // shows up in the instance's Logs History tab.  Best-effort.
+                  fetch(`/api/goad/tasks/${taskId}/link-instance`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ instanceId: newId }),
+                  }).catch(() => {})
+                }
                 // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
                 sessionStorage.setItem(`goad-task-${newId}-action`, "provide")
               } catch { /* SSR */ }

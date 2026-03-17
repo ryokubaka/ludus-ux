@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useCallback, useRef } from "react"
+import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -33,15 +34,55 @@ import {
   EyeOff,
   Copy,
   Lock,
+  Terminal,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { saveImpersonation } from "@/lib/impersonation-context"
 
 export default function UsersPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const router = useRouter()
+
+  // ── Impersonation ──────────────────────────────────────────────────────────
+  const [impersonateTarget, setImpersonateTarget] = useState<{ userID: string } | null>(null)
+  const [impersonateApiKey, setImpersonateApiKey] = useState("")
+  const [fetchingKey, setFetchingKey] = useState<string | null>(null)
+  const [showImpersonateKey, setShowImpersonateKey] = useState(false)
+  const apiKeyInputRef = useRef<HTMLInputElement>(null)
+
+  const startImpersonate = useCallback(async (userID: string) => {
+    setFetchingKey(userID)
+    try {
+      const res = await fetch(`/api/admin/fetch-user-apikey?username=${encodeURIComponent(userID)}`)
+      const data = await res.json()
+      if (data.apiKey) {
+        await saveImpersonation({ username: userID, apiKey: data.apiKey })
+        toast({ title: `Now managing as ${userID}` })
+        router.push("/")
+        return
+      }
+    } catch { /* SSH unavailable — fall through to manual dialog */ }
+    finally { setFetchingKey(null) }
+    setImpersonateTarget({ userID })
+    setImpersonateApiKey("")
+    setShowImpersonateKey(false)
+    setTimeout(() => apiKeyInputRef.current?.focus(), 50)
+  }, [router, toast])
+
+  const commitImpersonate = () => {
+    if (!impersonateTarget || !impersonateApiKey.trim()) {
+      toast({ variant: "destructive", title: "API key required" })
+      return
+    }
+    saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
+    toast({ title: `Now managing as ${impersonateTarget.userID}` })
+    setImpersonateTarget(null)
+    router.push("/")
+  }
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const [addDialog, setAddDialog] = useState(false)
@@ -336,6 +377,11 @@ export default function UsersPage() {
     }
   }
 
+  const sortedUsers = useMemo(
+    () => [...users].sort((a, b) => a.userID.localeCompare(b.userID)),
+    [users]
+  )
+
   const adminCount = users.filter((u) => u.isAdmin).length
 
   return (
@@ -378,6 +424,7 @@ export default function UsersPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
+                    <th className="p-3 w-24"></th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">User ID</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Name</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Role</th>
@@ -386,11 +433,29 @@ export default function UsersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((user) => {
+                  {sortedUsers.map((user) => {
                     const userRangeIds = rangeMap[user.userID.toLowerCase()] || []
                     const rangeId = userRangeIds[0] || user.rangeID || user.defaultRangeID
                     return (
                       <tr key={user.userID} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
+                        {/* Manage button — leftmost column, skip only ROOT */}
+                        <td className="p-2">
+                          {user.userID !== "ROOT" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
+                              onClick={() => startImpersonate(user.userID)}
+                              disabled={fetchingKey === user.userID}
+                              title={`Manage Ludus as ${user.userID}`}
+                            >
+                              {fetchingKey === user.userID
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Terminal className="h-3 w-3" />}
+                              Manage
+                            </Button>
+                          )}
+                        </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2">
                             <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
@@ -634,6 +699,56 @@ export default function UsersPage() {
             </div>
             <DialogFooter>
               <Button onClick={() => { setApiKeyResult(null); setShowApiKey(false) }}>Done</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ── Impersonation fallback dialog (when auto-read API key fails) ──── */}
+      {impersonateTarget && (
+        <Dialog open onOpenChange={() => setImpersonateTarget(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-primary" />
+                Manage as <code className="text-primary font-mono">{impersonateTarget.userID}</code>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  Could not auto-read the API key from <code className="font-mono">~{impersonateTarget.userID}/.bashrc</code>{" "}
+                  via root SSH. Enter it manually below.
+                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.userID}</code>.
+                </AlertDescription>
+              </Alert>
+              <div className="space-y-1.5">
+                <Label htmlFor="users-impersonate-apikey" className="text-xs">
+                  {impersonateTarget.userID}&apos;s Ludus API Key
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="users-impersonate-apikey"
+                    ref={apiKeyInputRef}
+                    type={showImpersonateKey ? "text" : "password"}
+                    placeholder="JUF3QT.XXXXXXXXXXXX"
+                    className="font-mono text-xs flex-1"
+                    value={impersonateApiKey}
+                    onChange={(e) => setImpersonateApiKey(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") commitImpersonate() }}
+                  />
+                  <Button size="icon" variant="ghost" onClick={() => setShowImpersonateKey(!showImpersonateKey)}>
+                    {showImpersonateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setImpersonateTarget(null)}>Cancel</Button>
+              <Button onClick={commitImpersonate} disabled={!impersonateApiKey.trim()}>
+                <Terminal className="h-4 w-4" />
+                Manage Ludus Ranges
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

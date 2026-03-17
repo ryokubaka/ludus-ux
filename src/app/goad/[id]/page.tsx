@@ -135,6 +135,7 @@ function TemplateChips({
 interface TaskSummary {
   id: string
   command: string
+  instanceId?: string
   status: string
   startedAt: number
   endedAt?: number
@@ -461,7 +462,12 @@ export default function GoadInstancePage() {
       const res = await fetch("/api/goad/tasks", { headers: impersonationHeaders() })
       const data = await res.json()
       const allTasks: TaskSummary[] = data.tasks ?? []
-      setTaskHistory(allTasks.filter((t) => t.command.includes(instanceId)))
+      // Match tasks that are explicitly linked to this instance (instanceId field
+      // set by createTask or retroactively by the link-instance API), OR whose
+      // command string contains the instance ID (CLI-style: -i <instanceId>).
+      setTaskHistory(allTasks.filter((t) =>
+        t.instanceId === instanceId || t.command.includes(instanceId)
+      ))
     } catch {}
     setHistoryLoading(false)
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps

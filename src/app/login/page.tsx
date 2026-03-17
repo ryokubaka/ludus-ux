@@ -175,7 +175,7 @@ export default function LoginPage() {
                       />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Use <code className="text-primary">root</code> for admin access, or your personal Ludus account
+                      Login with your personal Ludus account (not root)
                     </p>
                   </div>
 

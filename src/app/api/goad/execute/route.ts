@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
         streamGoadCommand(
           args,
           apiKey,
-          (line) => { if (!request.signal.aborted) send(line) },
+          (line) => { send(line) },
           (code) => {
             deregisterCleanup(taskId)
             completeTask(taskId, code, code === 0 ? "completed" : "error")

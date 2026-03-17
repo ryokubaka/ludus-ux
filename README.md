@@ -74,13 +74,19 @@ docker compose up -d --build
 #    http://localhost:3000   (plain HTTP, also available)
 ```
 
-If you have not already added your LUDUS_API_KEY to your `~/.bashrc` on your Ludus server, add it now:
+If you have not already added your root LUDUS_API_KEY to your `/root/.bashrc` on your Ludus server, add it now:
 
 ```bash
-ssh root@<your-ludus-server> "echo 'export LUDUS_API_KEY=<your-api-key>' >> ~/.bashrc"
+ssh root@<your-ludus-server> "echo 'export LUDUS_API_KEY=<your-api-key>' >> /root/.bashrc"
 ```
 
-Log in with your Ludus SSH username and password. The UI reads your `LUDUS_API_KEY` from `~/.bashrc` on your Ludus server automatically.
+If you have not already loaded the Ludus user's API key into your `~/.bashrc` on your Ludus server, load it now. You can find the API key by running `ludus-install-status` on your Ludus server:
+
+```bash
+ssh <admin-user>@<your-ludus-server> "echo 'export LUDUS_API_KEY=<your-api-key>' >> ~/.bashrc"
+```
+
+Log in with your Ludus admin user using SSH username and password. The UI reads your `LUDUS_API_KEY` from `~/.bashrc` on your Ludus server automatically.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash

@@ -315,7 +315,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground mt-4">
-          Ludus UX · Open Source · GNU APGL License
+          Ludus UX · Open Source · Apache 2.0 License
         </p>
       </div>
     </div>

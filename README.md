@@ -2,7 +2,7 @@
 
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 
@@ -278,7 +278,7 @@ docker run --rm -p 8088:8080 \
 
 ## License
 
-[AGPL-3.0](LICENSE) — Copyright (C) 2026 LUX Contributors
+[Apache-2.0](LICENSE) — Copyright (C) 2026 LUX Contributors
 
 This project is not affiliated with or endorsed by [Ludus](https://github.com/badsectorlabs/ludus) or [GOAD](https://github.com/Orange-Cyberdefense/GOAD). See [NOTICE](NOTICE) for third-party attributions.
 

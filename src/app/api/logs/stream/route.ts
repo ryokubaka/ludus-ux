@@ -182,6 +182,18 @@ export async function GET(request: NextRequest) {
             // starts.  Exiting early here would kill the stream before any useful
             // logs arrive.  We just count down the warmup and give up only if
             // DEPLOYING never appears within the window.
+            //
+            // Exception: testing-mode ops (snapshot/revert) never enter DEPLOYING.
+            // Once at least 10 s have elapsed since stream start and no log activity
+            // has been seen for 3 min, close the stream rather than waiting the full
+            // 5-min warmup.  This gives the UI timely "Done" feedback after the
+            // Proxmox jobs finish without cutting off GOAD's long pre-DEPLOYING phase.
+            const idleMs = Date.now() - lastActivityAt
+            const elapsed = (WARMUP_POLLS - warmupRemaining) * 2000
+            if (elapsed > 10_000 && idleMs > 3 * 60_000) {
+              send("DONE", state)
+              break
+            }
             warmupRemaining--
             if (warmupRemaining <= 0) {
               // Gave up waiting for the operation to begin

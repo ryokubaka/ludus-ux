@@ -482,6 +482,13 @@ export default function TestingPage() {
 
     const opType = isEnabled ? "testing_stop" : "testing_start"
 
+    // Start streaming BEFORE the API call — the Ludus PUT request can block
+    // for 30 s to 5 min while Proxmox jobs are already running and writing
+    // logs.  Starting after the await would miss all of that output.
+    // Note: for testing-mode ops, rangeState never enters DEPLOYING, so the
+    // stream relies on its warmup window to stay open and collect logs.
+    startLogStream(selectedRangeId)
+
     // POST to our API route which creates the DB record AND calls Ludus.
     // Using fetch directly so we can inject impersonation headers that apiRequest
     // would add but aren't in the ludusApi helper set.
@@ -496,6 +503,7 @@ export default function TestingPage() {
     if (!res.ok) {
       toast({ variant: "destructive", title: "Error", description: data.error || "Unknown error" })
       setShowLogs(false)
+      abortRef.current?.abort()
       setToggling(false)
       return
     }
@@ -507,10 +515,7 @@ export default function TestingPage() {
       title: isEnabled ? "Reverting VMs…" : "Snapshotting VMs…",
       description: "Proxmox is working. The UI will watch for completion automatically — this may take several minutes on slower hardware.",
     })
-
-    // Start streaming immediately — the stream waits up to 40 s for DEPLOYING
-    // to begin, so the user sees logs the moment Ludus starts working.
-    startLogStream(selectedRangeId)
+    // Stream is already running — no need to start it again here.
   }
 
   const handleToggle = () =>
@@ -544,6 +549,12 @@ export default function TestingPage() {
     if (!val || !selectedRangeId) return
     setAddingEntry(true)
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
+
+    // Show the log panel immediately so the user sees activity while Ludus
+    // resolves the domain IP and applies the firewall rule (can take 1-2 min).
+    setShowLogs(true)
+    setLogLines([])
+    startLogStream(rangeId)
 
     // Write to our DB FIRST so the pending state is durable even if the
     // browser is closed or Ludus is slow.
@@ -603,6 +614,12 @@ export default function TestingPage() {
     setRemovingEntry(entry)
     const { type, raw } = parseEntry(entry)
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
+
+    // Show the log panel immediately so the user sees Ludus applying the
+    // firewall rule removal.
+    setShowLogs(true)
+    setLogLines([])
+    startLogStream(rangeId)
 
     // Write to our DB FIRST so the pending state is durable
     const saved = await postPendingAllow(rangeId, raw, "remove", getImpersonationHeaders())
@@ -880,12 +897,16 @@ export default function TestingPage() {
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                {isInProgress && logLines.length === 0 && (
+                {(isInProgress || isStreaming || addingEntry || !!removingEntry) && logLines.length === 0 && (
                   <div className="flex flex-col gap-2 py-5 px-2">
                     <div className="flex items-center gap-2 text-sm text-blue-300">
                       <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
                       <span className="font-medium">
-                        {(activeOp?.opType === "testing_stop" || (opInProgress && isEnabled))
+                        {addingEntry
+                          ? "Applying allow rule…"
+                          : removingEntry
+                          ? "Removing allow rule…"
+                          : (activeOp?.opType === "testing_stop" || (opInProgress && isEnabled))
                           ? "Stopping Testing Mode…"
                           : "Starting Testing Mode…"}
                       </span>
@@ -893,10 +914,7 @@ export default function TestingPage() {
                     <p className="text-xs text-muted-foreground ml-6">
                       {isStreaming
                         ? "Connected — waiting for Ludus to begin. Logs will appear here automatically."
-                        : "Operation queued. Ludus will begin shortly — this page will update automatically."}
-                    </p>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      You can navigate away and return — progress will be tracked.
+                        : "Connecting to log stream…"}
                     </p>
                   </div>
                 )}

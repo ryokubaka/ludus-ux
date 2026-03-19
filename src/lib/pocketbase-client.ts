@@ -204,6 +204,77 @@ function mapUser(u: Row): UserObject {
   }
 }
 
+// ── Single-range and per-user range status ────────────────────────────────────
+
+/**
+ * Fetch a single range's status directly from PocketBase by its rangeID.
+ *
+ * PocketBase is the authoritative store for testingEnabled and rangeState —
+ * the Ludus REST API reads from it and may add a caching layer on top.
+ * Querying PocketBase directly avoids those delays, making status checks
+ * (especially completion detection for testing-mode ops) much more reliable.
+ *
+ * Returns null when PocketBase is unavailable or the range isn't found.
+ * Callers should fall back to the Ludus API on null.
+ */
+export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject | null> {
+  try {
+    const token = await getToken()
+    if (!token) return null
+
+    const settings = getSettings()
+    const base = settings.ludusUrl.replace(/\/$/, "")
+
+    const url = new URL(`${base}/api/collections/ranges/records`)
+    url.searchParams.set("filter", `rangeID = "${rangeId}"`)
+    url.searchParams.set("perPage", "1")
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+
+    if (!res.ok) {
+      if (res.status === 401) bustPbTokenCache()
+      return null
+    }
+
+    const body = await res.json() as { items?: Row[] }
+    const record = body.items?.[0]
+    if (!record) return null
+
+    return mapRange(record)
+  } catch (err) {
+    console.warn("[pocketbase] fetchPbRangeStatus failed:", (err as Error).message)
+    return null
+  }
+}
+
+/**
+ * Fetch all ranges owned by a specific Ludus userID from PocketBase.
+ *
+ * Used to build the range-selector status dots in the Testing page without
+ * depending on the Ludus REST API for per-range testingEnabled state.
+ *
+ * Returns an empty array when PocketBase is unavailable.
+ */
+export async function fetchPbUserRanges(userId: string): Promise<RangeObject[]> {
+  try {
+    const token = await getToken()
+    if (!token) return []
+
+    const rows = await fetchAll<Row>("ranges", token, {
+      filter: `userID = "${userId}"`,
+      sort:   "rangeNumber",
+    })
+
+    return rows.map(mapRange).filter((r) => !!r.rangeID)
+  } catch (err) {
+    console.warn("[pocketbase] fetchPbUserRanges failed:", (err as Error).message)
+    return []
+  }
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 export interface PbAdminData {

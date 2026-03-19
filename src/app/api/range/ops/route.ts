@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
+import { fetchPbRangeStatus } from "@/lib/pocketbase-client"
 import {
   createRangeOp,
   getActiveRangeOp,
@@ -26,13 +27,18 @@ import {
 // Remove the bare getDb() call — it was being tree-shaken by webpack.
 // Schema creation is handled inside each exported store function instead.
 
-/** Resolve impersonation headers and return { effectiveApiKey, effectiveUsername }. */
-function getEffective(request: NextRequest, session: { apiKey: string; username: string; isAdmin: boolean }) {
+/** Resolve impersonation state and return { effectiveApiKey, effectiveUsername }. */
+function getEffective(
+  request: NextRequest,
+  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
+) {
+  // Prefer session-cookie impersonation (survives page refresh) then fall back
+  // to the request header (set by client-side sessionStorage during same session).
   const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
+    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
     : null
   const impersonateAs = session.isAdmin
-    ? request.headers.get("X-Impersonate-As") || null
+    ? (session.impersonationUserId || request.headers.get("X-Impersonate-As") || null)
     : null
   return {
     effectiveApiKey:   impersonateApiKey || session.apiKey,
@@ -77,14 +83,31 @@ async function checkCompletion(
   }
 
   try {
-    const result = await ludusRequest<{
-      rangeState?: string
-      testingEnabled?: boolean
-    }>(`/range?rangeID=${encodeURIComponent(rangeId)}`, { apiKey: effectiveApiKey })
+    // ── PocketBase fast-path ─────────────────────────────────────────────────
+    // PocketBase is the authoritative source for testingEnabled and rangeState.
+    // Querying it directly bypasses any Ludus API caching, which is the primary
+    // reason the status gets "stuck" showing the old state after an op finishes.
+    const pbStatus = await fetchPbRangeStatus(rangeId)
 
-    if (!result.data) return op
+    let rangeState: string | undefined
+    let testingEnabled: boolean | undefined
 
-    const { rangeState, testingEnabled } = result.data
+    if (pbStatus) {
+      rangeState    = pbStatus.rangeState    ?? undefined
+      testingEnabled = pbStatus.testingEnabled ?? undefined
+    } else {
+      // PocketBase unavailable (root API key not set, or network error).
+      // Fall back to the Ludus REST API so the poller keeps working.
+      const result = await ludusRequest<{
+        rangeState?: string
+        testingEnabled?: boolean
+      }>(`/range?rangeID=${encodeURIComponent(rangeId)}`, { apiKey: effectiveApiKey })
+
+      if (!result.data) return op
+      rangeState    = result.data.rangeState
+      testingEnabled = result.data.testingEnabled
+    }
+
     const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
 
     // Ensure the op is marked running (it should already be from POST, but

@@ -101,15 +101,42 @@ function resolveOwnership(
   return ownership
 }
 
-// ── Fast path: PocketBase ─────────────────────────────────────────────────────
+// ── Fast path: PocketBase + parallel Ludus range list for VM status ───────────
+//
+// PocketBase stores range metadata (numberOfVMs, rangeState, etc.) but does NOT
+// store live Proxmox VM power state — that field is always empty in PB records.
+// To show accurate "running / total" VM counts we fetch GET /range/all from the
+// Ludus API in parallel (both requests fire simultaneously, so total latency is
+// max(pb, ludus) rather than pb + ludus).  The VMs array from Ludus is merged
+// into each PB range object; everything else (ownership, users) still comes from
+// the fast PocketBase read.
 
-async function buildAdminDataFromPb(): Promise<AdminData | null> {
-  const pbData = await fetchPbAdminData()
+async function buildAdminDataFromPb(apiKey: string): Promise<AdminData | null> {
+  // Fire PocketBase and Ludus API calls in parallel
+  const [pbData, ludusRangesRes] = await Promise.all([
+    fetchPbAdminData(),
+    ludusRequest<unknown>("/range/all", { apiKey }).catch(() => ({ data: null, error: "skipped" })),
+  ])
+
   if (!pbData) return null
 
-  const { ranges, users } = pbData
-  const ownership = resolveOwnership(ranges, users)
+  const { ranges: pbRanges, users } = pbData
 
+  // Build a rangeID → VMs map from the Ludus API response (if available)
+  const ludusRanges: RangeObject[] = ludusRangesRes.data
+    ? extractArray<RangeObject>(ludusRangesRes.data)
+    : []
+  const vmsByRangeId = new Map<string, RangeObject["VMs"]>(
+    ludusRanges.map((r) => [r.rangeID, r.VMs || []])
+  )
+
+  // Merge live VM data into the PB range records
+  const ranges = pbRanges.map((r) => ({
+    ...r,
+    VMs: vmsByRangeId.get(r.rangeID) ?? r.VMs,
+  }))
+
+  const ownership = resolveOwnership(ranges, users)
   return { ranges, users, ownership, ts: Date.now() }
 }
 
@@ -159,10 +186,10 @@ async function buildAdminDataFromApi(apiKey: string): Promise<AdminData> {
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 async function buildAdminData(apiKey: string): Promise<AdminData> {
-  // Fast path: query PocketBase directly (2 parallel DB reads, ~50–200 ms).
+  // Fast path: PocketBase for ownership/users + parallel Ludus API for VM status.
   // Falls back automatically to the Ludus API if PocketBase is unavailable or
   // LUDUS_ROOT_API_KEY is not configured.
-  const pbResult = await buildAdminDataFromPb()
+  const pbResult = await buildAdminDataFromPb(apiKey)
   if (pbResult) return pbResult
 
   console.log("[admin-data] PocketBase unavailable — using Ludus API (slow path)")

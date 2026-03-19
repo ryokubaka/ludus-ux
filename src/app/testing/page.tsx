@@ -149,12 +149,21 @@ export default function TestingPage() {
   } = useRange()
 
   // ── Supplemental per-range data (testingEnabled dots in selector) ─────────
-  // GET /range returns full RangeObject[] so we can show testingEnabled status
-  // per range in the local selector.  NOT used for selection logic.
+  // Uses PocketBase-backed endpoint so testingEnabled status stays accurate
+  // without depending on the Ludus API, which can cache stale values.
   const impersonatedUser = impersonation?.username ?? "self"
   const { data: rangesData } = useQuery({
-    queryKey: ["ranges", "user", impersonatedUser],
-    queryFn: () => ludusApi.getRangesForUser().then((r) => r.data ?? []),
+    queryKey: ["ranges", "user", "pb", impersonatedUser],
+    queryFn: async () => {
+      const res = await fetch("/api/range/pb-status", {
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) {
+        // Fall back to Ludus API on error
+        return ludusApi.getRangesForUser().then((r) => r.data ?? [])
+      }
+      return res.json() as Promise<RangeObject[]>
+    },
     staleTime: STALE.short,
   })
 
@@ -320,16 +329,38 @@ export default function TestingPage() {
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
 
-  /** Fetch live status for the given range from Ludus (doesn't touch op state). */
+  /**
+   * Fetch range status — PocketBase first, Ludus API as fallback.
+   *
+   * PocketBase is the authoritative store for testingEnabled and rangeState.
+   * Going there directly avoids Ludus caching delays that caused the status
+   * to appear "stuck" after a testing-mode toggle completed.
+   */
   const fetchStatus = useCallback(async (rangeId?: string) => {
     setStatusLoading(true)
-    const result = await ludusApi.getRangeStatus(rangeId)
-    // Guard against stale responses overwriting status when the range changed
-    // while this fetch was in-flight.
-    if (result.data && (!rangeId || selectedRangeIdRef.current === rangeId)) {
-      setStatus(result.data)
+    try {
+      const url = rangeId
+        ? `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`
+        : "/api/range/pb-status"
+      const res = await fetch(url, { headers: { ...getImpersonationHeaders() } })
+
+      if (res.ok) {
+        const data: RangeObject = await res.json()
+        if (!rangeId || selectedRangeIdRef.current === rangeId) {
+          setStatus(data)
+        }
+      } else {
+        // PocketBase route failed — fall back to Ludus API
+        const result = await ludusApi.getRangeStatus(rangeId)
+        if (result.data && (!rangeId || selectedRangeIdRef.current === rangeId)) {
+          setStatus(result.data)
+        }
+      }
+    } catch {
+      // Non-fatal; keep showing the last known status
+    } finally {
+      setStatusLoading(false)
     }
-    setStatusLoading(false)
   }, [])
 
   // When activeOp transitions from a set value to null (meaning the op just

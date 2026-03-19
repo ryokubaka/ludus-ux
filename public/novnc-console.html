@@ -152,14 +152,34 @@
     const badge    = document.getElementById('badge')
     const screen   = document.getElementById('screen')
 
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+
+    // Auto-reconnect: re-fetch a fresh VNC ticket and reconnect up to this
+    // many times before giving up and showing the manual Retry button.
+    const MAX_AUTO_RECONNECTS = 3
+    let autoReconnectCount = 0
+    let activeRfb = null  // track the current RFB instance to avoid stale callbacks
+
     function showError(message, hintHtml) {
-      spinner.style.display = 'none'
-      msg.style.display     = 'none'
-      err.style.display     = 'block'
-      err.textContent       = message
+      spinner.style.display  = 'none'
+      msg.style.display      = 'none'
+      err.style.display      = 'block'
+      err.textContent        = message
       if (hintHtml) { hint.style.display = 'block'; hint.innerHTML = hintHtml }
       retryBtn.style.display = 'inline-block'
     }
+
+    function showReconnecting(attempt) {
+      err.style.display      = 'none'
+      hint.style.display     = 'none'
+      retryBtn.style.display = 'none'
+      spinner.style.display  = 'block'
+      msg.style.display      = 'block'
+      overlay.classList.remove('hidden')
+      msg.textContent = `Reconnecting to ${vmName}… (attempt ${attempt}/${MAX_AUTO_RECONNECTS})`
+    }
+
+    function delay(ms) { return new Promise(r => setTimeout(r, ms)) }
 
     if (!vmId) { showError('No vmId parameter provided.', null); throw new Error('no vmId') }
 
@@ -177,10 +197,8 @@
       throw e
     }
 
-    // ── Fetch VNC ticket + proxy token from our server ────────────────────────
-    msg.textContent = `Requesting VNC ticket for ${vmName}…`
-    let info
-    try {
+    // ── Fetch a fresh VNC ticket + proxy token from our server ────────────────
+    async function fetchVncInfo() {
       const res = await fetch(
         `/api/console/vnc-info?vmId=${encodeURIComponent(vmId)}&vmName=${encodeURIComponent(vmName)}`,
       )
@@ -188,60 +206,104 @@
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || `HTTP ${res.status}`)
       }
-      info = await res.json()
-    } catch (e) {
-      showError(`Failed to get VNC ticket: ${e.message}`, null)
-      throw e
+      return res.json()
     }
 
-    // ── Connect via our server-side WebSocket proxy ───────────────────────────
-    // The proxy adds the PVEAuthCookie Proxmox requires.  The browser never
-    // needs to trust Proxmox's self-signed cert — all traffic goes through
-    // our own server over the existing HTTP connection.
-    msg.textContent = `Connecting to ${vmName}…`
+    // ── Connect (or reconnect) ────────────────────────────────────────────────
+    // Each call fetches a fresh Proxmox session + VNC ticket so stale-ticket
+    // 401s are resolved automatically without user intervention.
+    async function connectVnc() {
+      // Tear down any existing RFB instance to avoid duplicate event handlers
+      if (activeRfb) {
+        try { activeRfb.disconnect() } catch {}
+        activeRfb = null
+      }
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl   = `${wsProto}//${window.location.host}/api/vnc-ws?token=${encodeURIComponent(info.token)}`
+      msg.textContent = `Requesting VNC ticket for ${vmName}…`
+      let info
+      try {
+        info = await fetchVncInfo()
+      } catch (e) {
+        if (autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          await delay(2000)
+          return connectVnc()
+        }
+        showError(`Failed to get VNC ticket: ${e.message}`, null)
+        return
+      }
 
-    let rfb
-    try {
-      rfb = new RFB(screen, wsUrl, { credentials: { password: info.ticket } })
-    } catch (e) {
-      showError(`Failed to init noVNC: ${e.message}`, null)
-      throw e
+      // ── Connect via our server-side WebSocket proxy ───────────────────────
+      // The proxy adds the PVEAuthCookie Proxmox requires.  The browser never
+      // needs to trust Proxmox's self-signed cert — all traffic goes through
+      // our own server over the existing HTTP connection.
+      msg.textContent = `Connecting to ${vmName}…`
+      const wsUrl = `${wsProto}//${window.location.host}/api/vnc-ws?token=${encodeURIComponent(info.token)}`
+
+      let rfb
+      try {
+        rfb = new RFB(screen, wsUrl, { credentials: { password: info.ticket } })
+      } catch (e) {
+        showError(`Failed to init noVNC: ${e.message}`, null)
+        return
+      }
+
+      activeRfb = rfb
+      rfb.scaleViewport = true
+      rfb.resizeSession = true
+
+      rfb.addEventListener('connect', () => {
+        if (rfb !== activeRfb) return  // stale instance
+        autoReconnectCount = 0  // reset counter on a successful connection
+        overlay.classList.add('hidden')
+        badge.style.display = 'flex'
+        document.getElementById('badge-label').textContent = `${vmName} · Connected`
+        setTimeout(() => { badge.style.opacity = '0' }, 5000)
+      })
+
+      rfb.addEventListener('disconnect', async (e) => {
+        if (rfb !== activeRfb) return  // stale instance
+        badge.style.display = 'none'
+        const clean = e.detail?.clean
+        if (!clean && autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          // Brief pause — lets Proxmox settle before we request a new ticket
+          await delay(1500)
+          return connectVnc()
+        }
+        showError(
+          clean ? 'Disconnected from VM.' : 'Connection closed unexpectedly.',
+          clean
+            ? null
+            : 'The VM may have powered off, or the session timed out. Click Retry to reconnect.',
+        )
+      })
+
+      rfb.addEventListener('credentialsrequired', () => {
+        rfb.sendCredentials({ password: info.ticket })
+      })
+
+      rfb.addEventListener('securityfailure', async (e) => {
+        if (rfb !== activeRfb) return  // stale instance
+        // Security failure usually means the VNC ticket expired — fetch a new
+        // one and reconnect automatically instead of showing an error.
+        if (autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          await delay(1000)
+          return connectVnc()
+        }
+        showError(
+          `VNC security negotiation failed: ${e.detail?.reason || 'unknown'}`,
+          'The VNC ticket may have expired. Click Retry to request a fresh ticket.',
+        )
+      })
     }
 
-    rfb.scaleViewport = true
-    rfb.resizeSession = true
-
-    rfb.addEventListener('connect', () => {
-      overlay.classList.add('hidden')
-      badge.style.display = 'flex'
-      document.getElementById('badge-label').textContent = `${vmName} · Connected`
-      setTimeout(() => { badge.style.opacity = '0' }, 5000)
-    })
-
-    rfb.addEventListener('disconnect', (e) => {
-      badge.style.display = 'none'
-      const clean = e.detail?.clean
-      showError(
-        clean ? 'Disconnected from VM.' : 'Connection closed unexpectedly.',
-        clean
-          ? null
-          : 'The VM may have powered off, or the session timed out. Click Retry to reconnect.',
-      )
-    })
-
-    rfb.addEventListener('credentialsrequired', () => {
-      rfb.sendCredentials({ password: info.ticket })
-    })
-
-    rfb.addEventListener('securityfailure', (e) => {
-      showError(
-        `VNC security negotiation failed: ${e.detail?.reason || 'unknown'}`,
-        'The VNC ticket may have expired (30-second window). Click Retry to request a fresh ticket.',
-      )
-    })
+    // ── Initial connection ────────────────────────────────────────────────────
+    await connectVnc()
 
     // ── VNC controls toolbar ──────────────────────────────────────────────────
     const ctrlWrap = document.getElementById('ctrl-wrap')
@@ -272,7 +334,7 @@
     })
 
     document.getElementById('btn-cad').addEventListener('click', () => {
-      rfb.sendCtrlAltDel()
+      if (activeRfb) activeRfb.sendCtrlAltDel()
       flashToast('Ctrl+Alt+Del sent')
     })
 

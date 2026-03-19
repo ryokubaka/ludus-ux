@@ -4,8 +4,9 @@
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "copy:monaco": "node scripts/copy-monaco.js",
+    "dev": "npm run copy:monaco && next dev",
+    "build": "npm run copy:monaco && next build",
     "start": "next start -p 3000",
     "lint": "next lint"
   },
@@ -15,6 +16,7 @@
     "@tanstack/react-query-persist-client": "^5.90.24",
     "@tanstack/query-sync-storage-persister": "^5.90.24",
     "@monaco-editor/react": "^4.6.0",
+    "monaco-editor": "^0.46.0",
     "@radix-ui/react-accordion": "^1.1.2",
     "@radix-ui/react-alert-dialog": "^1.0.5",
     "@radix-ui/react-checkbox": "^1.0.4",

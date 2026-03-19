@@ -37,6 +37,9 @@ data/
 .DS_Store
 Thumbs.db
 
+# Generated at build time: Monaco Editor VS files copied from node_modules
+/public/monaco-vs
+
 # Developer docs (internal notes, not for end users)
 docs/CURRENT_STATUS.md
 

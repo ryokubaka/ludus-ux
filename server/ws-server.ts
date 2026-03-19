@@ -151,6 +151,8 @@ async function refreshUpstreamSession(session: {
   }
 }
 
+const MAX_UPSTREAM_RETRIES = 3
+
 function handleVncProxy(clientWs: WebSocket, token: string) {
   if (!token) {
     clientWs.close(4001, "No token provided")
@@ -165,7 +167,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
 
   let currentSession = session
   let upstreamWs: WebSocket | null = null
-  let retried = false
+  let retryCount = 0
 
   const connectUpstream = (targetSession: typeof currentSession) => {
     const upstreamUrl =
@@ -179,6 +181,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     let opened = false
     ws.on("open", () => {
       opened = true
+      retryCount = 0  // reset on successful connect so future drops can retry too
     })
 
     ws.on("message", (data, isBinary) => {
@@ -188,8 +191,12 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     })
 
     ws.on("close", async (code, reason) => {
-      if (!opened && !retried && shouldRetryUpstream(code)) {
-        retried = true
+      if (!opened && retryCount < MAX_UPSTREAM_RETRIES && shouldRetryUpstream(code)) {
+        retryCount++
+        // Exponential backoff: 300 ms, 600 ms, 1200 ms
+        const backoffMs = 300 * Math.pow(2, retryCount - 1)
+        console.log(`[VNC upstream] connection failed (code ${code}), retry ${retryCount}/${MAX_UPSTREAM_RETRIES} in ${backoffMs}ms`)
+        await new Promise((r) => setTimeout(r, backoffMs))
         try {
           const refreshed = await refreshUpstreamSession(currentSession)
           if (refreshed) {
@@ -205,6 +212,8 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     })
 
     ws.on("error", (err) => {
+      // Errors (e.g. 401) always precede a close event — log here, let the
+      // close handler decide whether to retry or close the client socket.
       console.error("[VNC upstream error]", err.message)
     })
   }

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { keepPreviousData } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -82,6 +83,9 @@ export default function RangeConfigPage() {
   const [config, setConfig] = useState("")
   const [originalConfig, setOriginalConfig] = useState("")
   const [saving, setSaving] = useState(false)
+  // Track which range's config is currently loaded in the editor so background
+  // refetches don't silently overwrite what the user has typed or saved.
+  const lastSyncedRangeRef = useRef<string | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [limitVM, setLimitVM] = useState("")
@@ -96,7 +100,8 @@ export default function RangeConfigPage() {
   const logsRef = useRef<HTMLDivElement>(null)
 
   // Range config — cached, reloads when selectedRangeId changes.
-  // Data is kept in editor state (config/originalConfig) via a useEffect below.
+  // Config rarely changes externally, so use a long stale time to avoid
+  // spurious background refetches overwriting the user's unsaved edits.
   const { data: cachedConfig, isLoading: loading } = useQuery({
     queryKey: queryKeys.rangeConfig(selectedRangeId),
     queryFn: async () => {
@@ -107,16 +112,21 @@ export default function RangeConfigPage() {
         ? raw
         : (raw as { result?: string })?.result || JSON.stringify(raw, null, 2)
     },
-    staleTime: STALE.short,
+    staleTime: STALE.long,
+    placeholderData: keepPreviousData,
   })
 
-  // Sync editor state when fresh config arrives (first load or range change only)
+  // Sync editor ONLY on initial load or when the active range changes.
+  // Background refetches must NOT overwrite what the user has typed or already saved —
+  // use lastSyncedRangeRef to track which range is currently loaded in the editor.
   useEffect(() => {
-    if (cachedConfig && typeof cachedConfig === "string" && cachedConfig !== originalConfig) {
-      setConfig(cachedConfig)
-      setOriginalConfig(cachedConfig)
-    }
-  }, [cachedConfig]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!cachedConfig || typeof cachedConfig !== "string") return
+    const rangeKey = selectedRangeId ?? "default"
+    if (lastSyncedRangeRef.current === rangeKey) return
+    setConfig(cachedConfig)
+    setOriginalConfig(cachedConfig)
+    lastSyncedRangeRef.current = rangeKey
+  }, [cachedConfig, selectedRangeId])
 
   // On mount: check if a deployment is already running so navigating
   // away and back doesn't lose the in-progress status.
@@ -249,7 +259,10 @@ export default function RangeConfigPage() {
               </Button>
             )}
 
-            <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(selectedRangeId) })} disabled={loading}>
+            <Button variant="ghost" size="icon" onClick={() => {
+              lastSyncedRangeRef.current = null // allow the incoming data to replace editor content
+              queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(selectedRangeId) })
+            }} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>

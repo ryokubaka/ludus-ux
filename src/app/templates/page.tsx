@@ -27,6 +27,9 @@ import {
   GitBranch,
   AlertTriangle,
   Check,
+  Monitor,
+  Apple,
+  HelpCircle,
 } from "lucide-react"
 import { ludusApi, del } from "@/lib/api"
 import type { TemplateObject } from "@/lib/types"
@@ -358,6 +361,27 @@ function AddFromSource({ installedNames, onAdded }: {
   )
 }
 
+// ── OS badge ─────────────────────────────────────────────────────────────────
+
+type LudusOS = "linux" | "windows" | "macos" | "other"
+
+function OsBadge({ os }: { os?: LudusOS }) {
+  if (!os) return null
+  const map: Record<LudusOS, { icon: React.ReactNode; label: string; cls: string }> = {
+    linux:   { icon: <Monitor className="h-3 w-3" />,    label: "Linux",   cls: "text-yellow-400" },
+    windows: { icon: <Monitor className="h-3 w-3" />,    label: "Windows", cls: "text-blue-400" },
+    macos:   { icon: <Apple className="h-3 w-3" />,      label: "macOS",   cls: "text-muted-foreground" },
+    other:   { icon: <HelpCircle className="h-3 w-3" />, label: "Other",   cls: "text-muted-foreground" },
+  }
+  const { icon, label, cls } = map[os] ?? map.other
+  return (
+    <span className={cn("flex items-center gap-1 text-xs font-mono", cls)}>
+      {icon}
+      {label}
+    </span>
+  )
+}
+
 export default function TemplatesPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -633,6 +657,7 @@ export default function TemplatesPage() {
                       />
                     </th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Template Name</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">OS</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
                     <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
                   </tr>
@@ -640,7 +665,7 @@ export default function TemplatesPage() {
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                      <td colSpan={5} className="p-8 text-center text-muted-foreground">
                         <BookTemplate className="h-8 w-8 mx-auto mb-2 opacity-40" />
                         <p>No templates found</p>
                       </td>
@@ -664,6 +689,9 @@ export default function TemplatesPage() {
                         </td>
                         <td className="p-3">
                           <span className="font-mono text-xs">{template.name}</span>
+                        </td>
+                        <td className="p-3">
+                          <OsBadge os={template.os} />
                         </td>
                         <td className="p-3">
                           {template.built ? (

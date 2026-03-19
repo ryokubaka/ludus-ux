@@ -65,6 +65,8 @@ export interface TemplateObject {
   built: boolean
   status?: string
   lastBuilt?: string
+  /** OS category returned by the Ludus API since v2.0.6 */
+  os?: "linux" | "windows" | "macos" | "other"
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────

@@ -380,7 +380,7 @@ export default function TestingPage() {
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
-  const startLogStream = useCallback((rangeId: string) => {
+  const startLogStream = useCallback((rangeId: string, snapshotStart = false) => {
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -388,8 +388,9 @@ export default function TestingPage() {
 
     ;(async () => {
       try {
+        const url = `/api/logs/stream?rangeId=${encodeURIComponent(rangeId)}${snapshotStart ? "&snapshotStart=true" : ""}`
         const res = await fetch(
-          `/api/logs/stream?rangeId=${encodeURIComponent(rangeId)}`,
+          url,
           { signal: ctrl.signal, headers: { ...getImpersonationHeaders() } }
         )
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -552,9 +553,11 @@ export default function TestingPage() {
 
     // Show the log panel immediately so the user sees activity while Ludus
     // resolves the domain IP and applies the firewall rule (can take 1-2 min).
+    // snapshotStart=true skips pre-existing deployment logs so the panel only
+    // shows output written after this allow operation begins.
     setShowLogs(true)
     setLogLines([])
-    startLogStream(rangeId)
+    startLogStream(rangeId, true)
 
     // Write to our DB FIRST so the pending state is durable even if the
     // browser is closed or Ludus is slow.
@@ -616,10 +619,10 @@ export default function TestingPage() {
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
 
     // Show the log panel immediately so the user sees Ludus applying the
-    // firewall rule removal.
+    // firewall rule removal. snapshotStart=true skips pre-existing logs.
     setShowLogs(true)
     setLogLines([])
-    startLogStream(rangeId)
+    startLogStream(rangeId, true)
 
     // Write to our DB FIRST so the pending state is durable
     const saved = await postPendingAllow(rangeId, raw, "remove", getImpersonationHeaders())

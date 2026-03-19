@@ -40,6 +40,11 @@ export async function GET(request: NextRequest) {
   const userId = searchParams.get("user") || undefined
   // Explicit rangeId allows per-range log streaming in multi-range environments
   const rangeIdParam = searchParams.get("rangeId") || undefined
+  // When true, skip all log lines that already exist at stream-open time so
+  // only NEW lines (written after the client connected) are emitted.
+  // Used by allow/deny operations to avoid flooding the panel with stale
+  // deployment logs from a previous range deploy.
+  const snapshotStart = searchParams.get("snapshotStart") === "true"
   const settings = getSettings()
 
   // Support admin impersonation: use the impersonated user's API key
@@ -69,6 +74,7 @@ export async function GET(request: NextRequest) {
       try {
         let lastLudusCount = 0
         let lastGoadCount = 0
+        let firstPoll = true
         let rangeId = rangeIdParam || ""
         let maxPolls = 900  // 30 min hard ceiling
 
@@ -108,10 +114,19 @@ export async function GET(request: NextRequest) {
             const allLines = logText.split("\n").filter((l) => l.trim())
             const newLines = allLines.slice(lastLudusCount)
             lastLudusCount = allLines.length
-            for (const line of newLines) {
-              send("LUDUS", line)
+
+            if (firstPoll && snapshotStart) {
+              // Skip all pre-existing lines — only stream new content from here on.
+              // This prevents allow/deny operations from flooding the panel with
+              // stale deployment logs that were written before this stream opened.
+              firstPoll = false
+            } else {
+              firstPoll = false
+              for (const line of newLines) {
+                send("LUDUS", line)
+              }
+              if (newLines.length > 0) lastActivityAt = Date.now()
             }
-            if (newLines.length > 0) lastActivityAt = Date.now()
           } else if (result.error) {
             send("ERROR", result.error)
             break

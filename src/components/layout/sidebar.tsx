@@ -378,7 +378,7 @@ export function Sidebar() {
         )}>
           {!collapsed && (
             <p className="text-xs text-muted-foreground">
-              Open Source · GNU AGPL
+              Open Source · Apache 2.0
             </p>
           )}
           <Tooltip>

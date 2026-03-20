@@ -24,7 +24,7 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Copy the bundled noVNC ESM file into the Next.js public directory
 COPY --from=deps /app/novnc-static ./public/novnc
@@ -49,8 +49,8 @@ RUN npx esbuild server/ws-server.ts \
 FROM base AS runner
 WORKDIR /app
 
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -89,7 +89,7 @@ RUN sed -i 's/\r//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint
 # Stay as root — entrypoint will su to nextjs after /etc/hosts setup.
 EXPOSE 3000 443
 
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
 ENTRYPOINT ["/bin/sh", "/app/docker-entrypoint.sh"]

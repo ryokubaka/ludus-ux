@@ -15,10 +15,31 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { fetchPbRangeStatus, fetchPbUserRanges } from "@/lib/pocketbase-client"
+import {
+  enrichRangesWithPbRecords,
+  fetchPbRangeStatus,
+  fetchPbUserRanges,
+} from "@/lib/pocketbase-client"
+import type { RangeObject } from "@/lib/types"
 import { ludusRequest } from "@/lib/ludus-client"
 
 export const dynamic = "force-dynamic"
+
+/** Normalize Ludus GET /range body (single object, array, or { result }). */
+function ludusRangeListFromResponse(data: unknown): RangeObject[] {
+  if (data == null) return []
+  if (Array.isArray(data)) return data as RangeObject[]
+  if (typeof data === "object" && data !== null && "result" in data) {
+    const inner = (data as { result?: unknown }).result
+    if (Array.isArray(inner)) return inner as RangeObject[]
+    if (inner && typeof inner === "object") return [inner as RangeObject]
+  }
+  // Single range object
+  if (typeof data === "object" && data !== null && "rangeID" in (data as object)) {
+    return [data as RangeObject]
+  }
+  return []
+}
 
 function getEffectiveKeys(
   request: NextRequest,
@@ -65,16 +86,15 @@ export async function GET(request: NextRequest) {
   const pbRanges = await fetchPbUserRanges(effectiveUserId)
   if (pbRanges.length > 0) return NextResponse.json(pbRanges)
 
-  // Fallback: query Ludus REST API for the user's range list
-  const result = await ludusRequest<unknown>("/ranges", { apiKey: effectiveApiKey })
+  // PB list-by-user failed (400 on sort/filter, wrong schema, etc.) or returned no rows.
+  // Ludus v2: GET /range returns this user's ranges. Merge each row with PocketBase
+  // by rangeID so testingEnabled / rangeState still come from PB (source of truth).
+  const result = await ludusRequest<unknown>("/range", { apiKey: effectiveApiKey })
   if (result.error) {
     return NextResponse.json({ error: result.error }, { status: result.status || 500 })
   }
 
-  // Ludus wraps arrays in { result: [...] }
-  const data = result.data
-  const arr = Array.isArray(data)
-    ? data
-    : (data as { result?: unknown[] })?.result ?? []
-  return NextResponse.json(arr)
+  const ludusRanges = ludusRangeListFromResponse(result.data)
+  const enriched = await enrichRangesWithPbRecords(ludusRanges)
+  return NextResponse.json(enriched)
 }

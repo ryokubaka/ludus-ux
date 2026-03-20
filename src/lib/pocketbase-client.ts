@@ -21,6 +21,14 @@ import type { RangeObject, UserObject, RangeState } from "./types"
 
 const PB_EMAIL = "root@ludus.internal"
 
+/**
+ * Escape a value for PocketBase filter string literals, e.g. field = "VALUE".
+ * Unescaped `"` or `\` in rangeID/userID breaks the filter parser → HTTP 400.
+ */
+function escapePbFilterLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
 // Two endpoints to try: PocketBase >= v0.20 uses _superusers, older uses admins.
 const AUTH_ENDPOINTS = [
   "/api/collections/_superusers/auth-with-password",
@@ -219,6 +227,7 @@ function mapUser(u: Row): UserObject {
  */
 export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject | null> {
   try {
+    if (!rangeId?.trim()) return null
     const token = await getToken()
     if (!token) return null
 
@@ -226,7 +235,7 @@ export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject |
     const base = settings.ludusUrl.replace(/\/$/, "")
 
     const url = new URL(`${base}/api/collections/ranges/records`)
-    url.searchParams.set("filter", `rangeID = "${rangeId}"`)
+    url.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId.trim())}"`)
     url.searchParams.set("perPage", "1")
 
     const res = await fetch(url.toString(), {
@@ -260,19 +269,56 @@ export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject |
  */
 export async function fetchPbUserRanges(userId: string): Promise<RangeObject[]> {
   try {
+    if (!userId?.trim()) return []
     const token = await getToken()
     if (!token) return []
 
-    const rows = await fetchAll<Row>("ranges", token, {
-      filter: `userID = "${userId}"`,
-      sort:   "rangeNumber",
-    })
+    const uid = userId.trim()
 
-    return rows.map(mapRange).filter((r) => !!r.rangeID)
+    // Do NOT pass PocketBase `sort=` here — some Ludus/PB builds omit `rangeNumber`
+    // on the schema index or rename fields, which returns HTTP 400 for the whole
+    // list request. Sort client-side after mapRange instead.
+    let rows: Row[]
+    try {
+      rows = await fetchAll<Row>("ranges", token, {
+        filter: `userID = "${escapePbFilterLiteral(uid)}"`,
+      })
+    } catch (firstErr) {
+      // Filter still invalid on some PB/Ludus versions (field type / name mismatch).
+      // Fall back: load all range rows and filter in memory (fine for typical range counts).
+      console.warn(
+        "[pocketbase] fetchPbUserRanges filter failed, trying full scan:",
+        (firstErr as Error).message,
+      )
+      const all = await fetchAll<Row>("ranges", token)
+      rows = all.filter((row) => str(row as Row, "userID") === uid)
+    }
+
+    return rows
+      .map(mapRange)
+      .filter((r) => !!r.rangeID)
+      .sort((a, b) => (a.rangeNumber ?? 0) - (b.rangeNumber ?? 0))
   } catch (err) {
     console.warn("[pocketbase] fetchPbUserRanges failed:", (err as Error).message)
     return []
   }
+}
+
+/**
+ * Overlay PocketBase state for each range by rangeID (one PB read per range).
+ * Use when the list query `userID = "…"` fails but single-record fetch works.
+ * Ludus GET /range provides the range list; PB remains source of truth for
+ * testingEnabled, rangeState, allowedDomains, etc.
+ */
+export async function enrichRangesWithPbRecords(ranges: RangeObject[]): Promise<RangeObject[]> {
+  const merged = await Promise.all(
+    ranges.map(async (r) => {
+      if (!r.rangeID?.trim()) return r
+      const pb = await fetchPbRangeStatus(r.rangeID.trim())
+      return pb ? { ...r, ...pb, rangeID: r.rangeID } : r
+    }),
+  )
+  return merged.sort((a, b) => (a.rangeNumber ?? 0) - (b.rangeNumber ?? 0))
 }
 
 // ── Public interface ──────────────────────────────────────────────────────────
@@ -305,7 +351,7 @@ export async function setPbUserAdmin(
 
     // Find the PocketBase record ID for this Ludus userID
     const searchUrl = new URL(`${base}/api/collections/users/records`)
-    searchUrl.searchParams.set("filter", `userID = "${targetUserID}"`)
+    searchUrl.searchParams.set("filter", `userID = "${escapePbFilterLiteral(targetUserID)}"`)
     searchUrl.searchParams.set("perPage", "1")
 
     const searchRes = await fetch(searchUrl.toString(), {
@@ -365,7 +411,7 @@ export async function setPbRangeOwner(
 
     // Find the PocketBase record ID for this Ludus rangeID
     const searchUrl = new URL(`${base}/api/collections/ranges/records`)
-    searchUrl.searchParams.set("filter", `rangeID = "${rangeId}"`)
+    searchUrl.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId)}"`)
     searchUrl.searchParams.set("perPage", "1")
 
     const searchRes = await fetch(searchUrl.toString(), {
@@ -420,13 +466,14 @@ export async function fetchPbAdminData(): Promise<PbAdminData | null> {
     if (!token) return null
 
     const [pbRanges, pbUsers] = await Promise.all([
-      fetchAll<Row>("ranges", token, { sort: "rangeNumber" }),
+      fetchAll<Row>("ranges", token),
       fetchAll<Row>("users", token),
     ])
 
     const ranges = pbRanges
       .map(mapRange)
       .filter((r) => r.rangeID) // discard unmappable records
+      .sort((a, b) => (a.rangeNumber ?? 0) - (b.rangeNumber ?? 0))
 
     const users = pbUsers
       .map(mapUser)

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -46,6 +46,50 @@ function parseEntry(entry: string): { type: "domain" | "ip"; raw: string; displa
   const m = entry.match(/^([^\s(]+)\s*(\(.*\))?$/)
   const domain = m ? m[1] : entry.trim()
   return { type: "domain", raw: domain, display: entry.trim() }
+}
+
+/**
+ * Find a range row from GET /api/range/pb-status (or Ludus fallback) for an
+ * accessible-range id. Strict `===` often failed when Ludus/PB used different
+ * casing or when JSON used `rangeId` vs `rangeID` — which hid the status dots.
+ */
+function findRangeByRangeId(list: RangeObject[] | undefined, id: string): RangeObject | undefined {
+  if (!list?.length || !id) return undefined
+  const want = id.trim()
+  const wantLower = want.toLowerCase()
+  return list.find((rd) => {
+    const rid = (rd.rangeID ?? (rd as { rangeId?: string }).rangeId ?? "").trim()
+    if (!rid) return false
+    return rid === want || rid.toLowerCase() === wantLower
+  })
+}
+
+/** Normalize each range object from API so rangeID / booleans are reliable for the UI. */
+function normalizeRangeListFromApi(raw: unknown): RangeObject[] {
+  const arr: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && "result" in raw && Array.isArray((raw as { result?: unknown }).result)
+      ? ((raw as { result: unknown[] }).result)
+      : []
+  const out: RangeObject[] = []
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue
+    const o = item as Record<string, unknown>
+    const rangeID = String(o.rangeID ?? o.rangeId ?? o.RangeID ?? "").trim()
+    if (!rangeID) continue
+    const testing =
+      o.testingEnabled === true || o.testingEnabled === false
+        ? Boolean(o.testingEnabled)
+        : Boolean(o.TestingEnabled)
+    const rangeState = (o.rangeState ?? o.RangeState ?? "NEVER DEPLOYED") as RangeObject["rangeState"]
+    out.push({
+      ...(item as RangeObject),
+      rangeID,
+      testingEnabled: testing,
+      rangeState,
+    })
+  }
+  return out
 }
 
 // ── DB-backed pending allow/deny helpers ─────────────────────────────────────
@@ -135,6 +179,7 @@ async function deletePendingAllows(
 
 export default function TestingPage() {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
   const { impersonation } = useImpersonation()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
@@ -154,15 +199,15 @@ export default function TestingPage() {
   const impersonatedUser = impersonation?.username ?? "self"
   const { data: rangesData } = useQuery({
     queryKey: ["ranges", "user", "pb", impersonatedUser],
-    queryFn: async () => {
+    queryFn: async (): Promise<RangeObject[]> => {
       const res = await fetch("/api/range/pb-status", {
         headers: { ...getImpersonationHeaders() },
       })
       if (!res.ok) {
-        // Fall back to Ludus API on error
-        return ludusApi.getRangesForUser().then((r) => r.data ?? [])
+        const { data } = await ludusApi.getRangesForUser()
+        return normalizeRangeListFromApi(data)
       }
-      return res.json() as Promise<RangeObject[]>
+      return normalizeRangeListFromApi(await res.json())
     },
     staleTime: STALE.short,
   })
@@ -396,6 +441,8 @@ export default function TestingPage() {
       if (op.status === "completed" || op.status === "error") {
         // Op finished — refresh range status so button label / badge updates
         await fetchStatus(rangeId)
+        // Refresh per-range dots (testingEnabled / DEPLOYING) for all ranges in the selector
+        await queryClient.invalidateQueries({ queryKey: ["ranges", "user", "pb"] })
       } else {
         // Op still in flight — ensure the log stream is running so the user
         // sees live output.  Use the ref to avoid circular useCallback deps.
@@ -407,7 +454,7 @@ export default function TestingPage() {
     } catch {
       // Non-fatal; next poll will retry
     }
-  }, [fetchStatus])
+  }, [fetchStatus, queryClient])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
@@ -453,10 +500,16 @@ export default function TestingPage() {
       } catch (err) {
         if ((err as Error).name === "AbortError") return
       } finally {
+        // Only clean up if this is still the active stream.  If startLogStream
+        // was called again while this stream was running (e.g. user adds an IP
+        // right after a testing-mode toggle), abortRef.current will have been
+        // replaced with a new controller.  Executing cleanup here would
+        // (a) clear isStreaming for the new stream and (b) cause pollOp to
+        // incorrectly restart the stream, clobbering the new one.
+        if (abortRef.current !== ctrl) return
         setIsStreaming(false)
-        // Always do one final poll when the stream ends (handles the case where
-        // [DEPLOY_COMPLETE] was sent but the check above missed it, or the
-        // stream was closed server-side after the op completed).
+        // One final poll so the DB record updates if [DONE] was missed or the
+        // stream was closed server-side after the op completed.
         await pollOp(rangeId)
       }
     })()
@@ -728,25 +781,32 @@ export default function TestingPage() {
       ) : contextRanges.length > 1 && (
         <div className="flex flex-wrap gap-2">
           {contextRanges.map((r) => {
-            // Look up full RangeObject for per-range status indicators (dots)
-            const rangeStatus = rangesData?.find((rd) => rd.rangeID === r.rangeID)
+            const isSelected = r.rangeID === selectedRangeId
+            // For the selected range, use the already-computed derived state from `status`
+            // (same source as the card's ENABLED badge — unambiguously correct).
+            // For other ranges, look up from the PB-backed list query.
+            const otherEntry = isSelected ? null : findRangeByRangeId(rangesData, r.rangeID)
+            const showTestingDot   = isSelected ? isEnabled   : (otherEntry?.testingEnabled === true)
+            const showDeployingDot = isSelected ? isDeploying : (
+              otherEntry?.rangeState === "DEPLOYING" || otherEntry?.rangeState === "WAITING"
+            )
             return (
               <button
                 key={r.rangeID}
                 onClick={() => selectRange(r.rangeID)}
                 className={cn(
                   "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
-                  selectedRangeId === r.rangeID
+                  isSelected
                     ? "border-primary/60 bg-primary/10 text-primary"
                     : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
                 )}
               >
                 <Server className="h-3.5 w-3.5" />
                 {r.rangeID}
-                {rangeStatus?.testingEnabled && (
+                {showTestingDot && (
                   <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" title="Testing enabled" />
                 )}
-                {(rangeStatus?.rangeState === "DEPLOYING" || rangeStatus?.rangeState === "WAITING") && (
+                {showDeployingDot && (
                   <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="Deploying" />
                 )}
               </button>

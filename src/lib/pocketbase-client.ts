@@ -260,6 +260,14 @@ export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject |
 }
 
 /**
+ * Tracks whether the server-side `userID = "…"` filter is known to fail on
+ * this PocketBase/Ludus deployment.  Set to true on first failure so all
+ * subsequent calls skip the doomed filter and go straight to a full scan,
+ * avoiding repeated 400 warnings in the logs.
+ */
+let _rangesFilterBroken = false
+
+/**
  * Fetch all ranges owned by a specific Ludus userID from PocketBase.
  *
  * Used to build the range-selector status dots in the Testing page without
@@ -279,17 +287,24 @@ export async function fetchPbUserRanges(userId: string): Promise<RangeObject[]> 
     // on the schema index or rename fields, which returns HTTP 400 for the whole
     // list request. Sort client-side after mapRange instead.
     let rows: Row[]
-    try {
-      rows = await fetchAll<Row>("ranges", token, {
-        filter: `userID = "${escapePbFilterLiteral(uid)}"`,
-      })
-    } catch (firstErr) {
-      // Filter still invalid on some PB/Ludus versions (field type / name mismatch).
-      // Fall back: load all range rows and filter in memory (fine for typical range counts).
-      console.warn(
-        "[pocketbase] fetchPbUserRanges filter failed, trying full scan:",
-        (firstErr as Error).message,
-      )
+    if (!_rangesFilterBroken) {
+      const filterExpr = `userID = "${escapePbFilterLiteral(uid)}"`
+      try {
+        rows = await fetchAll<Row>("ranges", token, { filter: filterExpr })
+      } catch (firstErr) {
+        // Filter is invalid on this PB/Ludus version (field type or name mismatch).
+        // Remember this for the lifetime of the process — subsequent calls will
+        // skip straight to the full-scan path and won't log this warning again.
+        _rangesFilterBroken = true
+        console.log(
+          `[pocketbase] ranges filter not supported on this server — using full-scan fallback (this is normal on some Ludus builds):`,
+          (firstErr as Error).message,
+        )
+        const all = await fetchAll<Row>("ranges", token)
+        rows = all.filter((row) => str(row as Row, "userID") === uid)
+      }
+    } else {
+      // Filter is known to fail on this deployment; go straight to full scan.
       const all = await fetchAll<Row>("ranges", token)
       rows = all.filter((row) => str(row as Row, "userID") === uid)
     }

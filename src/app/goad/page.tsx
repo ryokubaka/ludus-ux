@@ -64,20 +64,37 @@ export default function GoadPage() {
 
   const impUser = impersonation?.username ?? "self"
 
-  // Session-derived state
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [currentUsername, setCurrentUsername] = useState("")
+  // Session-derived state.
+  // Both are lazily initialised from sessionStorage so the very first render
+  // already has correct values — preventing the flash where all instances
+  // appear as "MY INSTANCES" before the admin status is confirmed.
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    try { return sessionStorage.getItem("ludus-sidebar-is-admin") === "true" } catch { return false }
+  })
+  const [currentUsername, setCurrentUsername] = useState<string>(() => {
+    try { return sessionStorage.getItem("ludus-auth-username") || "" } catch { return "" }
+  })
+  // True once the server session has been confirmed (or restored from cache).
+  // Keeps the MY INSTANCES section in a spinner state on a cold first load so
+  // stale/wrong data is never briefly shown to the user.
+  const [sessionConfirmed, setSessionConfirmed] = useState<boolean>(() => {
+    try { return sessionStorage.getItem("ludus-sidebar-is-admin") !== null } catch { return false }
+  })
+
   useEffect(() => {
-    try {
-      if (sessionStorage.getItem("isAdmin") === "true") setIsAdmin(true)
-    } catch { /* SSR guard */ }
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => {
-        if (d?.isAdmin) setIsAdmin(true)
-        if (d?.username) setCurrentUsername(d.username)
+        const admin = !!d?.isAdmin
+        setIsAdmin(admin)
+        try { sessionStorage.setItem("ludus-sidebar-is-admin", String(admin)) } catch {}
+        if (d?.username) {
+          setCurrentUsername(d.username)
+          try { sessionStorage.setItem("ludus-auth-username", d.username) } catch {}
+        }
       })
       .catch(() => {})
+      .finally(() => setSessionConfirmed(true))
   }, [])
 
   // Assign dialog state
@@ -339,7 +356,7 @@ export default function GoadPage() {
                 </span>
               </div>
 
-              {loading ? (
+              {(loading || !sessionConfirmed) ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>

@@ -329,6 +329,8 @@ export default function TestingPage() {
   // DB-backed operation tracking — persists across page refreshes.
   // null = no active op;  object = op is pending or running
   const [activeOp, setActiveOp] = useState<Pick<RangeOp, "id" | "opType" | "status" | "startedAt"> | null>(null)
+  // true while the initial pollOp is in flight (prevents accidental clicks)
+  const [opInitialising, setOpInitialising] = useState(false)
 
   // Elapsed-time ticker state (effect is placed after opInProgress is derived below)
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -356,7 +358,7 @@ export default function TestingPage() {
   const isEnabled    = status?.testingEnabled ?? false
   const opInProgress = !!activeOp && (activeOp.status === "pending" || activeOp.status === "running")
   // True while we should lock the button and show progress UI
-  const isInProgress = toggling || opInProgress || isDeploying
+  const isInProgress = toggling || opInProgress || isDeploying || opInitialising
 
   // Elapsed-time ticker — updates every second while an op is in-flight so the
   // UI shows "Xm Ys" rather than a static "waiting…" message.
@@ -434,6 +436,7 @@ export default function TestingPage() {
       if (!res.ok) return
       const { op } = await res.json() as { op: typeof activeOp | null }
 
+      setOpInitialising(false)
       setActiveOp(op)
 
       if (!op) return
@@ -452,6 +455,7 @@ export default function TestingPage() {
         }
       }
     } catch {
+      setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
   }, [fetchStatus, queryClient])
@@ -539,6 +543,7 @@ export default function TestingPage() {
 
     fetchStatus(selectedRangeId)
     refreshAllowedDomains(selectedRangeId)
+    setOpInitialising(true)
     pollOp(selectedRangeId)
   }, [selectedRangeId, fetchStatus, refreshAllowedDomains, pollOp])
 
@@ -757,13 +762,15 @@ export default function TestingPage() {
 
   const isStopping = activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)
   const progressLabel =
-    isDeploying   ? "Processing…"
+    opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
+    : isDeploying   ? "Processing…"
     : isStopping  ? "Stopping…"
     : opInProgress ? "Starting…"
     : ""
 
   const statusBadgeExtra: { label: string; variant: "info" | "secondary" } | null =
     isDeploying          ? { label: "PROCESSING", variant: "info" }
+    : opInitialising     ? { label: "CHECKING",   variant: "secondary" }
     : opInProgress       ? { label: "QUEUED",     variant: "secondary" }
     : null
 

@@ -377,9 +377,18 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <p className="text-xs text-muted-foreground">
-              Open Source · Apache 2.0
-            </p>
+            <div className="flex flex-col gap-0.5">
+              <p className="text-xs font-semibold text-muted-foreground">v0.9.0 <span className="font-normal text-muted-foreground/60">beta</span></p>
+              <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
+            </div>
+          )}
+          {collapsed && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-[10px] text-muted-foreground/50 font-mono cursor-default select-none">v0.9</span>
+              </TooltipTrigger>
+              <TooltipContent side="right">v0.9.0 beta — Open Source · Apache 2.0</TooltipContent>
+            </Tooltip>
           )}
           <Tooltip>
             <TooltipTrigger asChild>

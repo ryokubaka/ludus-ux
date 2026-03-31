@@ -29,6 +29,7 @@ import {
   Settings2,
   Tag,
   Info,
+  FileCode2,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { useRange } from "@/lib/range-context"
@@ -36,7 +37,25 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
 
-const STEPS = ["Select Range", "Configure VMs", "Domain Setup", "Deploy Tags", "Review & Deploy"]
+// ── Step arrays ────────────────────────────────────────────────────────────────
+// The step indicator switches between these two arrays the moment the user picks
+// their config method, making the divergent paths immediately obvious.
+const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Deploy Tags", "Review & Deploy"]
+const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & Deploy"]
+
+// ── Step → path mapping ────────────────────────────────────────────────────────
+// step 0 : Select Range          (shared)
+// step 1 : Config Method         (shared — user picks Wizard or YAML)
+//
+// Wizard path:
+// step 2 : Configure VMs
+// step 3 : Domain Setup
+// step 4 : Deploy Tags
+// step 5 : Review & Deploy
+//
+// YAML path:
+// step 2 : YAML Config
+// step 3 : Review & Deploy
 
 const ALL_TAGS = [
   "vm-deploy", "network", "dns-rewrites", "assign-ip", "windows", "dcs",
@@ -94,11 +113,7 @@ function inferOS(templateName: string): { isLinux: boolean; isWindows: boolean; 
 
 function defaultsForTemplate(template: string): VMEntry {
   const { isLinux, isWindows, isServer } = inferOS(template)
-  // hostname is the user-supplied suffix only (no {{ range_id }}- prefix).
-  // The prefix is added by generateYaml and shown read-only in the UI.
   const shortName = template.replace(/-template$/, "").replace(/-x64|-x86/g, "")
-  // For Windows produce a cleaner default that fits in 15 chars:
-  //   win2022-server → win2022-srv   win2022-workstation → win2022-ws
   const windowsShort = isWindows
     ? shortName.replace(/-?workstation$/i, "-ws").replace(/-?server$/i, "-srv")
     : shortName
@@ -122,11 +137,9 @@ function defaultsForTemplate(template: string): VMEntry {
   }
 }
 
-
 function generateYaml(vms: VMEntry[], domainFqdn: string | null): string {
   const lines: string[] = ["ludus:"]
   for (const vm of vms) {
-    // vmName = "{{ range_id }}-<suffix>"; hostname in Ludus YAML uses the same pattern
     const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
     const hostname = `{{ range_id }}-${vm.hostname}`
     lines.push(`  - vm_name: "${vmName}"`)
@@ -154,10 +167,6 @@ function generateYaml(vms: VMEntry[], domainFqdn: string | null): string {
   return lines.join("\n")
 }
 
-/**
- * Parse a Ludus range-config YAML into VMEntry[] for editing.
- * Handles the common fields; anything it can't parse is silently skipped.
- */
 function parseConfigYaml(yamlText: string): VMEntry[] {
   const entries: VMEntry[] = []
   const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
@@ -170,8 +179,6 @@ function parseConfigYaml(yamlText: string): VMEntry[] {
     if (!vmName) continue
     const template = get("template")
     const { isLinux, isWindows, isServer } = inferOS(template || vmName)
-    // Strip any "{{ range_id }}-" prefix from the hostname so the field only
-    // holds the user-editable suffix (matching our split-field UX).
     const rawHostname = get("hostname") || vmName
     const hostnameSuffix = rawHostname.replace(/^\{\{\s*range_id\s*\}\}-/, "")
     entries.push({
@@ -201,7 +208,11 @@ export default function NewRangePage() {
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
   const [step, setStep] = useState(0)
 
-  // Step 0: Range selection
+  // ── Config method (chosen on step 1) ────────────────────────────────────────
+  // null = not yet chosen; "wizard" or "yaml" after step 1 is committed.
+  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | null>(null)
+
+  // ── Step 0: Range selection ──────────────────────────────────────────────────
   const [mode, setMode] = useState<"existing" | "new">("existing")
   const [rangeName, setRangeName] = useState("")
   const [rangeId, setRangeId] = useState("")
@@ -212,29 +223,33 @@ export default function NewRangePage() {
   const [loadingExistingConfig, setLoadingExistingConfig] = useState(false)
   const [currentUserID, setCurrentUserID] = useState<string | null>(null)
 
-  // All ranges (for deconfliction)
   const [allRanges, setAllRanges] = useState<RangeObject[]>([])
 
-  // Step 1: Templates + VMs
+  // ── Wizard step 2: Templates + VMs ──────────────────────────────────────────
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const [templatesLoading, setTemplatesLoading] = useState(true)
   const [vms, setVms] = useState<VMEntry[]>([])
-  // Single shared VLAN for all VMs in this range
   const [rangeVlan, setRangeVlan] = useState(10)
 
-  // Step 2: Domain
+  // ── Wizard step 3: Domain ────────────────────────────────────────────────────
   const [enableDomain, setEnableDomain] = useState(false)
   const [domainFqdn, setDomainFqdn] = useState("ludus.network")
 
-  // Step 3: Deploy
+  // ── Wizard step 4: Deploy tags ───────────────────────────────────────────────
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+
+  // ── YAML step 2: raw config ──────────────────────────────────────────────────
+  // Pre-populated from the existing range config when handleUseExisting runs.
+  // For new ranges, starts empty so the user types/pastes.
+  const [yamlConfig, setYamlConfig] = useState("")
+
+  // ── Shared deploy state ──────────────────────────────────────────────────────
   const [deploying, setDeploying] = useState(false)
   const [deployResult, setDeployResult] = useState<"success" | "error" | null>(null)
   const [deployStatus, setDeployStatus] = useState("")
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [showTagSelector, setShowTagSelector] = useState(false)
   const [deletingVMs, setDeletingVMs] = useState(false)
 
-  // Auto-generate rangeId from name (must start with a letter)
+  // Auto-generate rangeId from name
   useEffect(() => {
     if (!rangeCreated) {
       const raw = rangeName.replace(/[^A-Za-z0-9]/g, "-").replace(/^[^A-Za-z]+/, "").replace(/-+/g, "-").replace(/-$/, "").slice(0, 20)
@@ -242,11 +257,12 @@ export default function NewRangePage() {
     }
   }, [rangeName, rangeCreated])
 
-  // Fetch templates, all ranges for deconfliction, and current user info on mount
   useEffect(() => {
     ludusApi.listTemplates().then((res) => {
       if (res.data) {
-        const built = (Array.isArray(res.data) ? res.data : []).filter((t) => t.built)
+        const built = (Array.isArray(res.data) ? res.data : [])
+          .filter((t) => t.built)
+          .sort((a, b) => a.name.localeCompare(b.name))
         setTemplates(built)
       }
       setTemplatesLoading(false)
@@ -256,13 +272,10 @@ export default function NewRangePage() {
     })
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.username) setCurrentUserID(data.username)
-      })
+      .then((data) => { if (data?.username) setCurrentUserID(data.username) })
       .catch(() => {})
   }, [])
 
-  // Compute VLANs in use across all OTHER ranges (for deconfliction)
   const usedVlans = useMemo(() => {
     const vlans = new Set<number>()
     for (const r of allRanges) {
@@ -276,7 +289,6 @@ export default function NewRangePage() {
     return vlans
   }, [allRanges, mode, selectedExistingRange])
 
-  // VMs already deployed in the selected existing range (for destroy warning + IP display)
   const existingRangeData = useMemo(() => {
     if (!selectedExistingRange) return null
     return allRanges.find((r) => r.rangeID === selectedExistingRange) ?? null
@@ -287,7 +299,6 @@ export default function NewRangePage() {
     [existingRangeData]
   )
 
-  // VLANs (3rd IP octet) occupied by the already-deployed VMs in the selected existing range
   const existingDeployedVlans = useMemo(() => {
     const vlans = new Set<number>()
     for (const vm of existingDeployedVMs) {
@@ -300,15 +311,11 @@ export default function NewRangePage() {
     return vlans
   }, [existingDeployedVMs])
 
-  // True when the user is about to deploy into a VLAN that already has live VMs —
-  // those VMs will be destroyed by the deployment.
   const willDestroyExistingVMs =
     mode === "existing" &&
     existingDeployedVMs.length > 0 &&
     existingDeployedVlans.has(rangeVlan)
 
-  // Auto-initialize rangeVlan to next available VLAN (only for *new* ranges —
-  // existing range configs seed the VLAN from their loaded YAML).
   useEffect(() => {
     if (mode !== "new" || usedVlans.size === 0 || vms.length > 0) return
     let v = 10
@@ -317,49 +324,39 @@ export default function NewRangePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usedVlans, mode])
 
-  // Compute the next available rangeNumber (10.x second octet)
-  // Ludus assigns this server-side, but we can predict it for display purposes.
   const nextRangeNumber = useMemo(() => {
     const used = new Set(allRanges.map((r) => r.rangeNumber).filter((n) => typeof n === "number" && n > 0))
-    let n = 1  // Ludus assigns second octets starting from 2 (10.1.*, 10.2.*, …)
+    let n = 1
     while (used.has(n) && n < 254) n++
     return n
   }, [allRanges])
 
-  const usedRangeIds = useMemo(() => {
-    return new Set(allRanges.map((r) => r.rangeID).filter(Boolean))
-  }, [allRanges])
+  const usedRangeIds = useMemo(() => new Set(allRanges.map((r) => r.rangeID).filter(Boolean)), [allRanges])
 
-  // The second IP octet (range number) to show in the preview "10.<n>.<vlan>.<octet>".
-  // For an existing range we know the real number; for a new range we predict it.
   const displayRangeNumber = useMemo((): number | string => {
-    if (mode === "existing" && existingRangeData?.rangeNumber != null) {
-      return existingRangeData.rangeNumber
-    }
+    if (mode === "existing" && existingRangeData?.rangeNumber != null) return existingRangeData.rangeNumber
     if (mode === "new") return nextRangeNumber
     return "?"
   }, [mode, existingRangeData, nextRangeNumber])
 
   const effectiveRangeId = mode === "existing" ? selectedExistingRange : rangeId
 
+  // ── VM helpers ───────────────────────────────────────────────────────────────
+
   const addVM = useCallback((template: string) => {
     setVms((prev) => {
       const newVm = defaultsForTemplate(template)
-      // All VMs share the same VLAN; ip_last_octet increments per VM
-      const ipLastOctet = 10 + prev.length
-      return [...prev, { ...newVm, vlan: rangeVlan, ipLastOctet }]
+      return [...prev, { ...newVm, vlan: rangeVlan, ipLastOctet: 10 + prev.length }]
     })
   }, [rangeVlan])
 
   const removeVM = useCallback((id: string) => {
     setVms((prev) => {
-      // Re-number ip_last_octet sequentially after removal
       const filtered = prev.filter((v) => v.id !== id)
       return filtered.map((v, i) => ({ ...v, ipLastOctet: 10 + i }))
     })
   }, [])
 
-  // When the shared VLAN changes, update all VMs
   const handleRangeVlanChange = useCallback((vlan: number) => {
     setRangeVlan(vlan)
     setVms((prev) => prev.map((v) => ({ ...v, vlan })))
@@ -369,15 +366,18 @@ export default function NewRangePage() {
     setVms((prev) => prev.map((v) => {
       if (v.id !== id) return v
       const updated = { ...v, ...patch }
-      // Keep vmName in sync whenever the hostname suffix changes
-      if ("hostname" in patch) {
-        updated.vmName = `{{ range_id }}-${patch.hostname ?? ""}`
-      }
+      if ("hostname" in patch) updated.vmName = `{{ range_id }}-${patch.hostname ?? ""}`
       return updated
     }))
   }, [])
 
-  // Step 0 → Step 1: When using existing range, load its config
+  // ── Step 0 → Step 1 handlers ─────────────────────────────────────────────────
+
+  /**
+   * Called when "Next" is pressed for an existing range.
+   * Fetches the range's YAML upfront so it is ready for both Wizard (parsed into
+   * VMEntry[]) and YAML mode (raw text) — no extra button click required on step 2.
+   */
   const handleUseExisting = async () => {
     if (!selectedExistingRange) return
     setLoadingExistingConfig(true)
@@ -385,10 +385,12 @@ export default function NewRangePage() {
       const res = await ludusApi.getRangeConfig(selectedExistingRange)
       const yamlText = typeof res.data === "string" ? res.data : res.data?.result || ""
       if (yamlText) {
+        // Store raw text for YAML mode
+        setYamlConfig(yamlText)
+        // Also parse for Wizard mode
         const parsed = parseConfigYaml(yamlText)
         if (parsed.length > 0) {
           setVms(parsed)
-          // Seed shared VLAN from the first VM in the existing config
           if (parsed[0]?.vlan) setRangeVlan(parsed[0].vlan)
         }
       }
@@ -416,11 +418,8 @@ export default function NewRangePage() {
         setCreating(false)
         return
       }
-      // Explicitly assign the new range to the current user so it appears in their accessible list
       if (currentUserID) {
-        await ludusApi.assignRange(currentUserID, rangeId).catch(() => {
-          // Non-fatal — range exists, assignment is best-effort
-        })
+        await ludusApi.assignRange(currentUserID, rangeId).catch(() => {})
       }
       setRangeCreated(true)
       await refreshRanges()
@@ -432,7 +431,15 @@ export default function NewRangePage() {
     setCreating(false)
   }
 
-  // Auto-assign domain roles when toggling domain
+  // ── Step 1 → Step 2: config method picker ────────────────────────────────────
+
+  const pickConfigMethod = (method: "wizard" | "yaml") => {
+    setConfigMethod(method)
+    setStep(2)
+  }
+
+  // ── Domain role auto-assignment ──────────────────────────────────────────────
+
   useEffect(() => {
     if (!enableDomain) {
       setVms((prev) => prev.map((v) => ({ ...v, domainRole: "none" as const })))
@@ -442,17 +449,14 @@ export default function NewRangePage() {
       let hasPrimaryDc = false
       return prev.map((v) => {
         if (!v.isWindows) return { ...v, domainRole: "none" as const }
-        if (v.isServer && !hasPrimaryDc) {
-          hasPrimaryDc = true
-          return { ...v, domainRole: "primary-dc" as const }
-        }
+        if (v.isServer && !hasPrimaryDc) { hasPrimaryDc = true; return { ...v, domainRole: "primary-dc" as const } }
         if (v.isServer) return { ...v, domainRole: "alt-dc" as const }
         return { ...v, domainRole: "member" as const }
       })
     })
   }, [enableDomain])
 
-  const yaml = useMemo(
+  const wizardYaml = useMemo(
     () => generateYaml(vms, enableDomain ? domainFqdn : null),
     [vms, enableDomain, domainFqdn]
   )
@@ -460,28 +464,28 @@ export default function NewRangePage() {
   const toggleTag = (tag: string) =>
     setSelectedTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
 
+  // ── Unified deploy ────────────────────────────────────────────────────────────
+  // Both Wizard (step 5) and YAML (step 3) routes converge here.
+  // configMethod determines which YAML to upload and whether tags apply.
+
   const handleDeploy = async () => {
     setDeploying(true)
     setDeployResult(null)
     setDeployStatus("")
+
+    const configToUpload = configMethod === "yaml" ? yamlConfig : wizardYaml
+
     try {
-      // When redeploying to an existing range that has live VMs, destroy them first
-      // so the new config starts from a clean slate.
       if (mode === "existing" && existingDeployedVMs.length > 0) {
         setDeletingVMs(true)
         setDeployStatus("Destroying existing VMs…")
         const delRes = await ludusApi.deleteRangeVMs(selectedExistingRange)
         if (delRes.error) {
           toast({ title: "VM deletion failed", description: delRes.error, variant: "destructive" })
-          setDeploying(false)
-          setDeletingVMs(false)
-          setDeployStatus("")
+          setDeploying(false); setDeletingVMs(false); setDeployStatus("")
           return
         }
-        // Poll until the range reports 0 VMs (up to ~90 s)
-        const maxWait = 90_000
-        const poll = 4_000
-        const start = Date.now()
+        const maxWait = 90_000, poll = 4_000, start = Date.now()
         while (Date.now() - start < maxWait) {
           await new Promise((r) => setTimeout(r, poll))
           const check = await ludusApi.getRanges()
@@ -495,27 +499,20 @@ export default function NewRangePage() {
         setDeployStatus("Uploading configuration…")
       }
 
-      const configRes = await ludusApi.setRangeConfig(yaml, effectiveRangeId || undefined)
+      const configRes = await ludusApi.setRangeConfig(configToUpload, effectiveRangeId || undefined)
       if (configRes.error) {
         toast({ title: "Config upload failed", description: configRes.error, variant: "destructive" })
-        setDeploying(false)
-        setDeployStatus("")
-        return
+        setDeploying(false); setDeployStatus(""); return
       }
+
       setDeployStatus("Starting deployment…")
-      const deployRes = await ludusApi.deployRange(
-        selectedTags.length > 0 ? selectedTags : undefined,
-        undefined,
-        effectiveRangeId || undefined,
-      )
+      const tags = configMethod === "wizard" && selectedTags.length > 0 ? selectedTags : undefined
+      const deployRes = await ludusApi.deployRange(tags, undefined, effectiveRangeId || undefined)
       if (deployRes.error) {
         toast({ title: "Deploy failed", description: deployRes.error, variant: "destructive" })
-        setDeployResult("error")
-        setDeploying(false)
-        setDeployStatus("")
-        return
+        setDeployResult("error"); setDeploying(false); setDeployStatus(""); return
       }
-      // Select the target range and go straight to the dashboard for live status.
+
       await refreshRanges()
       if (effectiveRangeId) selectRange(effectiveRangeId)
       toast({ title: "Deployment started", description: `Range ${effectiveRangeId ?? "default"} is being provisioned.` })
@@ -528,10 +525,21 @@ export default function NewRangePage() {
     setDeployStatus("")
   }
 
+  // ── Derived ──────────────────────────────────────────────────────────────────
+
   const rangeIdConflict = mode === "new" && !!rangeId && usedRangeIds.has(rangeId)
 
+  // Display steps switch the moment configMethod is committed.
+  const displaySteps = configMethod === "yaml" ? YAML_STEPS : WIZARD_STEPS
+
+  // Back-step for wizard Review & Deploy vs YAML Review & Deploy
+  const reviewBackStep = configMethod === "yaml" ? 2 : 4
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl space-y-6">
+      {/* Page heading */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon-sm" asChild>
           <Link href="/"><ArrowLeft className="h-4 w-4" /></Link>
@@ -542,9 +550,9 @@ export default function NewRangePage() {
         </div>
       </div>
 
-      {/* Step indicator */}
+      {/* Step indicator — updates immediately when configMethod is chosen */}
       <div className="flex items-center gap-2 flex-wrap">
-        {STEPS.map((s, i) => (
+        {displaySteps.map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div className={cn(
               "flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold",
@@ -555,7 +563,7 @@ export default function NewRangePage() {
               {i < step ? <Check className="h-3.5 w-3.5" /> : i + 1}
             </div>
             <span className={cn("text-sm", i === step ? "text-foreground font-medium" : "text-muted-foreground")}>{s}</span>
-            {i < STEPS.length - 1 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+            {i < displaySteps.length - 1 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
           </div>
         ))}
       </div>
@@ -569,9 +577,7 @@ export default function NewRangePage() {
               <Button variant={mode === "existing" ? "default" : "outline"} size="sm"
                 onClick={() => setMode("existing")}>Use Existing Range</Button>
               <Button variant={mode === "new" ? "default" : "outline"} size="sm"
-                onClick={() => setMode("new")}>
-                Create New Range
-              </Button>
+                onClick={() => setMode("new")}>Create New Range</Button>
             </div>
 
             <Separator />
@@ -615,17 +621,13 @@ export default function NewRangePage() {
                           <div className="flex items-center justify-between">
                             <code className="font-mono font-bold text-primary text-sm">{r.rangeID}</code>
                             <div className="flex items-center gap-2">
-                              {vmCount > 0 && (
-                                <Badge variant="warning" className="text-[10px]">{vmCount} VMs</Badge>
-                              )}
+                              {vmCount > 0 && <Badge variant="warning" className="text-[10px]">{vmCount} VMs</Badge>}
                               <Badge variant="secondary" className="text-[10px]">{r.accessType}</Badge>
                               {selectedExistingRange === r.rangeID && <Check className="h-4 w-4 text-primary" />}
                             </div>
                           </div>
                           {rn != null && (
-                            <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                              10.{rn}.* network
-                            </p>
+                            <p className="text-[10px] text-muted-foreground font-mono mt-0.5">10.{rn}.* network</p>
                           )}
                         </button>
                       )
@@ -635,7 +637,7 @@ export default function NewRangePage() {
                 <div className="flex justify-end">
                   <Button onClick={handleUseExisting} disabled={!selectedExistingRange || loadingExistingConfig}>
                     {loadingExistingConfig
-                      ? <><Loader2 className="h-4 w-4 animate-spin" /> Loading config...</>
+                      ? <><Loader2 className="h-4 w-4 animate-spin" /> Loading config…</>
                       : <>Next <ChevronRight className="h-4 w-4" /></>}
                   </Button>
                 </div>
@@ -679,7 +681,7 @@ export default function NewRangePage() {
                     </Button>
                   ) : (
                     <Button onClick={handleCreateRange} disabled={!rangeName || !rangeId || creating || rangeIdConflict}>
-                      {creating ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating...</>
+                      {creating ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating…</>
                         : <><Plus className="h-4 w-4" /> Create Range &amp; Continue</>}
                     </Button>
                   )}
@@ -690,8 +692,84 @@ export default function NewRangePage() {
         </Card>
       )}
 
-      {/* ── Step 1: Select VMs ──────────────────────────────────────────────── */}
+      {/* ── Step 1: Config Method ─────────────────────────────────────────────── */}
       {step === 1 && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            How would you like to configure{" "}
+            <code className="font-mono text-primary text-xs">{effectiveRangeId || "your range"}</code>?
+          </p>
+
+          <div className="grid grid-cols-2 gap-4">
+            {/* Wizard option */}
+            <button
+              onClick={() => pickConfigMethod("wizard")}
+              className="text-left p-5 rounded-xl border-2 border-border hover:border-primary/60 hover:bg-primary/5 transition-all space-y-3 group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/20 transition-colors">
+                  <Settings2 className="h-4 w-4 text-primary" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">Wizard</p>
+                  <p className="text-[10px] text-muted-foreground">Guided step-by-step</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Pick VM templates, configure networking, optionally set up an Active Directory domain,
+                and choose deploy tags. Best for building ranges from scratch.
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {["Configure VMs", "Domain Setup", "Deploy Tags"].map((s) => (
+                  <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
+                ))}
+              </div>
+            </button>
+
+            {/* YAML option */}
+            <button
+              onClick={() => pickConfigMethod("yaml")}
+              className="text-left p-5 rounded-xl border-2 border-border hover:border-cyan-500/60 hover:bg-cyan-500/5 transition-all space-y-3 group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-cyan-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-cyan-500/20 transition-colors">
+                  <FileCode2 className="h-4 w-4 text-cyan-400" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">YAML Config</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    {mode === "existing" && selectedExistingRange ? "Config pre-loaded" : "Paste raw YAML"}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {mode === "existing" && selectedExistingRange
+                  ? `Your current ${selectedExistingRange} config is already loaded and ready to edit. Skip straight to Review & Deploy.`
+                  : "Paste or type raw Ludus YAML directly. Skips the wizard steps — best for experienced users or reusing an existing config."}
+              </p>
+              <div className="flex flex-wrap gap-1">
+                <Badge variant="secondary" className="text-[10px] border-cyan-500/30 text-cyan-400 bg-cyan-500/10">
+                  Skips wizard steps
+                </Badge>
+                {mode === "existing" && selectedExistingRange && (
+                  <Badge variant="secondary" className="text-[10px] border-green-500/30 text-green-400 bg-green-500/10">
+                    Auto-loaded ✓
+                  </Badge>
+                )}
+              </div>
+            </button>
+          </div>
+
+          <div className="flex justify-start">
+            <Button variant="ghost" onClick={() => setStep(0)}>
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 2 (Wizard): Configure VMs ──────────────────────────────────── */}
+      {step === 2 && configMethod === "wizard" && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Available Templates</CardTitle></CardHeader>
@@ -730,18 +808,12 @@ export default function NewRangePage() {
                     <HardDrive className="h-4 w-4" /> VMs in Range
                     <Badge variant="secondary">{vms.length}</Badge>
                   </CardTitle>
-                  {/* Shared VLAN selector — applies to all VMs */}
                   <div className="flex items-center gap-2">
                     <Network className="h-3.5 w-3.5 text-muted-foreground" />
                     <Label className="text-xs text-muted-foreground whitespace-nowrap">Range VLAN</Label>
-                    <Input
-                      type="number"
-                      value={rangeVlan}
-                      min={2}
-                      max={255}
+                    <Input type="number" value={rangeVlan} min={2} max={255}
                       onChange={(e) => handleRangeVlanChange(parseInt(e.target.value) || 10)}
-                      className="h-7 w-20 text-xs text-center font-mono"
-                    />
+                      className="h-7 w-20 text-xs text-center font-mono" />
                   </div>
                 </div>
               </CardHeader>
@@ -767,7 +839,6 @@ export default function NewRangePage() {
                     </div>
                     {vm.showAdvanced && (
                       <div className="pt-2 border-t space-y-2">
-                        {/* Hostname suffix (editable) + VM Name preview (read-only) */}
                         <div className="grid grid-cols-3 gap-2">
                           <div className="col-span-2 space-y-2">
                             <div className="space-y-1">
@@ -775,24 +846,15 @@ export default function NewRangePage() {
                                 Hostname
                                 {vm.isWindows && <span className="text-muted-foreground ml-1">(max 15 chars)</span>}
                               </Label>
-                              <Input
-                                value={vm.hostname}
-                                onChange={(e) => updateVM(vm.id, {
-                                  hostname: e.target.value.slice(0, vm.isWindows ? 15 : 63)
-                                })}
+                              <Input value={vm.hostname}
+                                onChange={(e) => updateVM(vm.id, { hostname: e.target.value.slice(0, vm.isWindows ? 15 : 63) })}
                                 maxLength={vm.isWindows ? 15 : 63}
-                                className="h-7 text-xs font-mono"
-                                placeholder="server-01"
-                              />
+                                className="h-7 text-xs font-mono" placeholder="server-01" />
                             </div>
                             <div className="space-y-1">
                               <Label className="text-[10px] text-muted-foreground">VM Name (Proxmox)</Label>
-                              <Input
-                                value={vm.vmName}
-                                readOnly
-                                className="h-7 text-xs font-mono bg-muted/30 text-muted-foreground cursor-default"
-                                tabIndex={-1}
-                              />
+                              <Input value={vm.vmName} readOnly
+                                className="h-7 text-xs font-mono bg-muted/30 text-muted-foreground cursor-default" tabIndex={-1} />
                             </div>
                           </div>
                           <div className="space-y-1">
@@ -801,7 +863,6 @@ export default function NewRangePage() {
                               onChange={(e) => updateVM(vm.id, { ipLastOctet: parseInt(e.target.value) || 10 })} className="h-7 text-xs" />
                           </div>
                         </div>
-                        {/* Resources */}
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <Label className="text-[10px]">CPUs</Label>
@@ -823,21 +884,52 @@ export default function NewRangePage() {
           )}
 
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(0)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={() => setStep(2)} disabled={vms.length === 0}>Next <ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="ghost" onClick={() => setStep(1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(3)} disabled={vms.length === 0}>Next <ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
       )}
 
-      {/* ── Step 2: Domain Configuration ────────────────────────────────────── */}
-      {step === 2 && (
+      {/* ── Step 2 (YAML): YAML Config ───────────────────────────────────────── */}
+      {step === 2 && configMethod === "yaml" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">YAML Configuration</CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                {mode === "existing" && selectedExistingRange
+                  ? `Your current ${selectedExistingRange} config has been loaded below. Edit as needed, then continue to Review & Deploy.`
+                  : "Paste or type your Ludus range config YAML, then continue to Review & Deploy."}
+              </p>
+            </CardHeader>
+            <CardContent>
+              <textarea
+                value={yamlConfig}
+                onChange={(e) => setYamlConfig(e.target.value)}
+                className="w-full font-mono text-xs bg-gray-950 border border-gray-700 rounded-lg p-4 text-gray-300 resize-y focus:outline-none focus:ring-1 focus:ring-primary/50"
+                style={{ minHeight: 400 }}
+                placeholder={`ludus:\n  - vm_name: "{{ range_id }}-kali"\n    hostname: "{{ range_id }}-kali"\n    template: kali-x64-desktop-template\n    vlan: 10\n    ip_last_octet: 10\n    ram_gb: 4\n    cpus: 2\n    linux: true\n    testing:\n      snapshot: true\n      block_internet: true`}
+                autoFocus={!yamlConfig}
+              />
+            </CardContent>
+          </Card>
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(3)} disabled={!yamlConfig.trim()}>
+              Review &amp; Deploy <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 3 (Wizard): Domain Configuration ───────────────────────────── */}
+      {step === 3 && configMethod === "wizard" && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Active Directory Domain</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center gap-3">
-                <Checkbox id="enableDomain" checked={enableDomain}
-                  onCheckedChange={(c) => setEnableDomain(!!c)} />
+                <Checkbox id="enableDomain" checked={enableDomain} onCheckedChange={(c) => setEnableDomain(!!c)} />
                 <Label htmlFor="enableDomain" className="text-sm">Create an Active Directory domain</Label>
               </div>
               {enableDomain && (
@@ -869,20 +961,19 @@ export default function NewRangePage() {
             </CardContent>
           </Card>
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(1)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={() => setStep(3)}>Next <ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(4)}>Next <ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
       )}
 
-      {/* ── Step 3: Deploy Tags ──────────────────────────────────────────────── */}
-      {step === 3 && (
+      {/* ── Step 4 (Wizard): Deploy Tags ────────────────────────────────────── */}
+      {step === 4 && configMethod === "wizard" && (
         <div className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle className="text-sm flex items-center gap-2">
-                <Tag className="h-4 w-4" />
-                Deploy Tags
+                <Tag className="h-4 w-4" /> Deploy Tags
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
                 Optionally limit the deployment to specific Ansible steps. Leave all unchecked for a full
@@ -892,21 +983,13 @@ export default function NewRangePage() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
                 {ALL_TAGS.map((tag) => (
-                  <button
-                    key={tag}
+                  <button key={tag}
                     className={cn(
                       "flex items-center gap-2 p-2 rounded border text-left transition-colors",
-                      selectedTags.includes(tag)
-                        ? "border-primary bg-primary/10"
-                        : "border-border hover:border-primary/50"
+                      selectedTags.includes(tag) ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
                     )}
-                    onClick={() => toggleTag(tag)}
-                  >
-                    <Checkbox
-                      checked={selectedTags.includes(tag)}
-                      onCheckedChange={() => toggleTag(tag)}
-                      className="shrink-0"
-                    />
+                    onClick={() => toggleTag(tag)}>
+                    <Checkbox checked={selectedTags.includes(tag)} onCheckedChange={() => toggleTag(tag)} className="shrink-0" />
                     <div className="min-w-0">
                       <code className="text-xs font-mono text-primary">{tag}</code>
                       <p className="text-[10px] text-muted-foreground truncate">{TAG_DESCRIPTIONS[tag] || ""}</p>
@@ -919,23 +1002,20 @@ export default function NewRangePage() {
                   <p className="text-xs text-muted-foreground">
                     {selectedTags.length} tag{selectedTags.length !== 1 ? "s" : ""} selected — only these steps will run
                   </p>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedTags([])}>
-                    Clear all
-                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSelectedTags([])}>Clear all</Button>
                 </div>
               )}
             </CardContent>
           </Card>
-
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(2)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={() => setStep(4)}>Next <ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="ghost" onClick={() => setStep(3)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(5)}>Next <ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
       )}
 
-      {/* ── Step 4: Review & Deploy ──────────────────────────────────────────── */}
-      {step === 4 && (
+      {/* ── Review & Deploy (Wizard: step 5 / YAML: step 3) ─────────────────── */}
+      {((step === 5 && configMethod === "wizard") || (step === 3 && configMethod === "yaml")) && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Deployment Summary</CardTitle></CardHeader>
@@ -951,15 +1031,28 @@ export default function NewRangePage() {
                     <p>{rangeName}</p>
                   </div>
                 )}
-                <div>
-                  <span className="text-xs text-muted-foreground">VMs</span>
-                  <p>{vms.length}</p>
-                </div>
-                <div>
-                  <span className="text-xs text-muted-foreground">Domain</span>
-                  <p>{enableDomain ? domainFqdn : "None"}</p>
-                </div>
-                {selectedTags.length > 0 && (
+                {configMethod === "wizard" && (
+                  <>
+                    <div>
+                      <span className="text-xs text-muted-foreground">VMs</span>
+                      <p>{vms.length}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Domain</span>
+                      <p>{enableDomain ? domainFqdn : "None"}</p>
+                    </div>
+                  </>
+                )}
+                {configMethod === "yaml" && (
+                  <div>
+                    <span className="text-xs text-muted-foreground">Config source</span>
+                    <p className="flex items-center gap-1.5">
+                      <FileCode2 className="h-3.5 w-3.5 text-cyan-400" />
+                      <span>Raw YAML</span>
+                    </p>
+                  </div>
+                )}
+                {configMethod === "wizard" && selectedTags.length > 0 && (
                   <div className="col-span-2">
                     <span className="text-xs text-muted-foreground">Tags</span>
                     <p className="flex flex-wrap gap-1 mt-0.5">
@@ -976,15 +1069,24 @@ export default function NewRangePage() {
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm">Generated Configuration</CardTitle>
-                <Button variant="ghost" size="sm" asChild>
-                  <Link href="/range/config">Edit in Full Editor</Link>
-                </Button>
+                <CardTitle className="text-sm">
+                  {configMethod === "yaml" ? "YAML Configuration" : "Generated Configuration"}
+                </CardTitle>
+                {configMethod === "wizard" && (
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link href="/range/config">Edit in Full Editor</Link>
+                  </Button>
+                )}
+                {configMethod === "yaml" && (
+                  <Button variant="ghost" size="sm" onClick={() => setStep(2)}>
+                    Edit YAML
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>
               <pre className="bg-gray-950 border border-gray-700 rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
-                {yaml}
+                {configMethod === "yaml" ? yamlConfig : wizardYaml}
               </pre>
             </CardContent>
           </Card>
@@ -1007,13 +1109,16 @@ export default function NewRangePage() {
           <Alert variant="warning">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="text-xs">
-              This will upload the configuration and start deploying {vms.length} VMs to range{" "}
-              <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes depending on VM count and templates.
+              {configMethod === "wizard"
+                ? <>This will upload the configuration and start deploying {vms.length} VMs to range{" "}
+                    <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes.</>
+                : <>This will upload the YAML configuration and start deploying to range{" "}
+                    <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes.</>}
             </AlertDescription>
           </Alert>
 
           <div className="flex justify-between items-center">
-            <Button variant="ghost" onClick={() => setStep(3)} disabled={deploying}>
+            <Button variant="ghost" onClick={() => setStep(reviewBackStep)} disabled={deploying}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
             <div className="flex items-center gap-3">
@@ -1023,7 +1128,11 @@ export default function NewRangePage() {
                   {deployStatus}
                 </span>
               )}
-              <Button onClick={handleDeploy} disabled={deploying} className="min-w-36">
+              <Button
+                onClick={handleDeploy}
+                disabled={deploying || (configMethod === "yaml" && !yamlConfig.trim())}
+                className="min-w-36"
+              >
                 {deploying
                   ? <><Loader2 className="h-4 w-4 animate-spin" /> {deletingVMs ? "Destroying VMs…" : "Deploying…"}</>
                   : deployResult === "success" ? <><Check className="h-4 w-4" /> Deployed</>

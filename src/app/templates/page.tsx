@@ -526,11 +526,13 @@ export default function TemplatesPage() {
   const handleDelete = (name: string) =>
     confirm(`Delete template "${name}"? This cannot be undone.`, () => doDelete(name))
 
-  const filtered = templates.filter((t) => {
-    if (filterBuilt === "built") return t.built
-    if (filterBuilt === "unbuilt") return !t.built
-    return true
-  })
+  const filtered = templates
+    .filter((t) => {
+      if (filterBuilt === "built") return t.built
+      if (filterBuilt === "unbuilt") return !t.built
+      return true
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
 
   const builtCount = templates.filter((t) => t.built).length
   const installedNames = new Set(templates.map((t) => t.name))

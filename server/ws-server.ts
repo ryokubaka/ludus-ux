@@ -12,6 +12,9 @@
  * skips /api/vnc-ws requests. All other paths pass through normally.
  */
 
+// Must be imported first — monkey-patches console to add ISO timestamps.
+import "./logger"
+
 // Disable TLS verification for the Proxmox self-signed cert
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
 
@@ -153,6 +156,20 @@ async function refreshUpstreamSession(session: {
 
 const MAX_UPSTREAM_RETRIES = 3
 
+/**
+ * Normalise a WebSocket close code before forwarding it to another socket.
+ *
+ * Codes 1004, 1005, and 1006 are reserved/internal and MUST NOT appear in a
+ * real close frame (the ws library throws TypeError if you try).  Map them to
+ * 1011 (internal server error) so the close frame is always valid.
+ */
+function safeCloseCode(code: number): number {
+  if (code >= 1000 && code <= 4999 && code !== 1004 && code !== 1005 && code !== 1006) {
+    return code
+  }
+  return 1011
+}
+
 function handleVncProxy(clientWs: WebSocket, token: string) {
   if (!token) {
     clientWs.close(4001, "No token provided")
@@ -165,6 +182,9 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     return
   }
 
+  const { pveHost, node, vmid } = session
+  console.log(`[VNC proxy] new session — host=${pveHost} node=${node ?? "?"} vmid=${vmid ?? "?"} canRefresh=${!!(session.pveUser && session.pvePassword && node && vmid)}`)
+
   let currentSession = session
   let upstreamWs: WebSocket | null = null
   let retryCount = 0
@@ -172,6 +192,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
   const connectUpstream = (targetSession: typeof currentSession) => {
     const upstreamUrl =
       `wss://${targetSession.pveHost}:8006${targetSession.wsPath}?port=${targetSession.port}&vncticket=${encodeURIComponent(targetSession.vncticket)}`
+    console.log(`[VNC upstream] connecting → ${targetSession.pveHost}:8006${targetSession.wsPath} (attempt ${retryCount + 1}/${MAX_UPSTREAM_RETRIES + 1})`)
     const ws = new WebSocket(upstreamUrl, {
       headers: { Cookie: `PVEAuthCookie=${targetSession.pveAuthCookie}` },
       rejectUnauthorized: false,
@@ -182,6 +203,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     ws.on("open", () => {
       opened = true
       retryCount = 0  // reset on successful connect so future drops can retry too
+      console.log(`[VNC upstream] connected — host=${targetSession.pveHost} node=${targetSession.node ?? "?"} vmid=${targetSession.vmid ?? "?"}`)
     })
 
     ws.on("message", (data, isBinary) => {
@@ -200,21 +222,26 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
         try {
           const refreshed = await refreshUpstreamSession(currentSession)
           if (refreshed) {
+            console.log(`[VNC upstream] session refreshed — new ticket obtained for ${currentSession.pveHost}`)
             currentSession = refreshed
             connectUpstream(currentSession)
             return
+          } else {
+            console.warn(`[VNC upstream] session refresh returned null — missing pveUser/pvePassword/node/vmid, cannot re-authenticate`)
           }
         } catch (err) {
           console.error("[VNC upstream refresh error]", (err as Error).message)
         }
       }
-      if (clientWs.readyState === WebSocket.OPEN) clientWs.close(code, reason)
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(safeCloseCode(code), reason)
+      }
     })
 
     ws.on("error", (err) => {
       // Errors (e.g. 401) always precede a close event — log here, let the
       // close handler decide whether to retry or close the client socket.
-      console.error("[VNC upstream error]", err.message)
+      console.error(`[VNC upstream error] host=${targetSession.pveHost}:`, err.message)
     })
   }
 
@@ -226,7 +253,8 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
 
   connectUpstream(currentSession)
 
-  clientWs.on("close", () => {
+  clientWs.on("close", (code) => {
+    console.log(`[VNC proxy] client disconnected (code ${code}) — host=${pveHost} node=${node ?? "?"} vmid=${vmid ?? "?"}`)
     if (upstreamWs && upstreamWs.readyState < 2) upstreamWs.close()
   })
 

@@ -74,7 +74,7 @@ export function getAnsibleLineClass(line: string): string {
   const lower = line.toLowerCase()
 
   // Strip leading timestamp "[HH:MM:SS] " so PLAY/TASK headers are still
-  // detected when Ansible is run with -v or goad-mod injects timestamps.
+  // detected when Ansible is run with -v or GOAD injects timestamps.
   const content = lower.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, "")
 
   // Ansible section headers: "PLAY [name] ****", "TASK [name] ****",

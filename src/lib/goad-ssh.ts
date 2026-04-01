@@ -9,11 +9,10 @@
  * root credentials from the settings store are used as fallback.
  */
 
-import { Client as SSHClient, ConnectConfig } from "ssh2";
-import * as fs from "fs";
-import * as path from "path";
-import type { GoadInstance, GoadCatalog } from "./types";
-import { getSettings } from "./settings-store";
+import { Client as SSHClient, ConnectConfig } from "ssh2"
+import type { GoadInstance, GoadCatalog } from "./types"
+import { getSettings } from "./settings-store"
+import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
 
 /**
  * Strip ANSI/VT100 escape sequences from terminal output so raw text
@@ -41,9 +40,6 @@ function stripAnsi(text: string): string {
     // Cursor-control chars except newline/tab
     .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "")
 }
-
-// Key path is still an env var / Docker volume mount — not a runtime setting
-const GOAD_SSH_KEY_PATH = process.env.GOAD_SSH_KEY_PATH || "/app/ssh/id_rsa";
 
 /** Per-user SSH credentials extracted from the encrypted session cookie. */
 export interface SSHCreds {
@@ -99,30 +95,23 @@ function buildConnectConfig(creds?: SSHCreds): ConnectConfig {
   }
 
   // Fall back to root/admin credentials for admin-level operations
-  const username = process.env.GOAD_SSH_USER || settings.proxmoxSshUser || "root";
-  const password = process.env.GOAD_SSH_PASSWORD || settings.proxmoxSshPassword;
-  const keyPath = GOAD_SSH_KEY_PATH;
+  const username = process.env.GOAD_SSH_USER || settings.proxmoxSshUser || "root"
+  const password = (process.env.GOAD_SSH_PASSWORD || settings.proxmoxSshPassword || "").trim()
 
-  const config: ConnectConfig = { ...base, username };
+  const config: ConnectConfig = { ...base, username }
 
   if (password) {
-    config.password = password;
-  } else if (keyPath && fs.existsSync(keyPath)) {
-    config.privateKey = fs.readFileSync(keyPath);
+    config.password = password
   } else {
-    const defaultKeys = [
-      path.join(process.env.HOME || "/root", ".ssh/id_rsa"),
-      path.join(process.env.HOME || "/root", ".ssh/id_ed25519"),
-    ];
-    for (const kp of defaultKeys) {
-      if (fs.existsSync(kp)) {
-        config.privateKey = fs.readFileSync(kp);
-        break;
-      }
+    const key = readPrivateKey()
+    if (key) {
+      config.privateKey = key
+      const ph = getSshKeyPassphrase()
+      if (ph) config.passphrase = ph
     }
   }
 
-  return config;
+  return config
 }
 
 /**
@@ -188,7 +177,7 @@ export async function streamGoadCommand(
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
   const ludusApiKey = impersonateAs?.apiKey || apiKey || process.env.LUDUS_API_KEY || "";
-  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
   let command: string;
@@ -283,7 +272,7 @@ export async function streamGoadCommand(
 
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
-    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Ensure PROXMOX_SSH_PASSWORD is set in your .env (used for root SSH workspace setup)."; exit 1; fi`,
+    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
     pythonEnvSetup,
     ...(ludusWrapSetup ? [ludusWrapSetup] : []),
   ].join("; ");
@@ -444,7 +433,7 @@ export async function writeGoadRangeId(
   rangeId: string,
   creds?: SSHCreds
 ): Promise<void> {
-  const goadPath = getSettings().goadPath || "/opt/goad-mod"
+  const goadPath = getSettings().goadPath || "/opt/GOAD"
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
   const dir = `${goadPath}/workspace/${safeId}`
   const filePath = `${dir}/.goad_range_id`
@@ -458,7 +447,7 @@ export async function readGoadRangeId(
   creds?: SSHCreds
 ): Promise<string | null> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod"
+    const goadPath = getSettings().goadPath || "/opt/GOAD"
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
     const { stdout, code } = await sshExec(`cat '${filePath}' 2>/dev/null`, creds)
@@ -476,7 +465,7 @@ export async function readGoadRangeId(
 const LIST_INSTANCES_PY = `
 import os, json, pwd, sys, stat as statmod
 
-goad_path = sys.argv[1] if len(sys.argv) > 1 else '/opt/goad-mod'
+goad_path = sys.argv[1] if len(sys.argv) > 1 else '/opt/GOAD'
 workspace  = os.path.join(goad_path, 'workspace')
 
 results = []
@@ -539,7 +528,7 @@ print(json.dumps(results))
  */
 export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
@@ -771,7 +760,7 @@ let catalogCache: CacheEntry | null = null
 const CATALOG_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog> {
-  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
 
   if (catalogCache && Date.now() < catalogCache.expiry && catalogCache.goadPath === goadPath) {
     return catalogCache.data;
@@ -806,14 +795,14 @@ export function invalidateCatalogCache(): void {
 }
 
 /**
- * Read the lab config.json from the goad-mod directory.
+ * Read the lab config.json from the GOAD directory.
  */
 export async function getGoadLabConfig(
   labName: string,
   creds?: SSHCreds
 ): Promise<Record<string, unknown> | null> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const configPath = `${goadPath}/ad/${labName}/data/config.json`;
     const { stdout, code } = await sshExec(`cat "${configPath}" 2>/dev/null`, creds);
     if (code !== 0 || !stdout.trim()) return null;
@@ -868,7 +857,7 @@ export async function getInstanceInventories(
   creds?: SSHCreds
 ): Promise<InstanceInventoryFile[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const encoded = Buffer.from(LIST_INVENTORIES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}' '${instanceId.replace(/'/g, "'\\''")}'`;
     const { stdout, code } = await sshExec(cmd, creds);
@@ -890,7 +879,7 @@ export async function chownGoadInstance(
   targetUser: string,
   creds?: SSHCreds,
 ): Promise<void> {
-  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
   const safePath = `${goadPath}/workspace/${instanceId.replace(/'/g, "'\\''")}`
   const safeUser = targetUser.replace(/'/g, "'\\''")
   const cmd = `chown -R '${safeUser}':'${safeUser}' '${safePath}'`

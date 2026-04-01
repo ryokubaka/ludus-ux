@@ -166,7 +166,7 @@ export default function LoginPage() {
                       <Input
                         id="username"
                         autoComplete="username"
-                        placeholder="root or your Ludus username"
+                        placeholder="Ludus username (not root)"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                         className="pl-9 font-mono"

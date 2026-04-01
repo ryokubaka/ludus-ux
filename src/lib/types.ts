@@ -163,23 +163,36 @@ export interface BlueprintListItem {
   updated?: string
 }
 
+/** GET /blueprints/{id}/access/users — `access` is how the user inherits rights (often multiple strings). */
 export interface BlueprintAccessUserItem {
   userID: string
   name?: string
-  access: string
+  access?: string | string[]
   groups?: string[]
+}
+
+/** GET /blueprints/{id}/access/groups — not the same shape as users (see api-docs.ludus.cloud). */
+export interface BlueprintAccessGroupItem {
+  groupName: string
+  managers?: string[]
+  members?: string[]
 }
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 
-/** v2 group object */
+/** v2 group object — GET /groups returns summary only (see api-docs.ludus.cloud List all groups). */
 export interface GroupObject {
   id?: string
   groupName?: string
   name?: string
+  description?: string
   managers?: string[]
+  /** Populated only if the server embeds lists; otherwise use GET .../users and .../ranges. */
   members?: string[]
   ranges?: string[]
+  numMembers?: number
+  numManagers?: number
+  numRanges?: number
 }
 
 // ── Testing ───────────────────────────────────────────────────────────────────
@@ -224,7 +237,7 @@ export type PowerAction = "on" | "off"
 // ── GOAD ──────────────────────────────────────────────────────────────────────
 
 // String aliases — actual values are discovered dynamically from the server's
-// GOAD directory (e.g. /opt/goad-mod/ad/ and /opt/goad-mod/extensions/).
+// GOAD directory (e.g. /opt/GOAD/ad/ and /opt/GOAD/extensions/).
 export type GoadLabType = string
 export type GoadExtension = string
 

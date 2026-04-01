@@ -24,7 +24,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
-import { sshExec, readGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 
@@ -49,10 +50,8 @@ export async function POST(
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const settings = getSettings()
-  const goadPath = settings.goadPath || "/opt/goad-mod"
-  const rootCreds: SSHCreds | undefined = settings.proxmoxSshPassword
-    ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-    : undefined
+  const goadPath = settings.goadPath || "/opt/GOAD"
+  const rootCreds = rootPasswordCredsIfSet(settings)
 
   // ── 1. Resolve rangeID ────────────────────────────────────────────────────
   let ludusRangeId: string | null = bodyRangeId || null

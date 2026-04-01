@@ -160,7 +160,7 @@ if [ "$NEEDS_REGEN" = "true" ]; then
     add_san "$TLS_HOSTNAME"
     [ -n "$HOST_GW_IP" ] && SAN="$SAN,IP:$HOST_GW_IP"
 
-    CN="${TLS_HOSTNAME:-${LUDUS_SSH_HOST:-ludus-ui}}"
+    CN="${TLS_HOSTNAME:-${LUDUS_SSH_HOST:-ludus-ux}}"
 
     echo "[entrypoint] Generating self-signed cert (CN=$CN, SAN=$SAN)"
     openssl req -x509 -newkey rsa:2048 -nodes \
@@ -185,6 +185,19 @@ fi # end DISABLE_HTTPS check
 # ---------------------------------------------------------------------------
 chown -R nextjs:nodejs /app/data 2>/dev/null || true
 mkdir -p /app/data/tasks && chown nextjs:nodejs /app/data/tasks
+
+# ---------------------------------------------------------------------------
+# SSH private keys under /app/ssh (bind-mounted from the host).
+# Docker Desktop on Windows often shows them as mode 777 inside the container
+# even when the host file is 644 — normalize so permissions look sane and match
+# typical OpenSSH expectations. Ignore errors on exotic mounts.
+# ---------------------------------------------------------------------------
+for KEY in /app/ssh/id_rsa /app/ssh/id_ed25519; do
+    if [ -f "$KEY" ]; then
+        chmod 600 "$KEY" 2>/dev/null || true
+        chown nextjs:nodejs "$KEY" 2>/dev/null || true
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Drop privileges: run the app as the nextjs user (uid 1001).

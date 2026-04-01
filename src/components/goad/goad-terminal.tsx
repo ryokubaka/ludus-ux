@@ -188,7 +188,7 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
               <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
               <div className="w-3 h-3 rounded-full bg-green-500/80" />
             </div>
-            <span className="text-xs text-gray-400 font-mono ml-2">{label ?? "goad-mod terminal"}</span>
+            <span className="text-xs text-gray-400 font-mono ml-2">{label ?? "GOAD terminal"}</span>
           </div>
           <div className="flex gap-1 items-center">
             <Button size="icon-sm" variant="ghost" onClick={toggleSearch}>

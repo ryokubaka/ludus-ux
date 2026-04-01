@@ -17,7 +17,7 @@ interface ImpersonationContextValue {
 
 const ImpersonationContext = createContext<ImpersonationContextValue>({
   impersonation: null,
-  exitImpersonation: () => {},
+  exitImpersonation: () => { },
   impersonationHeaders: () => ({}),
 })
 
@@ -73,7 +73,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
             // Cookie has impersonation but sessionStorage doesn't — this can
             // happen in a new tab.  We can't reconstruct the full data without
             // the apiKey, so clear the cookie to keep things consistent.
-            fetch("/api/auth/impersonate", { method: "DELETE" }).catch(() => {})
+            fetch("/api/auth/impersonate", { method: "DELETE" }).catch(() => { })
           }
         } else if (!data.impersonating && stored) {
           // Cookie says NOT impersonating but sessionStorage has data — clear
@@ -84,7 +84,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
           queryClient.clear()
         }
       })
-      .catch(() => {})
+      .catch(() => { })
 
     // Re-read when the same-tab code dispatches our custom event after writing
     // to sessionStorage.  (The native 'storage' event only fires in other tabs.)
@@ -122,7 +122,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     // holds the impersonated user's API key the proxy will use it (session
     // takes priority over headers), returning impersonated data again.
     fetch("/api/auth/impersonate", { method: "DELETE" })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         // Cookie is clear — now safe to invalidate queries and re-fetch as admin.
         window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))

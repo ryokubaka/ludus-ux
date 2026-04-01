@@ -4,7 +4,7 @@
  * The Ludus API does not always surface `userID` in `GET /range/all`
  * responses, so admin-confirmed assignments would be lost on container restart
  * if stored only in process memory.  This table is the authoritative source
- * of truth for any assignment made through the Ludus-UI admin panel.
+ * of truth for any assignment made through the ludus-ux admin panel.
  *
  * It is merged with (and takes priority over) Ludus API heuristics in the
  * /api/admin/ranges-data route.

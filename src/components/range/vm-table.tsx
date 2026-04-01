@@ -81,17 +81,9 @@ export function VMTable({
   const selectedArray = Array.from(selectedVMs)
   const colSpan = 5 + (showConsole ? 1 : 0) + 1  // checkbox + name + status + ip + proxid + [console] + power
 
-  const parseIp = (ip: string): number => {
-    const parts = ip.split(".").map(Number)
-    if (parts.length !== 4 || parts.some(isNaN)) return Infinity
-    return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
-  }
-
-  const sortedVms = [...vms].sort((a, b) => {
-    const aIp = a.ip && a.ip !== "null" ? parseIp(a.ip) : Infinity
-    const bIp = b.ip && b.ip !== "null" ? parseIp(b.ip) : Infinity
-    return aIp - bIp
-  })
+  const sortedVms = [...vms].sort((a, b) =>
+    vmName(a).localeCompare(vmName(b), undefined, { sensitivity: "base" })
+  )
 
   return (
     <div>

@@ -17,7 +17,7 @@ info:
     - `X-Impersonate-Apikey` — target user's Ludus API key
     - `X-Ludus-Admin: true` — route to admin API port (8081)
     - `X-Ludus-User` — override Ludus user context
-  version: 0.1.0
+  version: 0.9.1
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -121,7 +121,7 @@ components:
         ludusAdminUrl:
           type: string
           format: uri
-          example: https://127.0.0.1:8081
+          example: https://192.168.1.10:8081
         verifyTls:
           type: boolean
         sshHost:

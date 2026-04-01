@@ -3,6 +3,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -12,13 +13,13 @@ async function readGoadLog(
   rangeId: string,
   lastCount: number,
 ): Promise<{ lines: string[]; newCount: number }> {
-  if (!settings.sshHost || !settings.proxmoxSshPassword) return { lines: [], newCount: lastCount }
+  if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) return { lines: [], newCount: lastCount }
   try {
     // Ludus v2 stores range files under /opt/ludus/ranges/<rangeID>/
     const logPath = `/opt/ludus/ranges/${rangeId}/ansible.log`
     const content = await sshExec(
       settings.sshHost, settings.sshPort,
-      settings.proxmoxSshUser || "root", settings.proxmoxSshPassword,
+      settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",
       `cat "${logPath}" 2>/dev/null || true`
     )
     const allLines = content.split("\n").filter((l) => l.trim())

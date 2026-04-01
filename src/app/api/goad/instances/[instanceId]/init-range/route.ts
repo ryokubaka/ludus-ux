@@ -19,7 +19,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
-import { readGoadRangeId, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership } from "@/lib/range-ownership-store"
 
@@ -47,9 +48,7 @@ export async function POST(
   const { instanceId } = params
   const settings = getSettings()
 
-  const rootCreds: SSHCreds | undefined = settings.proxmoxSshPassword
-    ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-    : undefined
+  const rootCreds = rootPasswordCredsIfSet(settings)
 
   const impersonateApiKey  = session.isAdmin
     ? request.headers.get("X-Impersonate-Apikey") || null

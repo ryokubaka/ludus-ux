@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query"
@@ -8,6 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { VMTable } from "@/components/range/vm-table"
 import { LogViewer } from "@/components/range/log-viewer"
 import {
@@ -26,7 +33,6 @@ import {
   Wifi,
   ChevronDown,
   ChevronRight,
-  Network,
   List,
   FileCode2,
   Download,
@@ -44,6 +50,9 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
 
+/** Re-open inventory for the same range without waiting on Ludus again. */
+const INVENTORY_CACHE_MS = 3 * 60 * 1000
+
 function dedupeVMs(vms: VMObject[]): VMObject[] {
   const seen = new Set<number | string>()
   return vms.filter((vm) => {
@@ -59,17 +68,25 @@ export function DashboardPageClient() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const { selectedRangeId, ranges: accessibleRanges, loading: rangeCtxLoading, selectRange, refreshRanges } = useRange()
+  const {
+    selectedRangeId,
+    ranges: accessibleRanges,
+    loading: rangeCtxLoading,
+    rangesFetching,
+    selectRange,
+    refreshRanges,
+  } = useRange()
 
   const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0 && !selectedRangeId
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [expandedRanges, setExpandedRanges] = useState<Set<string>>(new Set())
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
-  const [etcHosts, setEtcHosts] = useState<string | null>(null)
-  const [showHosts, setShowHosts] = useState(false)
-  const [inventoryText, setInventoryText] = useState<string | null>(null)
-  const [showInventory, setShowInventory] = useState(false)
+  const [wireguardDownloading, setWireguardDownloading] = useState(false)
+  /** Modal inventory — same path as before: client → /api/proxy → Ludus (impersonation headers on every ludusApi call). */
+  const [inventoryDialog, setInventoryDialog] = useState<{ rangeId: string; label: string; text: string } | null>(null)
+  const [inventoryLoading, setInventoryLoading] = useState(false)
+  const inventoryCacheRef = useRef(new Map<string, { text: string; at: number }>())
   const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -90,6 +107,7 @@ export function DashboardPageClient() {
     isFetching,
     isPlaceholderData,
     error: rangeError,
+    refetch: refetchRangeStatus,
   } = useQuery({
     queryKey: queryKeys.rangeStatus(selectedRangeId),
     queryFn: async () => {
@@ -161,15 +179,21 @@ export function DashboardPageClient() {
   // during key transition via keepPreviousData) from triggering a false positive.
   const streamIsForThisRange = isStreaming && streamingRangeId === (selectedRangeId ?? null)
   const rangeDataId = !isPlaceholderData ? (rangeData?.rangeID ?? rangeData?.name ?? null) : null
+  // Must depend on range state, not only range id: first fetch after redirect can still
+  // show READY; when Ludus flips to DEPLOYING the id is unchanged — without this dep the
+  // effect never re-runs and logs/stream never start until a full remount/refresh.
+  const rangeStateForStream = !isPlaceholderData ? (rangeData?.rangeState ?? null) : null
   useEffect(() => {
     if (!rangeData || isPlaceholderData || rangeCtxLoading || hasNoRanges) return
-    if (rangeData.rangeState === "DEPLOYING") {
+    const deployingLike =
+      rangeData.rangeState === "DEPLOYING" || rangeData.rangeState === "WAITING"
+    if (deployingLike) {
       setDeploying(true)
       setShowLogs(true)
       if (!streamIsForThisRange) startStreaming(selectedRangeId ?? undefined)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRangeId, rangeCtxLoading, rangeDataId])
+  }, [selectedRangeId, rangeCtxLoading, rangeDataId, rangeStateForStream])
 
   // ── Stream completion → refresh data and hide logs ─────────────────────────
   useEffect(() => {
@@ -184,6 +208,13 @@ export function DashboardPageClient() {
   const invalidateRangeStatus = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
   }, [queryClient, selectedRangeId])
+
+  const dashboardRefreshing = rangeCtxLoading || rangesFetching || isFetching
+
+  const handleRefreshDashboard = useCallback(async () => {
+    await refreshRanges()
+    await refetchRangeStatus()
+  }, [refreshRanges, refetchRangeStatus])
 
   // ── Deploy actions ──────────────────────────────────────────────────────────
   const doDeploy = async () => {
@@ -317,20 +348,54 @@ export function DashboardPageClient() {
 
   // ── Range extras ────────────────────────────────────────────────────────────
   const extractText = (data: unknown) => {
-    const d = data as { result?: string }
-    return d?.result || (typeof data === "string" ? data : "")
+    if (data == null) return ""
+    if (typeof data === "string") return data
+    if (typeof data !== "object") return String(data)
+    const d = data as { result?: unknown }
+    if (typeof d.result === "string") return d.result
+    if (d.result != null && typeof d.result === "object") {
+      try {
+        return JSON.stringify(d.result, null, 2)
+      } catch {
+        return String(d.result)
+      }
+    }
+    // Ludus may return inventory as a plain object (no `result` wrapper)
+    try {
+      return JSON.stringify(data, null, 2)
+    } catch {
+      return String(data)
+    }
   }
 
-  const handleGetHosts = async () => {
-    const result = await ludusApi.getRangeEtcHosts()
-    if (result.data) { setEtcHosts(extractText(result.data)); setShowHosts(true) }
-    else toast({ variant: "destructive", title: "Error", description: String(result.error) })
-  }
-
-  const handleShowInventory = async () => {
-    const result = await ludusApi.getRangeEtcHosts()
-    if (result.data) { setInventoryText(extractText(result.data)); setShowInventory(true) }
-    else toast({ variant: "destructive", title: "Error", description: String(result.error) })
+  const handleDownloadOwnWireguard = async () => {
+    setWireguardDownloading(true)
+    try {
+      const result = await ludusApi.getUserWireguard()
+      if (result.error) {
+        toast({ variant: "destructive", title: "WireGuard", description: result.error })
+        return
+      }
+      const data = result.data as { result?: { wireGuardConfig?: string } } | string
+      const content =
+        typeof data === "string"
+          ? data
+          : (data as { result?: { wireGuardConfig?: string } })?.result?.wireGuardConfig || ""
+      if (!content.trim()) {
+        toast({ variant: "destructive", title: "WireGuard", description: "Empty configuration from server" })
+        return
+      }
+      const blob = new Blob([content], { type: "text/plain" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "ludus-wireguard.conf"
+      a.click()
+      URL.revokeObjectURL(url)
+      toast({ title: "WireGuard config downloaded" })
+    } finally {
+      setWireguardDownloading(false)
+    }
   }
 
   const downloadText = (text: string, filename: string) => {
@@ -387,6 +452,49 @@ export function DashboardPageClient() {
   // ── Derived values ──────────────────────────────────────────────────────────
   const primaryRange = rangeData ?? null
   const allVMs = primaryRange?.VMs || (primaryRange as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
+
+  const handleShowInventory = async (rangeIdFromCard?: string) => {
+    const rid = (rangeIdFromCard || selectedRangeId || "").trim()
+    if (!rid) {
+      toast({ variant: "destructive", title: "No range selected", description: "Select a range in the sidebar first." })
+      return
+    }
+    const label =
+      (primaryRange?.rangeID === rid ? (primaryRange.name || primaryRange.rangeID) : null) ||
+      accessibleRanges.find((r) => r.rangeID === rid)?.rangeID ||
+      rid
+    const labelStr = String(label)
+    const cached = inventoryCacheRef.current.get(rid)
+    if (cached && Date.now() - cached.at < INVENTORY_CACHE_MS) {
+      setInventoryDialog({ rangeId: rid, label: labelStr, text: cached.text })
+      return
+    }
+    setInventoryDialog({ rangeId: rid, label: labelStr, text: "" })
+    setInventoryLoading(true)
+    try {
+      const result = await ludusApi.getRangeAnsibleInventory(rid)
+      if (result.error) {
+        setInventoryDialog(null)
+        toast({ variant: "destructive", title: "Inventory", description: result.error })
+        return
+      }
+      const text = extractText(result.data)
+      inventoryCacheRef.current.set(rid, { text, at: Date.now() })
+      setInventoryDialog({ rangeId: rid, label: labelStr, text })
+      if (!text.trim()) {
+        toast({ title: "Inventory", description: "Server returned an empty inventory for this range." })
+      }
+    } catch (err) {
+      setInventoryDialog(null)
+      toast({
+        variant: "destructive",
+        title: "Inventory",
+        description: err instanceof Error ? err.message : "Request failed",
+      })
+    } finally {
+      setInventoryLoading(false)
+    }
+  }
   const runningVMs = allVMs.filter((v) => v.poweredOn || v.powerState === "running").length
   const rangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
   const error = rangeError ? (rangeError as Error).message : null
@@ -434,6 +542,44 @@ export function DashboardPageClient() {
           subtext={version ? version.replace(/\s+\S+$/, "") : "Not connected"}
         />
       </div>
+
+      {/* ── WireGuard — account-wide VPN (same profile for all accessible ranges) ── */}
+      <Card className="border-blue-500/25 bg-blue-500/[0.06]">
+        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="space-y-1.5 min-w-0">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Wifi className="h-4 w-4 text-blue-400 shrink-0" />
+              WireGuard VPN
+            </h3>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Download the client configuration for your current Ludus account (including impersonation). One tunnel covers
+              lab access; ranges you can use in this app
+              {accessibleRanges.length > 0 ? (
+                <>
+                  :{" "}
+                  <span className="font-mono text-foreground/85 break-all">
+                    {accessibleRanges.map((r) => r.rangeID).join(", ")}
+                  </span>
+                </>
+              ) : (
+                <> are listed here once you have access — deploy or get shared access if you see none.</>
+              )}
+            </p>
+          </div>
+          <Button
+            className="gap-2 shrink-0 bg-blue-600 hover:bg-blue-600/90 text-white"
+            disabled={wireguardDownloading}
+            onClick={() => void handleDownloadOwnWireguard()}
+          >
+            {wireguardDownloading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            Download WireGuard
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* ── Range accordions ──────────────────────────────────────────────── */}
       {isLoading ? (
@@ -489,7 +635,7 @@ export function DashboardPageClient() {
                       <Badge className={cn("text-xs", getRangeStateBadge(state))}>{state}</Badge>
                       {lastRefreshed && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Wifi className={cn("h-3 w-3", isFetching ? "text-yellow-400 animate-pulse" : "text-green-400")} />
+                          <Wifi className={cn("h-3 w-3", dashboardRefreshing ? "text-yellow-400 animate-pulse" : "text-green-400")} />
                           {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </div>
                       )}
@@ -518,19 +664,33 @@ export function DashboardPageClient() {
                     <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction} className="gap-1.5">
                       <PowerOff className="h-3.5 w-3.5 text-red-400" /> All Off
                     </Button>
-                    <Button variant="outline" onClick={handleGetHosts} className="gap-1.5">
-                      <Network className="h-3.5 w-3.5" /> /etc/hosts
-                    </Button>
-                    <Button variant="outline" onClick={handleShowInventory} className="gap-1.5">
-                      <List className="h-3.5 w-3.5" /> Inventory
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void handleShowInventory(range.rangeID || rangeKey)}
+                      disabled={inventoryLoading}
+                      className="gap-1.5"
+                    >
+                      {inventoryLoading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <List className="h-3.5 w-3.5" />
+                      )}{" "}
+                      Inventory
                     </Button>
                     <Link href="/range/config">
                       <Button variant="ghost" className="gap-1.5">
                         <FileCode2 className="h-3.5 w-3.5" /> Config & Deploy
                       </Button>
                     </Link>
-                    <Button variant="ghost" size="icon" onClick={invalidateRangeStatus} disabled={isFetching} className="ml-auto">
-                      <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void handleRefreshDashboard()}
+                      disabled={dashboardRefreshing}
+                      className="ml-auto"
+                    >
+                      <RefreshCw className={cn("h-4 w-4", dashboardRefreshing && "animate-spin")} />
                     </Button>
                     {range.testingEnabled && (
                       <Badge variant="warning" className="flex items-center gap-1 px-3 py-1.5">
@@ -581,46 +741,10 @@ export function DashboardPageClient() {
                     </Button>
                   )}
 
-                  {/* ── /etc/hosts viewer ───────────────────────────────── */}
-                  {showHosts && etcHosts && (
-                    <div className="rounded-lg border border-border overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border">
-                        <span className="text-xs font-mono font-semibold">/etc/hosts</span>
-                        <div className="flex gap-1">
-                          <Button size="icon-sm" variant="ghost" onClick={() => downloadText(etcHosts, "hosts")}>
-                            <Download className="h-3 w-3" />
-                          </Button>
-                          <Button size="icon-sm" variant="ghost" onClick={() => setShowHosts(false)}>
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                      <pre className="p-3 text-xs font-mono overflow-auto max-h-48 bg-black/60">{etcHosts}</pre>
-                    </div>
-                  )}
-
-                  {/* ── Ansible inventory viewer ────────────────────────── */}
-                  {showInventory && inventoryText && (
-                    <div className="rounded-lg border border-border overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2 bg-muted/50 border-b border-border">
-                        <span className="text-xs font-mono font-semibold">Ansible Inventory</span>
-                        <div className="flex gap-1">
-                          <Button size="icon-sm" variant="ghost" onClick={() => downloadText(inventoryText, "inventory")}>
-                            <Download className="h-3 w-3" />
-                          </Button>
-                          <Button size="icon-sm" variant="ghost" onClick={() => setShowInventory(false)}>
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                      <pre className="p-3 text-xs font-mono overflow-auto max-h-48 bg-black/60">{inventoryText}</pre>
-                    </div>
-                  )}
-
                   {/* ── VM table with console actions ────────────────────── */}
                   <VMTable
                     vms={vms}
-                    onRefresh={invalidateRangeStatus}
+                    onRefresh={() => void handleRefreshDashboard()}
                     onDownloadVv={handleDownloadVv}
                     onOpenBrowser={handleOpenBrowser}
                     onOpenBrowserNewWindow={handleOpenBrowserNewWindow}
@@ -633,6 +757,59 @@ export function DashboardPageClient() {
           )
         })
       )}
+
+      <Dialog
+        open={!!inventoryDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInventoryDialog(null)
+            setInventoryLoading(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col gap-0">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-sm">
+              Ansible inventory — {inventoryDialog?.label ?? ""}
+            </DialogTitle>
+          </DialogHeader>
+          {inventoryLoading ? (
+            <div className="mt-2 mb-4 flex min-h-[200px] max-h-[60vh] flex-col items-center justify-center gap-3 rounded-md border border-border bg-black/40 p-8 text-center text-sm text-muted-foreground">
+              <Loader2 className="h-10 w-10 animate-spin text-primary" />
+              <p>Fetching inventory from Ludus…</p>
+              <p className="text-xs max-w-sm">
+                Generating inventory on the server is often slow. Re-opening the same range within a few minutes uses a
+                local cache so it appears instantly.
+              </p>
+            </div>
+          ) : (
+            <pre className="mt-2 mb-4 flex-1 min-h-[200px] max-h-[60vh] overflow-auto rounded-md border border-border bg-black/60 p-3 text-xs font-mono text-muted-foreground whitespace-pre-wrap">
+              {inventoryDialog?.text?.trim()
+                ? inventoryDialog.text
+                : "(empty — Ludus returned no inventory text for this range)"}
+            </pre>
+          )}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              disabled={inventoryLoading || !inventoryDialog?.text?.trim()}
+              onClick={() =>
+                inventoryDialog?.text &&
+                downloadText(
+                  inventoryDialog.text,
+                  `${inventoryDialog.rangeId.replace(/[^a-zA-Z0-9._-]/g, "_")}-inventory.txt`,
+                )
+              }
+            >
+              <Download className="h-4 w-4" /> Download
+            </Button>
+            <Button variant="ghost" onClick={() => setInventoryDialog(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

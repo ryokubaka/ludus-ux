@@ -124,7 +124,7 @@ export async function GET(request: NextRequest) {
     //   4. Instance has no owner recorded (workspace readable by connecting user
     //      implies they own it, or it's a legacy entry)
     //   5. The instance's IP range maps to one of the user's own Ludus ranges —
-    //      covers instances deployed outside ludus-ui (e.g. goad.sh run as root
+    //      covers instances deployed outside ludus-ux (e.g. goad.sh run as root
     //      on behalf of the user, or with sudo) where the file owner is "root"
     //      but the GOAD range still belongs to this user's Ludus pool.
     const myRangeIds = new Set(

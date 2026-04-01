@@ -16,6 +16,10 @@ export const STALE = {
   // redundant fetches during normal navigation.
   short: 30_000,
 
+  // ACL-driven lists (e.g. blueprints you can see, ranges shared via groups).
+  // Shorter than medium so other users' shares show up without minutes of delay.
+  acl: 20_000,
+
   // Blueprints, snapshots, ansible roles — change infrequently; 2 min is safe.
   medium: 2 * 60_000,
 

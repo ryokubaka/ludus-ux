@@ -16,11 +16,11 @@ export function getImpersonationHeaders(): Record<string, string> {
     if (raw) {
       const { apiKey, username } = JSON.parse(raw)
       const h: Record<string, string> = {}
-      if (apiKey)   h["X-Impersonate-Apikey"] = apiKey
-      if (username) h["X-Impersonate-As"]     = username
+      if (apiKey) h["X-Impersonate-Apikey"] = apiKey
+      if (username) h["X-Impersonate-As"] = username
       return h
     }
-  } catch {}
+  } catch { }
   return {}
 }
 
@@ -199,6 +199,14 @@ export const ludusApi = {
   getRangeEtcHosts: (rangeId?: string) =>
     get<{ result: string }>(rangeId ? `/range/etchosts?rangeID=${rangeId}` : "/range/etchosts"),
 
+  // Ansible inventory — GET /range/ansibleinventory
+  getRangeAnsibleInventory: (rangeId?: string) =>
+    get<{ result: string }>(
+      rangeId
+        ? `/range/ansibleinventory?rangeID=${encodeURIComponent(rangeId)}`
+        : "/range/ansibleinventory",
+    ),
+
   // SSH config — GET /range/sshconfig
   getRangeSSHConfig: (rangeId?: string) =>
     get<{ result: string }>(rangeId ? `/range/sshconfig?rangeID=${rangeId}` : "/range/sshconfig"),
@@ -309,13 +317,20 @@ export const ludusApi = {
 
   // Blueprints — v2 paths
   listBlueprints: () => get<import("./types").BlueprintListItem[]>("/blueprints"),
-  createBlueprintFromRange: (blueprintID: string) =>
-    post("/blueprints/from-range", { blueprintID }),
+  createBlueprintFromRange: (body: {
+    blueprintID: string
+    rangeID?: string
+    name?: string
+    description?: string
+  }) => post("/blueprints/from-range", body),
   getBlueprintConfig: (id: string) => get<{ result: string }>(`/blueprints/${id}/config`),
+  /** Ludus expects JSON `{ config: "<yaml string>" }`. */
   updateBlueprintConfig: (id: string, config: string) =>
-    put(`/blueprints/${id}/config`, config),
-  applyBlueprint: (id: string) =>
-    post(`/blueprints/${id}/apply`),
+    put(`/blueprints/${id}/config`, { config }),
+  applyBlueprint: (id: string, rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
+    return post(`/blueprints/${id}/apply${q}`)
+  },
   copyBlueprint: (id: string) =>
     post(`/blueprints/${id}/copy`),
   deleteBlueprint: (id: string) => del(`/blueprints/${id}`),
@@ -323,10 +338,14 @@ export const ludusApi = {
     post(`/blueprints/${id}/share/users`, { userIDs }),
   shareBlueprintWithGroups: (id: string, groupNames: string[]) =>
     post(`/blueprints/${id}/share/groups`, { groupNames }),
+  unshareBlueprintFromUsers: (id: string, userIDs: string[]) =>
+    del(`/blueprints/${encodeURIComponent(id)}/share/users`, { userIDs }),
+  unshareBlueprintFromGroups: (id: string, groupNames: string[]) =>
+    del(`/blueprints/${encodeURIComponent(id)}/share/groups`, { groupNames }),
   getBlueprintAccessUsers: (id: string) =>
     get<import("./types").BlueprintAccessUserItem[]>(`/blueprints/${id}/access/users`),
   getBlueprintAccessGroups: (id: string) =>
-    get<import("./types").BlueprintAccessUserItem[]>(`/blueprints/${id}/access/groups`),
+    get<import("./types").BlueprintAccessGroupItem[]>(`/blueprints/${id}/access/groups`),
 
   // Users admin — POST /user and DELETE /user/:id
   // These go to the Ludus admin port (8081) using the logged-in admin's own API key.
@@ -359,16 +378,23 @@ export const ludusApi = {
       { useAdmin: true }
     ),
 
-  // Groups — v2 paths
+  // Groups — v2 paths (group names in URL segments must be encoded)
   listGroups: () => get<import("./types").GroupObject[]>("/groups"),
   createGroup: (name: string) => post("/groups", { name }),
-  deleteGroup: (name: string) => del(`/groups/${name}`),
+  deleteGroup: (name: string) => del(`/groups/${encodeURIComponent(name)}`),
   addUsersToGroup: (group: string, userIds: string[]) =>
-    post(`/groups/${group}/users`, { userIDs: userIds }),
+    post(`/groups/${encodeURIComponent(group)}/users`, { userIDs: userIds }),
+  /** Ludus v2: BulkAddRangesToGroupRequest — `rangeIDs` (see api-docs.ludus.cloud). */
+  addRangesToGroup: (group: string, rangeIds: string[]) =>
+    post(`/groups/${encodeURIComponent(group)}/ranges`, { rangeIDs: rangeIds }),
+  removeRangesFromGroup: (group: string, rangeIds: string[]) =>
+    del(`/groups/${encodeURIComponent(group)}/ranges`, { rangeIDs: rangeIds }),
   removeUsersFromGroup: (group: string, userIds: string[]) =>
-    del(`/groups/${group}/users`, { userIDs: userIds }),
+    del(`/groups/${encodeURIComponent(group)}/users`, { userIDs: userIds }),
   listGroupMembers: (group: string) =>
-    get<import("./types").UserObject[]>(`/groups/${group}/users`),
+    get<import("./types").UserObject[]>(`/groups/${encodeURIComponent(group)}/users`),
+  listGroupRanges: (group: string) =>
+    get<unknown>(`/groups/${encodeURIComponent(group)}/ranges`),
   getUserMemberships: () =>
     get<import("./types").GroupObject[]>("/user/memberships"),
 

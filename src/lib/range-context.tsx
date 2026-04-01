@@ -9,7 +9,10 @@ import { STALE } from "./query-client"
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
   selectedRangeId: string | null
+  /** True while accessible ranges have no data yet (initial load). */
   loading: boolean
+  /** True during any accessible-ranges fetch (initial or background). */
+  rangesFetching: boolean
   selectRange: (rangeId: string) => void
   refreshRanges: () => Promise<void>
 }
@@ -18,6 +21,7 @@ const RangeContext = createContext<RangeContextValue>({
   ranges: [],
   selectedRangeId: null,
   loading: true,
+  rangesFetching: false,
   selectRange: () => {},
   refreshRanges: async () => {},
 })
@@ -62,15 +66,23 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  // The accessible ranges list — powered by TanStack Query.
-  // On the first visit this fetches from the API; on subsequent visits the
-  // cached result is returned immediately from localStorage, then revalidated
-  // in the background.
-  const { data: ranges = [], isLoading } = useQuery({
+  // The accessible ranges list — powered by TanStack Query (+ persistence in
+  // QueryProvider). Stale window + refetchInterval cover ACL changes from
+  // group membership without requiring a full reload.
+  const { data: ranges = [], isLoading, isFetching: rangesFetching } = useQuery({
     queryKey: [...queryKeys.accessibleRanges(), impersonationHeaders["X-Impersonate-As"] ?? "self"],
     queryFn: () => fetchAccessibleRanges(impersonationHeaders),
-    staleTime: STALE.short,
+    // Group/range ACL changes are made by other users/admins — no client-side
+    // invalidation for recipients. Short stale + interval keeps the sidebar honest.
+    staleTime: STALE.acl,
+    refetchInterval: 45_000,
+    refetchIntervalInBackground: false,
   })
+
+  // Align query key + fetch headers with sessionStorage on first paint (impersonation may already be set).
+  useEffect(() => {
+    setImpersonationHeaders(readImpersonationHeaders())
+  }, [readImpersonationHeaders])
 
   // Sync selectedRangeId whenever the ranges list changes
   useEffect(() => {
@@ -118,7 +130,16 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   }, [queryClient, readImpersonationHeaders])
 
   return (
-    <RangeContext.Provider value={{ ranges, selectedRangeId, loading: isLoading, selectRange, refreshRanges }}>
+    <RangeContext.Provider
+      value={{
+        ranges,
+        selectedRangeId,
+        loading: isLoading,
+        rangesFetching,
+        selectRange,
+        refreshRanges,
+      }}
+    >
       {children}
     </RangeContext.Provider>
   )

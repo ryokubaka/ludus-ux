@@ -21,6 +21,10 @@ interface FlatVM extends VMObject {
   rangeID: string
 }
 
+function vmDisplayName(vm: VMObject) {
+  return vm.name || vm.vmName || `vm-${vm.ID}`
+}
+
 export default function ConsolePage() {
   return (
     <Suspense fallback={null}>
@@ -58,12 +62,15 @@ function ConsolePageInner() {
   const vms = useMemo<FlatVM[]>(() => {
     const list = selectedRangeId ? allVms.filter((v) => v.rangeID === selectedRangeId) : allVms
     const seen = new Set<number | string>()
-    return list.filter((v) => {
+    const deduped = list.filter((v) => {
       const key = v.proxmoxID ?? v.ID
       if (seen.has(key)) return false
       seen.add(key)
       return true
     })
+    return [...deduped].sort((a, b) =>
+      vmDisplayName(a).localeCompare(vmDisplayName(b), undefined, { sensitivity: "base" })
+    )
   }, [allVms, selectedRangeId])
 
   // Fetch VMs for the currently selected range (or all ranges if none selected)

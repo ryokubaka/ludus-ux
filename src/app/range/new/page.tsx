@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
+import { useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -32,6 +33,7 @@ import {
   FileCode2,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -204,6 +206,7 @@ function parseConfigYaml(yamlText: string): VMEntry[] {
 
 export default function NewRangePage() {
   const router = useRouter()
+  const queryClient = useQueryClient()
   const { toast } = useToast()
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
   const [step, setStep] = useState(0)
@@ -224,6 +227,8 @@ export default function NewRangePage() {
   const [currentUserID, setCurrentUserID] = useState<string | null>(null)
 
   const [allRanges, setAllRanges] = useState<RangeObject[]>([])
+  /** Server-derived next 10.N.* octet (uses /range/all + root key when configured). */
+  const [ipPlan, setIpPlan] = useState<{ nextRangeNumber: number; globalPlan: boolean } | null>(null)
 
   // ── Wizard step 2: Templates + VMs ──────────────────────────────────────────
   const [templates, setTemplates] = useState<TemplateObject[]>([])
@@ -270,6 +275,17 @@ export default function NewRangePage() {
     ludusApi.getRanges().then((res) => {
       if (res.data) setAllRanges(Array.isArray(res.data) ? res.data : [res.data])
     })
+    const ipPlanController = new AbortController()
+    const ipPlanTimeout = setTimeout(() => ipPlanController.abort(), 12_000)
+    fetch("/api/range/ip-plan", { credentials: "include", signal: ipPlanController.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { nextRangeNumber?: number; globalPlan?: boolean } | null) => {
+        if (data && typeof data.nextRangeNumber === "number") {
+          setIpPlan({ nextRangeNumber: data.nextRangeNumber, globalPlan: !!data.globalPlan })
+        }
+      })
+      .catch(() => { /* timeout or network — keep client-side estimate from getRanges */ })
+      .finally(() => clearTimeout(ipPlanTimeout))
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.username) setCurrentUserID(data.username) })
@@ -324,12 +340,14 @@ export default function NewRangePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usedVlans, mode])
 
-  const nextRangeNumber = useMemo(() => {
+  const clientNextRangeNumber = useMemo(() => {
     const used = new Set(allRanges.map((r) => r.rangeNumber).filter((n) => typeof n === "number" && n > 0))
     let n = 1
     while (used.has(n) && n < 254) n++
     return n
   }, [allRanges])
+
+  const nextRangeNumber = ipPlan !== null ? ipPlan.nextRangeNumber : clientNextRangeNumber
 
   const usedRangeIds = useMemo(() => new Set(allRanges.map((r) => r.rangeID).filter(Boolean)), [allRanges])
 
@@ -514,7 +532,11 @@ export default function NewRangePage() {
       }
 
       await refreshRanges()
-      if (effectiveRangeId) selectRange(effectiveRangeId)
+      if (effectiveRangeId) {
+        // Drop stale dashboard cache (e.g. persisted READY) so "/" refetches DEPLOYING and opens logs.
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(effectiveRangeId) })
+        selectRange(effectiveRangeId)
+      }
       toast({ title: "Deployment started", description: `Range ${effectiveRangeId ?? "default"} is being provisioned.` })
       router.push("/")
     } catch (err) {
@@ -666,13 +688,33 @@ export default function NewRangePage() {
                   <Input id="rangeDesc" value={rangeDesc} onChange={(e) => setRangeDesc(e.target.value)}
                     placeholder="Range for labs" disabled={rangeCreated} />
                 </div>
-                {!rangeCreated && allRanges.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                    <Network className="h-3 w-3" />
-                    Ludus will automatically assign IP block{" "}
-                    <code className="font-mono text-primary">10.{nextRangeNumber}.*</code>
-                    {" "}(next available second octet on this server).
-                  </p>
+                {!rangeCreated && (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-muted-foreground flex items-start gap-1.5">
+                      <Network className="h-3 w-3 mt-0.5 shrink-0" />
+                      <span>
+                        Ludus will automatically assign IP block{" "}
+                        <code className="font-mono text-primary">10.{nextRangeNumber}.*</code>
+                        {ipPlan?.globalPlan
+                          ? " (next available second octet across all ranges on this server)."
+                          : ipPlan
+                            ? " (estimated from ranges visible to your account; Ludus may pick a different octet if this block is already taken)."
+                            : " (resolving next octet…)."}
+                      </span>
+                    </p>
+                    {ipPlan && !ipPlan.globalPlan && (
+                      <Alert className="border-amber-500/50 bg-amber-500/10">
+                        <AlertTriangle className="h-4 w-4 text-amber-500" />
+                        <AlertDescription className="text-xs leading-relaxed">
+                          Ludus UI could not load a <strong className="text-foreground">server-wide</strong> range list
+                          for your session. The suggested <code className="font-mono text-primary">10.{nextRangeNumber}.*</code>{" "}
+                          can be wrong and overlap another tenant. Set{" "}
+                          <code className="text-[10px] bg-muted px-1 rounded">LUDUS_ROOT_API_KEY</code> in Ludus UI
+                          environment so this wizard can query every range and show the correct next block.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                  </div>
                 )}
                 <div className="flex justify-end">
                   {rangeCreated ? (

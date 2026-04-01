@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
 import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/query-keys"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -33,7 +34,6 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { useImpersonation } from "@/lib/impersonation-context"
 import { useRange } from "@/lib/range-context"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
@@ -90,6 +90,18 @@ function normalizeRangeListFromApi(raw: unknown): RangeObject[] {
     })
   }
   return out
+}
+
+async function fetchPbStatusForRange(rangeId: string): Promise<RangeObject | null> {
+  const res = await fetch(
+    `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`,
+    { headers: { ...getImpersonationHeaders() } },
+  )
+  if (!res.ok) return null
+  const data: unknown = await res.json()
+  if (data && typeof data === "object" && "error" in data) return null
+  const list = normalizeRangeListFromApi(Array.isArray(data) ? data : [data])
+  return findRangeByRangeId(list, rangeId) ?? list[0] ?? null
 }
 
 // ── DB-backed pending allow/deny helpers ─────────────────────────────────────
@@ -180,7 +192,6 @@ async function deletePendingAllows(
 export default function TestingPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
-  const { impersonation } = useImpersonation()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
   // ── Global range context — single source of truth for which range is active.
@@ -193,23 +204,16 @@ export default function TestingPage() {
     loading: rangesLoading,
   } = useRange()
 
-  // ── Supplemental per-range data (testingEnabled dots in selector) ─────────
-  // Uses PocketBase-backed endpoint so testingEnabled status stays accurate
-  // without depending on the Ludus API, which can cache stale values.
-  const impersonatedUser = impersonation?.username ?? "self"
-  const { data: rangesData } = useQuery({
-    queryKey: ["ranges", "user", "pb", impersonatedUser],
-    queryFn: async (): Promise<RangeObject[]> => {
-      const res = await fetch("/api/range/pb-status", {
-        headers: { ...getImpersonationHeaders() },
-      })
-      if (!res.ok) {
-        const { data } = await ludusApi.getRangesForUser()
-        return normalizeRangeListFromApi(data)
-      }
-      return normalizeRangeListFromApi(await res.json())
-    },
-    staleTime: STALE.short,
+  // ── Per-range PB status for selector dots (all accessible ranges) ─────────
+  // Bulk GET /pb-status only returns ranges "owned" by the effective user; group-shared
+  // ranges are missing. One ?rangeId= fetch per sidebar range keeps dots correct.
+  const testingDotQueries = useQueries({
+    queries: contextRanges.map((r) => ({
+      queryKey: queryKeys.rangePbStatusDot(r.rangeID),
+      queryFn: () => fetchPbStatusForRange(r.rangeID),
+      enabled: !rangesLoading && !!r.rangeID,
+      staleTime: STALE.short,
+    })),
   })
 
   // Ref so closures (effects, intervals, callbacks) always read the LATEST
@@ -445,7 +449,7 @@ export default function TestingPage() {
         // Op finished — refresh range status so button label / badge updates
         await fetchStatus(rangeId)
         // Refresh per-range dots (testingEnabled / DEPLOYING) for all ranges in the selector
-        await queryClient.invalidateQueries({ queryKey: ["ranges", "user", "pb"] })
+        await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
       } else {
         // Op still in flight — ensure the log stream is running so the user
         // sees live output.  Use the ref to avoid circular useCallback deps.
@@ -787,12 +791,10 @@ export default function TestingPage() {
         </div>
       ) : contextRanges.length > 1 && (
         <div className="flex flex-wrap gap-2">
-          {contextRanges.map((r) => {
+          {contextRanges.map((r, i) => {
             const isSelected = r.rangeID === selectedRangeId
-            // For the selected range, use the already-computed derived state from `status`
-            // (same source as the card's ENABLED badge — unambiguously correct).
-            // For other ranges, look up from the PB-backed list query.
-            const otherEntry = isSelected ? null : findRangeByRangeId(rangesData, r.rangeID)
+            // Selected pill: `status` (authoritative for the open card). Others: per-range PB query.
+            const otherEntry = isSelected ? null : testingDotQueries[i]?.data
             const showTestingDot   = isSelected ? isEnabled   : (otherEntry?.testingEnabled === true)
             const showDeployingDot = isSelected ? isDeploying : (
               otherEntry?.rangeState === "DEPLOYING" || otherEntry?.rangeState === "WAITING"

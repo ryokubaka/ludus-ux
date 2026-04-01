@@ -26,6 +26,7 @@ import { WebSocketServer, WebSocket } from "ws"
 import { Client as SSHClient } from "ssh2"
 import { getVncSession } from "../src/lib/vnc-token-store"
 import { proxmoxCreateVncProxy, proxmoxLogin } from "../src/lib/proxmox-http"
+import { readPrivateKey, getSshKeyPassphrase } from "../src/lib/root-ssh-auth"
 
 // ── TLS configuration ────────────────────────────────────────────────────────
 const tlsCertPath = process.env.TLS_CERT_PATH || "/app/certificates/cert.pem"
@@ -270,8 +271,9 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
 // loopback address directly.  We work around this by setting up a local TCP
 // server (on ADMIN_TUNNEL_PORT inside the container) that forwards each
 // connection through an SSH channel to the remote host's 127.0.0.1:8081.
-// The LUDUS_ADMIN_URL env var is then updated so that the settings-store
-// (which reads it on every getSettings() call) uses the tunneled address.
+// When LUDUS_ADMIN_URL at boot already targets a non-localhost host (direct :8081),
+// we leave it unchanged so docker-compose defaults like https://ludus.example:8081 work.
+// Otherwise we point LUDUS_ADMIN_URL at the local tunnel port for settings-store defaults.
 //
 // A new SSH channel is opened for each TCP connection.  Admin operations are
 // infrequent so the per-call SSH overhead is acceptable and avoids having to
@@ -282,10 +284,23 @@ function startAdminTunnel(): Promise<void> {
   const sshHost     = (process.env.LUDUS_SSH_HOST       || "").replace(/\r/g, "")
   const sshPort     = parseInt(process.env.LUDUS_SSH_PORT || "22", 10)
   const sshUser     = (process.env.PROXMOX_SSH_USER      || "root").replace(/\r/g, "")
-  const sshPassword = (process.env.PROXMOX_SSH_PASSWORD  || "").replace(/\r/g, "")
+  const sshPassword = (process.env.PROXMOX_SSH_PASSWORD  || "").replace(/\r/g, "").trim()
+  const sshKey      = !sshPassword ? readPrivateKey() : null
+  /** If LUDUS_ADMIN_URL already targets a non-loopback host (e.g. https://ludus.example:8081), keep it — do not replace with the tunnel. */
+  const adminUrlAtBoot = (process.env.LUDUS_ADMIN_URL || "").trim()
+  const shouldPointEnvAtTunnel = (() => {
+    if (!adminUrlAtBoot) return true
+    try {
+      const { hostname } = new URL(adminUrlAtBoot)
+      const h = hostname.toLowerCase()
+      return h === "127.0.0.1" || h === "localhost"
+    } catch {
+      return true
+    }
+  })()
 
-  if (!sshHost || !sshPassword) {
-    console.log("[admin-tunnel] SSH credentials not configured — skipping tunnel")
+  if (!sshHost || (!sshPassword && !sshKey)) {
+    console.log("[admin-tunnel] SSH not configured (set PROXMOX_SSH_PASSWORD or mount a key at PROXMOX_SSH_KEY_PATH / ./ssh) — skipping tunnel")
     return Promise.resolve()
   }
 
@@ -314,13 +329,18 @@ function startAdminTunnel(): Promise<void> {
         socket.destroy()
       })
 
+      const passphrase = getSshKeyPassphrase()
       conn.connect({
         host: sshHost,
         port: sshPort,
         username: sshUser,
-        password: sshPassword,
         readyTimeout: 10_000,
-        authHandler: ["password"],
+        ...(sshPassword
+          ? { password: sshPassword }
+          : {
+              privateKey: sshKey!,
+              ...(passphrase ? { passphrase } : {}),
+            }),
       })
     })
 
@@ -330,11 +350,14 @@ function startAdminTunnel(): Promise<void> {
     })
 
     server.listen(ADMIN_TUNNEL_PORT, "127.0.0.1", () => {
-      // Point the admin URL at our local tunnel endpoint.
-      // settings-store.defaults() reads process.env on every getSettings() call,
-      // so this change takes effect immediately for all subsequent API calls.
-      process.env.LUDUS_ADMIN_URL = `https://127.0.0.1:${ADMIN_TUNNEL_PORT}`
-      console.log(`[admin-tunnel] Listening on 127.0.0.1:${ADMIN_TUNNEL_PORT} → ${sshHost}:8081`)
+      if (shouldPointEnvAtTunnel) {
+        process.env.LUDUS_ADMIN_URL = `https://127.0.0.1:${ADMIN_TUNNEL_PORT}`
+        console.log(`[admin-tunnel] LUDUS_ADMIN_URL → https://127.0.0.1:${ADMIN_TUNNEL_PORT} (forward to ${sshHost}:8081)`)
+      } else {
+        console.log(
+          `[admin-tunnel] Listening on 127.0.0.1:${ADMIN_TUNNEL_PORT} → ${sshHost}:8081; LUDUS_ADMIN_URL unchanged (${adminUrlAtBoot})`,
+        )
+      }
       resolve()
     })
   })

@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { chownGoadInstance, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { setPbRangeOwner } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -43,9 +44,7 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = getSettings()
-  const rootCreds: SSHCreds | undefined = settings.proxmoxSshPassword
-    ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-    : undefined
+  const rootCreds: SSHCreds | undefined = rootPasswordCredsIfSet(settings)
 
   const errors: string[] = []
 

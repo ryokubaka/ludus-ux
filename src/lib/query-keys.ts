@@ -11,6 +11,8 @@
 export const queryKeys = {
   // ── Range ─────────────────────────────────────────────────────────────────
   rangeStatus:      (rangeId?: string | null) => ["range", "status", rangeId ?? "default"] as const,
+  /** PB-backed testing/deploy dots for one range (GET /api/range/pb-status?rangeId=) */
+  rangePbStatusDot: (rangeId: string) => ["range", "pb-status-dot", rangeId] as const,
   rangeConfig:      (rangeId?: string | null) => ["range", "config", rangeId ?? "default"] as const,
   rangeEtcHosts:    (rangeId?: string | null) => ["range", "etchosts", rangeId ?? "default"] as const,
   rangeInventory:   (rangeId?: string | null) => ["range", "inventory", rangeId ?? "default"] as const,
@@ -18,6 +20,8 @@ export const queryKeys = {
 
   // ── Range lists ───────────────────────────────────────────────────────────
   accessibleRanges: () => ["ranges", "accessible"] as const,
+  /** GET /range — ranges owned by the effective user (not group-shared-only). */
+  rangesOwned:      () => ["ranges", "owned"] as const,
   allRanges:        () => ["ranges", "all"] as const,
 
   // ── Templates ─────────────────────────────────────────────────────────────
@@ -37,9 +41,13 @@ export const queryKeys = {
   blueprintConfig:       (id: string) => ["blueprints", id, "config"] as const,
   blueprintAccessUsers:  (id: string) => ["blueprints", id, "access", "users"] as const,
   blueprintAccessGroups: (id: string) => ["blueprints", id, "access", "groups"] as const,
+  /** Combined access lists for blueprint cards / share dialog */
+  blueprintSharing: (id: string) => ["blueprints", id, "sharing"] as const,
 
   // ── Groups ────────────────────────────────────────────────────────────────
   groups:           () => ["groups"] as const,
+  /** Members + range IDs for one group (GET /groups/{name}/users + /ranges). */
+  groupDetail:      (groupName: string) => ["groups", "detail", groupName] as const,
 
   // ── Snapshots ─────────────────────────────────────────────────────────────
   snapshots:        () => ["snapshots"] as const,

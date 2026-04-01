@@ -14,7 +14,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
-import { sshExec, readGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 import { getDb } from "@/lib/db"
 
@@ -61,9 +62,7 @@ export async function POST(
   }
 
   const settings = getSettings()
-  const rootCreds: SSHCreds | undefined = settings.proxmoxSshPassword
-    ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-    : undefined
+  const rootCreds = rootPasswordCredsIfSet(settings)
 
   // Resolve rangeID: prefer explicit body value, fall back to workspace file
   let ludusRangeId = bodyRangeId || null
@@ -99,7 +98,7 @@ export async function POST(
 
   // Step 2: Remove the GOAD workspace directory
   try {
-    const goadPath = settings.goadPath || "/opt/goad-mod"
+    const goadPath = settings.goadPath || "/opt/GOAD"
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const workspacePath = `${goadPath}/workspace/${safeId}`
 

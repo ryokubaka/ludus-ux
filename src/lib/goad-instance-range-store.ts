@@ -4,7 +4,7 @@
  * WHY THIS EXISTS
  * ───────────────
  * The SSH-written .goad_range_id file is the canonical on-server record, but
- * writing it requires root SSH credentials (proxmoxSshPassword).  When those
+ * writing it requires root SSH (password or mounted private key).  When those
  * credentials are not configured the write fails silently, leaving the new
  * instance with no range association in the UI.
  *

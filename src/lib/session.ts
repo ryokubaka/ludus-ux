@@ -48,7 +48,7 @@ const SESSION_COOKIE = IS_SECURE_CONTEXT ? "__Host-ludus_session" : "ludus_sessi
 const LEGACY_SESSION_COOKIE = "ludus_session"
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
-const SALT = new TextEncoder().encode("ludus-ui-session-salt-v1")
+const SALT = new TextEncoder().encode("ludus-ux-session-salt-v1")
 
 function getSecret(): string {
   return process.env.APP_SECRET || "change-me-in-production-32-chars!!"

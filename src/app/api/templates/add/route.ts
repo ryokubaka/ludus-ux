@@ -151,8 +151,8 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     if (/all configured authentication methods failed/i.test(msg) || /authentication/i.test(msg)) {
       throw new Error(
         "Root SSH authentication failed. To add templates, configure root SSH access: " +
-        "set PROXMOX_SSH_PASSWORD in your .env file (or configure it in Settings → SSH). " +
-        "Alternatively, mount an SSH private key to /app/ssh/id_rsa in the container."
+        "set PROXMOX_SSH_PASSWORD (or mount a root private key: ./ssh → /app/ssh, PROXMOX_SSH_KEY_PATH) " +
+        "in your .env or Settings → SSH."
       )
     }
     throw err

@@ -3,6 +3,7 @@ import { streamGoadCommand, isGoadConfigured, readGoadRangeId } from "@/lib/goad
 import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 
 export const dynamic = "force-dynamic"
@@ -82,9 +83,7 @@ export async function POST(request: NextRequest) {
   if (!effectiveRangeId && instanceId) {
     try {
       const settings = getSettings()
-      const rootCreds = settings.proxmoxSshPassword
-        ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-        : undefined
+      const rootCreds = rootPasswordCredsIfSet(settings)
       effectiveRangeId = (await readGoadRangeId(instanceId, rootCreds)) ?? undefined
     } catch {
       // SSH unavailable — proceed without range targeting

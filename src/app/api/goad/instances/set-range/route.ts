@@ -11,7 +11,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
-import { writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
+import { writeGoadRangeId } from "@/lib/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 
 export const dynamic = "force-dynamic"
@@ -31,9 +32,7 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = getSettings()
-  const rootCreds: SSHCreds | undefined = settings.proxmoxSshPassword
-    ? { username: settings.proxmoxSshUser || "root", password: settings.proxmoxSshPassword }
-    : undefined
+  const rootCreds = rootPasswordCredsIfSet(settings)
 
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 

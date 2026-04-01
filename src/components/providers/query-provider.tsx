@@ -38,6 +38,7 @@ import { useState, useEffect } from "react"
 import { QueryClientProvider, dehydrate } from "@tanstack/react-query"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { makeQueryClient } from "@/lib/query-client"
+import { queryKeys } from "@/lib/query-keys"
 
 const CACHE_KEY = "lux_query_cache"
 const MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 h
@@ -77,6 +78,13 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch { /* malformed JSON or private-browsing quota */ }
+
+    // Permission lists restored via setQueryData() look "fresh" to TanStack Query
+    // (dataUpdatedAt ≈ now), so staleTime would block refetch for minutes even
+    // when another user just shared a range/blueprint. Invalidate once so mounted
+    // observers immediately background-refetch from Ludus.
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRanges(), exact: false })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(), exact: false })
 
     // ── Persist cache changes (throttled) ─────────────────────────────────
     let saveTimer: ReturnType<typeof setTimeout> | null = null

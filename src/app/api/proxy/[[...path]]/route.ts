@@ -51,12 +51,22 @@ async function handler(
     }
   }
 
+  // Group bulk user/range mutations can exceed the default 30s while Ludus updates PocketBase / ACLs.
+  const groupBulkPath = /^\/groups\/[^/]+\/(users|ranges)$/
+  const slowGroupOp =
+    groupBulkPath.test(path) && ["POST", "DELETE"].includes(request.method)
+
+  // Ansible inventory is generated server-side and routinely exceeds 30s on busy ranges.
+  const slowAnsibleInventoryGet =
+    request.method === "GET" && /\/range\/ansibleinventory\b/i.test(path)
+
   const result = await ludusRequest(fullPath, {
     method: request.method,
     body,
     apiKey: effectiveApiKey,
     useAdminEndpoint: useAdmin,
     userOverride,
+    timeout: slowGroupOp ? 120_000 : slowAnsibleInventoryGet ? 120_000 : 30_000,
   })
 
   if (result.error) {
@@ -65,7 +75,7 @@ async function handler(
     const isConnectionError = result.status === 0
     const errorMessage =
       useAdmin && isConnectionError
-        ? `${result.error} — admin API (port 8081) unreachable. Ensure the app is deployed on the Ludus/Proxmox server itself, or set LUDUS_ADMIN_URL in your .env to an accessible address.`
+        ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
         : result.error
     return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
   }

@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { hasSshExecAuth } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -72,9 +73,9 @@ export async function DELETE(request: NextRequest) {
 
   const settings = getSettings()
   const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!sshPass) {
+  if (!hasSshExecAuth(settings, session.sshPassword)) {
     return NextResponse.json(
-      { error: "No Proxmox credentials configured. Set PROXMOX_SSH_PASSWORD in your .env." },
+      { error: "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD, mount a root key (./ssh), or log in with a user SSH password." },
       { status: 503 },
     )
   }

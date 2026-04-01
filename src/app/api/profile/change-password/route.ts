@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = getSettings()
-  if (!settings.sshHost || !settings.proxmoxSshPassword) {
+  if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) {
     return NextResponse.json({ error: "SSH not configured — contact an administrator" }, { status: 503 })
   }
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
   try {
     await sshExec(
       settings.sshHost, settings.sshPort,
-      settings.proxmoxSshUser || "root", settings.proxmoxSshPassword,
+      settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",
       `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
     )
   } catch (err) {

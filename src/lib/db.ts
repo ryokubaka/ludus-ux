@@ -33,7 +33,7 @@ import type BetterSqlite3 from "better-sqlite3"
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data")
 export const TASKS_LOG_DIR = path.join(DATA_DIR, "tasks")
-const DB_PATH = path.join(DATA_DIR, "ludus-ui.db")
+const DB_PATH = path.join(DATA_DIR, "ludus-ux.db")
 
 let _db: BetterSqlite3.Database | null = null
 

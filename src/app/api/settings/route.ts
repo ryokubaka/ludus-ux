@@ -13,7 +13,13 @@ export async function GET(request: NextRequest) {
 
   // Non-admins receive a restricted view — sensitive credentials are omitted.
   if (!session.isAdmin) {
-    const { proxmoxSshPassword: _p, rootApiKey: _r, proxmoxSshUser: _u, ...safeSettings } = settings
+    const {
+      proxmoxSshPassword: _p,
+      rootApiKey: _r,
+      proxmoxSshUser: _u,
+      proxmoxSshKeyPath: _k,
+      ...safeSettings
+    } = settings
     return NextResponse.json(safeSettings)
   }
 
@@ -44,6 +50,7 @@ export async function POST(request: NextRequest) {
   if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
+  if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
 
   const updated = updateSettings(patch)
   // Invalidate cached catalog if goadPath changed

@@ -92,9 +92,15 @@ export default function UsersPage() {
   const [newUserAdmin, setNewUserAdmin] = useState(false)
   const [showNewPassword, setShowNewPassword] = useState(false)
 
-  /** Strip any character that is not a lowercase letter, digit, hyphen, or underscore. */
-  const sanitizeUserId = (value: string) =>
-    value.toLowerCase().replace(/[^a-z0-9_-]/g, "")
+  /** Ludus/Linux usernames: letters and digits only, must start with a letter (max 32). */
+  const sanitizeUserId = (value: string) => {
+    let s = value.toLowerCase().replace(/[^a-z0-9]/g, "")
+    if (s.length > 32) s = s.slice(0, 32)
+    s = s.replace(/^[0-9]+/, "")
+    return s
+  }
+
+  const USER_ID_PATTERN = /^[a-z][a-z0-9]{0,31}$/
 
   // ── Delete user ────────────────────────────────────────────────────────────
   const [confirmDelete, setConfirmDelete] = useState<{ userId: string; rangeIds?: string[] } | null>(null)
@@ -143,18 +149,33 @@ export default function UsersPage() {
   })
 
   const users = usersData?.users ?? []
+  /** ROOT is admin-only; hide from the directory UI. */
+  const usersVisible = useMemo(
+    () => users.filter((u) => u.userID.toUpperCase() !== "ROOT"),
+    [users],
+  )
   const rangeMap = useMemo(() => usersData?.rangeMap ?? {}, [usersData])
 
   const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: queryKeys.users() })
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const handleAdd = async () => {
-    if (!newUserId.trim()) return
+    const uid = newUserId.trim()
+    if (!uid) return
+    if (!USER_ID_PATTERN.test(uid)) {
+      toast({
+        variant: "destructive",
+        title: "Invalid user ID",
+        description:
+          "Use 1–32 characters: start with a letter, then letters and numbers only (no spaces, dots, or symbols).",
+      })
+      return
+    }
     setAdding(true)
 
     // Step 1: Create the user account.
     // Pass userId as the `name` field so the Linux home directory matches /home/<userId>.
-    const result = await ludusApi.addUser(newUserId, newUserId, newUserAdmin)
+    const result = await ludusApi.addUser(uid, uid, newUserAdmin)
     if (result.error) {
       toast({ variant: "destructive", title: "Error creating user", description: result.error })
       setAdding(false)
@@ -171,7 +192,7 @@ export default function UsersPage() {
         const pwRes = await fetch("/api/users/change-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: newUserId, newPassword: newUserPassword }),
+          body: JSON.stringify({ userId: uid, newPassword: newUserPassword }),
         })
         const pwData = await pwRes.json() as { success?: boolean; error?: string }
         if (pwData.success) {
@@ -189,7 +210,7 @@ export default function UsersPage() {
       const keyRes = await fetch("/api/users/roll-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: newUserId }),
+        body: JSON.stringify({ userId: uid }),
       })
       const keyData = await keyRes.json() as { bashrcUpdated?: boolean; bashrcError?: string }
       if (keyData.bashrcUpdated) {
@@ -203,7 +224,7 @@ export default function UsersPage() {
 
     toast({
       title: "User created",
-      description: `${newUserId}${notes.length ? ` — ${notes.join(", ")}` : ""}`,
+      description: `${uid}${notes.length ? ` — ${notes.join(", ")}` : ""}`,
     })
     setAddDialog(false)
     setNewUserId(""); setNewUserPassword("")
@@ -378,20 +399,20 @@ export default function UsersPage() {
   }
 
   const sortedUsers = useMemo(
-    () => [...users].sort((a, b) => a.userID.localeCompare(b.userID)),
-    [users]
+    () => [...usersVisible].sort((a, b) => a.userID.localeCompare(b.userID)),
+    [usersVisible],
   )
 
-  const adminCount = users.filter((u) => u.isAdmin).length
+  const adminCount = usersVisible.filter((u) => u.isAdmin).length
 
   return (
     <div className="space-y-6">
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: "Total Users", value: users.length },
+          { label: "Total Users", value: usersVisible.length },
           { label: "Admins", value: adminCount, className: "text-primary" },
-          { label: "Regular Users", value: users.length - adminCount },
+          { label: "Regular Users", value: usersVisible.length - adminCount },
         ].map(({ label, value, className }) => (
           <Card key={label} className="glass-card">
             <CardContent className="p-4">
@@ -438,23 +459,20 @@ export default function UsersPage() {
                     const rangeId = userRangeIds[0] || user.rangeID || user.defaultRangeID
                     return (
                       <tr key={user.userID} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
-                        {/* Manage button — leftmost column, skip only ROOT */}
                         <td className="p-2">
-                          {user.userID !== "ROOT" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
-                              onClick={() => startImpersonate(user.userID)}
-                              disabled={fetchingKey === user.userID}
-                              title={`Manage Ludus as ${user.userID}`}
-                            >
-                              {fetchingKey === user.userID
-                                ? <Loader2 className="h-3 w-3 animate-spin" />
-                                : <Terminal className="h-3 w-3" />}
-                              Manage
-                            </Button>
-                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
+                            onClick={() => startImpersonate(user.userID)}
+                            disabled={fetchingKey === user.userID}
+                            title={`Manage Ludus as ${user.userID}`}
+                          >
+                            {fetchingKey === user.userID
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : <Terminal className="h-3 w-3" />}
+                            Manage
+                          </Button>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2">
@@ -481,41 +499,41 @@ export default function UsersPage() {
                         </td>
                         <td className="p-3">
                           <div className="flex items-center justify-end gap-1">
-                            {/* Promote / demote admin */}
-                            {user.userID !== "ROOT" && (
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                onClick={() => handleToggleAdmin(user.userID, !user.isAdmin)}
-                                disabled={roleChanging === user.userID}
-                                title={user.isAdmin ? `Revoke admin from ${user.userID}` : `Promote ${user.userID} to admin`}
-                              >
-                                {roleChanging === user.userID
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : user.isAdmin
-                                    ? <ShieldOff className="h-3 w-3 text-yellow-400" />
-                                    : <ShieldCheck className="h-3 w-3 text-cyan-400" />}
-                              </Button>
-                            )}
-                            {user.userID !== "ROOT" && (
-                              <Button size="icon-sm" variant="ghost"
-                                onClick={() => setConfirmRoll(user.userID)}
-                                disabled={apiKeyLoading === user.userID}
-                                title="Roll API key">
-                                {apiKeyLoading === user.userID
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : <Key className="h-3 w-3 text-yellow-400" />}
-                              </Button>
-                            )}
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              onClick={() => handleToggleAdmin(user.userID, !user.isAdmin)}
+                              disabled={roleChanging === user.userID}
+                              title={user.isAdmin ? `Revoke admin from ${user.userID}` : `Promote ${user.userID} to admin`}
+                            >
+                              {roleChanging === user.userID
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : user.isAdmin
+                                  ? <ShieldOff className="h-3 w-3 text-yellow-400" />
+                                  : <ShieldCheck className="h-3 w-3 text-cyan-400" />}
+                            </Button>
+                            <Button size="icon-sm" variant="ghost"
+                              onClick={() => setConfirmRoll(user.userID)}
+                              disabled={apiKeyLoading === user.userID}
+                              title="Roll API key">
+                              {apiKeyLoading === user.userID
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Key className="h-3 w-3 text-yellow-400" />}
+                            </Button>
                             <Button size="icon-sm" variant="ghost"
                               onClick={() => { setChangePwUserId(user.userID); setChangePwValue(""); setChangePwConfirm(""); setShowChangePw(false) }}
                               title="Change password">
                               <Lock className="h-3 w-3 text-cyan-400" />
                             </Button>
-                            <Button size="icon-sm" variant="ghost"
-                              onClick={() => handleGetWireguard(user.userID)}
-                              title="Download WireGuard config">
-                              <Download className="h-3 w-3 text-blue-400" />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1.5 border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs whitespace-nowrap"
+                              onClick={() => void handleGetWireguard(user.userID)}
+                              title="Download WireGuard client configuration"
+                            >
+                              <Download className="h-3 w-3 shrink-0" />
+                              Download WireGuard
                             </Button>
                             <Button size="icon-sm" variant="ghost"
                               onClick={() => openDeleteDialog(user.userID)}
@@ -552,7 +570,7 @@ export default function UsersPage() {
                 maxLength={32}
               />
               <p className="text-xs text-muted-foreground">
-                Lowercase letters, numbers, hyphens, underscores only — becomes the Linux username and home directory
+                Letters and numbers only; must start with a letter (max 32) — becomes the Linux username and home directory
               </p>
             </div>
             <div className="space-y-1.5">
@@ -577,7 +595,15 @@ export default function UsersPage() {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => { setAddDialog(false); setShowNewPassword(false) }}>Cancel</Button>
-            <Button onClick={handleAdd} disabled={adding || !newUserId.trim() || !newUserPassword.trim()}>
+            <Button
+              onClick={handleAdd}
+              disabled={
+                adding ||
+                !newUserId.trim() ||
+                !newUserPassword.trim() ||
+                !USER_ID_PATTERN.test(newUserId.trim())
+              }
+            >
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {adding ? "Creating… (up to 1 min)" : "Add User"}
             </Button>

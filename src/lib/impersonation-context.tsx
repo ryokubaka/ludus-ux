@@ -81,7 +81,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
           // or explicit cookie deletion).
           sessionStorage.removeItem(STORAGE_KEY)
           setImpersonation(null)
-          queryClient.invalidateQueries()
+          queryClient.clear()
         }
       })
       .catch(() => {})
@@ -91,17 +91,17 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     const handleChanged = () => {
       const next = readStorage()
       setImpersonation(next)
-      // Invalidate all cached queries so they refetch with the new identity's
-      // API key.  Without this, TanStack Query could serve stale admin data
-      // after entering impersonation, or stale impersonated data after exiting.
-      queryClient.invalidateQueries()
+      // Clear the entire query cache so the new user's pages load fresh data
+      // immediately, rather than briefly flashing stale data from the previous
+      // identity before a background refetch completes.
+      queryClient.clear()
     }
     window.addEventListener(IMPERSONATION_CHANGED_EVENT, handleChanged)
 
     const handleStorage = (e: StorageEvent) => {
       if (e.key === STORAGE_KEY) {
         setImpersonation(e.newValue ? JSON.parse(e.newValue) : null)
-        queryClient.invalidateQueries()
+        queryClient.clear()
       }
     }
     window.addEventListener("storage", handleStorage)

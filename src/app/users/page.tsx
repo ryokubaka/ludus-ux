@@ -73,12 +73,12 @@ export default function UsersPage() {
     setTimeout(() => apiKeyInputRef.current?.focus(), 50)
   }, [router, toast])
 
-  const commitImpersonate = () => {
+  const commitImpersonate = async () => {
     if (!impersonateTarget || !impersonateApiKey.trim()) {
       toast({ variant: "destructive", title: "API key required" })
       return
     }
-    saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
+    await saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
     toast({ title: `Now managing as ${impersonateTarget.userID}` })
     setImpersonateTarget(null)
     router.push("/")

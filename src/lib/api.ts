@@ -309,8 +309,8 @@ export const ludusApi = {
 
   // Blueprints — v2 paths
   listBlueprints: () => get<import("./types").BlueprintListItem[]>("/blueprints"),
-  createBlueprintFromRange: () =>
-    post("/blueprints/from-range"),
+  createBlueprintFromRange: (blueprintID: string) =>
+    post("/blueprints/from-range", { blueprintID }),
   getBlueprintConfig: (id: string) => get<{ result: string }>(`/blueprints/${id}/config`),
   updateBlueprintConfig: (id: string, config: string) =>
     put(`/blueprints/${id}/config`, config),
@@ -361,7 +361,7 @@ export const ludusApi = {
 
   // Groups — v2 paths
   listGroups: () => get<import("./types").GroupObject[]>("/groups"),
-  createGroup: (name: string) => post("/groups", { groupName: name }),
+  createGroup: (name: string) => post("/groups", { name }),
   deleteGroup: (name: string) => del(`/groups/${name}`),
   addUsersToGroup: (group: string, userIds: string[]) =>
     post(`/groups/${group}/users`, { userIDs: userIds }),

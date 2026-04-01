@@ -63,14 +63,18 @@ export default function BlueprintsPage() {
   const invalidateBlueprints = () => queryClient.invalidateQueries({ queryKey: queryKeys.blueprints() })
 
   const handleCreate = async () => {
+    if (!newBpId.trim()) {
+      toast({ variant: "destructive", title: "Blueprint ID required" })
+      return
+    }
     setCreating(true)
-    // v2: create blueprint from current range config
-    const result = await ludusApi.createBlueprintFromRange()
+    const result = await ludusApi.createBlueprintFromRange(newBpId.trim())
     if (result.error) {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Blueprint created from current range config" })
       setCreateDialog(false)
+      setNewBpId("")
       invalidateBlueprints()
     }
     setCreating(false)
@@ -234,17 +238,31 @@ export default function BlueprintsPage() {
       )}
 
       {/* Create dialog */}
-      <Dialog open={createDialog} onOpenChange={setCreateDialog}>
+      <Dialog open={createDialog} onOpenChange={(open) => { setCreateDialog(open); if (!open) setNewBpId("") }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Blueprint from Range</DialogTitle>
             <DialogDescription>
-              Save your current range configuration as a reusable blueprint. The blueprint will be created from your current range config.
+              Save your current range configuration as a reusable blueprint.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-bp-id">Blueprint ID <span className="text-red-400">*</span></Label>
+              <Input
+                id="new-bp-id"
+                placeholder="my-blueprint"
+                value={newBpId}
+                onChange={(e) => setNewBpId(e.target.value)}
+                className="font-mono"
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate() }}
+              />
+              <p className="text-xs text-muted-foreground">A unique identifier for this blueprint</p>
+            </div>
+          </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreateDialog(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={creating}>
+            <Button variant="ghost" onClick={() => { setCreateDialog(false); setNewBpId("") }}>Cancel</Button>
+            <Button onClick={handleCreate} disabled={creating || !newBpId.trim()}>
               {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
               Create Blueprint
             </Button>

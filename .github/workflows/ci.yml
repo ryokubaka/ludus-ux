@@ -17,6 +17,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# trivy-action@v0.35.0 pins actions/cache@v4 (Node 20). Opt into Node 24 for JS actions until
+# upstream bumps the pin (see https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest

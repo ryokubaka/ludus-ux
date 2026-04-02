@@ -1,0 +1,2211 @@
+openapi: 3.1.0
+info:
+  title: Ludus UX API
+  description: |
+    REST API for the Ludus UX web application — a Next.js frontend for managing
+    [Ludus](https://ludus.cloud) cyber range infrastructure, including VM ranges,
+    templates, user management, VNC/SPICE console access, and GOAD (Game of
+    Active Directory) lab orchestration.
+
+    ## Authentication
+
+    All protected endpoints require a valid session cookie set by `POST /api/auth/login`.
+    The cookie is AES-256-GCM encrypted and HTTP-only. Sessions expire after 24 hours.
+
+    **Admin impersonation headers** (admin sessions only):
+    - `X-Impersonate-As` — target username
+    - `X-Impersonate-Apikey` — target user's Ludus API key
+    - `X-Ludus-Admin: true` — route to admin API port (8081)
+    - `X-Ludus-User` — override Ludus user context
+  version: 0.9.2
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: /
+    description: Ludus UX application server
+
+tags:
+  - name: Auth
+    description: Login, session management, and logout
+  - name: Proxy
+    description: Generic pass-through proxy to the upstream Ludus API
+  - name: Health
+    description: Application liveness check
+  - name: Settings
+    description: Runtime configuration management
+  - name: Logo
+    description: Custom logo upload and retrieval
+  - name: Logs
+    description: Real-time range deployment log streaming (SSE)
+  - name: Admin
+    description: Admin-only aggregated data and user management
+  - name: Users
+    description: User credential operations (admin only)
+  - name: Range
+    description: Range lifecycle, configuration, and domain allow-list management
+  - name: Templates
+    description: VM template discovery and installation
+  - name: Console
+    description: SPICE/VNC console access for Proxmox VMs
+  - name: GOAD
+    description: GOAD (Game of Active Directory) lab orchestration
+
+# ---------------------------------------------------------------------------
+# Reusable components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ludus_session
+      description: AES-256-GCM encrypted HTTP-only session cookie set by the login endpoint.
+
+  parameters:
+    impersonateAs:
+      name: X-Impersonate-As
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Admin only. Scope the request to this username.
+    impersonateApikey:
+      name: X-Impersonate-Apikey
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Admin only. Use this user's Ludus API key instead of the session key.
+    ludusAdmin:
+      name: X-Ludus-Admin
+      in: header
+      required: false
+      schema:
+        type: string
+        enum: ["true"]
+      description: Admin only. Route the proxied request to the admin API port (8081).
+    ludusUser:
+      name: X-Ludus-User
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Admin only. Override the Ludus user context for this request.
+
+  schemas:
+    # ---- Session / Auth ----
+    SessionData:
+      type: object
+      properties:
+        authenticated:
+          type: boolean
+        username:
+          type: string
+        isAdmin:
+          type: boolean
+        loginAt:
+          type: string
+          format: date-time
+      required: [authenticated]
+
+    # ---- Settings ----
+    RuntimeSettings:
+      type: object
+      properties:
+        ludusUrl:
+          type: string
+          format: uri
+          example: https://192.168.1.10:8080
+        ludusAdminUrl:
+          type: string
+          format: uri
+          example: https://192.168.1.10:8081
+        verifyTls:
+          type: boolean
+        sshHost:
+          type: string
+        sshPort:
+          type: integer
+          default: 22
+        goadPath:
+          type: string
+          example: /opt/GOAD
+        rootApiKey:
+          type: string
+        proxmoxSshUser:
+          type: string
+          example: root
+        proxmoxSshPassword:
+          type: string
+          format: password
+
+    # ---- Range / VM ----
+    RangeState:
+      type: string
+      enum: [DEPLOYING, SUCCESS, ERROR, "NEVER DEPLOYED", ABORTED, WAITING]
+
+    VMObject:
+      type: object
+      properties:
+        vmName:
+          type: string
+        vmId:
+          type: integer
+        ipAddress:
+          type: string
+        os:
+          type: string
+        powerState:
+          type: string
+      additionalProperties: true
+
+    RangeObject:
+      type: object
+      properties:
+        rangeID:
+          type: string
+        name:
+          type: string
+        rangeNumber:
+          type: integer
+        rangeState:
+          $ref: '#/components/schemas/RangeState'
+        lastDeployment:
+          type: string
+          format: date-time
+        numberOfVMs:
+          type: integer
+        testingEnabled:
+          type: boolean
+        description:
+          type: string
+        VMs:
+          type: array
+          items:
+            $ref: '#/components/schemas/VMObject'
+        allowedDomains:
+          type: array
+          items:
+            type: string
+        userID:
+          type: string
+      required: [rangeID, rangeState, VMs]
+
+    RangeOpType:
+      type: string
+      enum: [testing_start, testing_stop]
+
+    RangeOpStatus:
+      type: string
+      enum: [pending, running, completed, error]
+
+    RangeOp:
+      type: object
+      properties:
+        id:
+          type: integer
+        rangeId:
+          type: string
+        username:
+          type: string
+        opType:
+          $ref: '#/components/schemas/RangeOpType'
+        status:
+          $ref: '#/components/schemas/RangeOpStatus'
+        expectedTestingEnabled:
+          type: integer
+          enum: [0, 1]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, rangeId, username, opType, status]
+
+    # ---- Users ----
+    UserObject:
+      type: object
+      properties:
+        userID:
+          type: string
+        isAdmin:
+          type: boolean
+        proxmoxUsername:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        defaultRangeID:
+          type: string
+        dateCreated:
+          type: string
+          format: date-time
+        dateLastActive:
+          type: string
+          format: date-time
+      required: [userID, isAdmin]
+
+    # ---- Templates ----
+    TemplateSource:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        files:
+          type: array
+          items:
+            type: string
+        ref:
+          type: string
+        apiBase:
+          type: string
+          format: uri
+
+    # ---- GOAD ----
+    GoadLabDef:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        vmCount:
+          type: integer
+        domains:
+          type: array
+          items:
+            type: string
+        requiredTemplates:
+          type: array
+          items:
+            type: string
+        ludusSupported:
+          type: boolean
+      required: [name]
+
+    GoadExtensionDef:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        machines:
+          type: array
+          items:
+            type: string
+        compatibility:
+          type: array
+          items:
+            type: string
+        impact:
+          type: string
+        requiredTemplates:
+          type: array
+          items:
+            type: string
+      required: [name]
+
+    GoadInstanceStatus:
+      type: string
+      enum: [CREATED, PROVIDED, READY]
+
+    GoadInstance:
+      type: object
+      properties:
+        instanceId:
+          type: string
+        lab:
+          type: string
+          example: GOAD
+        provider:
+          type: string
+          example: ludus
+        provisioner:
+          type: string
+          example: ansible
+        ipRange:
+          type: string
+          example: 10.5.10
+        status:
+          $ref: '#/components/schemas/GoadInstanceStatus'
+        isDefault:
+          type: boolean
+        extensions:
+          type: array
+          items:
+            type: string
+        ownerUserId:
+          type: string
+        ludusRangeId:
+          type: string
+      required: [instanceId, lab, provider, provisioner, status]
+
+    GoadTaskStatus:
+      type: string
+      enum: [running, completed, error, aborted]
+
+    GoadTask:
+      type: object
+      properties:
+        id:
+          type: string
+        command:
+          type: string
+        instanceId:
+          type: string
+        status:
+          $ref: '#/components/schemas/GoadTaskStatus'
+        startedAt:
+          type: integer
+          description: Unix timestamp in milliseconds
+        endedAt:
+          type: integer
+          description: Unix timestamp in milliseconds
+        exitCode:
+          type: integer
+        lineCount:
+          type: integer
+      required: [id, command, status, startedAt]
+
+    GoadTaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/GoadTask'
+        - type: object
+          properties:
+            lines:
+              type: array
+              items:
+                type: string
+          required: [lines]
+
+    # ---- Common responses ----
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required: [success]
+
+  responses:
+    Unauthorized:
+      description: No valid session cookie or session has expired.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Unauthorized
+    Forbidden:
+      description: Authenticated but insufficient privileges (admin required).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Forbidden
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # --------------------------------------------------------------------------
+  # Auth
+  # --------------------------------------------------------------------------
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login (step 1 and step 2)
+      description: |
+        Authenticates the user. There are two flows:
+
+        **Step 1 (SSH key retrieval):** Supply `username` and `password`.
+        The server connects over SSH, retrieves the `LUDUS_API_KEY` from
+        `~/.bashrc`, validates it against the Ludus API, and sets a session
+        cookie on success.
+
+        If the API key is not found in `~/.bashrc`, the server returns
+        `{ needsApiKey: true }` so the UI can prompt for manual entry.
+
+        **Step 2 (manual API key):** Supply `username`, `password`, and `apiKey`.
+        The server validates the supplied key directly.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+                apiKey:
+                  type: string
+                  description: Required only for step 2.
+              required: [username, password]
+            examples:
+              step1:
+                summary: SSH-based login (step 1)
+                value:
+                  username: alice
+                  password: s3cr3t
+              step2:
+                summary: Manual API key (step 2)
+                value:
+                  username: alice
+                  password: s3cr3t
+                  apiKey: LUDUS-XXXXXXXXXXXXXXXXXXXXXXXXXXXX
+      responses:
+        '200':
+          description: Login succeeded, or manual API key is required.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - description: Login OK — session cookie is set.
+                    type: object
+                    properties:
+                      success:
+                        type: boolean
+                        enum: [true]
+                      isAdmin:
+                        type: boolean
+                      username:
+                        type: string
+                    required: [success, isAdmin, username]
+                  - description: SSH succeeded but API key not found; user must supply key.
+                    type: object
+                    properties:
+                      needsApiKey:
+                        type: boolean
+                        enum: [true]
+                      username:
+                        type: string
+                      staleKey:
+                        type: boolean
+                        description: Set when an existing key was found but is invalid.
+                    required: [needsApiKey, username]
+        '400':
+          description: Missing required fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: SSH authentication failed or supplied API key is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Unable to connect to the Ludus server over SSH.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/session:
+    get:
+      tags: [Auth]
+      summary: Get current session
+      description: Returns information about the currently authenticated session.
+      operationId: getSession
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Authenticated session details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionData'
+              example:
+                authenticated: true
+                username: alice
+                isAdmin: false
+                loginAt: "2024-01-15T10:30:00Z"
+        '401':
+          description: No valid session.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authenticated:
+                    type: boolean
+                    enum: [false]
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout
+      description: Clears the session cookie and ends the current session.
+      operationId: logout
+      responses:
+        '200':
+          description: Session cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # --------------------------------------------------------------------------
+  # Proxy
+  # --------------------------------------------------------------------------
+  /api/proxy/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: false
+        schema:
+          type: string
+        description: >
+          Optional catch-all path forwarded verbatim to the Ludus API.
+          For example, `/api/proxy/range/list` proxies to `/range/list` on the
+          Ludus server. Query parameters are forwarded as-is.
+      - $ref: '#/components/parameters/ludusAdmin'
+      - $ref: '#/components/parameters/ludusUser'
+      - $ref: '#/components/parameters/impersonateApikey'
+    get:
+      tags: [Proxy]
+      summary: Proxy GET to Ludus API
+      operationId: proxyGet
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Response from the upstream Ludus API.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Proxy]
+      summary: Proxy POST to Ludus API
+      operationId: proxyPost
+      security:
+        - sessionCookie: []
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '200':
+          description: Response from the upstream Ludus API.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [Proxy]
+      summary: Proxy PUT to Ludus API
+      operationId: proxyPut
+      security:
+        - sessionCookie: []
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '200':
+          description: Response from the upstream Ludus API.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Proxy]
+      summary: Proxy DELETE to Ludus API
+      operationId: proxyDelete
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Response from the upstream Ludus API.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Proxy]
+      summary: Proxy PATCH to Ludus API
+      operationId: proxyPatch
+      security:
+        - sessionCookie: []
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+      responses:
+        '200':
+          description: Response from the upstream Ludus API.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # Health
+  # --------------------------------------------------------------------------
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: Returns a simple status payload. No authentication required.
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Application is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                  timestamp:
+                    type: string
+                    format: date-time
+              example:
+                status: ok
+                timestamp: "2024-01-15T10:30:00.000Z"
+
+  # --------------------------------------------------------------------------
+  # Settings
+  # --------------------------------------------------------------------------
+  /api/settings:
+    get:
+      tags: [Settings]
+      summary: Get runtime settings
+      description: Returns the current runtime configuration (Ludus URL, SSH config, GOAD path, etc.).
+      operationId: getSettings
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Settings]
+      summary: Update runtime settings
+      description: Persists updated runtime settings to SQLite. Admin required.
+      operationId: updateSettings
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ludusUrl:
+                  type: string
+                  format: uri
+                ludusAdminUrl:
+                  type: string
+                  format: uri
+                verifyTls:
+                  type: boolean
+                sshHost:
+                  type: string
+                sshPort:
+                  type: integer
+                goadPath:
+                  type: string
+                proxmoxSshUser:
+                  type: string
+                proxmoxSshPassword:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Updated settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuntimeSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # --------------------------------------------------------------------------
+  # Logo
+  # --------------------------------------------------------------------------
+  /api/logo:
+    get:
+      tags: [Logo]
+      summary: Get custom logo
+      description: Serves the uploaded custom logo image. No authentication required.
+      operationId: getLogo
+      responses:
+        '200':
+          description: Logo image file.
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: No custom logo has been set.
+    post:
+      tags: [Logo]
+      summary: Upload custom logo
+      description: Uploads a new custom logo. Admin required.
+      operationId: uploadLogo
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                logo:
+                  type: string
+                  format: binary
+                  description: "Allowed extensions: .png, .jpg, .jpeg, .gif, .webp, .svg"
+              required: [logo]
+      responses:
+        '200':
+          description: Logo uploaded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid file type or missing file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    delete:
+      tags: [Logo]
+      summary: Delete custom logo
+      description: Removes the custom logo, reverting to the default. Admin required.
+      operationId: deleteLogo
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Logo removed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No custom logo was set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: No logo set
+
+  # --------------------------------------------------------------------------
+  # Logs
+  # --------------------------------------------------------------------------
+  /api/logs/stream:
+    get:
+      tags: [Logs]
+      summary: Stream range deployment logs (SSE)
+      description: |
+        Opens a **Server-Sent Events** stream that tails Ludus range deployment
+        logs and GOAD Ansible logs in real time.
+
+        The stream polls every 2 seconds and terminates when the deploy
+        completes or errors, or after a 5-minute warmup window with no
+        `DEPLOYING` state detected (max 30 minutes total).
+
+        Each SSE `data:` line is prefixed with a tag:
+
+        | Prefix | Meaning |
+        |--------|---------|
+        | `[LUDUS]` | Output line from the Ludus range logs API |
+        | `[GOAD]` | Line from a GOAD Ansible log file (via SSH) |
+        | `[STATE]` | Range state change notification |
+        | `[DONE]` | Operation completed — stream ends |
+        | `[ERROR]` | An error occurred |
+      operationId: streamLogs
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: user
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter logs by user ID.
+        - name: rangeId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter logs to a specific range.
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: SSE stream of log events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                deploying:
+                  value: |
+                    data: [STATE] DEPLOYING
+
+                    data: [LUDUS] Preparing VMs...
+
+                    data: [DONE] Deploy completed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # Admin
+  # --------------------------------------------------------------------------
+  /api/admin/ranges-data:
+    get:
+      tags: [Admin]
+      summary: Get all ranges, users, and ownership mapping
+      description: |
+        Aggregated admin endpoint. Returns all ranges, all users, and a
+        range-to-user ownership map. Results are cached server-side for 30 seconds.
+        Admin required.
+      operationId: adminGetRangesData
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Aggregated ranges, users, and ownership data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ranges:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RangeObject'
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserObject'
+                  ownership:
+                    type: object
+                    additionalProperties:
+                      type: string
+                    description: Map of rangeID → userID.
+                required: [ranges, users, ownership]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Admin]
+      summary: Assign a range to a user
+      description: |
+        Calls the Ludus `/ranges/assign` endpoint and persists the ownership
+        record to SQLite. Admin required.
+      operationId: adminAssignRange
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeID:
+                  type: string
+                userID:
+                  type: string
+              required: [rangeID, userID]
+      responses:
+        '200':
+          description: Assignment result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  confirmed:
+                    type: boolean
+                  rangeID:
+                    type: string
+                  userID:
+                    type: string
+                required: [ok, confirmed, rangeID, userID]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    delete:
+      tags: [Admin]
+      summary: Remove range ownership record
+      description: |
+        Removes a stored ownership record from SQLite. Does **not** affect
+        the Ludus API. Admin required.
+      operationId: adminDeleteRangeOwnership
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeID:
+                  type: string
+              required: [rangeID]
+      responses:
+        '200':
+          description: Record removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/fetch-user-apikey:
+    get:
+      tags: [Admin]
+      summary: Fetch a user's Ludus API key
+      description: |
+        Retrieves a user's `LUDUS_API_KEY` from their `~/.bashrc` over root
+        SSH. Used for admin impersonation flows. Admin required.
+      operationId: adminFetchUserApikey
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: username
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9_.\-]+$'
+          description: Username whose API key should be retrieved.
+      responses:
+        '200':
+          description: API key (may be null if not found).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apiKey:
+                    type: string
+                    nullable: true
+                  message:
+                    type: string
+                required: [apiKey]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # --------------------------------------------------------------------------
+  # Users
+  # --------------------------------------------------------------------------
+  /api/users/roll-key:
+    post:
+      tags: [Users]
+      summary: Roll a user's Ludus API key
+      description: |
+        Resets a user's Ludus API key by calling the Ludus API, then writes
+        the new key to the user's `~/.bashrc` via root SSH. Admin required.
+      operationId: rollUserApiKey
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+              required: [userId]
+      responses:
+        '200':
+          description: New API key and bashrc update status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  newKey:
+                    type: string
+                  bashrcUpdated:
+                    type: boolean
+                  bashrcError:
+                    type: string
+                    description: Present only when the bashrc write failed.
+                required: [newKey, bashrcUpdated]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/users/change-password:
+    post:
+      tags: [Users]
+      summary: Change a user's Linux/PAM password
+      description: |
+        Changes a user's Linux/PAM password (shared with the Proxmox PAM
+        realm) by running `chpasswd` via root SSH. Admin required.
+      operationId: changeUserPassword
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                newPassword:
+                  type: string
+                  format: password
+              required: [userId, newPassword]
+      responses:
+        '200':
+          description: Password changed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: SSH connection to Ludus server failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # --------------------------------------------------------------------------
+  # Range
+  # --------------------------------------------------------------------------
+  /api/range/create:
+    post:
+      tags: [Range]
+      summary: Create a new range
+      description: |
+        Creates a new Ludus range via the admin API (port 8081), then assigns
+        it to the effective user. Supports admin impersonation headers.
+      operationId: createRange
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/impersonateAs'
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeID:
+                  type: string
+                name:
+                  type: string
+              required: [rangeID, name]
+              additionalProperties: true
+              description: Additional Ludus range fields are forwarded to the Ludus API.
+      responses:
+        '200':
+          description: Newly created range object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RangeObject'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/range/config:
+    get:
+      tags: [Range]
+      summary: Get range config YAML
+      description: Fetches the current range configuration YAML from Ludus.
+      operationId: getRangeConfig
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: rangeID
+          in: query
+          required: false
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: Range configuration.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags: [Range]
+      summary: Upload range config YAML
+      description: |
+        Uploads a new range configuration. Accepts JSON with the YAML content
+        as a string; converts to `multipart/form-data` before sending to Ludus.
+        Max request duration: 120 seconds.
+      operationId: putRangeConfig
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config:
+                  type: string
+                  description: YAML content of the range configuration.
+                rangeId:
+                  type: string
+                force:
+                  type: boolean
+                  default: false
+              required: [config]
+      responses:
+        '200':
+          description: Ludus API response.
+          content:
+            application/json:
+              schema: {}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/range/ops:
+    get:
+      tags: [Range]
+      summary: Get active range operation
+      description: |
+        Returns the active (pending or running) range operation for the
+        effective user and range. Auto-completes the op if the expected Ludus
+        state is already reflected.
+      operationId: getRangeOp
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: rangeId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateAs'
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: Active operation or null.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  op:
+                    oneOf:
+                      - $ref: '#/components/schemas/RangeOp'
+                      - type: 'null'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Range]
+      summary: Create range operation
+      description: |
+        Creates a range operation record and immediately calls the Ludus
+        testing enable/disable API.
+      operationId: createRangeOp
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/impersonateAs'
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeId:
+                  type: string
+                opType:
+                  $ref: '#/components/schemas/RangeOpType'
+              required: [rangeId, opType]
+      responses:
+        '200':
+          description: Created operation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  op:
+                    $ref: '#/components/schemas/RangeOp'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/range/allowed-domains:
+    get:
+      tags: [Range]
+      summary: Get allowed domains for a range
+      description: |
+        Returns the current `allowedDomains` list for a range. Falls back to
+        the admin API if the standard API returns an empty list (works around
+        a known Ludus/PocketBase sync bug).
+      operationId: getAllowedDomains
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: rangeId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: List of allowed domains.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  allowedDomains:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/range/pending-allows:
+    get:
+      tags: [Range]
+      summary: Get pending domain allow/deny operations
+      description: |
+        Returns DB-backed pending domain operations (adds and removes) that
+        have been submitted to Ludus but may not yet be reflected in the live
+        API response. Entries older than 5 minutes are auto-confirmed.
+      operationId: getPendingAllows
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: rangeId
+          in: query
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateAs'
+      responses:
+        '200':
+          description: Pending add and remove entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  adds:
+                    type: array
+                    items:
+                      type: string
+                  removes:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Range]
+      summary: Add a pending domain operation
+      description: Records a pending domain allow or deny entry in the local DB.
+      operationId: addPendingAllow
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeId:
+                  type: string
+                entry:
+                  type: string
+                opType:
+                  type: string
+                  enum: [add, remove]
+              required: [rangeId, entry, opType]
+      responses:
+        '201':
+          description: Entry recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Range]
+      summary: Remove reconciled domain entries
+      description: |
+        Removes entries from the pending-allows DB table once the client
+        confirms they have appeared in the live Ludus API response.
+      operationId: deletePendingAllows
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeId:
+                  type: string
+                entries:
+                  type: array
+                  items:
+                    type: string
+                opType:
+                  type: string
+                  enum: [add, remove]
+              required: [rangeId, entries, opType]
+      responses:
+        '200':
+          description: Entries removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # Templates
+  # --------------------------------------------------------------------------
+  /api/templates/sources:
+    get:
+      tags: [Templates]
+      summary: List available VM templates
+      description: |
+        Lists available VM templates from a remote GitLab repository
+        (default: `badsectorlabs/ludus`). Results are cached in-process for
+        5 minutes. No authentication required.
+      operationId: listTemplateSources
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            default: badsectorlabs
+        - name: repoUrl
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
+          description: Custom GitLab API base URL.
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+            default: templates
+          description: Path within the repository.
+        - name: ref
+          in: query
+          required: false
+          schema:
+            type: string
+            default: main
+          description: Git ref (branch, tag, or commit SHA).
+      responses:
+        '200':
+          description: Available templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TemplateSource'
+
+  /api/templates/add:
+    post:
+      tags: [Templates]
+      summary: Install templates on the Ludus server
+      description: |
+        Fetches template files from GitLab, copies them to the Ludus server via
+        root SSH, and registers them with `ludus templates add`. Uses root SSH
+        credentials from the application settings.
+      operationId: addTemplates
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templates:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        description: Template directory name.
+                      path:
+                        type: string
+                        description: Relative path in the repository (e.g. `templates/debian10`).
+                      apiBase:
+                        type: string
+                        format: uri
+                        description: GitLab repository API base URL.
+                      ref:
+                        type: string
+                        description: Git ref (branch/tag/SHA).
+                    required: [name, path, apiBase, ref]
+              required: [templates]
+      responses:
+        '200':
+          description: Installation results per template.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        success:
+                          type: boolean
+                        message:
+                          type: string
+                      required: [name, success, message]
+
+  # --------------------------------------------------------------------------
+  # Console
+  # --------------------------------------------------------------------------
+  /api/console/spice:
+    get:
+      tags: [Console]
+      summary: Download SPICE/VNC connection file
+      description: |
+        Downloads a `.vv` virt-viewer connection file for a Proxmox VM. Tries
+        SPICE first and falls back to VNC. Calls `pvesh` on the Proxmox node
+        over root SSH.
+      operationId: getSpiceConsole
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: vmId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Proxmox VM ID.
+        - name: vmName
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional display name used in the downloaded filename.
+      responses:
+        '200':
+          description: virt-viewer connection file.
+          content:
+            application/x-virt-viewer:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Error retrieving console credentials from Proxmox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/console/vnc-info:
+    get:
+      tags: [Console]
+      summary: Get VNC WebSocket token
+      description: |
+        Returns a short-lived token and VNC ticket for in-browser VNC (noVNC).
+        Authenticates to the Proxmox HTTP API, creates a VNC proxy session, and
+        stores connection info server-side under an opaque token.
+      operationId: getVncInfo
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: vmId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Proxmox VM ID.
+        - name: vmName
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: VNC connection credentials.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: Opaque short-lived token for opening the WebSocket.
+                  ticket:
+                    type: string
+                    description: VNC password used in the RFB protocol handshake.
+                  vmName:
+                    type: string
+                required: [token, ticket]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # GOAD — Catalog
+  # --------------------------------------------------------------------------
+  /api/goad/catalog:
+    get:
+      tags: [GOAD]
+      summary: Get GOAD lab catalog
+      description: |
+        Discovers the GOAD lab catalog on the Ludus server via SSH. Reads
+        `<goadPath>/ad/*/data/config.json` and
+        `<goadPath>/extensions/*/config.json`. Results are cached server-side.
+      operationId: getGoadCatalog
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: GOAD lab and extension catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  goadPath:
+                    type: string
+                  labs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadLabDef'
+                  extensions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadExtensionDef'
+                  error:
+                    type: string
+                required: [configured, goadPath, labs, extensions]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [GOAD]
+      summary: Invalidate GOAD catalog cache
+      description: Clears the server-side catalog cache and re-fetches from SSH.
+      operationId: refreshGoadCatalog
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Refreshed catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  goadPath:
+                    type: string
+                  labs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadLabDef'
+                  extensions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadExtensionDef'
+                  error:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # GOAD — Instances
+  # --------------------------------------------------------------------------
+  /api/goad/instances:
+    get:
+      tags: [GOAD]
+      summary: List GOAD instances
+      description: |
+        Lists all GOAD instances on the server (via SSH). Enriches each with
+        `ludusRangeId` from SQLite, an SSH tracking file, or IP-range reverse
+        lookup. Only returns instances belonging to the current user.
+      operationId: listGoadInstances
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/impersonateAs'
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: List of GOAD instances.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  instances:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadInstance'
+                  error:
+                    type: string
+                required: [configured, instances]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/set-range:
+    post:
+      tags: [GOAD]
+      summary: Link GOAD instances to a Ludus range
+      description: |
+        Associates one or more GOAD instance workspaces with a Ludus range ID.
+        Writes to SQLite and best-effort SSH write to a `.goad_range_id` file in
+        each workspace.
+      operationId: setGoadInstanceRange
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rangeId:
+                  type: string
+                instanceIds:
+                  type: array
+                  items:
+                    type: string
+              required: [rangeId, instanceIds]
+      responses:
+        '200':
+          description: All instance-to-range links were saved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        instanceId:
+                          type: string
+                        ok:
+                          type: boolean
+                        error:
+                          type: string
+        '207':
+          description: SQLite write succeeded but at least one SSH file write failed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        instanceId:
+                          type: string
+                        ok:
+                          type: boolean
+                        error:
+                          type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/{instanceId}/init-range:
+    post:
+      tags: [GOAD]
+      summary: Ensure GOAD instance has a Ludus range
+      description: |
+        Idempotent. Creates a Ludus range for the GOAD instance if one does
+        not already exist, assigns it to the user, and writes the `rangeID`
+        to the instance workspace file. Returns the existing `rangeId` if
+        already set.
+      operationId: initGoadInstanceRange
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: GOAD instance directory name.
+        - $ref: '#/components/parameters/impersonateAs'
+        - $ref: '#/components/parameters/impersonateApikey'
+      responses:
+        '200':
+          description: Range ID (existing or newly created).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rangeId:
+                    type: string
+                  created:
+                    type: boolean
+                    description: "`true` if a new range was created, `false` if it already existed."
+                required: [rangeId, created]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/{instanceId}/inventories:
+    get:
+      tags: [GOAD]
+      summary: Get GOAD instance Ansible inventories
+      description: Reads Ansible inventory files from the GOAD instance workspace via SSH.
+      operationId: getGoadInventories
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Inventory file contents.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  inventories:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/{instanceId}/sync-ips:
+    post:
+      tags: [GOAD]
+      summary: Sync GOAD inventory with Ludus IP range
+      description: |
+        Syncs GOAD Ansible inventory files with the actual Ludus-assigned IP
+        range. Replaces stale placeholder IPs in `instance.json` and all
+        inventory files via SSH. Calls the Ludus API to resolve the
+        `rangeNumber`.
+      operationId: syncGoadIps
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ludusRangeId:
+                  type: string
+      responses:
+        '200':
+          description: Sync result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  oldIpRange:
+                    type: string
+                    example: 10.4.10
+                  newIpRange:
+                    type: string
+                    example: 10.5.10
+                  rangeNumber:
+                    type: integer
+                  updates:
+                    type: array
+                    items:
+                      type: string
+                    description: List of files that were updated.
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/{instanceId}/force-delete:
+    post:
+      tags: [GOAD]
+      summary: Force-delete a GOAD instance
+      description: |
+        Deletes the GOAD instance's Ludus range (with `force=true`), removes
+        the workspace directory via SSH, and cleans up the SQLite ownership
+        record.
+      operationId: forceDeleteGoadInstance
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ludusRangeId:
+                  type: string
+                skipRangeDeletion:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Deletion result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rangeDeleted:
+                    type: boolean
+                  workspaceRemoved:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # GOAD — Execute
+  # --------------------------------------------------------------------------
+  /api/goad/execute:
+    post:
+      tags: [GOAD]
+      summary: Execute a GOAD command (SSE stream)
+      description: |
+        Executes a GOAD command via SSH PTY and streams output line-by-line
+        as **Server-Sent Events**. The process continues running even if the
+        client disconnects (e.g. page navigation); output can be resumed via
+        `GET /api/goad/tasks/{taskId}/stream`.
+
+        The first SSE line emitted is always `[TASKID] <id>` — clients should
+        capture this to enable resume.
+
+        Special line prefixes:
+
+        | Prefix | Meaning |
+        |--------|---------|
+        | `[TASKID] <id>` | Task ID for this execution |
+        | `[EXIT] Command exited with code N` | Terminal event — stream ends |
+        | `[ERROR] ...` | Execution error |
+      operationId: executeGoad
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                args:
+                  type: string
+                  description: GOAD command arguments (e.g. `install -p GOAD -l ludus`).
+                instanceId:
+                  type: string
+                  description: GOAD instance ID for range scoping.
+                rangeId:
+                  type: string
+                  description: Explicit Ludus range ID (overrides instance lookup).
+                impersonateAs:
+                  type: object
+                  properties:
+                    username:
+                      type: string
+                    apiKey:
+                      type: string
+                  required: [username, apiKey]
+                  description: Admin only.
+              required: [args]
+      responses:
+        '200':
+          description: SSE stream of GOAD command output.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                running:
+                  value: |
+                    data: [TASKID] abc123
+
+                    data: [Ansible] Running playbook...
+
+                    data: [EXIT] Command exited with code 0
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # GOAD — Tasks
+  # --------------------------------------------------------------------------
+  /api/goad/tasks:
+    get:
+      tags: [GOAD]
+      summary: List GOAD tasks
+      description: |
+        Returns all GOAD tasks for the current user (newest first).
+      operationId: listGoadTasks
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/impersonateAs'
+      responses:
+        '200':
+          description: List of tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GoadTask'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/tasks/{taskId}:
+    get:
+      tags: [GOAD]
+      summary: Get a GOAD task with logs
+      description: Fetches a single task including all captured log lines.
+      operationId: getGoadTask
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task detail with log lines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoadTaskDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/goad/tasks/{taskId}/stream:
+    get:
+      tags: [GOAD]
+      summary: Stream/resume a GOAD task (SSE)
+      description: |
+        Replays all existing log lines for a task and then streams new lines
+        live. Used to resume log display after page navigation. Emits
+        `[EXIT] Command exited with code N` when the task completes.
+      operationId: streamGoadTask
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE stream replaying and continuing task output.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Task not found.
+
+  /api/goad/tasks/{taskId}/stop:
+    post:
+      tags: [GOAD]
+      summary: Stop a running GOAD task
+      description: |
+        Kills the in-flight SSH/Ansible process (sends Ctrl+C to the PTY) and
+        marks the task as `aborted`. Works even after the original SSE client
+        disconnected.
+      operationId: stopGoadTask
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stop result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  killed:
+                    type: boolean
+                    description: Whether the underlying process was actually killed.
+                required: [success, killed]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Task not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

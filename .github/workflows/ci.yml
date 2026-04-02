@@ -1,0 +1,128 @@
+# GitHub Actions — mirrors the GitLab pipeline where it makes sense.
+# GitLab-only: .gitlab-ci.yml, DinD opt-in (CI_ENABLE_DIND). This file is synced
+# from the GitLab working copy via sync-to-git.ps1 (.gitlab-ci.yml excluded).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, dev, init-dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# trivy-action@v0.35.0 pins actions/cache@v4 (Node 20). Opt into Node 24 for JS actions until
+# upstream bumps the pin (see https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install OS deps for better-sqlite3
+        run: sudo apt-get update && sudo apt-get install -y python3 make g++
+      - name: Require package-lock.json
+        run: "test -f package-lock.json || (echo 'Add package-lock.json: npm install --legacy-peer-deps' && exit 1)"
+      - run: npm ci --legacy-peer-deps
+      - run: npm run lint
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y python3 make g++
+      - name: Require package-lock.json
+        run: "test -f package-lock.json || (echo 'Add package-lock.json: npm install --legacy-peer-deps' && exit 1)"
+      - run: npm ci --legacy-peer-deps
+      - run: npm audit --audit-level=high
+
+  trivy-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          scan-type: fs
+          scan-ref: "."
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          skip-dirs: node_modules,.next,.git
+
+  # Same Dockerfile as GitLab dockerfile_kaniko. Checkout runs on the host VM;
+  # Kaniko runs via `docker run` (job-level `container:` breaks checkout — no Node in executor image).
+  dockerfile-kaniko:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build image with Kaniko (no push)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            gcr.io/kaniko-project/executor:v1.23.2-debug \
+            --context /workspace \
+            --dockerfile /workspace/docker/Dockerfile \
+            --no-push \
+            --destination ludus-ux:ci
+
+  # ubuntu-latest provides Docker; exercises compose + /api/health like GitLab DinD job.
+  docker-compose-smoke:
+    runs-on: ubuntu-latest
+    needs: [dockerfile-kaniko]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Write CI .env
+        run: sh ci/write-ci-env.sh
+      - name: Build & up
+        run: |
+          docker compose build --progress=plain
+          docker compose up -d
+      - name: Wait for /api/health
+        run: |
+          set -e
+          ok=0
+          i=0
+          while [ "$i" -lt 90 ]; do
+            if curl -sfS http://127.0.0.1:3000/api/health >/dev/null; then
+              ok=1
+              break
+            fi
+            i=$((i + 1))
+            sleep 2
+          done
+          if [ "$ok" != 1 ]; then
+            echo "Health check failed — logs:"
+            docker compose logs --no-color --tail=200 || true
+            exit 1
+          fi
+          curl -sfS http://127.0.0.1:3000/api/health | head -c 500
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  trivy-image:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - run: docker build -f docker/Dockerfile -t ludus-ux:ci .
+      - uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: ludus-ux:ci
+          severity: CRITICAL,HIGH
+          exit-code: "1"

@@ -66,8 +66,8 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Install openssl for self-signed TLS certificate generation at runtime
-RUN apk add --no-cache openssl
+# Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS
+RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl
 
 # Create SSH keys directory
 RUN mkdir -p /app/ssh && chown nextjs:nodejs /app/ssh

@@ -70,7 +70,6 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             gcr.io/kaniko-project/executor:v1.23.2-debug \
-            /kaniko/executor \
             --context /workspace \
             --dockerfile /workspace/docker/Dockerfile \
             --no-push \

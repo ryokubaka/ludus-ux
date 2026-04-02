@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { hasSshExecAuth } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -117,9 +118,9 @@ export async function GET(request: NextRequest) {
 
   // Prefer dedicated Proxmox credentials; fall back to the logged-in user's SSH password.
   const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!sshPass) {
+  if (!hasSshExecAuth(settings, session.sshPassword)) {
     return NextResponse.json(
-      { error: "No Proxmox credentials available. Set PROXMOX_SSH_PASSWORD in your .env, or log out and back in." },
+      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a root key (./ssh), or log in with your SSH password." },
       { status: 503 }
     )
   }

@@ -1,6 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { formatDistanceToNow, format } from "date-fns";
+import { getAnsibleLineClass } from "./ansible-colors";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -81,22 +82,6 @@ export function parseLogLine(raw: string): {
   message: string;
   color: string;
 } {
-  const lower = raw.toLowerCase();
-  if (lower.includes("fatal") || lower.includes("[fatal]")) {
-    return { level: "FATAL", message: raw, color: "text-red-500 font-bold" };
-  }
-  if (lower.includes("error") || lower.includes("[error]")) {
-    return { level: "ERROR", message: raw, color: "text-red-400" };
-  }
-  if (lower.includes("warn") || lower.includes("[warn]")) {
-    return { level: "WARN", message: raw, color: "text-yellow-400" };
-  }
-  if (lower.includes("ok]") || lower.includes("success") || lower.includes("[info]")) {
-    return { level: "INFO", message: raw, color: "text-green-400" };
-  }
-  if (lower.includes("[debug]")) {
-    return { level: "DEBUG", message: raw, color: "text-gray-400" };
-  }
-  return { message: raw, color: "text-gray-300" };
+  return { message: raw, color: getAnsibleLineClass(raw) };
 }
 

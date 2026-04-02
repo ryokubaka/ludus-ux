@@ -1,6 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,41 +33,55 @@ import { cn } from "@/lib/utils"
 
 export default function AnsiblePage() {
   const { toast } = useToast()
-  const [roles, setRoles] = useState<AnsibleItem[]>([])
-  const [collections, setCollections] = useState<AnsibleItem[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
   const [addRoleDialog, setAddRoleDialog] = useState(false)
   const [addCollDialog, setAddCollDialog] = useState(false)
   const [newRoleName, setNewRoleName] = useState("")
   const [newRoleVersion, setNewRoleVersion] = useState("")
   const [newCollName, setNewCollName] = useState("")
+  const [newCollVersion, setNewCollVersion] = useState("")
   const [adding, setAdding] = useState(false)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.listAnsible()
-    if (result.data) {
-      // v2 uses lowercase fields; fall back to uppercase (v1 compat)
-      setRoles(result.data.filter((i) => (i.type || i.Type) === "role"))
-      setCollections(result.data.filter((i) => (i.type || i.Type) === "collection"))
-    }
-    setLoading(false)
-  }, [])
+  const { data: ansibleData, isLoading: loading } = useQuery({
+    queryKey: queryKeys.ansible(),
+    queryFn: async () => {
+      const result = await ludusApi.listAnsible()
+      const list = result.data ?? []
+      return {
+        roles: list.filter((i) => (i.type || i.Type) === "role"),
+        collections: list.filter((i) => (i.type || i.Type) === "collection"),
+      }
+    },
+    staleTime: STALE.long,
+  })
 
-  useEffect(() => { fetchData() }, [fetchData])
+  const roles = ansibleData?.roles ?? []
+  const collections = ansibleData?.collections ?? []
+  const invalidateAnsible = () => queryClient.invalidateQueries({ queryKey: queryKeys.ansible() })
 
   const handleAddRole = async () => {
     if (!newRoleName.trim()) return
     setAdding(true)
     const result = await ludusApi.addRole(newRoleName, newRoleVersion || undefined)
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      const alreadyInstalled =
+        /already installed/i.test(result.error) ||
+        /nothing to do/i.test(result.error)
+      if (alreadyInstalled) {
+        toast({ title: "Already installed", description: `${newRoleName} is already present on the server.` })
+        setAddRoleDialog(false)
+        setNewRoleName("")
+        setNewRoleVersion("")
+        invalidateAnsible()
+      } else {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else {
       toast({ title: "Role added", description: newRoleName })
       setAddRoleDialog(false)
       setNewRoleName("")
       setNewRoleVersion("")
-      fetchData()
+      invalidateAnsible()
     }
     setAdding(false)
   }
@@ -76,21 +93,35 @@ export default function AnsiblePage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Role removed" })
-      fetchData()
+      invalidateAnsible()
     }
   }
 
   const handleAddCollection = async () => {
     if (!newCollName.trim()) return
     setAdding(true)
-    const result = await ludusApi.addCollection(newCollName)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+    const result = await ludusApi.addCollection(newCollName, newCollVersion.trim() || undefined)
+    if (result.status === 409 || (result.error && /already installed/i.test(result.error))) {
+      toast({ title: "Already installed", description: `${newCollName} is already installed on the server.` })
+      setAddCollDialog(false)
+      setNewCollName("")
+      setNewCollVersion("")
+      invalidateAnsible()
+    } else if (result.error) {
+      const isPreRelease = /pre-release|pre_release|--pre/i.test(result.error)
+      toast({
+        variant: "destructive",
+        title: "Error installing collection",
+        description: isPreRelease
+          ? `${newCollName} is only available as a pre-release. Specify a concrete version number (e.g. 0.1.0) in the Version field and try again.`
+          : result.error,
+      })
     } else {
       toast({ title: "Collection added", description: newCollName })
       setAddCollDialog(false)
       setNewCollName("")
-      fetchData()
+      setNewCollVersion("")
+      invalidateAnsible()
     }
     setAdding(false)
   }
@@ -109,7 +140,7 @@ export default function AnsiblePage() {
               Collections ({collections.length})
             </TabsTrigger>
           </TabsList>
-          <Button variant="ghost" size="icon" onClick={fetchData} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={invalidateAnsible} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>
@@ -274,7 +305,7 @@ export default function AnsiblePage() {
       </Dialog>
 
       {/* Add Collection Dialog */}
-      <Dialog open={addCollDialog} onOpenChange={setAddCollDialog}>
+      <Dialog open={addCollDialog} onOpenChange={(open) => { setAddCollDialog(open); if (!open) { setNewCollName(""); setNewCollVersion("") } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Ansible Collection</DialogTitle>
@@ -286,8 +317,22 @@ export default function AnsiblePage() {
                 placeholder="community.general or namespace.collection"
                 value={newCollName}
                 onChange={(e) => setNewCollName(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !adding && newCollName.trim() && handleAddCollection()}
                 className="font-mono text-sm"
               />
+              <p className="text-xs text-muted-foreground">FQCN format: namespace.collection_name</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Version (optional)</Label>
+              <Input
+                placeholder="latest or 1.2.3"
+                value={newCollVersion}
+                onChange={(e) => setNewCollVersion(e.target.value)}
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Required for pre-release collections — specify a version like <code className="text-primary">0.1.0</code>
+              </p>
             </div>
           </div>
           <DialogFooter>

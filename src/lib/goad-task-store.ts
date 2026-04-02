@@ -358,6 +358,24 @@ export function listTasks(limit = MAX_TASKS): GoadTask[] {
     .filter(Boolean) as GoadTask[]
 }
 
+/**
+ * Retroactively links a task to an instanceId.
+ * Used after a "new instance" deployment where the instanceId was unknown at
+ * task-creation time — once the instance is discovered, the caller updates the
+ * record so it shows up correctly in the Logs History tab.
+ */
+export function updateTaskInstance(taskId: string, instanceId: string): boolean {
+  const entry = taskMap.get(taskId)
+  if (!entry) return false
+  entry.task.instanceId = instanceId
+  try {
+    getDb().prepare("UPDATE goad_tasks SET instance_id = ? WHERE id = ?").run(instanceId, taskId)
+  } catch (err) {
+    console.error("[task-store] updateTaskInstance DB write failed:", err)
+  }
+  return true
+}
+
 /** Returns the most recently-started task for a given instanceId, or null. */
 export function getLatestTaskForInstance(instanceId: string): GoadTask | null {
   for (let i = taskOrder.length - 1; i >= 0; i--) {

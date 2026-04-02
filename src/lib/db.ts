@@ -33,7 +33,7 @@ import type BetterSqlite3 from "better-sqlite3"
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data")
 export const TASKS_LOG_DIR = path.join(DATA_DIR, "tasks")
-const DB_PATH = path.join(DATA_DIR, "ludus-ui.db")
+const DB_PATH = path.join(DATA_DIR, "ludus-ux.db")
 
 let _db: BetterSqlite3.Database | null = null
 
@@ -41,7 +41,7 @@ export function getDb(): BetterSqlite3.Database {
   if (_db) return _db
   fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.mkdirSync(TASKS_LOG_DIR, { recursive: true })
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // better-sqlite3 is native; require() avoids ESM/CJS edge cases in Next server bundles
   const Sqlite = require("better-sqlite3") as typeof BetterSqlite3
   _db = new Sqlite(DB_PATH)
   _db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes
@@ -191,6 +191,35 @@ function runMigrations(db: BetterSqlite3.Database): void {
         );
         CREATE INDEX IF NOT EXISTS idx_pending_allow_lookup
           ON pending_allow_ops(rangeId, username);
+      `)
+    },
+
+    // v5 — Range ownership overrides: admin-confirmed assignments that survive
+    // container restarts even when Ludus API doesn't surface userID in responses.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS range_ownership (
+          rangeID     TEXT    NOT NULL PRIMARY KEY,
+          userID      TEXT    NOT NULL,
+          assignedBy  TEXT    NOT NULL DEFAULT 'admin',
+          assignedAt  INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_range_ownership_user
+          ON range_ownership(userID);
+      `)
+    },
+
+    // v6 — Local GOAD instance→range mapping.
+    // Written by set-range whenever a new GOAD instance is created so that the
+    // instances API can reliably return ludusRangeId without relying solely on
+    // the SSH-written .goad_range_id file (which requires root SSH credentials).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS goad_instance_ranges (
+          instance_id TEXT    NOT NULL PRIMARY KEY,
+          range_id    TEXT    NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
       `)
     },
   ]

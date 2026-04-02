@@ -1,6 +1,9 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
+import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/query-keys"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -31,7 +34,7 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { useImpersonation } from "@/lib/impersonation-context"
+import { useRange } from "@/lib/range-context"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
 
@@ -43,6 +46,62 @@ function parseEntry(entry: string): { type: "domain" | "ip"; raw: string; displa
   const m = entry.match(/^([^\s(]+)\s*(\(.*\))?$/)
   const domain = m ? m[1] : entry.trim()
   return { type: "domain", raw: domain, display: entry.trim() }
+}
+
+/**
+ * Find a range row from GET /api/range/pb-status (or Ludus fallback) for an
+ * accessible-range id. Strict `===` often failed when Ludus/PB used different
+ * casing or when JSON used `rangeId` vs `rangeID` — which hid the status dots.
+ */
+function findRangeByRangeId(list: RangeObject[] | undefined, id: string): RangeObject | undefined {
+  if (!list?.length || !id) return undefined
+  const want = id.trim()
+  const wantLower = want.toLowerCase()
+  return list.find((rd) => {
+    const rid = (rd.rangeID ?? (rd as { rangeId?: string }).rangeId ?? "").trim()
+    if (!rid) return false
+    return rid === want || rid.toLowerCase() === wantLower
+  })
+}
+
+/** Normalize each range object from API so rangeID / booleans are reliable for the UI. */
+function normalizeRangeListFromApi(raw: unknown): RangeObject[] {
+  const arr: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && "result" in raw && Array.isArray((raw as { result?: unknown }).result)
+      ? ((raw as { result: unknown[] }).result)
+      : []
+  const out: RangeObject[] = []
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue
+    const o = item as Record<string, unknown>
+    const rangeID = String(o.rangeID ?? o.rangeId ?? o.RangeID ?? "").trim()
+    if (!rangeID) continue
+    const testing =
+      o.testingEnabled === true || o.testingEnabled === false
+        ? Boolean(o.testingEnabled)
+        : Boolean(o.TestingEnabled)
+    const rangeState = (o.rangeState ?? o.RangeState ?? "NEVER DEPLOYED") as RangeObject["rangeState"]
+    out.push({
+      ...(item as RangeObject),
+      rangeID,
+      testingEnabled: testing,
+      rangeState,
+    })
+  }
+  return out
+}
+
+async function fetchPbStatusForRange(rangeId: string): Promise<RangeObject | null> {
+  const res = await fetch(
+    `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`,
+    { headers: { ...getImpersonationHeaders() } },
+  )
+  if (!res.ok) return null
+  const data: unknown = await res.json()
+  if (data && typeof data === "object" && "error" in data) return null
+  const list = normalizeRangeListFromApi(Array.isArray(data) ? data : [data])
+  return findRangeByRangeId(list, rangeId) ?? list[0] ?? null
 }
 
 // ── DB-backed pending allow/deny helpers ─────────────────────────────────────
@@ -132,13 +191,30 @@ async function deletePendingAllows(
 
 export default function TestingPage() {
   const { toast } = useToast()
-  const { impersonation } = useImpersonation()
+  const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
-  // ── Range selector ────────────────────────────────────────────────────────
-  const [ranges, setRanges] = useState<RangeObject[]>([])
-  const [rangesLoading, setRangesLoading] = useState(true)
-  const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
+  // ── Global range context — single source of truth for which range is active.
+  // selectedRangeId is persisted to sessionStorage and shared with the sidebar,
+  // so changing the range anywhere in the app instantly updates this page too.
+  const {
+    ranges: contextRanges,   // RangeAccessEntry[] — same list as the sidebar
+    selectedRangeId,         // string | null — driven by sidebar & local selector
+    selectRange,             // updates global context + sessionStorage
+    loading: rangesLoading,
+  } = useRange()
+
+  // ── Per-range PB status for selector dots (all accessible ranges) ─────────
+  // Bulk GET /pb-status only returns ranges "owned" by the effective user; group-shared
+  // ranges are missing. One ?rangeId= fetch per sidebar range keeps dots correct.
+  const testingDotQueries = useQueries({
+    queries: contextRanges.map((r) => ({
+      queryKey: queryKeys.rangePbStatusDot(r.rangeID),
+      queryFn: () => fetchPbStatusForRange(r.rangeID),
+      enabled: !rangesLoading && !!r.rangeID,
+      staleTime: STALE.short,
+    })),
+  })
 
   // Ref so closures (effects, intervals, callbacks) always read the LATEST
   // selectedRangeId without needing it in every dependency array.
@@ -257,6 +333,11 @@ export default function TestingPage() {
   // DB-backed operation tracking — persists across page refreshes.
   // null = no active op;  object = op is pending or running
   const [activeOp, setActiveOp] = useState<Pick<RangeOp, "id" | "opType" | "status" | "startedAt"> | null>(null)
+  // true while the initial pollOp is in flight (prevents accidental clicks)
+  const [opInitialising, setOpInitialising] = useState(false)
+
+  // Elapsed-time ticker state (effect is placed after opInProgress is derived below)
+  const [elapsedSec, setElapsedSec] = useState(0)
 
   // ── Log panel ─────────────────────────────────────────────────────────────
   const [showLogs, setShowLogs] = useState(false)
@@ -281,34 +362,56 @@ export default function TestingPage() {
   const isEnabled    = status?.testingEnabled ?? false
   const opInProgress = !!activeOp && (activeOp.status === "pending" || activeOp.status === "running")
   // True while we should lock the button and show progress UI
-  const isInProgress = toggling || opInProgress || isDeploying
+  const isInProgress = toggling || opInProgress || isDeploying || opInitialising
+
+  // Elapsed-time ticker — updates every second while an op is in-flight so the
+  // UI shows "Xm Ys" rather than a static "waiting…" message.
+  // Placed here (after opInProgress) to avoid a temporal dead zone error.
+  useEffect(() => {
+    if (!opInProgress || !activeOp) { setElapsedSec(0); return }
+    const startMs = activeOp.startedAt
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startMs) / 1000))
+    }, 1000)
+    return () => clearInterval(id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opInProgress, activeOp?.startedAt])
 
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
-  const fetchRanges = useCallback(async () => {
-    setRangesLoading(true)
-    // Use getRangesForUser (GET /range) — scoped to the current or impersonated
-    // user's API key.  getRanges() uses /range/all which returns all users'
-    // ranges for admins, making fetchStatus always show the admin's own data.
-    const result = await ludusApi.getRangesForUser()
-    if (result.data) {
-      setRanges(result.data)
-      setSelectedRangeId((prev) => {
-        if (prev && result.data!.some((r) => r.rangeID === prev)) return prev
-        return result.data![0]?.rangeID ?? null
-      })
-    }
-    setRangesLoading(false)
-  }, [])
 
-  /** Fetch live status for the given range from Ludus (doesn't touch op state). */
+  /**
+   * Fetch range status — PocketBase first, Ludus API as fallback.
+   *
+   * PocketBase is the authoritative store for testingEnabled and rangeState.
+   * Going there directly avoids Ludus caching delays that caused the status
+   * to appear "stuck" after a testing-mode toggle completed.
+   */
   const fetchStatus = useCallback(async (rangeId?: string) => {
     setStatusLoading(true)
-    // Pass rangeId so we always get the selected range's status, not just the
-    // first/default range.  GET /range?rangeID=xxx is supported by Ludus v2.
-    const result = await ludusApi.getRangeStatus(rangeId)
-    if (result.data) setStatus(result.data)
-    setStatusLoading(false)
+    try {
+      const url = rangeId
+        ? `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`
+        : "/api/range/pb-status"
+      const res = await fetch(url, { headers: { ...getImpersonationHeaders() } })
+
+      if (res.ok) {
+        const data: RangeObject = await res.json()
+        if (!rangeId || selectedRangeIdRef.current === rangeId) {
+          setStatus(data)
+        }
+      } else {
+        // PocketBase route failed — fall back to Ludus API
+        const result = await ludusApi.getRangeStatus(rangeId)
+        if (result.data && (!rangeId || selectedRangeIdRef.current === rangeId)) {
+          setStatus(result.data)
+        }
+      }
+    } catch {
+      // Non-fatal; keep showing the last known status
+    } finally {
+      setStatusLoading(false)
+    }
   }, [])
 
   // When activeOp transitions from a set value to null (meaning the op just
@@ -337,6 +440,7 @@ export default function TestingPage() {
       if (!res.ok) return
       const { op } = await res.json() as { op: typeof activeOp | null }
 
+      setOpInitialising(false)
       setActiveOp(op)
 
       if (!op) return
@@ -344,6 +448,8 @@ export default function TestingPage() {
       if (op.status === "completed" || op.status === "error") {
         // Op finished — refresh range status so button label / badge updates
         await fetchStatus(rangeId)
+        // Refresh per-range dots (testingEnabled / DEPLOYING) for all ranges in the selector
+        await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
       } else {
         // Op still in flight — ensure the log stream is running so the user
         // sees live output.  Use the ref to avoid circular useCallback deps.
@@ -353,13 +459,14 @@ export default function TestingPage() {
         }
       }
     } catch {
+      setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
-  }, [fetchStatus])
+  }, [fetchStatus, queryClient])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
-  const startLogStream = useCallback((rangeId: string) => {
+  const startLogStream = useCallback((rangeId: string, snapshotStart = false) => {
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -367,8 +474,9 @@ export default function TestingPage() {
 
     ;(async () => {
       try {
+        const url = `/api/logs/stream?rangeId=${encodeURIComponent(rangeId)}${snapshotStart ? "&snapshotStart=true" : ""}`
         const res = await fetch(
-          `/api/logs/stream?rangeId=${encodeURIComponent(rangeId)}`,
+          url,
           { signal: ctrl.signal, headers: { ...getImpersonationHeaders() } }
         )
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -384,10 +492,14 @@ export default function TestingPage() {
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
           // Filter out internal sentinel lines — show only real log content
-          const displayLines = newLines.filter((l) => !l.includes("[DEPLOY_COMPLETE]"))
+          // Filter out internal control lines — never show them as log output
+          const displayLines = newLines.filter(
+            (l) => !l.startsWith("[DONE] ") && !l.startsWith("[STATE] ")
+          )
           if (displayLines.length) setLogLines((prev) => [...prev, ...displayLines])
 
-          if (newLines.some((l) => l.includes("[DEPLOY_COMPLETE]"))) {
+          // [DONE] <state> — new sentinel; also accept legacy [DEPLOY_COMPLETE]
+          if (newLines.some((l) => l.startsWith("[DONE] ") || l.includes("[DEPLOY_COMPLETE]"))) {
             // Stream confirmed completion — do a final poll so DB gets updated
             if (rangeId) await pollOp(rangeId)
             break
@@ -396,10 +508,16 @@ export default function TestingPage() {
       } catch (err) {
         if ((err as Error).name === "AbortError") return
       } finally {
+        // Only clean up if this is still the active stream.  If startLogStream
+        // was called again while this stream was running (e.g. user adds an IP
+        // right after a testing-mode toggle), abortRef.current will have been
+        // replaced with a new controller.  Executing cleanup here would
+        // (a) clear isStreaming for the new stream and (b) cause pollOp to
+        // incorrectly restart the stream, clobbering the new one.
+        if (abortRef.current !== ctrl) return
         setIsStreaming(false)
-        // Always do one final poll when the stream ends (handles the case where
-        // [DEPLOY_COMPLETE] was sent but the check above missed it, or the
-        // stream was closed server-side after the op completed).
+        // One final poll so the DB record updates if [DONE] was missed or the
+        // stream was closed server-side after the op completed.
         await pollOp(rangeId)
       }
     })()
@@ -412,14 +530,8 @@ export default function TestingPage() {
   // ── Mount / range change ──────────────────────────────────────────────────
 
   useEffect(() => {
-    fetchRanges()
     return () => abortRef.current?.abort()
-  }, [fetchRanges])
-
-  // Re-fetch when impersonation changes
-  useEffect(() => {
-    fetchRanges()
-  }, [impersonation?.username, fetchRanges]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // When selected range changes: reset all per-range UI state, then load
   // the live status, allowed domains, and any active DB op simultaneously.
@@ -435,6 +547,7 @@ export default function TestingPage() {
 
     fetchStatus(selectedRangeId)
     refreshAllowedDomains(selectedRangeId)
+    setOpInitialising(true)
     pollOp(selectedRangeId)
   }, [selectedRangeId, fetchStatus, refreshAllowedDomains, pollOp])
 
@@ -463,6 +576,13 @@ export default function TestingPage() {
 
     const opType = isEnabled ? "testing_stop" : "testing_start"
 
+    // Start streaming BEFORE the API call — the Ludus PUT request can block
+    // for 30 s to 5 min while Proxmox jobs are already running and writing
+    // logs.  Starting after the await would miss all of that output.
+    // Note: for testing-mode ops, rangeState never enters DEPLOYING, so the
+    // stream relies on its warmup window to stay open and collect logs.
+    startLogStream(selectedRangeId)
+
     // POST to our API route which creates the DB record AND calls Ludus.
     // Using fetch directly so we can inject impersonation headers that apiRequest
     // would add but aren't in the ludusApi helper set.
@@ -477,6 +597,7 @@ export default function TestingPage() {
     if (!res.ok) {
       toast({ variant: "destructive", title: "Error", description: data.error || "Unknown error" })
       setShowLogs(false)
+      abortRef.current?.abort()
       setToggling(false)
       return
     }
@@ -486,12 +607,9 @@ export default function TestingPage() {
 
     toast({
       title: isEnabled ? "Reverting VMs…" : "Snapshotting VMs…",
-      description: "Logs will appear below. Ludus may take a moment to begin processing.",
+      description: "Proxmox is working. The UI will watch for completion automatically — this may take several minutes on slower hardware.",
     })
-
-    // Start streaming immediately — the stream waits up to 40 s for DEPLOYING
-    // to begin, so the user sees logs the moment Ludus starts working.
-    startLogStream(selectedRangeId)
+    // Stream is already running — no need to start it again here.
   }
 
   const handleToggle = () =>
@@ -525,6 +643,14 @@ export default function TestingPage() {
     if (!val || !selectedRangeId) return
     setAddingEntry(true)
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
+
+    // Show the log panel immediately so the user sees activity while Ludus
+    // resolves the domain IP and applies the firewall rule (can take 1-2 min).
+    // snapshotStart=true skips pre-existing deployment logs so the panel only
+    // shows output written after this allow operation begins.
+    setShowLogs(true)
+    setLogLines([])
+    startLogStream(rangeId, true)
 
     // Write to our DB FIRST so the pending state is durable even if the
     // browser is closed or Ludus is slow.
@@ -585,6 +711,12 @@ export default function TestingPage() {
     const { type, raw } = parseEntry(entry)
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
 
+    // Show the log panel immediately so the user sees Ludus applying the
+    // firewall rule removal. snapshotStart=true skips pre-existing logs.
+    setShowLogs(true)
+    setLogLines([])
+    startLogStream(rangeId, true)
+
     // Write to our DB FIRST so the pending state is durable
     const saved = await postPendingAllow(rangeId, raw, "remove", getImpersonationHeaders())
     if (saved) {
@@ -630,17 +762,19 @@ export default function TestingPage() {
 
   // ── Derived UI labels ─────────────────────────────────────────────────────
 
-  const selectedRange = ranges.find((r) => r.rangeID === selectedRangeId)
+  const selectedRange = contextRanges.find((r) => r.rangeID === selectedRangeId)
 
   const isStopping = activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)
   const progressLabel =
-    isDeploying   ? "Processing…"
+    opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
+    : isDeploying   ? "Processing…"
     : isStopping  ? "Stopping…"
     : opInProgress ? "Starting…"
     : ""
 
   const statusBadgeExtra: { label: string; variant: "info" | "secondary" } | null =
     isDeploying          ? { label: "PROCESSING", variant: "info" }
+    : opInitialising     ? { label: "CHECKING",   variant: "secondary" }
     : opInProgress       ? { label: "QUEUED",     variant: "secondary" }
     : null
 
@@ -655,29 +789,38 @@ export default function TestingPage() {
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading ranges…
         </div>
-      ) : ranges.length > 1 && (
+      ) : contextRanges.length > 1 && (
         <div className="flex flex-wrap gap-2">
-          {ranges.map((r) => (
-            <button
-              key={r.rangeID}
-              onClick={() => setSelectedRangeId(r.rangeID)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
-                selectedRangeId === r.rangeID
-                  ? "border-primary/60 bg-primary/10 text-primary"
-                  : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-              )}
-            >
-              <Server className="h-3.5 w-3.5" />
-              {r.rangeID}
-              {r.testingEnabled && (
-                <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" title="Testing enabled" />
-              )}
-              {(r.rangeState === "DEPLOYING" || r.rangeState === "WAITING") && (
-                <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="Deploying" />
-              )}
-            </button>
-          ))}
+          {contextRanges.map((r, i) => {
+            const isSelected = r.rangeID === selectedRangeId
+            // Selected pill: `status` (authoritative for the open card). Others: per-range PB query.
+            const otherEntry = isSelected ? null : testingDotQueries[i]?.data
+            const showTestingDot   = isSelected ? isEnabled   : (otherEntry?.testingEnabled === true)
+            const showDeployingDot = isSelected ? isDeploying : (
+              otherEntry?.rangeState === "DEPLOYING" || otherEntry?.rangeState === "WAITING"
+            )
+            return (
+              <button
+                key={r.rangeID}
+                onClick={() => selectRange(r.rangeID)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
+                  isSelected
+                    ? "border-primary/60 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                )}
+              >
+                <Server className="h-3.5 w-3.5" />
+                {r.rangeID}
+                {showTestingDot && (
+                  <span className="inline-block h-2 w-2 rounded-full bg-yellow-400" title="Testing enabled" />
+                )}
+                {showDeployingDot && (
+                  <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="Deploying" />
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -710,7 +853,7 @@ export default function TestingPage() {
                   <div>
                     <p className="font-semibold text-sm">
                       Testing Mode
-                      {selectedRange && ranges.length > 1 && (
+                      {selectedRange && contextRanges.length > 1 && (
                         <span className="ml-2 font-mono text-xs text-muted-foreground font-normal">
                           ({selectedRange.rangeID})
                         </span>
@@ -720,7 +863,13 @@ export default function TestingPage() {
                       {isDeploying
                         ? "Range is actively processing — VMs are being snapshotted or reverted"
                         : opInProgress
-                        ? "Operation queued — waiting for Ludus to begin processing (polling every 3 s)"
+                        ? (() => {
+                            const m = Math.floor(elapsedSec / 60)
+                            const s = elapsedSec % 60
+                            const elapsed = m > 0 ? `${m}m ${s}s` : `${s}s`
+                            const verb = activeOp?.opType === "testing_start" ? "Snapshotting" : "Reverting"
+                            return `${verb} VMs on Proxmox — watching for completion… (${elapsed})`
+                          })()
                         : isEnabled
                         ? "VMs are snapshotted and internet access is blocked"
                         : "VMs have normal internet access"}
@@ -851,12 +1000,16 @@ export default function TestingPage() {
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                {isInProgress && logLines.length === 0 && (
+                {(isInProgress || isStreaming || addingEntry || !!removingEntry) && logLines.length === 0 && (
                   <div className="flex flex-col gap-2 py-5 px-2">
                     <div className="flex items-center gap-2 text-sm text-blue-300">
                       <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
                       <span className="font-medium">
-                        {(activeOp?.opType === "testing_stop" || (opInProgress && isEnabled))
+                        {addingEntry
+                          ? "Applying allow rule…"
+                          : removingEntry
+                          ? "Removing allow rule…"
+                          : (activeOp?.opType === "testing_stop" || (opInProgress && isEnabled))
                           ? "Stopping Testing Mode…"
                           : "Starting Testing Mode…"}
                       </span>
@@ -864,10 +1017,7 @@ export default function TestingPage() {
                     <p className="text-xs text-muted-foreground ml-6">
                       {isStreaming
                         ? "Connected — waiting for Ludus to begin. Logs will appear here automatically."
-                        : "Operation queued. Ludus will begin shortly — this page will update automatically."}
-                    </p>
-                    <p className="text-xs text-muted-foreground ml-6">
-                      You can navigate away and return — progress will be tracked.
+                        : "Connecting to log stream…"}
                     </p>
                   </div>
                 )}

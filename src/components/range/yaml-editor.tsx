@@ -1,6 +1,12 @@
 "use client"
 
 import dynamic from "next/dynamic"
+import { loader } from "@monaco-editor/react"
+
+// Serve Monaco from the local /monaco-vs path (copied from node_modules at build time)
+// instead of loading from cdn.jsdelivr.net, so the editor works in air-gapped / restricted
+// network environments and doesn't suffer from CDN latency on first load.
+loader.config({ paths: { vs: "/monaco-vs" } })
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,
@@ -44,18 +50,6 @@ export function YamlEditor({
           formatOnPaste: true,
         }}
         onChange={(val) => onChange(val || "")}
-        beforeMount={(monaco) => {
-          // Add Ludus range config schema
-          monaco.languages.yaml?.yamlDefaults?.setDiagnosticsOptions?.({
-            validate: true,
-            schemas: [
-              {
-                uri: "https://docs.ludus.cloud/schemas/range-config.json",
-                fileMatch: ["*"],
-              },
-            ],
-          })
-        }}
       />
     </div>
   )

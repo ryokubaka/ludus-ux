@@ -65,6 +65,8 @@ export interface TemplateObject {
   built: boolean
   status?: string
   lastBuilt?: string
+  /** OS category returned by the Ludus API since v2.0.6 */
+  os?: "linux" | "windows" | "macos" | "other"
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
@@ -161,23 +163,36 @@ export interface BlueprintListItem {
   updated?: string
 }
 
+/** GET /blueprints/{id}/access/users — `access` is how the user inherits rights (often multiple strings). */
 export interface BlueprintAccessUserItem {
   userID: string
   name?: string
-  access: string
+  access?: string | string[]
   groups?: string[]
+}
+
+/** GET /blueprints/{id}/access/groups — not the same shape as users (see api-docs.ludus.cloud). */
+export interface BlueprintAccessGroupItem {
+  groupName: string
+  managers?: string[]
+  members?: string[]
 }
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 
-/** v2 group object */
+/** v2 group object — GET /groups returns summary only (see api-docs.ludus.cloud List all groups). */
 export interface GroupObject {
   id?: string
   groupName?: string
   name?: string
+  description?: string
   managers?: string[]
+  /** Populated only if the server embeds lists; otherwise use GET .../users and .../ranges. */
   members?: string[]
   ranges?: string[]
+  numMembers?: number
+  numManagers?: number
+  numRanges?: number
 }
 
 // ── Testing ───────────────────────────────────────────────────────────────────
@@ -222,7 +237,7 @@ export type PowerAction = "on" | "off"
 // ── GOAD ──────────────────────────────────────────────────────────────────────
 
 // String aliases — actual values are discovered dynamically from the server's
-// GOAD directory (e.g. /opt/goad-mod/ad/ and /opt/goad-mod/extensions/).
+// GOAD directory (e.g. /opt/GOAD/ad/ and /opt/GOAD/extensions/).
 export type GoadLabType = string
 export type GoadExtension = string
 
@@ -240,9 +255,10 @@ export interface GoadInstance {
   /** Linux username that owns the instance workspace directory */
   ownerUserId?: string
   /**
-   * Ludus rangeID (Proxmox pool name, e.g. "smeowden") for the range this
-   * GOAD instance was deployed to. Populated by correlating ipRange with
-   * GET /range/all — set once the instance has been "provided" (ip_range known).
+   * Dedicated Ludus rangeID for this GOAD instance.
+   * Populated from <workspace>/<instanceId>/.goad_range_id (written by our
+   * init-range flow) or from the `range_id` field GOAD stores in instance.json.
+   * When set, all Ludus operations for this instance target only this range.
    */
   ludusRangeId?: string
 }
@@ -253,6 +269,10 @@ export interface GoadLabDef {
   description: string
   vmCount: number
   domains: number
+  /** Ludus packer template names required to deploy this lab */
+  requiredTemplates: string[]
+  /** Whether a providers/ludus/ directory exists for this lab */
+  ludusSupported: boolean
 }
 
 /** An extension discovered from <goadPath>/extensions/<ext>/config.json */
@@ -263,6 +283,8 @@ export interface GoadExtensionDef {
   /** Lab names this extension is compatible with; "*" means all */
   compatibility: string[]
   impact: string
+  /** Ludus packer template names required by this extension (beyond the base lab) */
+  requiredTemplates: string[]
 }
 
 /** Full catalog returned by GET /api/goad/catalog */

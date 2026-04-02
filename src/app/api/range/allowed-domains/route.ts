@@ -39,14 +39,42 @@ function getEffective(
   }
 }
 
+/**
+ * Extract all allowed entries from a Ludus range response.
+ *
+ * Ludus stores two separate fields in PocketBase:
+ *   • allowedDomains — entries added via POST /testing/allow { domains: [...] }
+ *                      Format: "example.com (1.2.3.4)" or bare "example.com"
+ *   • allowedIPs     — entries added via POST /testing/allow { ips: [...] }
+ *                      Format: bare IP string e.g. "8.8.8.8"
+ *
+ * We merge both so the UI shows every rule regardless of how it was added.
+ * IPs that already appear embedded in an allowedDomains entry (e.g.
+ * "example.com (8.8.8.8)") are deduplicated so they don't show twice.
+ */
 function extractAllowedDomains(data: unknown): string[] {
   if (!data || typeof data !== "object") return []
   // Handle both single object and array responses
   const obj = Array.isArray(data) ? data[0] : data
   if (!obj || typeof obj !== "object") return []
   const d = obj as Record<string, unknown>
-  if (Array.isArray(d.allowedDomains)) return d.allowedDomains as string[]
-  return []
+
+  const domains: string[] = Array.isArray(d.allowedDomains) ? (d.allowedDomains as string[]) : []
+  const ips: string[]     = Array.isArray(d.allowedIPs)     ? (d.allowedIPs     as string[]) : []
+
+  if (ips.length === 0) return domains
+
+  // Build the set of IPs already referenced inside domain entries
+  // e.g. "example.com (1.2.3.4)" → "1.2.3.4"
+  const embeddedIPs = new Set<string>()
+  for (const entry of domains) {
+    const m = entry.match(/\((\d+\.\d+\.\d+\.\d+)\)/)
+    if (m) embeddedIPs.add(m[1])
+  }
+
+  // Append IPs not already represented in the domains list
+  const extraIPs = ips.filter((ip) => !embeddedIPs.has(ip))
+  return [...domains, ...extraIPs]
 }
 
 export async function GET(request: NextRequest) {

@@ -14,6 +14,8 @@ export interface LudusRequestOptions {
   apiKey?: string
   useAdminEndpoint?: boolean
   userOverride?: string
+  /** Milliseconds before the request is aborted. Defaults to 30 000 ms. Pass 0 for no timeout. */
+  timeout?: number
 }
 
 export async function ludusRequest<T = unknown>(
@@ -26,12 +28,18 @@ export async function ludusRequest<T = unknown>(
     apiKey = "",
     useAdminEndpoint = false,
     userOverride,
+    timeout = 30_000,
   } = options
 
   const settings = getSettings()
-  const baseUrl = useAdminEndpoint && settings.ludusAdminUrl
-    ? settings.ludusAdminUrl
-    : settings.ludusUrl
+  let baseUrl = settings.ludusUrl
+  if (useAdminEndpoint) {
+    if (settings.ludusAdminUrl) {
+      baseUrl = settings.ludusAdminUrl
+    } else {
+      baseUrl = settings.ludusUrl.replace(/:8080\b/, ":8081")
+    }
+  }
 
   // Build URL — prepend /api/v2 for Ludus v2 API.
   // The root path "/" maps to "/api/v2/" (the version endpoint).
@@ -50,11 +58,15 @@ export async function ludusRequest<T = unknown>(
     headers["X-Impersonate-User"] = userOverride
   }
 
+  const controller = new AbortController()
+  const timeoutId = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null
+
   try {
     const fetchOptions: RequestInit = {
       method,
       headers,
       cache: "no-store",
+      signal: controller.signal,
     }
 
     if (body !== undefined) {
@@ -62,6 +74,7 @@ export async function ludusRequest<T = unknown>(
     }
 
     const response = await fetch(url, fetchOptions)
+    if (timeoutId) clearTimeout(timeoutId)
     const status = response.status
 
     if (status === 204) {
@@ -83,6 +96,10 @@ export async function ludusRequest<T = unknown>(
       return { data: text as unknown as T, status }
     }
   } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId)
+    if (err instanceof Error && err.name === "AbortError") {
+      return { error: "Connection timed out after 30 s — is the Ludus server reachable?", status: 0 }
+    }
     const message = err instanceof Error ? err.message : String(err)
     return { error: `Connection failed: ${message}`, status: 0 }
   }

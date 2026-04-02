@@ -1,7 +1,9 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import { ludusApi } from "@/lib/api"
+
+const POLL_INTERVAL_MS = 5000
 
 interface UseDeployLogsOptions {
   onComplete?: () => void
@@ -10,8 +12,10 @@ interface UseDeployLogsOptions {
 export function useDeployLogs(options: UseDeployLogsOptions = {}) {
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
+  const [rangeState, setRangeState] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const lastCountRef = useRef(0)
+  const isStreamingRef = useRef(false)
   const onCompleteRef = useRef(options.onComplete)
   onCompleteRef.current = options.onComplete
 
@@ -20,19 +24,29 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
       clearInterval(timerRef.current)
       timerRef.current = null
     }
+    isStreamingRef.current = false
     setIsStreaming(false)
   }, [])
 
-  const startStreaming = useCallback(() => {
+  // Stop the interval when the component that owns this hook unmounts
+  useEffect(() => () => stopStreaming(), [stopStreaming])
+
+  const startStreaming = useCallback((rangeId?: string) => {
     stopStreaming()
     lastCountRef.current = 0
+    isStreamingRef.current = true
     setIsStreaming(true)
+    setRangeState(null)
 
     const poll = async () => {
+      // Skip fetches when the tab is not visible
+      if (typeof document !== "undefined" && document.hidden) return
+      if (!isStreamingRef.current) return
+
       try {
         const [logsResult, rangeResult] = await Promise.all([
-          ludusApi.getRangeLogs(),
-          ludusApi.getRangeStatus(),
+          ludusApi.getRangeLogs(rangeId),
+          ludusApi.getRangeStatus(rangeId),
         ])
 
         if (logsResult.data) {
@@ -41,11 +55,16 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
           const newLines = allLines.slice(lastCountRef.current)
           lastCountRef.current = allLines.length
           if (newLines.length > 0) {
-            setLines((prev) => [...prev, ...newLines])
+            // Prepend a wall-clock timestamp to each newly-received line.
+            // Lines within the same poll window share the same timestamp, which
+            // is within POLL_INTERVAL_MS of when they were actually written.
+            const ts = new Date().toISOString().slice(11, 19)
+            setLines((prev) => [...prev, ...newLines.map((l) => `[${ts}] ${l}`)])
           }
         }
 
         const state = (rangeResult.data as { rangeState?: string } | null)?.rangeState
+        if (state) setRangeState(state)
         if (state && state !== "DEPLOYING" && state !== "WAITING") {
           stopStreaming()
           onCompleteRef.current?.()
@@ -55,15 +74,15 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
       }
     }
 
-    // Immediate first poll, then every 2 s
     poll()
-    timerRef.current = setInterval(poll, 2000)
+    timerRef.current = setInterval(poll, POLL_INTERVAL_MS)
   }, [stopStreaming])
 
   const clearLogs = useCallback(() => {
     setLines([])
     lastCountRef.current = 0
+    setRangeState(null)
   }, [])
 
-  return { lines, isStreaming, startStreaming, stopStreaming, clearLogs }
+  return { lines, isStreaming, rangeState, startStreaming, stopStreaming, clearLogs }
 }

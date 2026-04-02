@@ -7,7 +7,7 @@
  *   3. User overrides saved via the Settings UI (persisted to SQLite)
  *
  * Overrides survive container restarts because they are stored in the
- * volume-mounted SQLite database at $DATA_DIR/ludus-ui.db.
+ * volume-mounted SQLite database at $DATA_DIR/ludus-ux.db.
  */
 
 import { getDb } from "./db"
@@ -19,12 +19,19 @@ export interface RuntimeSettings {
   sshHost: string
   sshPort: number
   goadPath: string
+  /** Whether the GOAD integration is shown in the UI. Defaults to true. */
+  goadEnabled: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
   rootApiKey: string
   /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
   proxmoxSshUser: string
   /** Proxmox/root SSH password — used for VM console (SPICE) access. */
   proxmoxSshPassword: string
+  /**
+   * Optional path to root SSH private key inside the container (e.g. /app/ssh/id_rsa).
+   * When set, tried before PROXMOX_SSH_KEY_PATH env — survives Next/env oddities and is saved in SQLite.
+   */
+  proxmoxSshKeyPath: string
 }
 
 // Module-level overrides loaded from the DB + any in-process mutations.
@@ -41,10 +48,12 @@ function defaults(): RuntimeSettings {
     verifyTls: process.env.LUDUS_VERIFY_TLS === "true",
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
-    goadPath: process.env.GOAD_PATH || "/opt/goad-mod",
+    goadPath: process.env.GOAD_PATH || "/opt/GOAD",
+    goadEnabled: process.env.ENABLE_GOAD !== "false",
     rootApiKey: process.env.LUDUS_ROOT_API_KEY || "",
     proxmoxSshUser: process.env.PROXMOX_SSH_USER || "root",
     proxmoxSshPassword: process.env.PROXMOX_SSH_PASSWORD || "",
+    proxmoxSshKeyPath: "",
   }
 }
 
@@ -57,9 +66,11 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "sshHost",
   "sshPort",
   "goadPath",
+  "goadEnabled",
   "rootApiKey",
   "proxmoxSshUser",
   "proxmoxSshPassword",
+  "proxmoxSshKeyPath",
 ]
 
 function loadOverridesFromDb(): Partial<RuntimeSettings> {
@@ -73,7 +84,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       if (!SETTINGS_KEYS.includes(key as keyof RuntimeSettings)) continue
       const k = key as keyof RuntimeSettings
       // Coerce stored strings back to the right type
-      if (k === "verifyTls") {
+      if (k === "verifyTls" || k === "goadEnabled") {
         (result as Record<string, unknown>)[k] = value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(value, 10)

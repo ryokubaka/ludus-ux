@@ -8,7 +8,22 @@ export async function GET(request: NextRequest) {
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
-  return NextResponse.json(getSettings())
+
+  const settings = getSettings()
+
+  // Non-admins receive a restricted view — sensitive credentials are omitted.
+  if (!session.isAdmin) {
+    const {
+      proxmoxSshPassword: _p,
+      rootApiKey: _r,
+      proxmoxSshUser: _u,
+      proxmoxSshKeyPath: _k,
+      ...safeSettings
+    } = settings
+    return NextResponse.json(safeSettings)
+  }
+
+  return NextResponse.json(settings)
 }
 
 export async function POST(request: NextRequest) {
@@ -32,8 +47,10 @@ export async function POST(request: NextRequest) {
   if (typeof body.sshHost === "string") patch.sshHost = body.sshHost.trim()
   if (typeof body.sshPort === "number") patch.sshPort = body.sshPort
   if (typeof body.goadPath === "string") patch.goadPath = body.goadPath.trim()
+  if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
+  if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
 
   const updated = updateSettings(patch)
   // Invalidate cached catalog if goadPath changed

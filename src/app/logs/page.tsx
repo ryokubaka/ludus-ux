@@ -7,11 +7,13 @@ import { Badge } from "@/components/ui/badge"
 import { LogViewer } from "@/components/range/log-viewer"
 import { Activity, RefreshCw, Trash2, Download } from "lucide-react"
 import { ludusApi, getImpersonationApiKey } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
 export default function LogsPage() {
   const { toast } = useToast()
+  const { selectedRangeId } = useRange()
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [rangeState, setRangeState] = useState<string>("")
@@ -49,7 +51,10 @@ export default function LogsPage() {
         const headers: Record<string, string> = {}
         if (impKey) headers["X-Impersonate-Apikey"] = impKey
 
-        const res = await fetch("/api/logs/stream", { signal: ctrl.signal, headers })
+        const streamUrl = selectedRangeId
+          ? `/api/logs/stream?rangeId=${selectedRangeId}`
+          : "/api/logs/stream"
+        const res = await fetch(streamUrl, { signal: ctrl.signal, headers })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const dec = new TextDecoder()
@@ -61,13 +66,23 @@ export default function LogsPage() {
             .split("\n")
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
-          if (newLines.length) setLines((prev) => [...prev, ...newLines])
-          const completeLine = newLines.find((l) => l.startsWith("[DEPLOY_COMPLETE]"))
-          if (completeLine) {
-            // Extract the state from the completion message and refresh status
-            const match = completeLine.match(/Range state: (\w+)/)
-            if (match) setRangeState(match[1])
+          // Update state badge from server-pushed STATE/DONE events; filter
+          // internal control lines so they never appear as log output.
+          const displayLines = newLines.filter(
+            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ")
+          )
+          if (displayLines.length) setLines((prev) => [...prev, ...displayLines])
+          // [DONE] <state> — new sentinel (replaces legacy [DEPLOY_COMPLETE])
+          const doneLine = newLines.find((l) => l.startsWith("[DONE] "))
+          if (doneLine) {
+            setRangeState(doneLine.slice(7).trim())
             loadLogs()
+          }
+          // [STATE] <state> — intermediate state update
+          const stateLine = newLines.findLast?.((l) => l.startsWith("[STATE] ")) ??
+            [...newLines].reverse().find((l) => l.startsWith("[STATE] "))
+          if (stateLine) {
+            setRangeState(stateLine.slice(8).trim())
           }
         }
       } catch (err) {
@@ -76,7 +91,7 @@ export default function LogsPage() {
         setIsStreaming(false)
       }
     })()
-  }, [loadLogs])
+  }, [loadLogs, selectedRangeId])
 
   const clearLogs = useCallback(() => setLines([]), [])
 
@@ -97,7 +112,7 @@ export default function LogsPage() {
   useEffect(() => {
     startStreaming()
     return () => abortRef.current?.abort()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [startStreaming])
 
   const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
 

@@ -1,6 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useRef } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
+import { keepPreviousData } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -22,6 +26,7 @@ import {
   Info,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -72,11 +77,15 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
 
 export default function RangeConfigPage() {
   const { toast } = useToast()
+  const { selectedRangeId } = useRange()
+  const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const [config, setConfig] = useState("")
   const [originalConfig, setOriginalConfig] = useState("")
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // Track which range's config is currently loaded in the editor so background
+  // refetches don't silently overwrite what the user has typed or saved.
+  const lastSyncedRangeRef = useRef<string | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [limitVM, setLimitVM] = useState("")
@@ -88,28 +97,40 @@ export default function RangeConfigPage() {
     onComplete: () => setDeploying(false),
   })
 
-  const fetchConfig = useCallback(async () => {
-    setLoading(true)
-    const result = await ludusApi.getRangeConfig()
-    if (result.data) {
-      // v1 API returns {"result": "yaml string"}
+  const logsRef = useRef<HTMLDivElement>(null)
+
+  // Range config — cached, reloads when selectedRangeId changes.
+  // Config rarely changes externally, so use a long stale time to avoid
+  // spurious background refetches overwriting the user's unsaved edits.
+  const { data: cachedConfig, isLoading: loading } = useQuery({
+    queryKey: queryKeys.rangeConfig(selectedRangeId),
+    queryFn: async () => {
+      const result = await ludusApi.getRangeConfig(selectedRangeId ?? undefined)
+      if (result.error) throw new Error(result.error)
       const raw = result.data as { result?: string } | string
-      const yamlStr = typeof raw === "string"
+      return typeof raw === "string"
         ? raw
         : (raw as { result?: string })?.result || JSON.stringify(raw, null, 2)
-      setConfig(yamlStr)
-      setOriginalConfig(yamlStr)
-    } else if (result.error) {
-      toast({ variant: "destructive", title: "Error loading config", description: result.error })
-    }
-    setLoading(false)
-  }, [toast])
+    },
+    staleTime: STALE.long,
+    placeholderData: keepPreviousData,
+  })
+
+  // Sync editor ONLY on initial load or when the active range changes.
+  // Background refetches must NOT overwrite what the user has typed or already saved —
+  // use lastSyncedRangeRef to track which range is currently loaded in the editor.
+  useEffect(() => {
+    if (!cachedConfig || typeof cachedConfig !== "string") return
+    const rangeKey = selectedRangeId ?? "default"
+    if (lastSyncedRangeRef.current === rangeKey) return
+    setConfig(cachedConfig)
+    setOriginalConfig(cachedConfig)
+    lastSyncedRangeRef.current = rangeKey
+  }, [cachedConfig, selectedRangeId])
 
   // On mount: check if a deployment is already running so navigating
   // away and back doesn't lose the in-progress status.
   useEffect(() => {
-    fetchConfig()
-
     const checkDeployStatus = async () => {
       const rangeResult = await ludusApi.getRangeStatus()
       if (rangeResult.data?.rangeState === "DEPLOYING") {
@@ -120,11 +141,11 @@ export default function RangeConfigPage() {
     }
     checkDeployStatus()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchConfig])
+  }, [selectedRangeId])
 
   const handleSave = async () => {
     setSaving(true)
-    const result = await ludusApi.setRangeConfig(config)
+    const result = await ludusApi.setRangeConfig(config, selectedRangeId ?? undefined)
     if (result.error) {
       toast({ variant: "destructive", title: "Save failed", description: result.error })
     } else {
@@ -132,6 +153,8 @@ export default function RangeConfigPage() {
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
       toast({ title: "Config saved" })
+      // Update the cached config so navigating away and back shows the saved version
+      queryClient.setQueryData(queryKeys.rangeConfig(selectedRangeId), config)
     }
     setSaving(false)
   }
@@ -143,9 +166,12 @@ export default function RangeConfigPage() {
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
+    // Scroll to the logs panel after React renders it
+    setTimeout(() => logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
     const result = await ludusApi.deployRange(
       selectedTags.length > 0 ? selectedTags : undefined,
-      limitVM || undefined
+      limitVM || undefined,
+      selectedRangeId ?? undefined
     )
     if (result.error) {
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
@@ -164,7 +190,7 @@ export default function RangeConfigPage() {
     )
 
   const doAbort = async () => {
-    await ludusApi.abortDeploy()
+    await ludusApi.abortDeploy(selectedRangeId ?? undefined)
     stopStreaming()
     setDeploying(false)
     toast({ title: "Deploy aborted" })
@@ -233,7 +259,10 @@ export default function RangeConfigPage() {
               </Button>
             )}
 
-            <Button variant="ghost" size="icon" onClick={fetchConfig} disabled={loading}>
+            <Button variant="ghost" size="icon" onClick={() => {
+              lastSyncedRangeRef.current = null // allow the incoming data to replace editor content
+              queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(selectedRangeId) })
+            }} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>
@@ -322,7 +351,7 @@ export default function RangeConfigPage() {
 
       {/* Deploy Logs */}
       {showLogs && (
-        <Card>
+        <Card ref={logsRef}>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">

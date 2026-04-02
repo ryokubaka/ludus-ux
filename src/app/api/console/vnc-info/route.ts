@@ -3,6 +3,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { proxmoxLogin, proxmoxGetFirstNode, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
 import { storeVncSession } from "@/lib/vnc-token-store"
+import { hasProxmoxPamOrSessionPassword } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -18,9 +19,12 @@ export async function GET(request: NextRequest) {
   // Prefer dedicated Proxmox credentials; fall back to the logged-in user's SSH password.
   // For a typical Ludus deployment, root's SSH password == Proxmox root@pam password.
   const password = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!password) {
+  if (!hasProxmoxPamOrSessionPassword(settings, session.sshPassword)) {
     return NextResponse.json(
-      { error: "No Proxmox credentials available. Set PROXMOX_SSH_PASSWORD in your .env, or log out and back in." },
+      {
+        error:
+          "In-browser VNC needs a Proxmox PAM password (same as Linux root/user password for API login). SSH keys work for SPICE and pvesh-over-SSH but not for the Proxmox REST ticket used by noVNC. Set PROXMOX_SSH_PASSWORD or log in with your SSH password.",
+      },
       { status: 503 },
     )
   }

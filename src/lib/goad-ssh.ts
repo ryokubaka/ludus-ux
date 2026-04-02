@@ -9,11 +9,10 @@
  * root credentials from the settings store are used as fallback.
  */
 
-import { Client as SSHClient, ConnectConfig } from "ssh2";
-import * as fs from "fs";
-import * as path from "path";
-import type { GoadInstance, GoadCatalog } from "./types";
-import { getSettings } from "./settings-store";
+import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
+import type { GoadInstance, GoadCatalog } from "./types"
+import { getSettings } from "./settings-store"
+import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
 
 /**
  * Strip ANSI/VT100 escape sequences from terminal output so raw text
@@ -41,9 +40,6 @@ function stripAnsi(text: string): string {
     // Cursor-control chars except newline/tab
     .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "")
 }
-
-// Key path is still an env var / Docker volume mount — not a runtime setting
-const GOAD_SSH_KEY_PATH = process.env.GOAD_SSH_KEY_PATH || "/app/ssh/id_rsa";
 
 /** Per-user SSH credentials extracted from the encrypted session cookie. */
 export interface SSHCreds {
@@ -99,30 +95,23 @@ function buildConnectConfig(creds?: SSHCreds): ConnectConfig {
   }
 
   // Fall back to root/admin credentials for admin-level operations
-  const username = process.env.GOAD_SSH_USER || settings.proxmoxSshUser || "root";
-  const password = process.env.GOAD_SSH_PASSWORD || settings.proxmoxSshPassword;
-  const keyPath = GOAD_SSH_KEY_PATH;
+  const username = process.env.GOAD_SSH_USER || settings.proxmoxSshUser || "root"
+  const password = (process.env.GOAD_SSH_PASSWORD || settings.proxmoxSshPassword || "").trim()
 
-  const config: ConnectConfig = { ...base, username };
+  const config: ConnectConfig = { ...base, username }
 
   if (password) {
-    config.password = password;
-  } else if (keyPath && fs.existsSync(keyPath)) {
-    config.privateKey = fs.readFileSync(keyPath);
+    config.password = password
   } else {
-    const defaultKeys = [
-      path.join(process.env.HOME || "/root", ".ssh/id_rsa"),
-      path.join(process.env.HOME || "/root", ".ssh/id_ed25519"),
-    ];
-    for (const kp of defaultKeys) {
-      if (fs.existsSync(kp)) {
-        config.privateKey = fs.readFileSync(kp);
-        break;
-      }
+    const key = readPrivateKey()
+    if (key) {
+      config.privateKey = key
+      const ph = getSshKeyPassphrase()
+      if (ph) config.passphrase = ph
     }
   }
 
-  return config;
+  return config
 }
 
 /**
@@ -178,33 +167,160 @@ export async function streamGoadCommand(
   /** When set, the command is wrapped with `sudo -H -u {username}` and the
    *  impersonated user's API key replaces the caller's key.  The SSH connection
    *  itself uses root credentials (creds is ignored and falls back to root/key). */
-  impersonateAs?: { username: string; apiKey: string }
+  impersonateAs?: { username: string; apiKey: string },
+  /** Dedicated Ludus rangeID for this GOAD instance. When set, LUDUS_RANGE_ID
+   *  is injected into the GOAD environment so Ludus operations target only
+   *  this range — leaving other ranges completely untouched. */
+  rangeId?: string
 ): Promise<() => void> {
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
   const ludusApiKey = impersonateAs?.apiKey || apiKey || process.env.LUDUS_API_KEY || "";
-  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
   let command: string;
   // PYTHONUNBUFFERED=1 prevents Python from block-buffering stdout when stdin is a pipe,
   // ensuring ansible output is flushed to the SSH stream line-by-line in real time.
-  const pyEnv = `PYTHONUNBUFFERED=1 LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}' LUDUS_VERSION=2`;
+  // LUDUS_RANGE_ID is passed as an env var so the ludus wrapper (see below) can
+  // inject --range into every ludus CLI call made by GOAD subprocesses.
+  //
+  // LUDUS_API_KEY is only injected when we actually have a key.  Passing an
+  // empty string causes the ludus CLI to reject it with "Malformed API Key"
+  // instead of falling back to reading the key from ~/.config/ludus/config.yml
+  // (which is set up correctly during `goad -t install`).
+  const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
+  const pyEnvParts = [
+    "PYTHONUNBUFFERED=1",
+    "LUDUS_VERSION=2",
+    ...(ludusApiKey ? [`LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}'`] : []),
+    ...(safeRangeId ? [`LUDUS_RANGE_ID='${safeRangeId}'`] : []),
+  ]
+  const pyEnv = pyEnvParts.join(" ")
 
-  // Build the inner goad command (same as before)
+  // ── Pre-flight: ensure workspace is writable (as root, separate SSH) ────────
+  //
+  // The GOAD workspace directory is typically owned by root after installation.
+  // Non-root SSH users cannot create instance sub-directories in it, which
+  // causes goad.py to crash with "Instance dir creation error".
+  //
+  // We open a *separate* root SSH connection (reusing the root credentials in
+  // the settings store) and create+chmod the directory before the user's command
+  // starts.  This runs as actual root — no sudo required.
+  //
+  // The await adds ~1-2 s of setup latency, which is negligible for a 30-90 min
+  // GOAD deployment.  Failure is silenced here; the preamble below still checks
+  // writability and prints a clear actionable error if it isn't writable.
+  const GOAD_WORKSPACE = `${goadPath}/workspace`;
+  try {
+    await sshExec(`mkdir -p '${GOAD_WORKSPACE}' && chmod 777 '${GOAD_WORKSPACE}'`);
+  } catch {
+    // Root SSH may not be configured; writability check in preamble below handles it
+  }
+
+  // ── ludus CLI wrapper ────────────────────────────────────────────────────────
+  //
+  // The Ludus CLI's --range flag is NOT readable from any environment variable
+  // (confirmed from ludus-client/cmd/root.go: viper.BindPFlag is never called for
+  // the "range" flag).  Without the wrapper, every `ludus range rm / deploy /
+  // status` call inside GOAD targets the user's DEFAULT Ludus range regardless of
+  // what LUDUS_RANGE_ID is set to — causing destructive cross-range contamination.
+  //
+  // Solution: when a rangeId is known, create a tiny sh wrapper script at a
+  // temporary path and prepend that path to $PATH.  GOAD's Python code does
+  // `env = os.environ.copy()` before every subprocess.run(), so the modified PATH
+  // (and LUDUS_RANGE_ID) propagate into every `ludus` call inside GOAD.
+  //
+  // The wrapper intercepts `ludus …` calls and rewrites them to
+  // `ludus --range $LUDUS_RANGE_ID …` unless --range/-r was already supplied.
+  // $LUDUS_RANGE_ID is evaluated at wrapper-execution time (from the inherited
+  // env), so the wrapper file itself is range-agnostic and safe to reuse.
+  // Written as a single inline string so that `then` is never followed by `;`
+  // (bash treats `then;` as a syntax error — only `fi;`, `done;`, etc. are valid).
+  // The two nested `if` guards are spelled out in one expression with each
+  // `then` followed directly by the next command (space-separated, no `;`).
+  const ludusWrapSetup = safeRangeId
+    ? `_LUDUS_REAL=$(command -v ludus 2>/dev/null || true);` +
+      ` if [ -n "$_LUDUS_REAL" ]; then` +
+      ` _LUDUS_WRAP=$(mktemp -d 2>/dev/null || true);` +
+      ` if [ -n "$_LUDUS_WRAP" ]; then` +
+      // printf %s embeds the real binary path at wrapper-creation time.
+      // $LUDUS_RANGE_ID is evaluated at wrapper-execution time from the env.
+      ` printf '#!/bin/sh\\n_R="%s"\\nfor _a in "$@"; do case "$_a" in --range|-r) exec "$_R" "$@";; esac; done\\nexec "$_R" --range "$LUDUS_RANGE_ID" "$@"\\n' "$_LUDUS_REAL" > "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
+      ` chmod +x "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
+      ` export PATH="$_LUDUS_WRAP:$PATH";` +
+      ` fi; fi`
+    : "";
+
+  // ── Per-command preamble (runs in the user's SSH context) ────────────────────
+  //
+  // 1. Idempotent bashrc check — ensures LUDUS_VERSION=2 is set for interactive
+  //    and UI-triggered commands alike.
+  // 2. Writability gate — emits a clear, actionable message if root SSH above
+  //    didn't succeed (e.g. root creds not configured).
+  // 3. goad.sh venv activation — activates $HOME/.goad/.venv if it already
+  //    exists.  goad.sh itself creates the venv on first run, so this is only
+  //    for subsequent invocations where we want the activated PATH before the
+  //    actual command runs (e.g. so the ludus wrapper step can find the right
+  //    python3 / ansible on PATH).  Silently skipped on first run — goad.sh
+  //    will create the venv as part of the main command.
+  // 4. ludus wrapper — prepends a range-scoping shim to $PATH (only when
+  //    a dedicated rangeId is known for this operation).
+  const pythonEnvSetup =
+    `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
+
+  const setupPreamble = [
+    `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
+    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
+    pythonEnvSetup,
+    ...(ludusWrapSetup ? [ludusWrapSetup] : []),
+  ].join("; ");
+
+  // ── pyEnv as export statements ───────────────────────────────────────────────
+  //
+  // The pyEnv vars are needed by goad.sh, python3 goad.py, and all subprocesses
+  // (including the ludus CLI called by GOAD's provide command).
+  //
+  // For the non-REPL path `${pyEnv} bash goad.sh` works fine — env var prefixes
+  // are inherited by the named command and all its children.
+  //
+  // For the REPL path the command is `${pyEnv} printf '...' | bash goad.sh`.
+  // In bash, `VAR=value cmd1 | cmd2` only sets VAR for cmd1 (printf) — NOT for
+  // cmd2 (bash goad.sh).  printf doesn't use these vars, so GOAD never sees
+  // LUDUS_API_KEY and falls back to its config file (which may be stale/wrong).
+  //
+  // Solution: export the vars into the shell's environment BEFORE the pipeline
+  // runs.  Exported vars are inherited by every subsequent command including the
+  // right-hand side of pipes.
+  const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
+
+  // Build the inner goad command.
+  //
+  // Both paths go through goad.sh rather than invoking python3 goad.py directly.
+  // This is critical: goad.sh creates $HOME/.goad/.venv on first run and activates
+  // it on every run (source $venv/bin/activate).  The venv contains the correct
+  // versions of ansible-playbook and all Python deps.  If we bypass goad.sh and
+  // call python3 directly, the system ansible at /usr/local/bin/ansible-playbook
+  // (which may have a broken/incompatible installation) is used instead.
+  //
+  // For REPL mode we pipe the GOAD REPL commands to goad.sh via stdin.  bash
+  // propagates stdin to child processes, so goad.sh → python3 goad.py all see
+  // the piped input.  goad.py reads from stdin when no args are given, entering
+  // interactive REPL mode where our commands are executed.
   let innerCommand: string;
   if (goadArgs.startsWith("--repl ")) {
     const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "");
     const stdinCmds = rawCmds.split(";").join("\n");
     const escaped = stdinCmds.replace(/'/g, "'\\''");
     innerCommand = [
+      setupPreamble,
+      pyEnvExports,
       `cd ${goadPath}`,
-      `. ${goadPath}/.venv/bin/activate 2>/dev/null || true`,
-      `${pyEnv} printf '${escaped}\nexit\n' | python3 -u ${goadPath}/goad.py`,
-    ].join(" && ");
+      `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
+    ].join("; ");
   } else {
-    innerCommand = `cd ${goadPath} && ${pyEnv} ${goadPath}/goad.sh ${goadArgs}`;
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`;
   }
 
   if (impersonateAs) {
@@ -219,8 +335,7 @@ export async function streamGoadCommand(
   }
 
   // Captured once the exec channel is open; used to send Ctrl+C on abort.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let channelStream: any = null;
+  let channelStream: ClientChannel | null = null
 
   conn.on("ready", () => {
     // Use a wide PTY so goad.py's Rich library renders full-width tables
@@ -241,8 +356,9 @@ export async function streamGoadCommand(
       let lineBuffer = "";
 
       function flushBuffer(raw: string, isFinal = false) {
-        // Auto-answer interactive yes/no prompts
-        if (/\([yY]\/[nN]\)\s*$/.test(raw.trim())) {
+        // Auto-answer interactive yes/no prompts (handles both "(y/N) " and "(y/N): " formats)
+        const trimmed = raw.trim();
+        if (/\([yY]\/[nN]\)[:\s]*$/.test(trimmed) || /\bDo you want to continue\?\s*$/i.test(trimmed)) {
           try { stream.write("y\n"); } catch {}
         }
         const text = stripAnsi(lineBuffer + raw);
@@ -300,6 +416,47 @@ export async function streamGoadCommand(
   };
 }
 
+// ── Per-instance Ludus range tracking ────────────────────────────────────────
+//
+// Each GOAD instance should have its own dedicated Ludus range so that
+// destroying it only removes that instance's VMs — not the operator's
+// other ranges.
+//
+// The range ID is stored in <goadPath>/workspace/<instanceId>/.goad_range_id
+// as a plain string. GOAD is invoked with LUDUS_RANGE_ID=<rangeId> so it
+// targets the correct range for all Ludus API calls.
+
+/** Write the dedicated Ludus rangeID for a GOAD instance workspace. */
+export async function writeGoadRangeId(
+  instanceId: string,
+  rangeId: string,
+  creds?: SSHCreds
+): Promise<void> {
+  const goadPath = getSettings().goadPath || "/opt/GOAD"
+  const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
+  const dir = `${goadPath}/workspace/${safeId}`
+  const filePath = `${dir}/.goad_range_id`
+  const safeRangeId = rangeId.replace(/'/g, "")
+  await sshExec(`mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`, creds)
+}
+
+/** Read the dedicated Ludus rangeID for a GOAD instance. Returns null if not set. */
+export async function readGoadRangeId(
+  instanceId: string,
+  creds?: SSHCreds
+): Promise<string | null> {
+  try {
+    const goadPath = getSettings().goadPath || "/opt/GOAD"
+    const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
+    const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
+    const { stdout, code } = await sshExec(`cat '${filePath}' 2>/dev/null`, creds)
+    if (code !== 0 || !stdout.trim()) return null
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
 // Python script that reads the entire workspace in one SSH call.
 // Encoded as base64 and piped through the existing SSH connection to avoid
 // shell-quoting issues.  Returns a JSON array of instance objects, each with
@@ -307,7 +464,7 @@ export async function streamGoadCommand(
 const LIST_INSTANCES_PY = `
 import os, json, pwd, sys, stat as statmod
 
-goad_path = sys.argv[1] if len(sys.argv) > 1 else '/opt/goad-mod'
+goad_path = sys.argv[1] if len(sys.argv) > 1 else '/opt/GOAD'
 workspace  = os.path.join(goad_path, 'workspace')
 
 results = []
@@ -335,11 +492,22 @@ for d in entries:
         except Exception:
             pass
 
+    # Read dedicated Ludus rangeID from our tracking file (.goad_range_id)
+    goad_range_id = ''
+    range_id_path = os.path.join(dp, '.goad_range_id')
+    if os.path.isfile(range_id_path):
+        try:
+            with open(range_id_path) as rf:
+                goad_range_id = rf.read().strip()
+        except Exception:
+            pass
+
     try:
         with open(fp) as f:
             data = json.load(f)
-        data['__owner__'] = owner
-        data['__dir__']   = d
+        data['__owner__']         = owner
+        data['__dir__']           = d
+        data['__goad_range_id__'] = goad_range_id
         results.append(data)
     except Exception:
         pass
@@ -359,7 +527,7 @@ print(json.dumps(results))
  */
 export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
@@ -381,16 +549,25 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
     for (const data of parsed) {
       const instanceId = (data.id as string) || (data.__dir__ as string) || ""
       if (!instanceId) continue
+      // ludusRangeId: prefer our .goad_range_id file (explicit tracking),
+      // fall back to range_id/ludus_range_id that GOAD itself may write to instance.json.
+      const ludusRangeId =
+        (data.__goad_range_id__ as string) ||
+        (data.range_id         as string) ||
+        (data.ludus_range_id   as string) ||
+        ""
+
       instances.push({
         instanceId,
-        lab:         ((data.lab         as string) || "") as import("./types").GoadLabType,
-        provider:    (data.provider    as string) || "",
-        provisioner: (data.provisioner as string) || "",
-        ipRange:     (data.ip_range    as string) || "",
-        status:      ((data.status      as string) || "CREATED") as import("./types").GoadInstanceStatus,
-        isDefault:   Boolean(data.is_default),
-        extensions:  ((data.extensions as string[]) || []) as import("./types").GoadExtension[],
-        ownerUserId: (data.__owner__   as string) || "",
+        lab:          ((data.lab         as string) || "") as import("./types").GoadLabType,
+        provider:     (data.provider    as string) || "",
+        provisioner:  (data.provisioner as string) || "",
+        ipRange:      (data.ip_range    as string) || "",
+        status:       ((data.status      as string) || "CREATED") as import("./types").GoadInstanceStatus,
+        isDefault:    Boolean(data.is_default),
+        extensions:   ((data.extensions as string[]) || []) as import("./types").GoadExtension[],
+        ownerUserId:  (data.__owner__   as string) || "",
+        ludusRangeId: ludusRangeId || undefined,
       })
     }
 
@@ -435,6 +612,73 @@ def read_readme_description(lab_dir):
                 pass
     return ""
 
+def extract_templates_from_yaml_file(path):
+    """Scan any YAML file for template/packer_template field values.
+    Uses a line-regex approach — no PyYAML dependency required.
+    Handles any indentation depth and both 'template:' and 'packer_template:' keys."""
+    templates = set()
+    if not os.path.isfile(path):
+        return templates
+    try:
+        with open(path) as f:
+            for line in f:
+                # Match:  template: some-value  OR  packer_template: some-value
+                # at any indentation level.  Template names in GOAD Ludus configs
+                # are always bare identifiers (win2019-server-x64, etc.) so we
+                # match word chars, dots, slashes, and dashes — no quote handling
+                # needed, which also avoids JS-template-literal escape issues.
+                m = re.match(r'^\\s+(?:packer_)?template:\\s+([\\w][\\w./-]*)', line)
+                if m:
+                    templates.add(m.group(1).strip())
+    except Exception:
+        pass
+    return templates
+
+def extract_templates_from_json(path):
+    """Scan data/config.json host entries for template / packer_template fields."""
+    templates = set()
+    if not os.path.isfile(path):
+        return templates
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        hosts = data.get("lab", {}).get("hosts", {})
+        for h in hosts.values():
+            for key in ("template", "packer_template", "ludus_template"):
+                val = h.get(key, "")
+                if val and isinstance(val, str):
+                    templates.add(val.strip())
+    except Exception:
+        pass
+    return templates
+
+def get_required_templates(base_dir):
+    """Collect required Ludus packer template names for a lab or extension.
+
+    Priority order:
+      1. Any *.yml / *.yaml under providers/ludus/   (direct Ludus config)
+      2. data/config.json host entries                (fallback for labs without a
+                                                       dedicated Ludus provider dir)
+    """
+    templates = set()
+
+    # 1. Scan every YAML file under providers/ludus/
+    ludus_dir = os.path.join(base_dir, "providers", "ludus")
+    if os.path.isdir(ludus_dir):
+        for fname in os.listdir(ludus_dir):
+            if fname.endswith((".yml", ".yaml")):
+                templates |= extract_templates_from_yaml_file(
+                    os.path.join(ludus_dir, fname)
+                )
+
+    # 2. Fall back to data/config.json when no Ludus provider dir exists
+    if not templates:
+        templates |= extract_templates_from_json(
+            os.path.join(base_dir, "data", "config.json")
+        )
+
+    return sorted(templates)
+
 def discover(goad_path):
     result = {"labs": [], "extensions": []}
 
@@ -463,11 +707,16 @@ def discover(goad_path):
                 except Exception:
                     pass
             description = read_readme_description(lab_dir)
+            required_templates = get_required_templates(lab_dir)
+            ludus_dir = os.path.join(lab_dir, "providers", "ludus")
+            ludus_supported = os.path.isdir(ludus_dir)
             result["labs"].append({
                 "name": lab_name,
                 "description": description,
                 "vmCount": vm_count,
                 "domains": domain_count,
+                "requiredTemplates": required_templates,
+                "ludusSupported": ludus_supported,
             })
 
     ext_path = os.path.join(goad_path, "extensions")
@@ -486,12 +735,14 @@ def discover(goad_path):
                 try:
                     with open(cfg_file) as f:
                         cfg = json.load(f)
+                    required_templates = get_required_templates(ext_dir)
                     result["extensions"].append({
                         "name": cfg.get("name", ext_name),
                         "description": cfg.get("description", ""),
                         "machines": cfg.get("machines", []),
                         "compatibility": cfg.get("compatibility", ["*"]),
                         "impact": cfg.get("impact", ""),
+                        "requiredTemplates": required_templates,
                     })
                 except Exception:
                     pass
@@ -508,7 +759,7 @@ let catalogCache: CacheEntry | null = null
 const CATALOG_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog> {
-  const goadPath = getSettings().goadPath || "/opt/goad-mod";
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
 
   if (catalogCache && Date.now() < catalogCache.expiry && catalogCache.goadPath === goadPath) {
     return catalogCache.data;
@@ -543,14 +794,14 @@ export function invalidateCatalogCache(): void {
 }
 
 /**
- * Read the lab config.json from the goad-mod directory.
+ * Read the lab config.json from the GOAD directory.
  */
 export async function getGoadLabConfig(
   labName: string,
   creds?: SSHCreds
 ): Promise<Record<string, unknown> | null> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const configPath = `${goadPath}/ad/${labName}/data/config.json`;
     const { stdout, code } = await sshExec(`cat "${configPath}" 2>/dev/null`, creds);
     if (code !== 0 || !stdout.trim()) return null;
@@ -605,7 +856,7 @@ export async function getInstanceInventories(
   creds?: SSHCreds
 ): Promise<InstanceInventoryFile[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/goad-mod";
+    const goadPath = getSettings().goadPath || "/opt/GOAD";
     const encoded = Buffer.from(LIST_INVENTORIES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}' '${instanceId.replace(/'/g, "'\\''")}'`;
     const { stdout, code } = await sshExec(cmd, creds);
@@ -614,5 +865,25 @@ export async function getInstanceInventories(
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Change the OS-level owner of a GOAD instance workspace directory.
+ * Runs `chown -R <targetUser>:<targetUser> <workspace>/<instanceId>` as root.
+ * Used when re-assigning a GOAD instance from one Ludus user to another.
+ */
+export async function chownGoadInstance(
+  instanceId: string,
+  targetUser: string,
+  creds?: SSHCreds,
+): Promise<void> {
+  const goadPath = getSettings().goadPath || "/opt/GOAD";
+  const safePath = `${goadPath}/workspace/${instanceId.replace(/'/g, "'\\''")}`
+  const safeUser = targetUser.replace(/'/g, "'\\''")
+  const cmd = `chown -R '${safeUser}':'${safeUser}' '${safePath}'`
+  const { code, stderr } = await sshExec(cmd, creds)
+  if (code !== 0) {
+    throw new Error(`chown failed (exit ${code}): ${stderr.trim() || "unknown error"}`)
   }
 }

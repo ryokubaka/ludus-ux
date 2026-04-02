@@ -1,8 +1,8 @@
 /**
  * Direct HTTP calls to the Proxmox VE API.
  *
- * Used for VNC console setup — authenticates as root@pam using the SSH password
- * (Proxmox uses PAM, so the Linux root password == root@pam API password).
+ * Used for in-browser VNC — authenticates as root@pam with a password (PAM).
+ * SSH key auth is not used here; SPICE / pvesh paths use SSH separately.
  *
  * TLS verification is already disabled globally by ludus-client.ts
  * (NODE_TLS_REJECT_UNAUTHORIZED=0) when LUDUS_VERIFY_TLS != "true".

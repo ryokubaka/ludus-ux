@@ -1,6 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useMemo, useCallback, useRef } from "react"
+import { useRouter } from "next/navigation"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -22,32 +26,81 @@ import {
   Key,
   Download,
   Shield,
+  ShieldOff,
+  ShieldCheck,
   User,
   Loader2,
   Eye,
   EyeOff,
   Copy,
   Lock,
+  Terminal,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import { saveImpersonation } from "@/lib/impersonation-context"
 
 export default function UsersPage() {
   const { toast } = useToast()
-  const [users, setUsers] = useState<UserObject[]>([])
-  const [rangeMap, setRangeMap] = useState<Record<string, string[]>>({}) // userID → rangeID[]
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const router = useRouter()
+
+  // ── Impersonation ──────────────────────────────────────────────────────────
+  const [impersonateTarget, setImpersonateTarget] = useState<{ userID: string } | null>(null)
+  const [impersonateApiKey, setImpersonateApiKey] = useState("")
+  const [fetchingKey, setFetchingKey] = useState<string | null>(null)
+  const [showImpersonateKey, setShowImpersonateKey] = useState(false)
+  const apiKeyInputRef = useRef<HTMLInputElement>(null)
+
+  const startImpersonate = useCallback(async (userID: string) => {
+    setFetchingKey(userID)
+    try {
+      const res = await fetch(`/api/admin/fetch-user-apikey?username=${encodeURIComponent(userID)}`)
+      const data = await res.json()
+      if (data.apiKey) {
+        await saveImpersonation({ username: userID, apiKey: data.apiKey })
+        toast({ title: `Now managing as ${userID}` })
+        router.push("/")
+        return
+      }
+    } catch { /* SSH unavailable — fall through to manual dialog */ }
+    finally { setFetchingKey(null) }
+    setImpersonateTarget({ userID })
+    setImpersonateApiKey("")
+    setShowImpersonateKey(false)
+    setTimeout(() => apiKeyInputRef.current?.focus(), 50)
+  }, [router, toast])
+
+  const commitImpersonate = async () => {
+    if (!impersonateTarget || !impersonateApiKey.trim()) {
+      toast({ variant: "destructive", title: "API key required" })
+      return
+    }
+    await saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
+    toast({ title: `Now managing as ${impersonateTarget.userID}` })
+    setImpersonateTarget(null)
+    router.push("/")
+  }
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const [addDialog, setAddDialog] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newUserId, setNewUserId] = useState("")
-  const [newUserName, setNewUserName] = useState("")
   const [newUserPassword, setNewUserPassword] = useState("")
   const [newUserAdmin, setNewUserAdmin] = useState(false)
   const [showNewPassword, setShowNewPassword] = useState(false)
+
+  /** Ludus/Linux usernames: letters and digits only, must start with a letter (max 32). */
+  const sanitizeUserId = (value: string) => {
+    let s = value.toLowerCase().replace(/[^a-z0-9]/g, "")
+    if (s.length > 32) s = s.slice(0, 32)
+    s = s.replace(/^[0-9]+/, "")
+    return s
+  }
+
+  const USER_ID_PATTERN = /^[a-z][a-z0-9]{0,31}$/
 
   // ── Delete user ────────────────────────────────────────────────────────────
   const [confirmDelete, setConfirmDelete] = useState<{ userId: string; rangeIds?: string[] } | null>(null)
@@ -70,42 +123,59 @@ export default function UsersPage() {
   const [changingPw, setChangingPw] = useState(false)
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
-  const fetchUsers = useCallback(async () => {
-    setLoading(true)
-    const [usersResult, rangesResult] = await Promise.all([
-      ludusApi.listAllUsers().catch(() => ludusApi.listUsers()),
-      ludusApi.listAllRanges().catch(() => ({ data: undefined, error: "no ranges", status: 0 })),
-    ])
-
-    const userList = usersResult.data
-      ? (Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data])
-      : []
-    setUsers(userList)
-
-    // Build userID → rangeID[] map (a user can own multiple ranges in Ludus v2)
-    if (rangesResult.data && Array.isArray(rangesResult.data)) {
-      const map: Record<string, string[]> = {}
-      for (const r of rangesResult.data as RangeObject[]) {
-        const uid = (r.userID || r.rangeID?.split("-")[0] || "").toLowerCase()
-        if (uid && r.rangeID) {
-          if (!map[uid]) map[uid] = []
-          if (!map[uid].includes(r.rangeID)) map[uid].push(r.rangeID)
+  const { data: usersData, isLoading: loading } = useQuery({
+    queryKey: queryKeys.users(),
+    queryFn: async () => {
+      const [usersResult, rangesResult] = await Promise.all([
+        ludusApi.listAllUsers().catch(() => ludusApi.listUsers()),
+        ludusApi.listAllRanges().catch(() => ({ data: undefined, error: "no ranges", status: 0 })),
+      ])
+      const userList: UserObject[] = usersResult.data
+        ? (Array.isArray(usersResult.data) ? usersResult.data : [usersResult.data])
+        : []
+      const rangeMap: Record<string, string[]> = {}
+      if (rangesResult.data && Array.isArray(rangesResult.data)) {
+        for (const r of rangesResult.data as RangeObject[]) {
+          const uid = (r.userID || r.rangeID?.split("-")[0] || "").toLowerCase()
+          if (uid && r.rangeID) {
+            if (!rangeMap[uid]) rangeMap[uid] = []
+            if (!rangeMap[uid].includes(r.rangeID)) rangeMap[uid].push(r.rangeID)
+          }
         }
       }
-      setRangeMap(map)
-    }
-    setLoading(false)
-  }, [])
+      return { users: userList, rangeMap }
+    },
+    staleTime: STALE.long,
+  })
 
-  useEffect(() => { fetchUsers() }, [fetchUsers])
+  const users = usersData?.users ?? []
+  /** ROOT is admin-only; hide from the directory UI. */
+  const usersVisible = useMemo(
+    () => users.filter((u) => u.userID.toUpperCase() !== "ROOT"),
+    [users],
+  )
+  const rangeMap = useMemo(() => usersData?.rangeMap ?? {}, [usersData])
+
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: queryKeys.users() })
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const handleAdd = async () => {
-    if (!newUserId.trim()) return
+    const uid = newUserId.trim()
+    if (!uid) return
+    if (!USER_ID_PATTERN.test(uid)) {
+      toast({
+        variant: "destructive",
+        title: "Invalid user ID",
+        description:
+          "Use 1–32 characters: start with a letter, then letters and numbers only (no spaces, dots, or symbols).",
+      })
+      return
+    }
     setAdding(true)
 
-    // Step 1: Create the user account
-    const result = await ludusApi.addUser(newUserId, newUserName || undefined, newUserAdmin)
+    // Step 1: Create the user account.
+    // Pass userId as the `name` field so the Linux home directory matches /home/<userId>.
+    const result = await ludusApi.addUser(uid, uid, newUserAdmin)
     if (result.error) {
       toast({ variant: "destructive", title: "Error creating user", description: result.error })
       setAdding(false)
@@ -122,7 +192,7 @@ export default function UsersPage() {
         const pwRes = await fetch("/api/users/change-password", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: newUserId, newPassword: newUserPassword }),
+          body: JSON.stringify({ userId: uid, newPassword: newUserPassword }),
         })
         const pwData = await pwRes.json() as { success?: boolean; error?: string }
         if (pwData.success) {
@@ -140,7 +210,7 @@ export default function UsersPage() {
       const keyRes = await fetch("/api/users/roll-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: newUserId }),
+        body: JSON.stringify({ userId: uid }),
       })
       const keyData = await keyRes.json() as { bashrcUpdated?: boolean; bashrcError?: string }
       if (keyData.bashrcUpdated) {
@@ -154,12 +224,12 @@ export default function UsersPage() {
 
     toast({
       title: "User created",
-      description: `${newUserId}${notes.length ? ` — ${notes.join(", ")}` : ""}`,
+      description: `${uid}${notes.length ? ` — ${notes.join(", ")}` : ""}`,
     })
     setAddDialog(false)
-    setNewUserId(""); setNewUserName(""); setNewUserPassword("")
+    setNewUserId(""); setNewUserPassword("")
     setNewUserAdmin(false); setShowNewPassword(false)
-    fetchUsers()
+    invalidateUsers()
     setAdding(false)
   }
 
@@ -212,7 +282,7 @@ export default function UsersPage() {
         title: "Error deleting user",
         description: `${userId}: ${userResult.error}${notes.length ? ` (${notes.join("; ")})` : ""}`,
       })
-      fetchUsers()
+      invalidateUsers()
       return
     }
 
@@ -227,7 +297,7 @@ export default function UsersPage() {
         .join(" — "),
     })
 
-    fetchUsers()
+    invalidateUsers()
   }
 
   // ── Roll API key ───────────────────────────────────────────────────────────
@@ -284,6 +354,31 @@ export default function UsersPage() {
     }
   }
 
+  // ── Promote / demote admin ─────────────────────────────────────────────────
+  const [roleChanging, setRoleChanging] = useState<string | null>(null)
+
+  const handleToggleAdmin = async (userID: string, makeAdmin: boolean) => {
+    setRoleChanging(userID)
+    try {
+      const res = await fetch("/api/admin/user-role", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userID, isAdmin: makeAdmin }),
+      })
+      const data = await res.json() as { ok?: boolean; error?: string }
+      if (!res.ok) {
+        toast({ variant: "destructive", title: "Role change failed", description: data.error ?? `HTTP ${res.status}` })
+        return
+      }
+      toast({ title: makeAdmin ? `${userID} promoted to admin` : `${userID} demoted to user` })
+      invalidateUsers()
+    } catch (err) {
+      toast({ variant: "destructive", title: "Role change error", description: (err as Error).message })
+    } finally {
+      setRoleChanging(null)
+    }
+  }
+
   // ── WireGuard ──────────────────────────────────────────────────────────────
   const handleGetWireguard = async (userId: string) => {
     const result = await ludusApi.getUserWireguard(userId)
@@ -303,16 +398,21 @@ export default function UsersPage() {
     }
   }
 
-  const adminCount = users.filter((u) => u.isAdmin).length
+  const sortedUsers = useMemo(
+    () => [...usersVisible].sort((a, b) => a.userID.localeCompare(b.userID)),
+    [usersVisible],
+  )
+
+  const adminCount = usersVisible.filter((u) => u.isAdmin).length
 
   return (
     <div className="space-y-6">
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: "Total Users", value: users.length },
+          { label: "Total Users", value: usersVisible.length },
           { label: "Admins", value: adminCount, className: "text-primary" },
-          { label: "Regular Users", value: users.length - adminCount },
+          { label: "Regular Users", value: usersVisible.length - adminCount },
         ].map(({ label, value, className }) => (
           <Card key={label} className="glass-card">
             <CardContent className="p-4">
@@ -328,7 +428,7 @@ export default function UsersPage() {
         <Button onClick={() => setAddDialog(true)}>
           <Plus className="h-4 w-4" /> Add User
         </Button>
-        <Button variant="ghost" size="icon" onClick={fetchUsers} disabled={loading}>
+        <Button variant="ghost" size="icon" onClick={invalidateUsers} disabled={loading}>
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
       </div>
@@ -345,6 +445,7 @@ export default function UsersPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
+                    <th className="p-3 w-24"></th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">User ID</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Name</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Role</th>
@@ -353,11 +454,26 @@ export default function UsersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {users.map((user) => {
+                  {sortedUsers.map((user) => {
                     const userRangeIds = rangeMap[user.userID.toLowerCase()] || []
                     const rangeId = userRangeIds[0] || user.rangeID || user.defaultRangeID
                     return (
                       <tr key={user.userID} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
+                        <td className="p-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
+                            onClick={() => startImpersonate(user.userID)}
+                            disabled={fetchingKey === user.userID}
+                            title={`Manage Ludus as ${user.userID}`}
+                          >
+                            {fetchingKey === user.userID
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : <Terminal className="h-3 w-3" />}
+                            Manage
+                          </Button>
+                        </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2">
                             <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
@@ -383,25 +499,41 @@ export default function UsersPage() {
                         </td>
                         <td className="p-3">
                           <div className="flex items-center justify-end gap-1">
-                            {user.userID !== "ROOT" && (
-                              <Button size="icon-sm" variant="ghost"
-                                onClick={() => setConfirmRoll(user.userID)}
-                                disabled={apiKeyLoading === user.userID}
-                                title="Roll API key">
-                                {apiKeyLoading === user.userID
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : <Key className="h-3 w-3 text-yellow-400" />}
-                              </Button>
-                            )}
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              onClick={() => handleToggleAdmin(user.userID, !user.isAdmin)}
+                              disabled={roleChanging === user.userID}
+                              title={user.isAdmin ? `Revoke admin from ${user.userID}` : `Promote ${user.userID} to admin`}
+                            >
+                              {roleChanging === user.userID
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : user.isAdmin
+                                  ? <ShieldOff className="h-3 w-3 text-yellow-400" />
+                                  : <ShieldCheck className="h-3 w-3 text-cyan-400" />}
+                            </Button>
+                            <Button size="icon-sm" variant="ghost"
+                              onClick={() => setConfirmRoll(user.userID)}
+                              disabled={apiKeyLoading === user.userID}
+                              title="Roll API key">
+                              {apiKeyLoading === user.userID
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Key className="h-3 w-3 text-yellow-400" />}
+                            </Button>
                             <Button size="icon-sm" variant="ghost"
                               onClick={() => { setChangePwUserId(user.userID); setChangePwValue(""); setChangePwConfirm(""); setShowChangePw(false) }}
                               title="Change password">
                               <Lock className="h-3 w-3 text-cyan-400" />
                             </Button>
-                            <Button size="icon-sm" variant="ghost"
-                              onClick={() => handleGetWireguard(user.userID)}
-                              title="Download WireGuard config">
-                              <Download className="h-3 w-3 text-blue-400" />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1.5 border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs whitespace-nowrap"
+                              onClick={() => void handleGetWireguard(user.userID)}
+                              title="Download WireGuard client configuration"
+                            >
+                              <Download className="h-3 w-3 shrink-0" />
+                              Download WireGuard
                             </Button>
                             <Button size="icon-sm" variant="ghost"
                               onClick={() => openDeleteDialog(user.userID)}
@@ -430,12 +562,16 @@ export default function UsersPage() {
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label>User ID <span className="text-red-400">*</span></Label>
-              <Input placeholder="jd" value={newUserId} onChange={(e) => setNewUserId(e.target.value)} className="font-mono" />
-              <p className="text-xs text-muted-foreground">Typically 2-3 character initials (lowercase)</p>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Display Name</Label>
-              <Input placeholder="John Doe" value={newUserName} onChange={(e) => setNewUserName(e.target.value)} />
+              <Input
+                placeholder="jd"
+                value={newUserId}
+                onChange={(e) => setNewUserId(sanitizeUserId(e.target.value))}
+                className="font-mono"
+                maxLength={32}
+              />
+              <p className="text-xs text-muted-foreground">
+                Letters and numbers only; must start with a letter (max 32) — becomes the Linux username and home directory
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label>Password <span className="text-red-400">*</span></Label>
@@ -459,7 +595,15 @@ export default function UsersPage() {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => { setAddDialog(false); setShowNewPassword(false) }}>Cancel</Button>
-            <Button onClick={handleAdd} disabled={adding || !newUserId.trim() || !newUserPassword.trim()}>
+            <Button
+              onClick={handleAdd}
+              disabled={
+                adding ||
+                !newUserId.trim() ||
+                !newUserPassword.trim() ||
+                !USER_ID_PATTERN.test(newUserId.trim())
+              }
+            >
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {adding ? "Creating… (up to 1 min)" : "Add User"}
             </Button>
@@ -581,6 +725,56 @@ export default function UsersPage() {
             </div>
             <DialogFooter>
               <Button onClick={() => { setApiKeyResult(null); setShowApiKey(false) }}>Done</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ── Impersonation fallback dialog (when auto-read API key fails) ──── */}
+      {impersonateTarget && (
+        <Dialog open onOpenChange={() => setImpersonateTarget(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-primary" />
+                Manage as <code className="text-primary font-mono">{impersonateTarget.userID}</code>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <Alert>
+                <AlertDescription className="text-xs">
+                  Could not auto-read the API key from <code className="font-mono">~{impersonateTarget.userID}/.bashrc</code>{" "}
+                  via root SSH. Enter it manually below.
+                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.userID}</code>.
+                </AlertDescription>
+              </Alert>
+              <div className="space-y-1.5">
+                <Label htmlFor="users-impersonate-apikey" className="text-xs">
+                  {impersonateTarget.userID}&apos;s Ludus API Key
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="users-impersonate-apikey"
+                    ref={apiKeyInputRef}
+                    type={showImpersonateKey ? "text" : "password"}
+                    placeholder="JUF3QT.XXXXXXXXXXXX"
+                    className="font-mono text-xs flex-1"
+                    value={impersonateApiKey}
+                    onChange={(e) => setImpersonateApiKey(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") commitImpersonate() }}
+                  />
+                  <Button size="icon" variant="ghost" onClick={() => setShowImpersonateKey(!showImpersonateKey)}>
+                    {showImpersonateKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setImpersonateTarget(null)}>Cancel</Button>
+              <Button onClick={commitImpersonate} disabled={!impersonateApiKey.trim()}>
+                <Terminal className="h-4 w-4" />
+                Manage Ludus Ranges
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server"
-import { subscribeToTask } from "@/lib/goad-task-store"
+import { subscribeToTask, getTask } from "@/lib/goad-task-store"
+import { getSessionFromRequest } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
@@ -9,9 +10,33 @@ export const dynamic = "force-dynamic"
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
-  const { taskId } = params
+  const session = await getSessionFromRequest(request)
+  if (!session) {
+    return new Response("data: [ERROR] Not authenticated\n\n", {
+      status: 401,
+      headers: { "Content-Type": "text/event-stream" },
+    })
+  }
+
+  const { taskId } = await params
+
+  // Enforce ownership before opening the stream.
+  const task = getTask(taskId)
+  if (task) {
+    const impersonateAs = session.isAdmin
+      ? request.headers.get("X-Impersonate-As") || null
+      : null
+    const effectiveUser = impersonateAs || session.username
+    if (!session.isAdmin && task.username && task.username !== effectiveUser) {
+      return new Response("data: [ERROR] Not found\n\n", {
+        status: 404,
+        headers: { "Content-Type": "text/event-stream" },
+      })
+    }
+  }
+
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({

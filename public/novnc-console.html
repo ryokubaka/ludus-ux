@@ -40,6 +40,72 @@
     }
     .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; animation: pulse 1.5s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* ── VNC controls toolbar ─────────────────────────────────────────────── */
+    /*  #ctrl-wrap is always present at the top-center.
+        #ctrl-handle is the always-visible tab indicator.
+        #controls is the expandable bar that appears on hover / mouse-near-top. */
+    #ctrl-wrap {
+      position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center;
+      z-index: 300;
+    }
+    /* Persistent visible handle — always-visible tab that signals "controls here" */
+    #ctrl-handle {
+      width: 80px; height: 10px;
+      background: #52525b;
+      border-radius: 0 0 8px 8px;
+      cursor: pointer;
+      transition: background 0.2s, width 0.2s, height 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+    }
+    #ctrl-handle::after {
+      content: '';
+      display: block;
+      width: 28px; height: 3px;
+      background: #a1a1aa;
+      border-radius: 2px;
+      margin: 3px auto 0;
+    }
+    #ctrl-wrap:hover #ctrl-handle,
+    #ctrl-wrap.active #ctrl-handle {
+      background: #6d28d9;
+      width: 96px;
+      height: 12px;
+    }
+    #ctrl-wrap:hover #ctrl-handle::after,
+    #ctrl-wrap.active #ctrl-handle::after { background: #c4b5fd; }
+
+    /* Expandable bar */
+    #controls {
+      display: flex; align-items: center; justify-content: center; gap: 4px;
+      background: rgba(9,9,11,0.92); border: 1px solid #3f3f46;
+      border-top: none; border-radius: 0 0 8px 8px;
+      padding: 5px 12px;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.18s;
+    }
+    #ctrl-wrap:hover #controls,
+    #ctrl-wrap.active #controls { opacity: 1; pointer-events: auto; }
+
+    .ctrl-btn {
+      display: flex; align-items: center; gap: 5px;
+      padding: 4px 11px; font-size: 11px; font-family: monospace;
+      border: 1px solid #3f3f46; background: transparent; color: #a1a1aa;
+      border-radius: 5px; cursor: pointer; white-space: nowrap;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .ctrl-btn:hover { background: #27272a; color: #e4e4e7; border-color: #52525b; }
+    .ctrl-btn:active { background: #3f3f46; }
+    .ctrl-sep { width: 1px; height: 16px; background: #3f3f46; flex-shrink: 0; }
+    /* Toast — absolutely positioned so it never affects button centering */
+    #ctrl-toast {
+      position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; color: #4ade80; white-space: nowrap;
+      background: rgba(9,9,11,0.85); padding: 2px 8px; border-radius: 4px;
+      opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    #ctrl-toast.show { opacity: 1; }
   </style>
 </head>
 <body>
@@ -49,6 +115,21 @@
     <div id="err"  style="display:none"></div>
     <div id="hint" style="display:none"></div>
     <button class="btn" id="retryBtn" style="display:none" onclick="window.location.reload()">↺ Retry</button>
+  </div>
+
+  <!-- VNC controls — always-visible handle + expandable bar on hover/mouse-near-top -->
+  <div id="ctrl-wrap">
+    <div id="ctrl-handle" title="VM controls"></div>
+    <div id="controls">
+      <button class="ctrl-btn" id="btn-cad" title="Send Ctrl+Alt+Del to the VM">
+        ⌨ Ctrl+Alt+Del
+      </button>
+      <div class="ctrl-sep"></div>
+      <button class="ctrl-btn" id="btn-fullscreen" title="Toggle fullscreen">
+        ⛶ Fullscreen
+      </button>
+      <span id="ctrl-toast"></span>
+    </div>
   </div>
 
   <div id="screen"></div>
@@ -71,14 +152,34 @@
     const badge    = document.getElementById('badge')
     const screen   = document.getElementById('screen')
 
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+
+    // Auto-reconnect: re-fetch a fresh VNC ticket and reconnect up to this
+    // many times before giving up and showing the manual Retry button.
+    const MAX_AUTO_RECONNECTS = 3
+    let autoReconnectCount = 0
+    let activeRfb = null  // track the current RFB instance to avoid stale callbacks
+
     function showError(message, hintHtml) {
-      spinner.style.display = 'none'
-      msg.style.display     = 'none'
-      err.style.display     = 'block'
-      err.textContent       = message
+      spinner.style.display  = 'none'
+      msg.style.display      = 'none'
+      err.style.display      = 'block'
+      err.textContent        = message
       if (hintHtml) { hint.style.display = 'block'; hint.innerHTML = hintHtml }
       retryBtn.style.display = 'inline-block'
     }
+
+    function showReconnecting(attempt) {
+      err.style.display      = 'none'
+      hint.style.display     = 'none'
+      retryBtn.style.display = 'none'
+      spinner.style.display  = 'block'
+      msg.style.display      = 'block'
+      overlay.classList.remove('hidden')
+      msg.textContent = `Reconnecting to ${vmName}… (attempt ${attempt}/${MAX_AUTO_RECONNECTS})`
+    }
+
+    function delay(ms) { return new Promise(r => setTimeout(r, ms)) }
 
     if (!vmId) { showError('No vmId parameter provided.', null); throw new Error('no vmId') }
 
@@ -96,10 +197,8 @@
       throw e
     }
 
-    // ── Fetch VNC ticket + proxy token from our server ────────────────────────
-    msg.textContent = `Requesting VNC ticket for ${vmName}…`
-    let info
-    try {
+    // ── Fetch a fresh VNC ticket + proxy token from our server ────────────────
+    async function fetchVncInfo() {
       const res = await fetch(
         `/api/console/vnc-info?vmId=${encodeURIComponent(vmId)}&vmName=${encodeURIComponent(vmName)}`,
       )
@@ -107,59 +206,146 @@
         const d = await res.json().catch(() => ({}))
         throw new Error(d.error || `HTTP ${res.status}`)
       }
-      info = await res.json()
-    } catch (e) {
-      showError(`Failed to get VNC ticket: ${e.message}`, null)
-      throw e
+      return res.json()
     }
 
-    // ── Connect via our server-side WebSocket proxy ───────────────────────────
-    // The proxy adds the PVEAuthCookie Proxmox requires.  The browser never
-    // needs to trust Proxmox's self-signed cert — all traffic goes through
-    // our own server over the existing HTTP connection.
-    msg.textContent = `Connecting to ${vmName}…`
+    // ── Connect (or reconnect) ────────────────────────────────────────────────
+    // Each call fetches a fresh Proxmox session + VNC ticket so stale-ticket
+    // 401s are resolved automatically without user intervention.
+    async function connectVnc() {
+      // Tear down any existing RFB instance to avoid duplicate event handlers
+      if (activeRfb) {
+        try { activeRfb.disconnect() } catch {}
+        activeRfb = null
+      }
 
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl   = `${wsProto}//${window.location.host}/api/vnc-ws?token=${encodeURIComponent(info.token)}`
+      msg.textContent = `Requesting VNC ticket for ${vmName}…`
+      let info
+      try {
+        info = await fetchVncInfo()
+      } catch (e) {
+        if (autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          await delay(2000)
+          return connectVnc()
+        }
+        showError(`Failed to get VNC ticket: ${e.message}`, null)
+        return
+      }
 
-    let rfb
-    try {
-      rfb = new RFB(screen, wsUrl, { credentials: { password: info.ticket } })
-    } catch (e) {
-      showError(`Failed to init noVNC: ${e.message}`, null)
-      throw e
+      // ── Connect via our server-side WebSocket proxy ───────────────────────
+      // The proxy adds the PVEAuthCookie Proxmox requires.  The browser never
+      // needs to trust Proxmox's self-signed cert — all traffic goes through
+      // our own server over the existing HTTP connection.
+      msg.textContent = `Connecting to ${vmName}…`
+      const wsUrl = `${wsProto}//${window.location.host}/api/vnc-ws?token=${encodeURIComponent(info.token)}`
+
+      let rfb
+      try {
+        rfb = new RFB(screen, wsUrl, { credentials: { password: info.ticket } })
+      } catch (e) {
+        showError(`Failed to init noVNC: ${e.message}`, null)
+        return
+      }
+
+      activeRfb = rfb
+      rfb.scaleViewport = true
+      rfb.resizeSession = true
+
+      rfb.addEventListener('connect', () => {
+        if (rfb !== activeRfb) return  // stale instance
+        autoReconnectCount = 0  // reset counter on a successful connection
+        overlay.classList.add('hidden')
+        badge.style.display = 'flex'
+        document.getElementById('badge-label').textContent = `${vmName} · Connected`
+        setTimeout(() => { badge.style.opacity = '0' }, 5000)
+      })
+
+      rfb.addEventListener('disconnect', async (e) => {
+        if (rfb !== activeRfb) return  // stale instance
+        badge.style.display = 'none'
+        const clean = e.detail?.clean
+        if (!clean && autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          // Brief pause — lets Proxmox settle before we request a new ticket
+          await delay(1500)
+          return connectVnc()
+        }
+        showError(
+          clean ? 'Disconnected from VM.' : 'Connection closed unexpectedly.',
+          clean
+            ? null
+            : 'The VM may have powered off, or the session timed out. Click Retry to reconnect.',
+        )
+      })
+
+      rfb.addEventListener('credentialsrequired', () => {
+        rfb.sendCredentials({ password: info.ticket })
+      })
+
+      rfb.addEventListener('securityfailure', async (e) => {
+        if (rfb !== activeRfb) return  // stale instance
+        // Security failure usually means the VNC ticket expired — fetch a new
+        // one and reconnect automatically instead of showing an error.
+        if (autoReconnectCount < MAX_AUTO_RECONNECTS) {
+          autoReconnectCount++
+          showReconnecting(autoReconnectCount)
+          await delay(1000)
+          return connectVnc()
+        }
+        showError(
+          `VNC security negotiation failed: ${e.detail?.reason || 'unknown'}`,
+          'The VNC ticket may have expired. Click Retry to request a fresh ticket.',
+        )
+      })
     }
 
-    rfb.scaleViewport = true
-    rfb.resizeSession = true
+    // ── Initial connection ────────────────────────────────────────────────────
+    await connectVnc()
 
-    rfb.addEventListener('connect', () => {
-      overlay.classList.add('hidden')
-      badge.style.display = 'flex'
-      document.getElementById('badge-label').textContent = `${vmName} · Connected`
-      setTimeout(() => { badge.style.opacity = '0' }, 5000)
+    // ── VNC controls toolbar ──────────────────────────────────────────────────
+    const ctrlWrap = document.getElementById('ctrl-wrap')
+    const toast    = document.getElementById('ctrl-toast')
+    let hideTimer  = null
+
+    function showControls() {
+      ctrlWrap.classList.add('active')
+      clearTimeout(hideTimer)
+      hideTimer = setTimeout(() => ctrlWrap.classList.remove('active'), 2800)
+    }
+
+    function flashToast(text) {
+      toast.textContent = text
+      toast.classList.add('show')
+      setTimeout(() => toast.classList.remove('show'), 1800)
+    }
+
+    // Reveal when cursor is within 40 px of the top edge
+    document.addEventListener('mousemove', (e) => {
+      if (e.clientY < 40) showControls()
+    })
+    // Keep visible while hovering the wrap itself (CSS :hover handles opacity;
+    // the JS .active class handles the mouse-near-top trigger path)
+    ctrlWrap.addEventListener('mouseenter', () => clearTimeout(hideTimer))
+    ctrlWrap.addEventListener('mouseleave', () => {
+      hideTimer = setTimeout(() => ctrlWrap.classList.remove('active'), 600)
     })
 
-    rfb.addEventListener('disconnect', (e) => {
-      badge.style.display = 'none'
-      const clean = e.detail?.clean
-      showError(
-        clean ? 'Disconnected from VM.' : 'Connection closed unexpectedly.',
-        clean
-          ? null
-          : 'The VM may have powered off, or the session timed out. Click Retry to reconnect.',
-      )
+    document.getElementById('btn-cad').addEventListener('click', () => {
+      if (activeRfb) activeRfb.sendCtrlAltDel()
+      flashToast('Ctrl+Alt+Del sent')
     })
 
-    rfb.addEventListener('credentialsrequired', () => {
-      rfb.sendCredentials({ password: info.ticket })
-    })
-
-    rfb.addEventListener('securityfailure', (e) => {
-      showError(
-        `VNC security negotiation failed: ${e.detail?.reason || 'unknown'}`,
-        'The VNC ticket may have expired (30-second window). Click Retry to request a fresh ticket.',
-      )
+    document.getElementById('btn-fullscreen').addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {})
+        flashToast('Fullscreen on')
+      } else {
+        document.exitFullscreen().catch(() => {})
+        flashToast('Fullscreen off')
+      }
     })
   </script>
 </body>

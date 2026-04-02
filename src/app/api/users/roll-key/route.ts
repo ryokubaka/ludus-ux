@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 
@@ -78,8 +79,9 @@ export async function POST(request: NextRequest) {
   let bashrcUpdated = false
   let bashrcError: string | undefined
 
-  if (settings.sshHost && settings.proxmoxSshPassword) {
+  if (settings.sshHost && isRootProxmoxSshConfigured(settings)) {
     const sshUser = settings.proxmoxSshUser || "root"
+    const sshPw = settings.proxmoxSshPassword || ""
     try {
       // Resolve the actual Linux username via the Ludus API (proxmoxUsername may differ
       // from userID, e.g. "pwtest2" → "pw-test-two").
@@ -98,13 +100,13 @@ export async function POST(request: NextRequest) {
       }
 
       const homeDir = await sshExec(
-        settings.sshHost, settings.sshPort, sshUser, settings.proxmoxSshPassword,
+        settings.sshHost, settings.sshPort, sshUser, sshPw,
         `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
       )
 
       if (homeDir) {
         await sshExec(
-          settings.sshHost, settings.sshPort, sshUser, settings.proxmoxSshPassword,
+          settings.sshHost, settings.sshPort, sshUser, sshPw,
           `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
           `sed -i '/\\(export \\)\\?LUDUS_VERSION=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
           `echo 'export LUDUS_API_KEY=${newKey}' >> ${homeDir}/.bashrc; ` +
@@ -118,7 +120,8 @@ export async function POST(request: NextRequest) {
       bashrcError = (err as Error).message
     }
   } else {
-    bashrcError = "SSH not configured (LUDUS_SSH_HOST / PROXMOX_SSH_PASSWORD missing) — bashrc not updated"
+    bashrcError =
+      "SSH not configured (LUDUS_SSH_HOST and root SSH password or private key required) — bashrc not updated"
   }
 
   return NextResponse.json({ newKey, bashrcUpdated, bashrcError })

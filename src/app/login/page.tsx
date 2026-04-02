@@ -31,7 +31,10 @@ type Step = "credentials" | "set-api-key"
 export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const nextPath = searchParams.get("next") || "/"
+  // Only allow relative paths starting with "/" to prevent open-redirect abuse
+  // (e.g. /login?next=//evil.com or /login?next=https://attacker.com).
+  const rawNext = searchParams.get("next") || "/"
+  const nextPath = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/"
 
   const [step, setStep] = useState<Step>("credentials")
   const [username, setUsername] = useState("")
@@ -163,7 +166,7 @@ export default function LoginPage() {
                       <Input
                         id="username"
                         autoComplete="username"
-                        placeholder="root or your Ludus username"
+                        placeholder="Ludus username (not root)"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                         className="pl-9 font-mono"
@@ -172,7 +175,7 @@ export default function LoginPage() {
                       />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Use <code className="text-primary">root</code> for admin access, or your personal Ludus account
+                      Login with your personal Ludus account (not root)
                     </p>
                   </div>
 
@@ -312,7 +315,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="text-center text-xs text-muted-foreground mt-4">
-          Ludus UX · Open Source · GNU APGL License
+          Ludus UX · Open Source · Apache 2.0 License
         </p>
       </div>
     </div>

@@ -12,22 +12,28 @@
  * skips /api/vnc-ws requests. All other paths pass through normally.
  */
 
+// Must be imported first — monkey-patches console to add ISO timestamps.
+import "./logger"
+
 // Disable TLS verification for the Proxmox self-signed cert
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
 
 import http from "http"
 import https from "https"
+import net from "net"
 import fs from "fs"
 import { WebSocketServer, WebSocket } from "ws"
+import { Client as SSHClient } from "ssh2"
 import { getVncSession } from "../src/lib/vnc-token-store"
 import { proxmoxCreateVncProxy, proxmoxLogin } from "../src/lib/proxmox-http"
+import { readPrivateKey, getSshKeyPassphrase } from "../src/lib/root-ssh-auth"
 
 // ── TLS configuration ────────────────────────────────────────────────────────
 const tlsCertPath = process.env.TLS_CERT_PATH || "/app/certificates/cert.pem"
 const tlsKeyPath  = process.env.TLS_KEY_PATH  || "/app/certificates/key.pem"
 
 let tlsOptions: https.ServerOptions | null = null
-if (fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath)) {
+if (process.env.DISABLE_HTTPS !== "true" && fs.existsSync(tlsCertPath) && fs.existsSync(tlsKeyPath)) {
   try {
     tlsOptions = {
       cert: fs.readFileSync(tlsCertPath),
@@ -149,6 +155,22 @@ async function refreshUpstreamSession(session: {
   }
 }
 
+const MAX_UPSTREAM_RETRIES = 3
+
+/**
+ * Normalise a WebSocket close code before forwarding it to another socket.
+ *
+ * Codes 1004, 1005, and 1006 are reserved/internal and MUST NOT appear in a
+ * real close frame (the ws library throws TypeError if you try).  Map them to
+ * 1011 (internal server error) so the close frame is always valid.
+ */
+function safeCloseCode(code: number): number {
+  if (code >= 1000 && code <= 4999 && code !== 1004 && code !== 1005 && code !== 1006) {
+    return code
+  }
+  return 1011
+}
+
 function handleVncProxy(clientWs: WebSocket, token: string) {
   if (!token) {
     clientWs.close(4001, "No token provided")
@@ -161,13 +183,17 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     return
   }
 
+  const { pveHost, node, vmid } = session
+  console.log(`[VNC proxy] new session — host=${pveHost} node=${node ?? "?"} vmid=${vmid ?? "?"} canRefresh=${!!(session.pveUser && session.pvePassword && node && vmid)}`)
+
   let currentSession = session
   let upstreamWs: WebSocket | null = null
-  let retried = false
+  let retryCount = 0
 
   const connectUpstream = (targetSession: typeof currentSession) => {
     const upstreamUrl =
       `wss://${targetSession.pveHost}:8006${targetSession.wsPath}?port=${targetSession.port}&vncticket=${encodeURIComponent(targetSession.vncticket)}`
+    console.log(`[VNC upstream] connecting → ${targetSession.pveHost}:8006${targetSession.wsPath} (attempt ${retryCount + 1}/${MAX_UPSTREAM_RETRIES + 1})`)
     const ws = new WebSocket(upstreamUrl, {
       headers: { Cookie: `PVEAuthCookie=${targetSession.pveAuthCookie}` },
       rejectUnauthorized: false,
@@ -177,6 +203,8 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     let opened = false
     ws.on("open", () => {
       opened = true
+      retryCount = 0  // reset on successful connect so future drops can retry too
+      console.log(`[VNC upstream] connected — host=${targetSession.pveHost} node=${targetSession.node ?? "?"} vmid=${targetSession.vmid ?? "?"}`)
     })
 
     ws.on("message", (data, isBinary) => {
@@ -186,24 +214,35 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     })
 
     ws.on("close", async (code, reason) => {
-      if (!opened && !retried && shouldRetryUpstream(code)) {
-        retried = true
+      if (!opened && retryCount < MAX_UPSTREAM_RETRIES && shouldRetryUpstream(code)) {
+        retryCount++
+        // Exponential backoff: 300 ms, 600 ms, 1200 ms
+        const backoffMs = 300 * Math.pow(2, retryCount - 1)
+        console.log(`[VNC upstream] connection failed (code ${code}), retry ${retryCount}/${MAX_UPSTREAM_RETRIES} in ${backoffMs}ms`)
+        await new Promise((r) => setTimeout(r, backoffMs))
         try {
           const refreshed = await refreshUpstreamSession(currentSession)
           if (refreshed) {
+            console.log(`[VNC upstream] session refreshed — new ticket obtained for ${currentSession.pveHost}`)
             currentSession = refreshed
             connectUpstream(currentSession)
             return
+          } else {
+            console.warn(`[VNC upstream] session refresh returned null — missing pveUser/pvePassword/node/vmid, cannot re-authenticate`)
           }
         } catch (err) {
           console.error("[VNC upstream refresh error]", (err as Error).message)
         }
       }
-      if (clientWs.readyState === WebSocket.OPEN) clientWs.close(code, reason)
+      if (clientWs.readyState === WebSocket.OPEN) {
+        clientWs.close(safeCloseCode(code), reason)
+      }
     })
 
     ws.on("error", (err) => {
-      console.error("[VNC upstream error]", err.message)
+      // Errors (e.g. 401) always precede a close event — log here, let the
+      // close handler decide whether to retry or close the client socket.
+      console.error(`[VNC upstream error] host=${targetSession.pveHost}:`, err.message)
     })
   }
 
@@ -215,7 +254,8 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
 
   connectUpstream(currentSession)
 
-  clientWs.on("close", () => {
+  clientWs.on("close", (code) => {
+    console.log(`[VNC proxy] client disconnected (code ${code}) — host=${pveHost} node=${node ?? "?"} vmid=${vmid ?? "?"}`)
     if (upstreamWs && upstreamWs.readyState < 2) upstreamWs.close()
   })
 
@@ -224,5 +264,107 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
   })
 }
 
+// ── Admin API SSH tunnel ──────────────────────────────────────────────────────
+//
+// The Ludus admin API (port 8081) typically binds only to 127.0.0.1 on the
+// Proxmox host.  A Docker bridge-networked container cannot reach that
+// loopback address directly.  We work around this by setting up a local TCP
+// server (on ADMIN_TUNNEL_PORT inside the container) that forwards each
+// connection through an SSH channel to the remote host's 127.0.0.1:8081.
+// When LUDUS_ADMIN_URL at boot already targets a non-localhost host (direct :8081),
+// we leave it unchanged so docker-compose defaults like https://ludus.example:8081 work.
+// Otherwise we point LUDUS_ADMIN_URL at the local tunnel port for settings-store defaults.
+//
+// A new SSH channel is opened for each TCP connection.  Admin operations are
+// infrequent so the per-call SSH overhead is acceptable and avoids having to
+// maintain a persistent reconnecting SSH connection.
+const ADMIN_TUNNEL_PORT = 18081
+
+function startAdminTunnel(): Promise<void> {
+  const sshHost     = (process.env.LUDUS_SSH_HOST       || "").replace(/\r/g, "")
+  const sshPort     = parseInt(process.env.LUDUS_SSH_PORT || "22", 10)
+  const sshUser     = (process.env.PROXMOX_SSH_USER      || "root").replace(/\r/g, "")
+  const sshPassword = (process.env.PROXMOX_SSH_PASSWORD  || "").replace(/\r/g, "").trim()
+  const sshKey      = !sshPassword ? readPrivateKey() : null
+  /** If LUDUS_ADMIN_URL already targets a non-loopback host (e.g. https://ludus.example:8081), keep it — do not replace with the tunnel. */
+  const adminUrlAtBoot = (process.env.LUDUS_ADMIN_URL || "").trim()
+  const shouldPointEnvAtTunnel = (() => {
+    if (!adminUrlAtBoot) return true
+    try {
+      const { hostname } = new URL(adminUrlAtBoot)
+      const h = hostname.toLowerCase()
+      return h === "127.0.0.1" || h === "localhost"
+    } catch {
+      return true
+    }
+  })()
+
+  if (!sshHost || (!sshPassword && !sshKey)) {
+    console.log("[admin-tunnel] SSH not configured (set PROXMOX_SSH_PASSWORD or mount a key at PROXMOX_SSH_KEY_PATH / ./ssh) — skipping tunnel")
+    return Promise.resolve()
+  }
+
+  return new Promise<void>((resolve) => {
+    const server = net.createServer((socket) => {
+      const conn = new SSHClient()
+
+      conn.on("ready", () => {
+        // Ask the remote SSH server to open a channel to its own localhost:8081
+        conn.forwardOut("127.0.0.1", ADMIN_TUNNEL_PORT, "127.0.0.1", 8081, (err, stream) => {
+          if (err) {
+            console.error("[admin-tunnel] forwardOut error:", err.message)
+            socket.destroy()
+            conn.end()
+            return
+          }
+          socket.pipe(stream)
+          stream.pipe(socket)
+          socket.on("error", () => { stream.destroy(); conn.end() })
+          stream.on("close", () => { socket.destroy(); conn.end() })
+        })
+      })
+
+      conn.on("error", (err) => {
+        console.error("[admin-tunnel] SSH error:", err.message)
+        socket.destroy()
+      })
+
+      const passphrase = getSshKeyPassphrase()
+      conn.connect({
+        host: sshHost,
+        port: sshPort,
+        username: sshUser,
+        readyTimeout: 10_000,
+        ...(sshPassword
+          ? { password: sshPassword }
+          : {
+              privateKey: sshKey!,
+              ...(passphrase ? { passphrase } : {}),
+            }),
+      })
+    })
+
+    server.on("error", (err) => {
+      console.error("[admin-tunnel] Server error:", err.message)
+      resolve() // Don't block startup; admin ops will fail with a clear error
+    })
+
+    server.listen(ADMIN_TUNNEL_PORT, "127.0.0.1", () => {
+      if (shouldPointEnvAtTunnel) {
+        process.env.LUDUS_ADMIN_URL = `https://127.0.0.1:${ADMIN_TUNNEL_PORT}`
+        console.log(`[admin-tunnel] LUDUS_ADMIN_URL → https://127.0.0.1:${ADMIN_TUNNEL_PORT} (forward to ${sshHost}:8081)`)
+      } else {
+        console.log(
+          `[admin-tunnel] Listening on 127.0.0.1:${ADMIN_TUNNEL_PORT} → ${sshHost}:8081; LUDUS_ADMIN_URL unchanged (${adminUrlAtBoot})`,
+        )
+      }
+      resolve()
+    })
+  })
+}
+
 // ── Boot Next.js standalone server ───────────────────────────────────────────
-require("./server")
+;(async () => {
+  await startAdminTunnel()
+  require("./server")
+})()

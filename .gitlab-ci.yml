@@ -1,0 +1,176 @@
+# LUX — merge request / branch CI
+#
+# Default Docker gate: `dockerfile_kaniko` builds docker/Dockerfile without any daemon
+# (works on every runner).
+#
+# Optional DinD jobs (`docker_compose_smoke`, `trivy_image`):
+#   • Skipped unless you set CI/CD variable CI_ENABLE_DIND=true (Project → Settings
+#     → CI/CD → Variables).
+#   • Require a runner with privileged Docker-in-Docker. In the runner’s config.toml:
+#       [runners.docker]
+#       privileged = true
+#     Without privileged, docker:dind hits "mount: permission denied" and never
+#     listens on 2375 — GitLab’s 30s service health check fails and must not be
+#     followed by an infinite wait loop.
+#   • DinD uses TLS off: DOCKER_HOST=tcp://docker:2375, command --tls=false.
+
+stages:
+  - verify
+  - security
+  - docker
+
+variables:
+  DOCKER_DRIVER: overlay2
+  NPM_INSTALL_FLAGS: "--legacy-peer-deps"
+
+.docker_dind:
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  services:
+    - name: docker:27-dind
+      alias: docker
+      command: ["--tls=false"]
+
+lint:
+  stage: verify
+  image: node:20-alpine
+  before_script:
+    - apk add --no-cache python3 make g++
+    - 'test -f package-lock.json || (echo "ERROR: package-lock.json is missing. Run npm install --legacy-peer-deps && git add package-lock.json" && exit 1)'
+  script:
+    - npm ci $NPM_INSTALL_FLAGS
+    - npm run lint
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+
+npm_audit:
+  stage: security
+  image: node:20-alpine
+  before_script:
+    - apk add --no-cache python3 make g++
+    - 'test -f package-lock.json || (echo "ERROR: package-lock.json is missing. Run npm install --legacy-peer-deps && git add package-lock.json" && exit 1)'
+  script:
+    - npm ci $NPM_INSTALL_FLAGS
+    - npm audit --audit-level=high
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+
+trivy_filesystem:
+  stage: security
+  image:
+    name: aquasec/trivy:0.58.0
+    entrypoint: [""]
+  script:
+    - trivy fs --exit-code 1 --severity HIGH,CRITICAL --no-progress --ignore-unfixed --skip-dirs node_modules --skip-dirs .next --skip-dirs .git .
+
+# Required: same Dockerfile as Compose; no DinD / privileged.
+dockerfile_kaniko:
+  stage: docker
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo '{}' > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/docker/Dockerfile"
+      --no-push
+      --destination ludus-ux:ci
+
+# Opt-in: set CI_ENABLE_DIND=true after privileged DinD works on your runner.
+docker_compose_smoke:
+  extends: .docker_dind
+  stage: docker
+  image: docker:27-cli
+  rules:
+    - if: $CI_ENABLE_DIND == "true"
+      when: on_success
+    - when: never
+  before_script:
+    - |
+      ok=0
+      for i in $(seq 1 15); do
+        if docker info >/dev/null 2>&1; then
+          ok=1
+          break
+        fi
+        echo "Waiting for Docker daemon ($i/15)..."
+        sleep 2
+      done
+      if [ "$ok" != 1 ]; then
+        echo "ERROR: No Docker daemon at DOCKER_HOST=$DOCKER_HOST"
+        echo "Ensure the runner has privileged=true and docker:dind can start."
+        exit 1
+      fi
+      docker info
+    - apk add --no-cache curl openssl
+    - sh ci/write-ci-env.sh
+  script:
+    - docker compose build --progress=plain
+    - docker compose up -d
+    - |
+      echo "Waiting for /api/health..."
+      ok=0
+      i=0
+      while [ "$i" -lt 90 ]; do
+        if curl -sfS http://127.0.0.1:3000/api/health >/dev/null; then
+          ok=1
+          break
+        fi
+        i=$((i + 1))
+        sleep 2
+      done
+      if [ "$ok" != 1 ]; then
+        echo "Health check failed — container logs:"
+        docker compose logs --no-color --tail=200 || true
+        exit 1
+      fi
+      echo "Health OK"
+      curl -sfS http://127.0.0.1:3000/api/health | head -c 500 || true
+    - docker compose down -v --remove-orphans
+  after_script:
+    - docker compose down -v --remove-orphans || true
+
+trivy_image:
+  extends: .docker_dind
+  stage: docker
+  image: docker:27-cli
+  rules:
+    - if: $CI_ENABLE_DIND == "true"
+      when: on_success
+    - when: never
+  before_script:
+    - |
+      ok=0
+      for i in $(seq 1 15); do
+        if docker info >/dev/null 2>&1; then
+          ok=1
+          break
+        fi
+        echo "Waiting for Docker daemon ($i/15)..."
+        sleep 2
+      done
+      if [ "$ok" != 1 ]; then
+        echo "ERROR: No Docker daemon at DOCKER_HOST=$DOCKER_HOST"
+        echo "Ensure the runner has privileged=true and docker:dind can start."
+        exit 1
+      fi
+      docker info
+    - apk add --no-cache curl tar
+    - curl -sfL "https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz" | tar -xzf - -C /usr/local/bin trivy
+    - chmod +x /usr/local/bin/trivy
+  script:
+    - docker build -f docker/Dockerfile -t ludus-ux:ci .
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --no-progress ludus-ux:ci
+  allow_failure: true

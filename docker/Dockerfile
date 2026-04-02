@@ -69,6 +69,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS
 RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl
 
+# Standalone Next runs with `node` only. The official Node image ships npm under
+# /usr/local/lib/node_modules/npm with its own dependency tree; Trivy reports those
+# CVEs on `trivy image` even though the container never executes npm at runtime.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx \
+    && for d in /opt/yarn-*; do [ -d "$d" ] && rm -rf "$d"; done 2>/dev/null || true
+
 # Create SSH keys directory
 RUN mkdir -p /app/ssh && chown nextjs:nodejs /app/ssh
 

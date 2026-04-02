@@ -9,6 +9,24 @@
 
 **LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations. It exists because teams wanted a browser-native way to design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD), and handle day-two tasks (snapshots, testing mode, templates, blueprints) without living in the CLI—while keeping the stack self-hosted and inspectable.
 
+## Table of contents
+
+- [Why use LUX?](#why-use-lux)
+- [Ludus Pro vs LUX](#ludus-pro-vs-lux)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [SSH authentication (root vs session)](#ssh-authentication-root-vs-session)
+- [Configuration](#configuration)
+- [Features](#features)
+- [Persistent Data](#persistent-data)
+- [Architecture](#architecture)
+- [Development](#development)
+- [API Reference](#api-reference)
+- [Images](#images)
+- [License](#license)
+- [Author](#author)
+
+
 ### Why use LUX?
 
 - **Operators and builders** who prefer visual workflows, shared UIs, and fewer copy-paste errors across SSH sessions.

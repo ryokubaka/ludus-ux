@@ -9,7 +9,7 @@
  * root credentials from the settings store are used as fallback.
  */
 
-import { Client as SSHClient, ConnectConfig } from "ssh2"
+import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
 import type { GoadInstance, GoadCatalog } from "./types"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
@@ -335,8 +335,7 @@ export async function streamGoadCommand(
   }
 
   // Captured once the exec channel is open; used to send Ctrl+C on abort.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let channelStream: any = null;
+  let channelStream: ClientChannel | null = null
 
   conn.on("ready", () => {
     // Use a wide PTY so goad.py's Rich library renders full-width tables

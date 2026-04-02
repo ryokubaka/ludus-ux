@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.2] — Beta — 2026-04-02
+
+### Security
+- **Next.js 15.5.14** — addresses [GHSA-h25m-26qc-wcjf](https://github.com/advisories/GHSA-h25m-26qc-wcjf) (HTTP request deserialization / RSC-related DoS) and related advisories fixed in the 15.5.10+ line. Requires App Router updates: async `cookies()` in `getSession()`, async dynamic `params` in API routes, and `serverExternalPackages` in `next.config.js`.
+
+### Changed
+- **React 18.3.1** (pinned minimum) — compatible with Next 15 peer range.
+- **eslint-config-next** aligned with Next 15.5.14.
+
+---
+
 ## [0.9.1] — Beta — 2026-04-01
 
 ### Added

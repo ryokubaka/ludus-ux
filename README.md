@@ -332,7 +332,7 @@ All persistent state lives in the `data/` directory (Docker volume):
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 14 (App Router, React 18) |
+| Framework | Next.js 15 (App Router, React 18) |
 | UI | Tailwind CSS, Radix UI (shadcn-style), Lucide |
 | Code editor | Monaco (YAML) |
 | Terminal/console | noVNC (esbuild bundle), xterm.js |

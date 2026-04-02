@@ -4,7 +4,7 @@ import { getSessionFromRequest } from "@/lib/session"
 
 async function handler(
   request: NextRequest,
-  { params }: { params: { path?: string[] } }
+  { params }: { params: Promise<{ path?: string[] }> }
 ) {
   try {
   const session = await getSessionFromRequest(request)
@@ -12,8 +12,9 @@ async function handler(
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  // Build the Ludus API path. Optional catch-all: params.path may be undefined (root /).
-  const segments = params.path || []
+  const { path: pathSegments } = await params
+  // Build the Ludus API path. Optional catch-all: path may be undefined (root /).
+  const segments = pathSegments || []
   const path = segments.length > 0 ? "/" + segments.join("/") : "/"
 
   const searchParams = request.nextUrl.searchParams

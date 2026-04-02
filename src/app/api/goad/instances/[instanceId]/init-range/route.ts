@@ -38,14 +38,14 @@ function deriveRangeInfo(instanceId: string, username: string): { rangeId: strin
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { instanceId: string } }
+  { params }: { params: Promise<{ instanceId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const { instanceId } = params
+  const { instanceId } = await params
   const settings = getSettings()
 
   const rootCreds = rootPasswordCredsIfSet(settings)

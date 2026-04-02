@@ -6,14 +6,15 @@ export const dynamic = "force-dynamic"
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const task = getTask(params.taskId)
+  const { taskId } = await params
+  const task = getTask(taskId)
   if (!task) {
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }

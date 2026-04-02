@@ -152,11 +152,12 @@ export async function getSessionFromRequest(
 
 /** Read and decrypt the session from the Next.js cookie store (server components) */
 export async function getSession(): Promise<SessionData | null> {
-  const token = cookies().get(SESSION_COOKIE)?.value
+  const cookieStore = await cookies()
+  const token = cookieStore.get(SESSION_COOKIE)?.value
   if (token) return decryptSession(token)
 
   if (IS_SECURE_CONTEXT) {
-    const legacyToken = cookies().get(LEGACY_SESSION_COOKIE)?.value
+    const legacyToken = cookieStore.get(LEGACY_SESSION_COOKIE)?.value
     if (legacyToken) return decryptSession(legacyToken)
   }
 

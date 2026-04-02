@@ -352,7 +352,7 @@ function AddFromSource({ installedNames, onAdded }: {
 
           {sourceTemplates.length === 0 && !loadingSource && !sourceError && (
             <p className="text-xs text-muted-foreground/60 text-center py-4">
-              Click "Fetch Available Templates" to browse templates from the selected source.
+              Click &quot;Fetch Available Templates&quot; to browse templates from the selected source.
             </p>
           )}
         </CardContent>

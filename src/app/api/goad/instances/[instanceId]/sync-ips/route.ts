@@ -33,14 +33,14 @@ export const dynamic = "force-dynamic"
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { instanceId: string } }
+  { params }: { params: Promise<{ instanceId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const { instanceId } = params
+  const { instanceId } = await params
   const body = await request.json().catch(() => ({}))
   const { ludusRangeId: bodyRangeId } = body as { ludusRangeId?: string }
 

@@ -14,13 +14,14 @@ export const dynamic = "force-dynamic"
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
+  const { taskId } = await params
   const body = await request.json().catch(() => ({}))
   const { instanceId } = body as { instanceId?: string }
 
@@ -28,10 +29,10 @@ export async function POST(
     return NextResponse.json({ error: "instanceId is required" }, { status: 400 })
   }
 
-  const ok = updateTaskInstance(params.taskId, instanceId)
+  const ok = updateTaskInstance(taskId, instanceId)
   if (!ok) {
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }
 
-  return NextResponse.json({ ok: true, taskId: params.taskId, instanceId })
+  return NextResponse.json({ ok: true, taskId, instanceId })
 }

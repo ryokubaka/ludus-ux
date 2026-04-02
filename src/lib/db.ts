@@ -41,7 +41,7 @@ export function getDb(): BetterSqlite3.Database {
   if (_db) return _db
   fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.mkdirSync(TASKS_LOG_DIR, { recursive: true })
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // better-sqlite3 is native; require() avoids ESM/CJS edge cases in Next server bundles
   const Sqlite = require("better-sqlite3") as typeof BetterSqlite3
   _db = new Sqlite(DB_PATH)
   _db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes

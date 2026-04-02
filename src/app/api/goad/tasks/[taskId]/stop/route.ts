@@ -14,14 +14,14 @@ export const dynamic = "force-dynamic"
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const { taskId } = params
+  const { taskId } = await params
 
   // Enforce ownership: only the task owner (or an admin) may stop it.
   const { getTask } = await import("@/lib/goad-task-store")

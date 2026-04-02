@@ -23,14 +23,14 @@ export const dynamic = "force-dynamic"
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { instanceId: string } }
+  { params }: { params: Promise<{ instanceId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const { instanceId } = params
+  const { instanceId } = await params
 
   // Non-admins may only delete instances that belong to their own username.
   // Instance IDs contain the username prefix (e.g. "alice-goad-mini-ludus"),

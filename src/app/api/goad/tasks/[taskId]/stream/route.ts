@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic"
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   const session = await getSessionFromRequest(request)
   if (!session) {
@@ -20,7 +20,7 @@ export async function GET(
     })
   }
 
-  const { taskId } = params
+  const { taskId } = await params
 
   // Enforce ownership before opening the stream.
   const task = getTask(taskId)

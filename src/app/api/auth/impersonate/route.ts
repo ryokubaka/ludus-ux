@@ -50,8 +50,9 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { impersonationApiKey, impersonationUserId, ...clean } = session
+  void impersonationApiKey
+  void impersonationUserId
   const response = NextResponse.json({ ok: true })
   await setSessionCookie(response, clean)
   return response

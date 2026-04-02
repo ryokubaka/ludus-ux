@@ -21,8 +21,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -36,8 +36,8 @@ jobs:
   npm-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: npm
@@ -50,8 +50,8 @@ jobs:
   trivy-fs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: actions/checkout@v6
+      - uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: fs
           scan-ref: "."
@@ -59,22 +59,20 @@ jobs:
           exit-code: "1"
           skip-dirs: node_modules,.next,.git
 
-  # Same as GitLab dockerfile_kaniko — no host Docker required inside the job
-  # (executor runs in its own container).
+  # Same Dockerfile as GitLab dockerfile_kaniko. Checkout runs on the host VM;
+  # Kaniko runs via `docker run` (job-level `container:` breaks checkout — no Node in executor image).
   dockerfile-kaniko:
     runs-on: ubuntu-latest
-    container:
-      image: gcr.io/kaniko-project/executor:v1.23.2-debug
-      options: --entrypoint ""
     steps:
-      - uses: actions/checkout@v4
-      - name: Build image (no push)
+      - uses: actions/checkout@v6
+      - name: Build image with Kaniko (no push)
         run: |
-          mkdir -p /kaniko/.docker
-          echo '{}' > /kaniko/.docker/config.json
-          /kaniko/executor \
-            --context "$GITHUB_WORKSPACE" \
-            --dockerfile "$GITHUB_WORKSPACE/docker/Dockerfile" \
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            gcr.io/kaniko-project/executor:v1.23.2-debug \
+            /kaniko/executor \
+            --context /workspace \
+            --dockerfile /workspace/docker/Dockerfile \
             --no-push \
             --destination ludus-ux:ci
 
@@ -83,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [dockerfile-kaniko]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Write CI .env
         run: sh ci/write-ci-env.sh
       - name: Build & up
@@ -117,9 +115,9 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: docker build -f docker/Dockerfile -t ludus-ux:ci .
-      - uses: aquasecurity/trivy-action@0.28.0
+      - uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: ludus-ux:ci
           severity: CRITICAL,HIGH

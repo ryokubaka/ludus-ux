@@ -9,6 +9,23 @@
 
 **LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations. It exists because teams wanted a browser-native way to design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD), and handle day-two tasks (snapshots, testing mode, templates, blueprints) without living in the CLI—while keeping the stack self-hosted and inspectable.
 
+## Table of contents
+
+- [Why use LUX?](#why-use-lux)
+- [Ludus Pro vs LUX](#ludus-pro-vs-lux)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [SSH authentication (root vs session)](#ssh-authentication-root-vs-session)
+- [Configuration](#configuration)
+- [Features](#features)
+- [Persistent Data](#persistent-data)
+- [Architecture](#architecture)
+- [Development](#development)
+- [API Reference](#api-reference)
+- [Images](#images)
+- [License](#license)
+- [Author](#author)
+
 ### Why use LUX?
 
 - **Operators and builders** who prefer visual workflows, shared UIs, and fewer copy-paste errors across SSH sessions.
@@ -45,10 +62,32 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 | Feature | Requires |
 |---|---|
 | GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` |
-
 ---
 
 ## Quick Start
+
+### Verify Docker and Compose
+
+Confirm the Docker CLI and Compose are on your **PATH** before running the quickstart script or starting the stack:
+
+```bash
+docker --version
+docker compose version
+```
+
+If `docker compose` is not found, try the legacy standalone client:
+
+```bash
+docker-compose --version
+```
+
+If only `docker-compose` works, use `docker-compose up …` wherever these docs use `docker compose up …`.
+
+| Environment | Notes |
+|---|---|
+| **Linux** | Install [Docker Engine](https://docs.docker.com/engine/install/) and the Compose V2 plugin (e.g. `docker-compose-plugin` on Debian/Ubuntu). If commands fail with permission errors, add your user to the `docker` group and sign in again. |
+| **Windows (Git Bash + [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/))** | Start Docker Desktop. Under **Settings → General**, enable **Use Docker Compose V2**. Open a **new** Git Bash or IDE terminal after install so `docker` resolves (Docker adds its CLI directory to PATH). |
+
 
 Before we install LUX, we need to add the `LUDUS_API_KEY` to the `/root/.bashrc` and `~/.bashrc` on the Ludus server. This is the API key that will be used to authenticate to the Ludus server.
 
@@ -68,23 +107,23 @@ ssh <admin-user>@<ludus-server> "echo 'export LUDUS_API_KEY=<user-api-key>' >> ~
 
 ### Automated setup (recommended)
 
-From a clone of this repo, with **Python 3**, **Docker**, and (for option **1** below) **`scp`/`ssh`** available:
+After completing the steps above -
+
+From a clone of this repo, with **Python 3**, **Docker**, **Docker Compose** (`docker compose` or `docker-compose` — see [Verify Docker and Compose](#verify-docker-and-compose)), and (for option **1** below) **`scp`/`ssh`** available:
 
 ```bash
-cd ludus-ui
+cd ludus-ux
 bash scripts/quickstart.sh
 ```
 
-The script creates `.env` from `.env.example`, prompts for **LUDUS_SSH_HOST**, **APP_SECRET** (or auto-generates), **LUDUS_ROOT_API_KEY**, **SSH_KEY_PATH**, and root SSH auth (**scp** as `root`). As a **non-root** user with a key under `/root/`, it tries in order: **SSH key + `sudo -n`**, then **`sshpass` + `sudo -n`** (password SSH, NOPASSWD sudo), then **`sshpass` + `sudo -S`** (SSH and sudo passwords read with `read -s` — no `ssh -t` redirect). **Install `sshpass`** when prompted (`apt install sshpass`, `brew install sshpass`, or WSL/MSYS2 on Windows). Servers that disable SSH password auth need a key or option **1** as `root`. Local key file or **PROXMOX_SSH_PASSWORD** options are unchanged. It sets **`chmod 755`** on the key directory (Linux), then optionally runs **`docker compose up -d --build`**. **PROXMOX_SSH_USER** stays **`root`** for the fetched root key.
-
-
+> Note: The script **exits early** if `docker` or docker compose is missing, with hints for Linux and Windows installation.
 
 ### Manual setup
 
 1. Clone and enter the repository
 
 ```bash
-git clone <repo-url> ludus-ui && cd ludus-ui
+git clone <repo-url> ludus-ux && cd ludus-ux
 cp .env.example .env
 ```
 
@@ -131,7 +170,14 @@ chmod 600 certificates/cert.pem
 chmod 600 certificates/key.pem
 ```
 
-5. Start the container:
+5. Confirm Docker and Compose ([Verify Docker and Compose](#verify-docker-and-compose)) — same checks the quickstart script performs:
+
+```bash
+docker --version
+docker compose version
+```
+
+6. Start the container:
 
 ```bash
 docker compose up -d --build
@@ -139,7 +185,9 @@ docker compose up -d --build
 # http://localhost:3000   (plain HTTP, also available)
 ```
 
-6. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+If you only have standalone Compose, use `docker-compose up -d --build` instead.
+
+7. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash

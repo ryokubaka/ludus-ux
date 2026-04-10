@@ -378,7 +378,7 @@ export function Sidebar() {
         )}>
           {!collapsed && (
             <div className="flex flex-col gap-0.5">
-              <p className="text-xs font-semibold text-muted-foreground">v0.9.2 <span className="font-normal text-muted-foreground/60">beta</span></p>
+              <p className="text-xs font-semibold text-muted-foreground">v0.9.3 <span className="font-normal text-muted-foreground/60">beta</span></p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
             </div>
           )}
@@ -387,7 +387,7 @@ export function Sidebar() {
               <TooltipTrigger asChild>
                 <span className="text-[10px] text-muted-foreground/50 font-mono cursor-default select-none">v0.9</span>
               </TooltipTrigger>
-              <TooltipContent side="right">v0.9.2 beta — Open Source · Apache 2.0</TooltipContent>
+              <TooltipContent side="right">v0.9.3 beta — Open Source · Apache 2.0</TooltipContent>
             </Tooltip>
           )}
           <Tooltip>

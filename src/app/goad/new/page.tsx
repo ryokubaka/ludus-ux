@@ -35,6 +35,9 @@ import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
+import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
+import { type NetworkRule, injectNetworkRules } from "@/lib/network-rules"
+import { Shield } from "lucide-react"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -120,7 +123,7 @@ function TemplateChips({
   )
 }
 
-const STEPS = ["Select Lab Type", "Select Extensions", "Select Range", "Review & Deploy"]
+const STEPS = ["Select Lab Type", "Select Extensions", "Select Range", "Network Rules", "Review & Deploy"]
 
 function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
@@ -138,9 +141,13 @@ export default function NewGoadInstancePage() {
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const [currentUsername, setCurrentUsername] = useState<string>("")
 
+  // Step 3: Network Rules
+  const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+
   // Range selection (step 2)
   const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
   const [selectedExistingRange, setSelectedExistingRange] = useState<string>("")
+
   // Stable UID shared between the auto-generated range name and GOAD instance ID.
   // Using the same UID means the range suffix visually matches the instance name suffix,
   // making it easy to see which range belongs to which instance.
@@ -368,6 +375,14 @@ export default function NewGoadInstancePage() {
       }
     }
 
+    // If the user defined custom firewall rules, write them to the range config
+    // before GOAD starts. GOAD's ansible will apply the network tag and enforce them.
+    if (networkRules.length > 0 && rangeId) {
+      try {
+        await ludusApi.setRangeConfig(injectNetworkRules("", networkRules), rangeId)
+      } catch { /* Non-fatal — GOAD can still deploy, rules can be set post-deploy */ }
+    }
+
     // Show the terminal view.  Range log streaming is started by /goad/[id]'s
     // useEffect once isRunning becomes true after the redirect.
     setDeployed(true)
@@ -563,7 +578,7 @@ export default function NewGoadInstancePage() {
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === selectedLab)
 
-  const showTerminal = step === 3 && (deployed || isRunning)
+  const showTerminal = step === 4 && (deployed || isRunning)
 
   return (
     <div className={cn(
@@ -897,8 +912,42 @@ export default function NewGoadInstancePage() {
         </div>
       )}
 
-      {/* Step 3: Review & Deploy */}
-      {step === 3 && !showTerminal && (
+      {/* Step 3: Network Rules */}
+      {step === 3 && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Shield className="h-4 w-4" /> Firewall Rules
+                <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Define custom iptables rules for the GOAD range router. Leave empty to use Ludus
+                defaults (all inter-VLAN and external traffic accepted).
+              </p>
+            </CardHeader>
+            <CardContent>
+              <NetworkRulesEditor rules={networkRules} onChange={setNetworkRules} availableVlans={[]} />
+            </CardContent>
+          </Card>
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(2)}>
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setStep(4)}>
+                Skip <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button onClick={() => setStep(4)}>
+                Next <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 4: Review & Deploy */}
+      {step === 4 && !showTerminal && (
         <div className="space-y-4">
           <Card>
             <CardHeader className="pb-3">
@@ -951,6 +1000,17 @@ export default function NewGoadInstancePage() {
               <div className="flex items-center gap-3">
                 <span className="text-xs text-muted-foreground w-24">GOAD Path</span>
                 <code className="text-xs text-muted-foreground font-mono">{catalog?.goadPath}</code>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground w-24">Firewall Rules</span>
+                <div className="flex items-center gap-1.5">
+                  <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-sm">
+                    {networkRules.length > 0
+                      ? `${networkRules.length} custom rule${networkRules.length !== 1 ? "s" : ""}`
+                      : "Ludus defaults"}
+                  </span>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1024,7 +1084,7 @@ export default function NewGoadInstancePage() {
           )}
 
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(2)}>
+            <Button variant="ghost" onClick={() => setStep(3)}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
             <Button onClick={handleDeploy} disabled={isRunning || creatingRange || clearingRange} className="min-w-36">
@@ -1039,7 +1099,7 @@ export default function NewGoadInstancePage() {
       )}
 
       {/* ── Side-by-side terminal view ─────────────────────────────────── */}
-      {step === 3 && showTerminal && (
+      {step === 4 && showTerminal && (
         <>
           {/* Redirect notice */}
           <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 flex-shrink-0">

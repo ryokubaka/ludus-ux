@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.3] — Beta — 2026-04-10
+
+### Added
+- **Firewall Rules visual editor** — collapsible panel on the Range Configuration page lets operators add, edit, reorder, and delete `network.rules` entries without touching YAML. Rules are serialized back into the range config via "Apply to Config" and saved with the normal "Save Config" button.
+- **Drag-and-drop rule ordering** — rule rows are draggable (native HTML5 DnD) with a grip handle; evaluation order matches iptables top-to-bottom processing so order matters and is preserved.
+- **Firewall Rules wizard step — Deploy New Range** — a "Network Rules" step (between Domain Setup and Deploy Tags) lets rules be defined before first-time deployment. Existing configs are pre-populated from the parsed range YAML.
+- **Firewall Rules wizard step — GOAD** — the Deploy New GOAD Instance wizard includes a "Network Rules" step (between Select Range and Review & Deploy). Rules are injected into the range config before GOAD's Ansible run so the `network` tag enforces them on the router.
+- **VLAN smart dropdowns** — Source VLAN and Destination VLAN fields are now grouped `<Select>` menus with three sections: *Range VLANs* (auto-populated from VMs in the current config), *Special* (`wireguard`, `public`, `all`), and *Custom number…* (reveals a numeric input for any VLAN 1–255). Powered by the new `extractVlansFromConfig()` utility.
+- `NetworkRule` / `NetworkConfig` types and `extractNetworkRules()`, `injectNetworkRules()`, `buildNetworkYaml()`, `extractVlansFromConfig()` utilities in `src/lib/network-rules.ts` (backed by `js-yaml`).
+
+### Fixed
+- **Deploy Logs not streaming** — the Configuration page now passes `selectedRangeId` to `startStreaming()`. Previously, logs were polled against the default range even when a named range was selected, causing the panel to appear empty until a manual refresh.
+- **Ansible `ports` schema error** — `ports` is always emitted in the YAML (it is required by the Ludus schema). When `protocol: all`, LUX forces `ports: all`; the Ansible port-number assertion is only evaluated when `ports` is a specific value, so `all` passes cleanly. The Ports input is disabled in the UI when protocol is `all`.
+- **iptables rule ordering** — Ludus applies each rule with `iptables -I` (insert at chain head), which reverses YAML order in the chain. `injectNetworkRules` and `buildNetworkYaml` now write rules in reversed order, and `extractNetworkRules` reverses on read, so the order displayed in LUX matches the top-to-bottom evaluation order in iptables.
+- **Deploy Logs panel position** — the Deploy Logs card on the Configuration page is now rendered at the top of the page (above the toolbar) so streaming output is immediately visible without scrolling past the YAML editor.
+- **Firewall Rules UI alignment** — the info banner icon and the Firewall Rules card header title were rendering below vertical centre. The banner was refactored from a Radix `Alert` (absolute-positioned icon) to a plain flex row; the `CardHeader` padding was made symmetric so the title row sits centred.
+
+### Changed
+- Protocol and Action dropdowns and compact inputs in the Firewall Rules form display text centred for improved readability.
+- The New Range wizard option description updated to include "networking" in the feature summary.
+
+---
+
 ## [0.9.2] — Beta — 2026-04-02
 
 ### Security

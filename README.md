@@ -185,7 +185,7 @@ docker compose up -d --build
 # http://localhost:3000   (plain HTTP, also available)
 ```
 
-6. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+7. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash

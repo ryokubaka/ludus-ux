@@ -1,5 +1,8 @@
 // Ludus API Types — matched to Ludus Server v2.x API responses
 
+// Re-export network rule types so consumers can import from one place
+export type { NetworkRule, NetworkConfig, VlanValue, Protocol, RuleAction } from "./network-rules"
+
 export interface LudusVersion {
   result: string
   version?: string

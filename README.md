@@ -26,6 +26,7 @@
 - [License](#license)
 - [Author](#author)
 
+
 ### Why use LUX?
 
 - **Operators and builders** who prefer visual workflows, shared UIs, and fewer copy-paste errors across SSH sessions.
@@ -62,32 +63,10 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 | Feature | Requires |
 |---|---|
 | GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` |
+
 ---
 
 ## Quick Start
-
-### Verify Docker and Compose
-
-Confirm the Docker CLI and Compose are on your **PATH** before running the quickstart script or starting the stack:
-
-```bash
-docker --version
-docker compose version
-```
-
-If `docker compose` is not found, try the legacy standalone client:
-
-```bash
-docker-compose --version
-```
-
-If only `docker-compose` works, use `docker-compose up …` wherever these docs use `docker compose up …`.
-
-| Environment | Notes |
-|---|---|
-| **Linux** | Install [Docker Engine](https://docs.docker.com/engine/install/) and the Compose V2 plugin (e.g. `docker-compose-plugin` on Debian/Ubuntu). If commands fail with permission errors, add your user to the `docker` group and sign in again. |
-| **Windows (Git Bash + [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/))** | Start Docker Desktop. Under **Settings → General**, enable **Use Docker Compose V2**. Open a **new** Git Bash or IDE terminal after install so `docker` resolves (Docker adds its CLI directory to PATH). |
-
 
 Before we install LUX, we need to add the `LUDUS_API_KEY` to the `/root/.bashrc` and `~/.bashrc` on the Ludus server. This is the API key that will be used to authenticate to the Ludus server.
 
@@ -107,23 +86,23 @@ ssh <admin-user>@<ludus-server> "echo 'export LUDUS_API_KEY=<user-api-key>' >> ~
 
 ### Automated setup (recommended)
 
-After completing the steps above -
-
-From a clone of this repo, with **Python 3**, **Docker**, **Docker Compose** (`docker compose` or `docker-compose` — see [Verify Docker and Compose](#verify-docker-and-compose)), and (for option **1** below) **`scp`/`ssh`** available:
+From a clone of this repo, with **Python 3**, **Docker**, and (for option **1** below) **`scp`/`ssh`** available:
 
 ```bash
-cd ludus-ux
+cd ludus-ui
 bash scripts/quickstart.sh
 ```
 
-> Note: The script **exits early** if `docker` or docker compose is missing, with hints for Linux and Windows installation.
+The script creates `.env` from `.env.example`, prompts for **LUDUS_SSH_HOST**, **APP_SECRET** (or auto-generates), **LUDUS_ROOT_API_KEY**, **SSH_KEY_PATH**, and root SSH auth (**scp** as `root`). As a **non-root** user with a key under `/root/`, it tries in order: **SSH key + `sudo -n`**, then **`sshpass` + `sudo -n`** (password SSH, NOPASSWD sudo), then **`sshpass` + `sudo -S`** (SSH and sudo passwords read with `read -s` — no `ssh -t` redirect). **Install `sshpass`** when prompted (`apt install sshpass`, `brew install sshpass`, or WSL/MSYS2 on Windows). Servers that disable SSH password auth need a key or option **1** as `root`. Local key file or **PROXMOX_SSH_PASSWORD** options are unchanged. It sets **`chmod 755`** on the key directory (Linux), then optionally runs **`docker compose up -d --build`**. **PROXMOX_SSH_USER** stays **`root`** for the fetched root key.
+
+
 
 ### Manual setup
 
 1. Clone and enter the repository
 
 ```bash
-git clone <repo-url> ludus-ux && cd ludus-ux
+git clone <repo-url> ludus-ui && cd ludus-ui
 cp .env.example .env
 ```
 
@@ -170,14 +149,7 @@ chmod 600 certificates/cert.pem
 chmod 600 certificates/key.pem
 ```
 
-5. Confirm Docker and Compose ([Verify Docker and Compose](#verify-docker-and-compose)) — same checks the quickstart script performs:
-
-```bash
-docker --version
-docker compose version
-```
-
-6. Start the container:
+5. Start the container:
 
 ```bash
 docker compose up -d --build
@@ -185,9 +157,7 @@ docker compose up -d --build
 # http://localhost:3000   (plain HTTP, also available)
 ```
 
-If you only have standalone Compose, use `docker-compose up -d --build` instead.
-
-7. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+6. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash
@@ -317,7 +287,8 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 - **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal
 - **Range Config Editor** — Monaco YAML for `range-config.yml`, save, selective Ansible tags, live logs
-- **New Range Wizard** — Guided flow: range selection → templates → domain → tags → deploy
+- **Firewall Rules Editor** — Collapsible visual panel on the Config page to add, edit, reorder (drag-and-drop), and delete `network.rules` entries without hand-editing YAML; "Apply to Config" merges rules into the Monaco editor. Also available as a wizard step in Deploy New Range and Deploy New GOAD Instance flows.
+- **New Range Wizard** — Guided flow: range selection → templates → domain → **firewall rules** → tags → deploy
 - **Range Logs** — Standalone SSE viewer with timestamps, download, clear; snapshot mode for post-connect streams
 
 ### Testing & Snapshots
@@ -338,7 +309,7 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 ### GOAD Integration
 
-- **Overview & wizards** — Instances, live deploy streams, dedicated range per instance, task history with resumable SSE
+- **Overview & wizards** — Instances, live deploy streams, dedicated range per instance, task history with resumable SSE; Deploy New Instance wizard includes a **Firewall Rules** step to define router iptables rules before the Ansible run
 - **Instance actions** — Provision, provide, start/stop, destroy, force-delete, sync IPs, stop running Ansible
 - **Inventory** — View workspace inventory from the UI
 

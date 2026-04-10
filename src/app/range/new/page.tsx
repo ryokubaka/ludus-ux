@@ -31,6 +31,7 @@ import {
   Tag,
   Info,
   FileCode2,
+  Shield,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
@@ -38,11 +39,13 @@ import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
+import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
+import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
 
 // ── Step arrays ────────────────────────────────────────────────────────────────
 // The step indicator switches between these two arrays the moment the user picks
 // their config method, making the divergent paths immediately obvious.
-const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Deploy Tags", "Review & Deploy"]
+const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Network Rules", "Deploy Tags", "Review & Deploy"]
 const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & Deploy"]
 
 // ── Step → path mapping ────────────────────────────────────────────────────────
@@ -52,8 +55,9 @@ const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & 
 // Wizard path:
 // step 2 : Configure VMs
 // step 3 : Domain Setup
-// step 4 : Deploy Tags
-// step 5 : Review & Deploy
+// step 4 : Network Rules
+// step 5 : Deploy Tags
+// step 6 : Review & Deploy
 //
 // YAML path:
 // step 2 : YAML Config
@@ -139,7 +143,7 @@ function defaultsForTemplate(template: string): VMEntry {
   }
 }
 
-function generateYaml(vms: VMEntry[], domainFqdn: string | null): string {
+function generateYaml(vms: VMEntry[], domainFqdn: string | null, networkRules: NetworkRule[]): string {
   const lines: string[] = ["ludus:"]
   for (const vm of vms) {
     const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
@@ -166,7 +170,7 @@ function generateYaml(vms: VMEntry[], domainFqdn: string | null): string {
     lines.push(`      block_internet: ${vm.testingBlockInternet}`)
     lines.push("")
   }
-  return lines.join("\n")
+  return lines.join("\n") + buildNetworkYaml(networkRules)
 }
 
 function parseConfigYaml(yamlText: string): VMEntry[] {
@@ -240,7 +244,14 @@ export default function NewRangePage() {
   const [enableDomain, setEnableDomain] = useState(false)
   const [domainFqdn, setDomainFqdn] = useState("ludus.network")
 
-  // ── Wizard step 4: Deploy tags ───────────────────────────────────────────────
+  // ── Wizard step 4: Network Rules ─────────────────────────────────────────────
+  const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+  const wizardVlans = useMemo(
+    () => [...new Set(vms.map((v) => v.vlan))].sort((a, b) => a - b),
+    [vms]
+  )
+
+  // ── Wizard step 5: Deploy tags ───────────────────────────────────────────────
   const [selectedTags, setSelectedTags] = useState<string[]>([])
 
   // ── YAML step 2: raw config ──────────────────────────────────────────────────
@@ -411,6 +422,8 @@ export default function NewRangePage() {
           setVms(parsed)
           if (parsed[0]?.vlan) setRangeVlan(parsed[0].vlan)
         }
+        // Pre-populate network rules from existing config
+        setNetworkRules(extractNetworkRules(yamlText))
       }
     } catch {}
     setLoadingExistingConfig(false)
@@ -475,8 +488,8 @@ export default function NewRangePage() {
   }, [enableDomain])
 
   const wizardYaml = useMemo(
-    () => generateYaml(vms, enableDomain ? domainFqdn : null),
-    [vms, enableDomain, domainFqdn]
+    () => generateYaml(vms, enableDomain ? domainFqdn : null, networkRules),
+    [vms, enableDomain, domainFqdn, networkRules]
   )
 
   const toggleTag = (tag: string) =>
@@ -555,7 +568,7 @@ export default function NewRangePage() {
   const displaySteps = configMethod === "yaml" ? YAML_STEPS : WIZARD_STEPS
 
   // Back-step for wizard Review & Deploy vs YAML Review & Deploy
-  const reviewBackStep = configMethod === "yaml" ? 2 : 4
+  const reviewBackStep = configMethod === "yaml" ? 2 : 5
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -762,7 +775,7 @@ export default function NewRangePage() {
                 and choose deploy tags. Best for building ranges from scratch.
               </p>
               <div className="flex flex-wrap gap-1">
-                {["Configure VMs", "Domain Setup", "Deploy Tags"].map((s) => (
+                {["Configure VMs", "Domain Setup", "Network Rules", "Deploy Tags"].map((s) => (
                   <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
                 ))}
               </div>
@@ -1009,8 +1022,40 @@ export default function NewRangePage() {
         </div>
       )}
 
-      {/* ── Step 4 (Wizard): Deploy Tags ────────────────────────────────────── */}
+      {/* ── Step 4 (Wizard): Network Rules ──────────────────────────────────── */}
       {step === 4 && configMethod === "wizard" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Shield className="h-4 w-4" /> Firewall Rules
+                <span className="text-xs text-muted-foreground font-normal">(optional)</span>
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Define custom iptables rules for the range router. Leave empty to use Ludus defaults
+                (all inter-VLAN and external traffic accepted).
+              </p>
+            </CardHeader>
+            <CardContent>
+              <NetworkRulesEditor rules={networkRules} onChange={setNetworkRules} availableVlans={wizardVlans} />
+            </CardContent>
+          </Card>
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(3)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={() => setStep(5)}>
+                Skip <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button onClick={() => setStep(5)}>
+                Next <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 5 (Wizard): Deploy Tags ────────────────────────────────────── */}
+      {step === 5 && configMethod === "wizard" && (
         <div className="space-y-4">
           <Card>
             <CardHeader>
@@ -1050,14 +1095,14 @@ export default function NewRangePage() {
             </CardContent>
           </Card>
           <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(3)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={() => setStep(5)}>Next <ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="ghost" onClick={() => setStep(4)}><ChevronLeft className="h-4 w-4" /> Back</Button>
+            <Button onClick={() => setStep(6)}>Next <ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
       )}
 
-      {/* ── Review & Deploy (Wizard: step 5 / YAML: step 3) ─────────────────── */}
-      {((step === 5 && configMethod === "wizard") || (step === 3 && configMethod === "yaml")) && (
+      {/* ── Review & Deploy (Wizard: step 6 / YAML: step 3) ─────────────────── */}
+      {((step === 6 && configMethod === "wizard") || (step === 3 && configMethod === "yaml")) && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Deployment Summary</CardTitle></CardHeader>
@@ -1082,6 +1127,15 @@ export default function NewRangePage() {
                     <div>
                       <span className="text-xs text-muted-foreground">Domain</span>
                       <p>{enableDomain ? domainFqdn : "None"}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs text-muted-foreground">Firewall Rules</span>
+                      <p className="flex items-center gap-1">
+                        <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+                        {networkRules.length > 0
+                          ? `${networkRules.length} custom rule${networkRules.length !== 1 ? "s" : ""}`
+                          : "Ludus defaults"}
+                      </p>
                     </div>
                   </>
                 )}

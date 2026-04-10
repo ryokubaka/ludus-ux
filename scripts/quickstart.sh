@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LUX (ludus-ui) interactive setup — creates .env, prepares the SSH key directory, optional scp, starts Docker.
+# LUX (ludus-ux) interactive setup — creates .env, prepares the SSH key directory, optional scp, starts Docker.
 # Run from the repository root:
 #   bash scripts/quickstart.sh
 #   chmod +x scripts/quickstart.sh && ./scripts/quickstart.sh
@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -f docker-compose.yml ]]; then
-  echo "Error: docker-compose.yml not found. Run this script from the ludus-ui repo root." >&2
+  echo "Error: docker-compose.yml not found. Run this script from the ludus-ux repo root." >&2
   exit 1
 fi
 

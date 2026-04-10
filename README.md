@@ -89,7 +89,7 @@ ssh <admin-user>@<ludus-server> "echo 'export LUDUS_API_KEY=<user-api-key>' >> ~
 From a clone of this repo, with **Python 3**, **Docker**, and (for option **1** below) **`scp`/`ssh`** available:
 
 ```bash
-cd ludus-ui
+cd ludus-ux
 bash scripts/quickstart.sh
 ```
 
@@ -102,7 +102,7 @@ The script creates `.env` from `.env.example`, prompts for **LUDUS_SSH_HOST**, *
 1. Clone and enter the repository
 
 ```bash
-git clone <repo-url> ludus-ui && cd ludus-ui
+git clone <repo-url> ludus-ux && cd ludus-ux
 cp .env.example .env
 ```
 

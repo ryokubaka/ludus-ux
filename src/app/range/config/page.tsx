@@ -24,6 +24,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   Info,
+  ChevronDown,
+  ChevronRight,
+  Shield,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { useRange } from "@/lib/range-context"
@@ -32,6 +35,8 @@ import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { cn } from "@/lib/utils"
+import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
+import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
 
 const ALL_TAGS = [
   "vm-deploy",
@@ -92,6 +97,8 @@ export default function RangeConfigPage() {
   const [showTagSelector, setShowTagSelector] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
+  const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+  const [showNetworkRules, setShowNetworkRules] = useState(false)
 
   const { lines, isStreaming, startStreaming, stopStreaming, clearLogs } = useDeployLogs({
     onComplete: () => setDeploying(false),
@@ -125,6 +132,7 @@ export default function RangeConfigPage() {
     if (lastSyncedRangeRef.current === rangeKey) return
     setConfig(cachedConfig)
     setOriginalConfig(cachedConfig)
+    setNetworkRules(extractNetworkRules(cachedConfig))
     lastSyncedRangeRef.current = rangeKey
   }, [cachedConfig, selectedRangeId])
 
@@ -132,11 +140,11 @@ export default function RangeConfigPage() {
   // away and back doesn't lose the in-progress status.
   useEffect(() => {
     const checkDeployStatus = async () => {
-      const rangeResult = await ludusApi.getRangeStatus()
+      const rangeResult = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
       if (rangeResult.data?.rangeState === "DEPLOYING") {
         setDeploying(true)
         setShowLogs(true)
-        startStreaming()
+        startStreaming(selectedRangeId ?? undefined)
       }
     }
     checkDeployStatus()
@@ -179,7 +187,7 @@ export default function RangeConfigPage() {
       return
     }
     toast({ title: "Deployment started", description: selectedTags.length > 0 ? `Tags: ${selectedTags.join(", ")}` : "Full deployment" })
-    startStreaming()
+    startStreaming(selectedRangeId ?? undefined)
   }
   const handleDeploy = () =>
     confirm(
@@ -207,6 +215,25 @@ export default function RangeConfigPage() {
 
   return (
     <div className="space-y-4">
+      {/* Deploy Logs — shown at the top so it's immediately visible when a deploy starts */}
+      {showLogs && (
+        <Card ref={logsRef}>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Activity className={cn("h-4 w-4", isStreaming && "animate-pulse text-green-400")} />
+                Deploy Logs
+                {isStreaming && <Badge variant="success">Live</Badge>}
+              </CardTitle>
+              <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>Hide</Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <LogViewer lines={lines} onClear={clearLogs} maxHeight="400px" />
+          </CardContent>
+        </Card>
+      )}
+
       {/* Toolbar */}
       <Card>
         <CardContent className="p-3 space-y-2">
@@ -329,6 +356,47 @@ export default function RangeConfigPage() {
         </AlertDescription>
       </Alert>
 
+      {/* Network Rules panel */}
+      <Card>
+        <CardHeader
+          className="px-4 py-3 cursor-pointer select-none"
+          onClick={() => setShowNetworkRules((v) => !v)}
+        >
+          <CardTitle className="text-sm flex items-center gap-2 leading-none">
+            {showNetworkRules ? (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            )}
+            <Shield className="h-4 w-4" />
+            Firewall Rules
+            {networkRules.length > 0 && (
+              <Badge variant="secondary" className="text-xs ml-1">
+                {networkRules.length}
+              </Badge>
+            )}
+            <span className="text-xs text-muted-foreground font-normal ml-1">
+              (visual editor — click to expand)
+            </span>
+          </CardTitle>
+        </CardHeader>
+        {showNetworkRules && (
+          <CardContent className="pt-0">
+            <NetworkRulesEditor
+              rules={networkRules}
+              onChange={setNetworkRules}
+              availableVlans={extractVlansFromConfig(cachedConfig ?? "")}
+              showApplyButton
+              onApply={() => {
+                const updated = injectNetworkRules(config, networkRules)
+                setConfig(updated)
+                toast({ title: "Firewall rules applied", description: "Review the YAML below, then save." })
+              }}
+            />
+          </CardContent>
+        )}
+      </Card>
+
       {/* YAML Editor */}
       <Card>
         <CardHeader className="pb-2">
@@ -349,24 +417,6 @@ export default function RangeConfigPage() {
         </CardContent>
       </Card>
 
-      {/* Deploy Logs */}
-      {showLogs && (
-        <Card ref={logsRef}>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Activity className={cn("h-4 w-4", isStreaming && "animate-pulse text-green-400")} />
-                Deploy Logs
-                {isStreaming && <Badge variant="success">Live</Badge>}
-              </CardTitle>
-              <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>Hide</Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <LogViewer lines={lines} onClear={clearLogs} maxHeight="400px" />
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }

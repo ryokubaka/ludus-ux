@@ -26,6 +26,7 @@
 - [License](#license)
 - [Author](#author)
 
+
 ### Why use LUX?
 
 - **Operators and builders** who prefer visual workflows, shared UIs, and fewer copy-paste errors across SSH sessions.
@@ -62,6 +63,7 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 | Feature | Requires |
 |---|---|
 | GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` |
+
 ---
 
 ## Quick Start
@@ -88,6 +90,7 @@ If only `docker-compose` works, use `docker-compose up …` wherever these docs 
 | **Linux** | Install [Docker Engine](https://docs.docker.com/engine/install/) and the Compose V2 plugin (e.g. `docker-compose-plugin` on Debian/Ubuntu). If commands fail with permission errors, add your user to the `docker` group and sign in again. |
 | **Windows (Git Bash + [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/))** | Start Docker Desktop. Under **Settings → General**, enable **Use Docker Compose V2**. Open a **new** Git Bash or IDE terminal after install so `docker` resolves (Docker adds its CLI directory to PATH). |
 
+---
 
 Before we install LUX, we need to add the `LUDUS_API_KEY` to the `/root/.bashrc` and `~/.bashrc` on the Ludus server. This is the API key that will be used to authenticate to the Ludus server.
 
@@ -117,6 +120,7 @@ bash scripts/quickstart.sh
 ```
 
 > Note: The script **exits early** if `docker` or docker compose is missing, with hints for Linux and Windows installation.
+
 
 ### Manual setup
 
@@ -157,10 +161,6 @@ scp -P 22 root@<ludus-host>:/root/.ssh/id_rsa ssh/id_rsa
 chmod 600 ssh/id_rsa
 ```
 
-   (You can use `cp` instead of `scp` if you are running LUX on the same host as the Ludus server.)
-
-   If you use **that** server key, you must also install the matching **public** key for **incoming** root SSH — see [Root private key copied from the Ludus server](#root-private-key-copied-from-the-ludus-server) below.
-
 4. (Optional) Add your own cert + key to the `certificates/` directory to host the UI. If not provided, LUX will auto-generate self-signed certs:
 
 ```bash
@@ -184,8 +184,6 @@ docker compose up -d --build
 # https://localhost       (port 443 — expected self-signed cert warning)
 # http://localhost:3000   (plain HTTP, also available)
 ```
-
-If you only have standalone Compose, use `docker-compose up -d --build` instead.
 
 7. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
 
@@ -317,7 +315,8 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 - **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal
 - **Range Config Editor** — Monaco YAML for `range-config.yml`, save, selective Ansible tags, live logs
-- **New Range Wizard** — Guided flow: range selection → templates → domain → tags → deploy
+- **Firewall Rules Editor** — Collapsible visual panel on the Config page to add, edit, reorder (drag-and-drop), and delete `network.rules` entries without hand-editing YAML; "Apply to Config" merges rules into the Monaco editor. Also available as a wizard step in Deploy New Range and Deploy New GOAD Instance flows.
+- **New Range Wizard** — Guided flow: range selection → templates → domain → **firewall rules** → tags → deploy
 - **Range Logs** — Standalone SSE viewer with timestamps, download, clear; snapshot mode for post-connect streams
 
 ### Testing & Snapshots
@@ -338,7 +337,7 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 ### GOAD Integration
 
-- **Overview & wizards** — Instances, live deploy streams, dedicated range per instance, task history with resumable SSE
+- **Overview & wizards** — Instances, live deploy streams, dedicated range per instance, task history with resumable SSE; Deploy New Instance wizard includes a **Firewall Rules** step to define router iptables rules before the Ansible run
 - **Instance actions** — Provision, provide, start/stop, destroy, force-delete, sync IPs, stop running Ansible
 - **Inventory** — View workspace inventory from the UI
 

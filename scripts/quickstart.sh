@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LUX (ludus-ui) interactive setup — creates .env, prepares the SSH key directory, optional scp, starts Docker.
+# LUX (ludus-ux) interactive setup — creates .env, prepares the SSH key directory, optional scp, starts Docker.
 # Run from the repository root:
 #   bash scripts/quickstart.sh
 #   chmod +x scripts/quickstart.sh && ./scripts/quickstart.sh
@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 if [[ ! -f docker-compose.yml ]]; then
-  echo "Error: docker-compose.yml not found. Run this script from the ludus-ui repo root." >&2
+  echo "Error: docker-compose.yml not found. Run this script from the ludus-ux repo root." >&2
   exit 1
 fi
 
@@ -21,6 +21,40 @@ fi
 
 if ! command -v python3 &>/dev/null; then
   echo "Error: python3 is required (used to write .env safely)." >&2
+  exit 1
+fi
+
+# Docker CLI (Linux Engine or Windows/macOS Docker Desktop). Git Bash on Windows needs a new shell after install so PATH includes Docker.
+if ! command -v docker &>/dev/null; then
+  echo "Error: docker was not found in PATH." >&2
+  echo "" >&2
+  echo "  Linux: install Docker Engine — https://docs.docker.com/engine/install/" >&2
+  echo "         Add your user to the docker group if the daemon is permission-denied (then re-login)." >&2
+  echo "" >&2
+  echo "  Windows: install Docker Desktop — https://docs.docker.com/desktop/setup/install/windows-install/" >&2
+  echo "           Start Docker Desktop, then open a new Git Bash or terminal so docker.exe is on PATH." >&2
+  exit 1
+fi
+
+# Compose: Docker Compose V2 plugin (docker compose) or legacy standalone (docker-compose).
+lux_compose() {
+  if docker compose version &>/dev/null 2>&1; then
+    docker compose "$@"
+  elif command -v docker-compose &>/dev/null && docker-compose version &>/dev/null 2>&1; then
+    docker-compose "$@"
+  else
+    return 127
+  fi
+}
+
+if ! lux_compose version &>/dev/null; then
+  echo "Error: Docker Compose is not available (tried 'docker compose' and 'docker-compose')." >&2
+  echo "" >&2
+  echo "  Linux: use the Compose V2 plugin with Docker Engine (often docker-compose-plugin package)," >&2
+  echo "         or install standalone docker-compose and ensure it is on PATH." >&2
+  echo "" >&2
+  echo "  Windows: in Docker Desktop → Settings → General, enable \"Use Docker Compose V2\"." >&2
+  echo "            Restart Docker Desktop; use a new shell and run: docker compose version" >&2
   exit 1
 fi
 
@@ -142,7 +176,7 @@ case "${auth_choice:-1}" in
       echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
       if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
           "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
-        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build" >&2
+        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
         exit 1
       fi
     elif [[ "$remote_key" == /root/* ]]; then
@@ -248,7 +282,7 @@ case "${auth_choice:-1}" in
       echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
       if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
           "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
-        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build" >&2
+        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
         exit 1
       fi
     fi
@@ -316,15 +350,11 @@ echo ""
 read -r -p "Run 'docker compose up -d --build' now? [Y/n] " do_up
 do_up="${do_up:-y}"
 if [[ "${do_up,,}" =~ ^y ]]; then
-  if ! command -v docker &>/dev/null; then
-    echo "docker not found in PATH; run manually: docker compose up -d --build" >&2
-  else
-    docker compose up -d --build
-    echo ""
-    echo "Stack started."
-  fi
+  lux_compose up -d --build
+  echo ""
+  echo "Stack started."
 else
-  echo "Skipped. When ready: docker compose up -d --build"
+  echo "Skipped. When ready: docker compose up -d --build (or: docker-compose up -d --build)"
 fi
 
 echo ""

@@ -9,15 +9,17 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loader2, ExternalLink } from "lucide-react"
+import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loader2, ExternalLink, Trash2 } from "lucide-react"
 import type { VMObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { put } from "@/lib/api"
+import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 
 interface VMTableProps {
   vms: VMObject[]
   onRefresh?: () => void
+  /** When set, Ludus DELETE /vm/{id} is scoped to this range */
+  rangeId?: string
   /** If provided, a "Browser" console button is shown per VM (opens in same tab) */
   onOpenBrowser?: (vm: VMObject) => void
   /** If provided, a popout button opens the console in a new window */
@@ -31,6 +33,7 @@ interface VMTableProps {
 export function VMTable({
   vms,
   onRefresh,
+  rangeId,
   onOpenBrowser,
   onOpenBrowserNewWindow,
   onDownloadVv,
@@ -40,6 +43,7 @@ export function VMTable({
   const { toast } = useToast()
   const [selectedVMs, setSelectedVMs] = useState<Set<string>>(new Set())
   const [loadingVMs, setLoadingVMs] = useState<Set<string>>(new Set())
+  const [destroyingProxmoxId, setDestroyingProxmoxId] = useState<number | null>(null)
 
   const vmName = (vm: VMObject) => vm.name || vm.vmName || `vm-${vm.ID}`
   const isRunning = (vm: VMObject) => vm.poweredOn ?? (vm.powerState === "running")
@@ -64,7 +68,13 @@ export function VMTable({
 
   const handlePower = async (names: string[], action: "on" | "off") => {
     setLoadingVMs((prev) => new Set([...Array.from(prev), ...names]))
-    const result = await put(`/range/power${action}`, { machines: names })
+    // Scope to the current range so Ludus does not fall back to the user's
+    // default range — which breaks (or targets the wrong range) whenever the
+    // dashboard is showing a non-default or GOAD-mapped range. Without this,
+    // Ludus returns `Range <id> not found for user <user>`.
+    const result = action === "on"
+      ? await ludusApi.powerOn(names, rangeId)
+      : await ludusApi.powerOff(names, rangeId)
     if (result.error) {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
@@ -78,8 +88,55 @@ export function VMTable({
     })
   }
 
+  const handleDestroyVm = async (vm: VMObject) => {
+    const name = vmName(vm)
+    const proxmoxId = vm.proxmoxID ?? vm.ID
+    if (
+      !window.confirm(
+        `Permanently destroy VM "${name}" (VMID ${proxmoxId})? This cannot be undone.`,
+      )
+    ) {
+      return
+    }
+    setDestroyingProxmoxId(proxmoxId)
+    const result = await ludusApi.destroyVm(proxmoxId, rangeId)
+    if (result.error) {
+      toast({ variant: "destructive", title: "Destroy failed", description: result.error })
+      void postVmOperationAudit({
+        kind: "destroy_vm",
+        rangeId,
+        vmId: proxmoxId,
+        vmName: name,
+        status: "error",
+        detail: result.error,
+      })
+    } else {
+      toast({
+        title: "VM destroyed",
+        description: result.data?.result ?? `${name} removed from range`,
+      })
+      void postVmOperationAudit({
+        kind: "destroy_vm",
+        rangeId,
+        vmId: proxmoxId,
+        vmName: name,
+        status: "ok",
+        detail: result.data?.result,
+      })
+      const ip = typeof vm.ip === "string" ? vm.ip.trim() : ""
+      if (ip) void pruneKnownHosts([ip])
+      setSelectedVMs((prev) => {
+        const next = new Set(prev)
+        next.delete(name)
+        return next
+      })
+      onRefresh?.()
+    }
+    setDestroyingProxmoxId(null)
+  }
+
   const selectedArray = Array.from(selectedVMs)
-  const colSpan = 5 + (showConsole ? 1 : 0) + 1  // checkbox + name + status + ip + proxid + [console] + power
+  const colSpan = 5 + (showConsole ? 1 : 0) + 1 + 1  // checkbox + name + status + ip + proxid + [console] + power + destroy
 
   const sortedVms = [...vms].sort((a, b) =>
     vmName(a).localeCompare(vmName(b), undefined, { sensitivity: "base" })
@@ -121,6 +178,9 @@ export function VMTable({
                 <th className="p-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider">Console</th>
               )}
               <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Power</th>
+              <th className="p-3 text-center text-xs font-semibold text-muted-foreground uppercase tracking-wider w-14">
+                Destroy
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -139,6 +199,8 @@ export function VMTable({
                 const powerLoading = loadingVMs.has(name)
                 const isDownloading = downloadingVm === name
                 const isOpening = openingVm === name
+                const proxmoxId = vm.proxmoxID ?? vm.ID
+                const isDestroying = destroyingProxmoxId === proxmoxId
                 return (
                   <tr
                     key={vm.ID || name}
@@ -250,6 +312,26 @@ export function VMTable({
                           <TooltipContent>Power Off</TooltipContent>
                         </Tooltip>
                       </div>
+                    </td>
+                    <td className="p-3 text-center">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            className="text-muted-foreground hover:text-destructive"
+                            disabled={powerLoading || isDestroying}
+                            onClick={() => void handleDestroyVm(vm)}
+                          >
+                            {isDestroying ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Destroy VM (permanent)</TooltipContent>
+                      </Tooltip>
                     </td>
                   </tr>
                 )

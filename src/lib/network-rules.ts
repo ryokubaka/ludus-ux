@@ -115,6 +115,14 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
  * The `ludus:` VM list and all other keys are preserved unchanged.
  * Returns the modified YAML string. Throws if the base YAML is unparseable.
  */
+const YAML_DUMP_OPTS = {
+  indent: 2,
+  lineWidth: -1,
+  noRefs: true,
+  quotingType: '"' as const,
+  forceQuotes: false,
+}
+
 export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): string {
   let doc: Record<string, unknown>
   try {
@@ -135,13 +143,40 @@ export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): stri
     }
   }
 
-  return yaml.dump(doc, {
-    indent: 2,
-    lineWidth: -1,
-    noRefs: true,
-    quotingType: '"',
-    forceQuotes: false,
-  })
+  return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
+/**
+ * Snapshot the full `network:` object from range-config YAML (defaults + rules).
+ * Returns null if missing, non-object, or unparseable.
+ */
+export function extractNetworkSection(yamlText: string): Record<string, unknown> | null {
+  try {
+    const doc = yaml.load(yamlText) as Record<string, unknown> | null
+    if (!doc || typeof doc !== "object") return null
+    const network = doc.network
+    if (!network || typeof network !== "object" || Array.isArray(network)) return null
+    return structuredClone(network) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Replace `network:` in YAML with the given snapshot (typically restored after GOAD).
+ * If `network` is null, returns `yamlText` unchanged.
+ */
+export function applyNetworkSection(yamlText: string, network: Record<string, unknown> | null): string {
+  if (network == null) return yamlText
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    doc = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>
+  } catch {
+    doc = {}
+  }
+  doc.network = structuredClone(network) as Record<string, unknown>
+  return yaml.dump(doc, YAML_DUMP_OPTS)
 }
 
 /** Build a network: block YAML string suitable for appending to a manually-built config. */
@@ -173,6 +208,62 @@ export function extractVlansFromConfig(yamlText: string): number[] {
   } catch {
     return []
   }
+}
+
+/**
+ * Strip VM entries belonging to a GOAD extension from the top-level `ludus:`
+ * list of a range-config YAML. Matching is done case-insensitively against
+ * each entry's `vm_name` / `hostname` using the extension's short slug
+ * (the token before the first dot of `extensionName`).
+ *
+ * Called from the extension-removal flow so the user does NOT have to
+ * hand-edit range-config.yml after uninstalling an extension — otherwise a
+ * subsequent full deploy or `provide` re-creates the VMs from stale entries.
+ *
+ * Returns the original YAML unchanged when nothing matched or the YAML is
+ * unparseable; returns the re-dumped YAML otherwise.
+ */
+export function removeExtensionVmsFromRangeConfig(
+  yamlText: string,
+  extensionName: string,
+): { yaml: string; removed: string[] } {
+  const out = { yaml: yamlText, removed: [] as string[] }
+  const ext = extensionName.trim().toLowerCase()
+  if (!ext) return out
+  const extShort = ext.split(".")[0]
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out
+    doc = parsed as Record<string, unknown>
+  } catch {
+    return out
+  }
+  const ludus = doc.ludus
+  if (!Array.isArray(ludus)) return out
+  const matches = (entry: unknown): string | null => {
+    if (!entry || typeof entry !== "object") return null
+    const e = entry as Record<string, unknown>
+    for (const k of ["vm_name", "hostname"] as const) {
+      const v = e[k]
+      if (typeof v !== "string") continue
+      const vl = v.toLowerCase()
+      const vs = vl.split(".")[0]
+      if (vl === ext || vs === ext || vl === extShort || vs === extShort) return v
+      if (extShort.length >= 3 && vs.includes(extShort)) return v
+    }
+    return null
+  }
+  const kept: unknown[] = []
+  for (const entry of ludus) {
+    const hit = matches(entry)
+    if (hit) out.removed.push(hit)
+    else kept.push(entry)
+  }
+  if (out.removed.length === 0) return out
+  doc.ludus = kept
+  out.yaml = yaml.dump(doc, YAML_DUMP_OPTS)
+  return out
 }
 
 /** Return a blank NetworkRule with sensible defaults. */

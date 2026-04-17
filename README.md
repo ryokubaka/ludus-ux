@@ -54,7 +54,7 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 
 | Requirement | Details |
 |---|---|
-| **Ludus server** | v2.x with API access on port 8080 |
+| **Ludus server** | v2.x with API access on port 8080 (tested with [**Ludus v2.1.0**](https://gitlab.com/badsectorlabs/ludus/-/releases)) |
 | **Docker + Docker Compose** | Any recent version (tested on Docker 24+) |
 | **Network access** | Container must reach the Ludus server on ports 8080 (API) and 22 (SSH) |
 
@@ -313,11 +313,11 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 ### Range Management
 
-- **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal
+- **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, **per-VM destroy** (Ludus `DELETE /vm/{vmID}`), range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal; **Deploy History** deep-links to a GOAD instance’s Logs History (side-by-side Ludus + GOAD) when the range is mapped in LUX’s GOAD range store
 - **Range Config Editor** — Monaco YAML for `range-config.yml`, save, selective Ansible tags, live logs
 - **Firewall Rules Editor** — Collapsible visual panel on the Config page to add, edit, reorder (drag-and-drop), and delete `network.rules` entries without hand-editing YAML; "Apply to Config" merges rules into the Monaco editor. Also available as a wizard step in Deploy New Range and Deploy New GOAD Instance flows.
 - **New Range Wizard** — Guided flow: range selection → templates → domain → **firewall rules** → tags → deploy
-- **Range Logs** — Standalone SSE viewer with timestamps, download, clear; snapshot mode for post-connect streams
+- **Range Logs** — Standalone SSE viewer with timestamps, download, clear; snapshot mode for post-connect streams; deploy history list matches Dashboard behavior (**GOAD** rows open the GOAD instance history view when linked)
 
 ### Testing & Snapshots
 
@@ -337,8 +337,12 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 ### GOAD Integration
 
-- **Overview & wizards** — Instances, live deploy streams, dedicated range per instance, task history with resumable SSE; Deploy New Instance wizard includes a **Firewall Rules** step to define router iptables rules before the Ansible run
+- **Overview & wizards** — Instances load without waiting on a full session round-trip before cards appear; live deploy streams, dedicated range per instance, task history with resumable SSE; Deploy New Instance wizard includes a **Firewall Rules** step to define router iptables rules before the Ansible run
+- **Range YAML vs Range Configuration** — GOAD **Provide**, **Provision lab**, and **Install extension** refresh Ludus `range-config.yml` from GOAD templates (which would overwrite edits you made in the Range Configuration UI). After a successful run, LUX re-applies your saved `network:` block (firewall defaults + rules) onto the new YAML so UI-defined firewall rules are preserved; other top-level keys still come from GOAD until you edit them again in Ludus or the UI.
 - **Instance actions** — Provision, provide, start/stop, destroy, force-delete, sync IPs, stop running Ansible
+- **Extensions** — Install via **Add** (queue to side cart) and **Install # extensions** (confirm, chained `install_extension` in cart order, then **Deploy Status**), re-provision, **remove** (destroys extension VMs via Ludus and updates `instance.json` + workspace inventories over SSH). VM destroys and extension removals append rows to the local SQLite table `vm_operation_log` (`POST /api/vm-operation-log`), surfaced in the UI as a **VM Operations** panel on the Dashboard (collapsible, next to Deploy History) and on the Range Logs page (dedicated card) via `GET /api/vm-operation-log?rangeId=…` — non-admins are scoped to their own rows; admins see everyone by default and can pass `?username=…`. You can also inspect directly with e.g. `sqlite3 data/ludus-ux.db "SELECT datetime(ts/1000,'unixepoch'),kind,vm_id,vm_name,extension_name,status,detail FROM vm_operation_log ORDER BY ts DESC LIMIT 30"` on the LUX host.
+- **Dashboard provisioning indicator** — For GOAD-mapped ranges, the Dashboard range header shows a pulsing `GOAD: <kind>` badge and an in-card banner with an "Open GOAD" link whenever a GOAD task (`provide` / `install_extension` / `provision_lab` / `provision_extension`) is still running, even after the Ludus range deploy itself flips to `SUCCESS`. Dashboard polls `/api/goad/tasks` every 3 s while anything is running and auto-refreshes range status + deploy history when the task ends.
+- **Logs History** — Integrated GOAD + Ludus runs show as a single **GOAD** row; click for side-by-side range deploy log and GOAD CLI output (standalone Ludus deploys still show as Range Deploy). Detail view includes id/time/template metadata for Ludus and GOAD. **Deep links**: `?tab=history&deployLogId=` opens that deploy; range→instance mapping uses `GET /api/goad/by-range` (SQLite + enriched instances fallback). **Dashboard / Range Logs** only tag a deploy with **GOAD** when it correlates with a GOAD task (time overlap or proximity); manual range-config deploys stay plain Ludus rows. Deploy history there is paginated (5 per page).
 - **Inventory** — View workspace inventory from the UI
 
 ### Users & Groups *(admin)*
@@ -365,7 +369,7 @@ All persistent state lives in the `data/` directory (Docker volume):
 
 | Path | Contents |
 |---|---|
-| `data/ludus-ux.db` | SQLite: settings, GOAD tasks, range ownership, pending ops, instance→range mappings |
+| `data/ludus-ux.db` | SQLite: settings, GOAD tasks, range ownership, pending ops, instance→range mappings, `vm_operation_log` (VM/extension deletion audit) |
 | `data/tasks/` | GOAD task log files |
 | `data/uploads/` | Custom logo |
 | `certificates/` | TLS material (auto-generated or provided) |

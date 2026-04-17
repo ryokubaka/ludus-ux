@@ -23,10 +23,28 @@ function findLogo(): string | null {
   return null
 }
 
-/** Serve the custom logo, or 404 if none is set. */
+const DEFAULT_LOGO_PATH = path.join(process.cwd(), "public", "default-logo.jpeg")
+
+function serveBundledDefault(): NextResponse {
+  if (!fs.existsSync(DEFAULT_LOGO_PATH)) {
+    return new NextResponse(null, { status: 404 })
+  }
+  const content = fs.readFileSync(DEFAULT_LOGO_PATH)
+  return new NextResponse(content, {
+    headers: {
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+    },
+  })
+}
+
+/**
+ * Custom logo bytes if uploaded; otherwise bundled default. Avoids 404 on
+ * `<img src="/api/logo">` and keeps HEAD vs GET consistent.
+ */
 export async function GET() {
   const logoPath = findLogo()
-  if (!logoPath) return new NextResponse(null, { status: 404 })
+  if (!logoPath) return serveBundledDefault()
 
   const ext = path.extname(logoPath).toLowerCase()
   const content = fs.readFileSync(logoPath)
@@ -34,6 +52,22 @@ export async function GET() {
     headers: {
       "Content-Type": MIME[ext] ?? "image/png",
       // No browser caching — we want the sidebar to pick up a new upload immediately
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+    },
+  })
+}
+
+/** 200 = custom logo on disk; 204 = using default only (not an error — avoids console 404 noise). */
+export async function HEAD() {
+  const logoPath = findLogo()
+  if (!logoPath) {
+    return new NextResponse(null, { status: 204 })
+  }
+  const ext = path.extname(logoPath).toLowerCase()
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Content-Type": MIME[ext] ?? "image/png",
       "Cache-Control": "no-cache, no-store, must-revalidate",
     },
   })

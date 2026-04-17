@@ -24,6 +24,7 @@ import { ludusRequest } from "@/lib/ludus-client"
 import { getAllOwnership } from "@/lib/range-ownership-store"
 import { fetchPbAdminData } from "@/lib/pocketbase-client"
 import type { RangeObject, UserObject } from "@/lib/types"
+import { extractArray } from "@/lib/utils"
 
 export interface AdminData {
   ranges: RangeObject[]
@@ -38,15 +39,6 @@ const _swrCache = new SWRCache<AdminData>(30_000)
 
 export function bustAdminCache(): void {
   _swrCache.invalidate()
-}
-
-export function extractArray<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[]
-  if (data && typeof data === "object" && "result" in data) {
-    const r = (data as { result: unknown }).result
-    if (Array.isArray(r)) return r as T[]
-  }
-  return []
 }
 
 // ── Ownership resolution (shared by both paths) ───────────────────────────────

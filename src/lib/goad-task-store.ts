@@ -197,22 +197,32 @@ hydrateFromDb()
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function resolveLogFile(taskId: string, instanceId?: string | null): string {
-  const newPath = taskLogPath(taskId, instanceId)
-  if (fs.existsSync(newPath)) return newPath
-  // Fallback: pre-subdirectory layout stored files flat in tasks/
-  return legacyTaskLogPath(taskId)
+/** Distinct on-disk locations a task log may live (migration + instance linking). */
+function logFileCandidates(taskId: string, instanceId?: string | null): string[] {
+  return [
+    ...new Set([
+      legacyTaskLogPath(taskId),
+      taskLogPath(taskId, null),
+      taskLogPath(taskId, instanceId),
+    ]),
+  ]
 }
 
 function loadLinesFromFile(entry: TaskEntry): void {
   if (entry.linesLoaded) return
   try {
-    const logFile = resolveLogFile(entry.task.id, entry.task.instanceId)
-    if (fs.existsSync(logFile)) {
+    const merged: string[] = []
+    // Oldest layout first so a task that moved from flat → _global → per-instance
+    // replays in chronological order when multiple files exist.
+    for (const logFile of logFileCandidates(entry.task.id, entry.task.instanceId)) {
+      if (!fs.existsSync(logFile)) continue
       const content = fs.readFileSync(logFile, "utf8")
-      entry.task.lines = content.split("\n").filter((l) => l.length > 0)
-      entry.task.lineCount = entry.task.lines.length
+      for (const line of content.split("\n")) {
+        if (line.length > 0) merged.push(line)
+      }
     }
+    entry.task.lines = merged
+    entry.task.lineCount = merged.length
   } catch (err) {
     console.error("[task-store] loadLines failed:", err)
   }
@@ -226,12 +236,9 @@ function evictOldestIfNeeded(): void {
     taskMap.delete(oldest)
     try {
       getDb().prepare("DELETE FROM goad_tasks WHERE id = ?").run(oldest)
-      // Delete new per-instance path
-      const logFile = taskLogPath(oldest, entry?.task.instanceId)
-      if (fs.existsSync(logFile)) fs.unlinkSync(logFile)
-      // Also delete legacy flat path if it exists (backward compat)
-      const legacyFile = legacyTaskLogPath(oldest)
-      if (fs.existsSync(legacyFile)) fs.unlinkSync(legacyFile)
+      for (const p of logFileCandidates(oldest, entry?.task.instanceId)) {
+        if (fs.existsSync(p)) fs.unlinkSync(p)
+      }
     } catch {}
   }
 }
@@ -383,6 +390,22 @@ export function getLatestTaskForInstance(instanceId: string): GoadTask | null {
     if (task?.instanceId === instanceId) return task
   }
   return null
+}
+
+/**
+ * Returns every task currently in `running` state for a given instanceId
+ * (newest-first). Used by the unified abort route to kill any in-flight
+ * GOAD SSH/ansible process before aborting the Ludus range.
+ */
+export function getRunningTasksForInstance(instanceId: string): GoadTask[] {
+  const out: GoadTask[] = []
+  for (let i = taskOrder.length - 1; i >= 0; i--) {
+    const task = taskMap.get(taskOrder[i])?.task
+    if (task && task.instanceId === instanceId && task.status === "running") {
+      out.push(task)
+    }
+  }
+  return out
 }
 
 // ── Subscription (for SSE replay + live stream) ───────────────────────────────

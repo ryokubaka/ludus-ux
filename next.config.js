@@ -22,6 +22,16 @@ const nextConfig = {
     }
     return config
   },
+  // Browsers still probe `/favicon.ico` directly (bookmark bar, history
+  // contexts) regardless of the `<link rel="icon">` tag emitted from
+  // `metadata.icons`. Route that probe at the existing `/api/logo` endpoint
+  // so the favicon is always the current LUX logo (custom upload or bundled
+  // default) and the console no longer shows a 404.
+  async rewrites() {
+    return [
+      { source: '/favicon.ico', destination: '/api/logo' },
+    ]
+  },
 }
 
 module.exports = nextConfig

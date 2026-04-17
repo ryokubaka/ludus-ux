@@ -29,6 +29,92 @@ export function getImpersonationApiKey(): string | null {
   return getImpersonationHeaders()["X-Impersonate-Apikey"] ?? null
 }
 
+export interface VmOperationLogEntry {
+  id: string
+  ts: number
+  username: string
+  kind: "destroy_vm" | "remove_extension"
+  rangeId: string | null
+  instanceId: string | null
+  vmId: number | null
+  vmName: string | null
+  extensionName: string | null
+  status: "ok" | "error"
+  detail: string | null
+}
+
+/**
+ * Read LUX-local VM operation log (destroy_vm / remove_extension), newest first.
+ * Non-admin sessions are scoped server-side to their own username.
+ */
+export async function getVmOperationLog(params: {
+  rangeId?: string
+  instanceId?: string
+  limit?: number
+} = {}): Promise<{ entries: VmOperationLogEntry[]; error?: string }> {
+  const qs = new URLSearchParams()
+  if (params.rangeId) qs.set("rangeId", params.rangeId)
+  if (params.instanceId) qs.set("instanceId", params.instanceId)
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  try {
+    const res = await fetch(
+      `/api/vm-operation-log${qs.toString() ? `?${qs}` : ""}`,
+      { headers: { ...getImpersonationHeaders() } },
+    )
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string }
+      return { entries: [], error: d.error ?? `HTTP ${res.status}` }
+    }
+    const data = (await res.json()) as { entries?: VmOperationLogEntry[] }
+    return { entries: data.entries ?? [] }
+  } catch (err) {
+    return { entries: [], error: (err as Error).message }
+  }
+}
+
+/** Best-effort append to LUX local `vm_operation_log` (SQLite) for VM / extension removals. */
+export async function postVmOperationAudit(payload: {
+  kind: "destroy_vm" | "remove_extension"
+  rangeId?: string
+  instanceId?: string
+  vmId?: number
+  vmName?: string
+  extensionName?: string
+  status: "ok" | "error"
+  detail?: string
+}): Promise<void> {
+  try {
+    await fetch("/api/vm-operation-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+      body: JSON.stringify(payload),
+    })
+    // Notify any mounted list view (Dashboard / Range Logs) to refetch without
+    // needing the writer to hold a queryClient reference.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("vm-operation-log-updated"))
+    }
+  } catch {
+    /* ignore — audit must not break primary flow */
+  }
+}
+
+/** After Ludus destroys VMs, drop matching keys from the LUX host `~/.ssh/known_hosts` (avoids MITM warnings on recycle). */
+export async function pruneKnownHosts(hosts: string[]): Promise<void> {
+  const uniq = [...new Set(hosts.map((h) => h.trim()).filter(Boolean))]
+  if (uniq.length === 0) return
+  try {
+    await fetch("/api/ssh/prune-known-hosts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hosts: uniq }),
+      credentials: "include",
+    })
+  } catch {
+    /* non-fatal */
+  }
+}
+
 export async function apiRequest<T = unknown>(
   path: string,
   options: {
@@ -139,11 +225,6 @@ export const ludusApi = {
     return { data, status: result.status }
   },
 
-  // Accessible ranges — GET /ranges/accessible
-  listAccessibleRanges: () =>
-    get<import("./types").RangeAccessEntry[]>("/ranges/accessible"),
-
-
   // Range config — GET /range/config → {"result":"yaml..."}
   getRangeConfig: (rangeId?: string) =>
     get<{ result: string }>(rangeId ? `/range/config?rangeID=${rangeId}` : "/range/config"),
@@ -176,6 +257,12 @@ export const ludusApi = {
   deleteRangeVMs: (rangeId: string) =>
     del(`/range/${encodeURIComponent(rangeId)}/vms`),
 
+  /** Halt and destroy a single VM (Proxmox VMID). */
+  destroyVm: (vmId: string | number, rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
+    return del<{ result: string }>(`/vm/${encodeURIComponent(String(vmId))}${q}`)
+  },
+
   // Deployment
   // Ludus expects tags as a comma-separated string (not an array).  Sending
   // an array causes Go JSON to silently fail to unmarshal the field, leaving
@@ -188,16 +275,9 @@ export const ludusApi = {
   abortDeploy: (rangeId?: string) =>
     post(rangeId ? `/range/abort?rangeID=${rangeId}` : "/range/abort"),
 
-  // Deploy tags — GET /range/tags
-  getDeployTags: () => get<{ result: string }>("/range/tags"),
-
   // Logs — GET /range/logs → {"cursor":N,"result":"log text"}
   getRangeLogs: (rangeId?: string) =>
     get<{ cursor: number; result: string }>(rangeId ? `/range/logs?rangeID=${rangeId}` : "/range/logs"),
-
-  // etc/hosts — GET /range/etchosts → {"result":"hosts string"}
-  getRangeEtcHosts: (rangeId?: string) =>
-    get<{ result: string }>(rangeId ? `/range/etchosts?rangeID=${rangeId}` : "/range/etchosts"),
 
   // Ansible inventory — GET /range/ansibleinventory
   getRangeAnsibleInventory: (rangeId?: string) =>
@@ -206,14 +286,6 @@ export const ludusApi = {
         ? `/range/ansibleinventory?rangeID=${encodeURIComponent(rangeId)}`
         : "/range/ansibleinventory",
     ),
-
-  // SSH config — GET /range/sshconfig
-  getRangeSSHConfig: (rangeId?: string) =>
-    get<{ result: string }>(rangeId ? `/range/sshconfig?rangeID=${rangeId}` : "/range/sshconfig"),
-
-  // RDP configs — GET /range/rdpconfigs
-  getRangeRDPConfigs: (rangeId?: string) =>
-    get<{ result: string }>(rangeId ? `/range/rdpconfigs?rangeID=${rangeId}` : "/range/rdpconfigs"),
 
   // Range creation — routed through dedicated endpoint that proxies to admin API (port 8081)
   createRange: async (data: { name: string; rangeID: string; description?: string; purpose?: string; userID?: string[] }): Promise<{ data?: { result: string }; error?: string; status: number }> => {
@@ -238,13 +310,24 @@ export const ludusApi = {
   getTemplateStatus: () => get<import("./types").TemplateObject[] | null>("/templates/status"),
   buildTemplates: (names: string[]) => post("/templates", { templates: names }),
   abortTemplateBuild: () => post("/templates/abort"),
-  deleteTemplate: (name: string) => del(`/template/${name}`),
   getTemplateLogs: () => get<{ cursor: number; result: string }>("/templates/logs"),
+
+  // Log history — range deploys
+  getRangeLogHistory: (rangeId?: string) =>
+    get<import("./types").LogHistoryEntry[]>(rangeId ? `/range/logs/history?rangeID=${rangeId}` : "/range/logs/history"),
+  getRangeLogHistoryById: (logId: string, rangeId?: string) =>
+    get<import("./types").LogHistoryDetail>(
+      rangeId ? `/range/logs/history/${logId}?rangeID=${rangeId}` : `/range/logs/history/${logId}`,
+    ),
+
+  // Log history — template builds
+  getTemplateLogHistory: () =>
+    get<import("./types").LogHistoryEntry[]>("/templates/logs/history"),
+  getTemplateLogHistoryById: (logId: string) =>
+    get<import("./types").LogHistoryDetail>(`/templates/logs/history/${logId}`),
 
   // Ansible roles+collections — GET /ansible → [{name, version, type}]
   listAnsible: () => get<import("./types").AnsibleItem[]>("/ansible"),
-  listRoles: () => get<import("./types").AnsibleItem[]>("/ansible"),
-  listCollections: () => get<import("./types").AnsibleItem[]>("/ansible"),
   // Ludus v2 role endpoint: POST /ansible/role — field "role", action "install"|"remove"
   addRole: (name: string, version?: string) =>
     post("/ansible/role", { role: name, action: "install", ...(version ? { version } : {}) }),
@@ -253,31 +336,10 @@ export const ludusApi = {
   // Ludus v2 collection endpoint: POST /ansible/collection — field "collection" (no action field)
   addCollection: (name: string, version?: string) =>
     post("/ansible/collection", { collection: name, ...(version ? { version } : {}) }),
-  removeCollection: (name: string) =>
-    post("/ansible/collection", { collection: name, force: true }),
 
   // Wireguard — GET /user/wireguard
   getUserWireguard: (_userId?: string) =>
     get<{ result: { wireGuardConfig: string } }>("/user/wireguard"),
-
-  // API key — GET /user/apikey → returns the current key without changing it
-  getUserApiKey: (userId?: string) =>
-    get<{ result: string; apiKey?: string }>(
-      "/user/apikey",
-      userId ? { userOverride: userId } : undefined
-    ),
-
-  // Roll/regenerate API key — POST /user/apikey
-  regenerateApiKey: (userId?: string) =>
-    post<{ result: string; apiKey?: string }>(
-      "/user/apikey",
-      undefined,
-      userId ? { userOverride: userId } : undefined
-    ),
-
-  // User credentials — GET /user/credentials
-  getUserCredentials: () =>
-    get<{ username: string; password: string }>("/user/credentials"),
 
   // Range power actions — PUT /range/poweron|poweroff with {"machines": [...names]}
   powerOn: (vmNames?: string[], rangeId?: string) => {
@@ -290,12 +352,6 @@ export const ludusApi = {
   },
 
   // Testing mode (rangeId selects which range in Ludus v2 multi-range environments)
-  getTestingStatus: (rangeId?: string) =>
-    get<import("./types").RangeObject>(rangeId ? `/range?rangeID=${rangeId}` : "/range"),
-  startTesting: (rangeId?: string) =>
-    put(rangeId ? `/testing/start?rangeID=${rangeId}` : "/testing/start"),
-  stopTesting: (rangeId?: string) =>
-    put(rangeId ? `/testing/stop?rangeID=${rangeId}` : "/testing/stop"),
   // POST /testing/allow and /testing/deny expect { domains?: string[], ips?: string[] }
   allowDomain: (domain: string, rangeId?: string) =>
     post(rangeId ? `/testing/allow?rangeID=${rangeId}` : "/testing/allow", { domains: [domain] }),
@@ -395,15 +451,9 @@ export const ludusApi = {
     get<import("./types").UserObject[]>(`/groups/${encodeURIComponent(group)}/users`),
   listGroupRanges: (group: string) =>
     get<unknown>(`/groups/${encodeURIComponent(group)}/ranges`),
-  getUserMemberships: () =>
-    get<import("./types").GroupObject[]>("/user/memberships"),
 
-  // Range access sharing — v2: ranges/assign (admin only), ranges/revoke
+  // Range access sharing — v2: ranges/assign (admin only)
   // POST /ranges/assign/{userID}/{rangeID} is on port 8080 with admin API key auth
   assignRange: (userId: string, rangeId: string) =>
     post(`/ranges/assign/${encodeURIComponent(userId)}/${encodeURIComponent(rangeId)}`),
-  revokeRange: (userId: string, rangeId: string) =>
-    del(`/ranges/revoke/${userId}/${rangeId}`),
-  listRangeUsers: (rangeId: string) =>
-    get<import("./types").UserObject[]>(`/ranges/${rangeId}/users`),
 }

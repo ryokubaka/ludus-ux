@@ -31,7 +31,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import type { GoadInstance } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { cn, timeAgo } from "@/lib/utils"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
@@ -44,14 +44,6 @@ interface TaskSummary {
   startedAt: number
   endedAt?: number
   lineCount: number
-}
-
-function timeAgo(ms: number): string {
-  const diff = Date.now() - ms
-  if (diff < 60_000) return "just now"
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return new Date(ms).toLocaleDateString()
 }
 
 export default function GoadPage() {
@@ -74,11 +66,15 @@ export default function GoadPage() {
   const [currentUsername, setCurrentUsername] = useState<string>(() => {
     try { return sessionStorage.getItem("ludus-auth-username") || "" } catch { return "" }
   })
-  // True once the server session has been confirmed (or restored from cache).
-  // Keeps the MY INSTANCES section in a spinner state on a cold first load so
-  // stale/wrong data is never briefly shown to the user.
+  // True once /api/auth/session returns. Do not block rendering instance cards on
+  // this flag — repeat visitors can hydrate from sessionStorage below.
   const [sessionConfirmed, setSessionConfirmed] = useState<boolean>(() => {
-    try { return sessionStorage.getItem("ludus-sidebar-is-admin") !== null } catch { return false }
+    try {
+      return (
+        sessionStorage.getItem("ludus-sidebar-is-admin") !== null
+        || !!sessionStorage.getItem("ludus-auth-username")
+      )
+    } catch { return false }
   })
 
   useEffect(() => {
@@ -356,7 +352,14 @@ export default function GoadPage() {
                 </span>
               </div>
 
-              {(loading || !sessionConfirmed) ? (
+              {!sessionConfirmed && (
+                <p className="text-xs text-muted-foreground flex items-center gap-2 py-1">
+                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  Refreshing session…
+                </p>
+              )}
+
+              {loading ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>

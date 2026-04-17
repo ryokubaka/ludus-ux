@@ -1,7 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { formatDistanceToNow, format } from "date-fns";
-import { getAnsibleLineClass } from "./ansible-colors";
+import { format } from "date-fns";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -17,31 +16,40 @@ export function formatDate(date: string | Date | undefined): string {
   }
 }
 
-export function formatRelativeTime(date: string | Date | undefined): string {
-  if (!date) return "Never";
-  try {
-    const d = typeof date === "string" ? new Date(date) : date;
-    return formatDistanceToNow(d, { addSuffix: true });
-  } catch {
-    return String(date);
-  }
+/**
+ * Humanised "X ago" with graceful fallback for older timestamps.
+ * Accepts an ISO/parseable date string, epoch millis, or a Date.
+ * Returns the input stringified if the date can't be parsed so callers
+ * never have to guard against NaN.
+ */
+export function timeAgo(input: string | number | Date): string {
+  const ms = input instanceof Date ? input.getTime() : typeof input === "number" ? input : new Date(input).getTime()
+  if (!Number.isFinite(ms)) return String(input)
+  const diff = Date.now() - ms
+  if (diff < 0) return String(input)
+  if (diff < 60_000) return "just now"
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  return new Date(ms).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
-export function getRangeStateColor(state: string): string {
-  switch (state) {
-    case "SUCCESS":
-      return "text-green-400";
-    case "DEPLOYING":
-      return "text-yellow-400";
-    case "ERROR":
-      return "text-red-400";
-    case "ABORTED":
-      return "text-orange-400";
-    case "NEVER DEPLOYED":
-      return "text-gray-400";
-    default:
-      return "text-gray-400";
+/**
+ * Unwrap `[...]` or `{ result: [...] }` shapes returned by Ludus endpoints
+ * (legacy responses wrap the payload in `{ result }`, newer ones return the
+ * array directly). Returns `[]` for anything that can't be coerced.
+ */
+export function extractArray<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[]
+  if (data && typeof data === "object" && "result" in data) {
+    const r = (data as { result: unknown }).result
+    if (Array.isArray(r)) return r as T[]
   }
+  return []
 }
 
 export function getRangeStateBadge(state: string): string {
@@ -58,30 +66,3 @@ export function getRangeStateBadge(state: string): string {
       return "bg-gray-500/20 text-gray-400 border-gray-500/30";
   }
 }
-
-export function getPowerStateColor(state: string): string {
-  switch (state) {
-    case "running":
-      return "text-green-400";
-    case "stopped":
-      return "text-red-400";
-    case "suspended":
-      return "text-yellow-400";
-    default:
-      return "text-gray-400";
-  }
-}
-
-export function truncate(str: string, length: number): string {
-  if (str.length <= length) return str;
-  return str.slice(0, length) + "...";
-}
-
-export function parseLogLine(raw: string): {
-  level?: string;
-  message: string;
-  color: string;
-} {
-  return { message: raw, color: getAnsibleLineClass(raw) };
-}
-

@@ -31,7 +31,7 @@ import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
-import { ludusApi, getImpersonationHeaders } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
@@ -132,7 +132,7 @@ function shellQuote(arg: string): string {
 export default function NewGoadInstancePage() {
   const router = useRouter()
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
-  const { impersonation } = useImpersonation()
+  const { impersonation, impersonationHeaders } = useImpersonation()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
@@ -207,7 +207,9 @@ export default function NewGoadInstancePage() {
       })
       .catch(() => {})
   }, [])
-  const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new")
+  const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new", {
+    getExtraHeaders: impersonationHeaders,
+  })
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -412,7 +414,11 @@ export default function NewGoadInstancePage() {
       const targetRangeId: string = rangeId!
       setClearingRange(true)
       try {
+        const preClear = await ludusApi.getRangeStatus(targetRangeId)
+        const ips =
+          preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
         await ludusApi.deleteRangeVMs(targetRangeId)
+        if (ips.length > 0) void pruneKnownHosts(ips)
         const deadline = Date.now() + 10 * 60 * 1000
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 8000))
@@ -472,7 +478,11 @@ export default function NewGoadInstancePage() {
         const targetRangeId: string = rangeId
         setClearingRange(true)
         try {
+          const preClear = await ludusApi.getRangeStatus(targetRangeId)
+          const ips =
+            preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
           await ludusApi.deleteRangeVMs(targetRangeId)
+          if (ips.length > 0) void pruneKnownHosts(ips)
           const deadline = Date.now() + 10 * 60 * 1000
           while (Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, 8000))

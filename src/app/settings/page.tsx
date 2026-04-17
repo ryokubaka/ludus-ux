@@ -201,7 +201,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetch("/api/logo", { method: "HEAD" })
-      .then((r) => setHasLogo(r.ok))
+      .then((r) => setHasLogo(r.status === 200))
       .catch(() => setHasLogo(false))
   }, [logoKey])
 
@@ -670,7 +670,7 @@ export default function SettingsPage() {
               <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-border bg-muted/30 overflow-hidden flex-shrink-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={hasLogo ? `/api/logo?v=${logoKey}` : "/default-logo.jpeg"}
+                  src={`/api/logo?v=${logoKey}`}
                   alt="Current logo"
                   className="h-full w-full object-contain"
                 />

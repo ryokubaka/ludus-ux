@@ -40,6 +40,18 @@ export function getInstanceRangeLocal(instanceId: string): string | null {
   }
 }
 
+/** Reverse lookup: Ludus rangeID → GOAD instance id (workspace folder name). */
+export function getInstanceIdForRange(rangeId: string): string | null {
+  try {
+    const row = getDb()
+      .prepare("SELECT instance_id FROM goad_instance_ranges WHERE range_id = ?")
+      .get(rangeId) as { instance_id: string } | null
+    return row?.instance_id ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Returns all known instance→range mappings as a Map for bulk enrichment. */
 export function getAllInstanceRangesLocal(): Map<string, string> {
   try {

@@ -37,7 +37,7 @@ import {
   Share2,
   Play,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
@@ -302,12 +302,15 @@ export function AdminPageClient() {
     setDeletingRange(null)
     setDeleteConfirmText("")
     _pinnedAssignments.delete(rangeID)
-    // Delete the range from Ludus
+    const statusRes = await ludusApi.getRangeStatus(rangeID)
+    const ipsForHosts =
+      statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
     const res = await ludusApi.deleteRange(rangeID)
     if (res.error) {
       toast({ variant: "destructive", title: "Delete failed", description: res.error })
       return
     }
+    if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
     // Remove ownership record from SQLite + bust server cache
     await fetch("/api/admin/ranges-data", {
       method: "DELETE",

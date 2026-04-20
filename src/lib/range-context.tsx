@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { RangeAccessEntry } from "./types"
 import { queryKeys } from "./query-keys"
 import { STALE } from "./query-client"
+import { extractArray } from "./utils"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -28,20 +29,11 @@ const RangeContext = createContext<RangeContextValue>({
 
 const STORAGE_KEY = "lux_selected_range"
 
-function extractArray(data: unknown): RangeAccessEntry[] {
-  if (Array.isArray(data)) return data
-  if (data && typeof data === "object" && "result" in data) {
-    const inner = (data as { result: unknown }).result
-    if (Array.isArray(inner)) return inner
-  }
-  return []
-}
-
 async function fetchAccessibleRanges(impersonationHeaders: Record<string, string> = {}): Promise<RangeAccessEntry[]> {
   const res = await fetch("/api/proxy/ranges/accessible", { headers: impersonationHeaders })
   if (!res.ok) return []
   const data = await res.json()
-  const list = extractArray(data)
+  const list = extractArray<RangeAccessEntry>(data)
   return [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))
 }
 

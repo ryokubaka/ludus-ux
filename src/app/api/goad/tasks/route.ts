@@ -29,6 +29,8 @@ export async function GET(request: NextRequest) {
     endedAt: t.endedAt,
     exitCode: t.exitCode,
     lineCount: t.lineCount,
+    phase: t.phase ?? null,
+    hasNetworkRules: t.hasNetworkRules ?? false,
   }))
   return NextResponse.json({ tasks })
 }

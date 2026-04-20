@@ -68,11 +68,6 @@ export function getDb(): BetterSqlite3.Database {
   return _db
 }
 
-/** Absolute path to the database file. */
-export function dbPath(): string {
-  return DB_PATH
-}
-
 /**
  * Absolute path to the log file for a given task.
  * Organized as: tasks/{instanceId}/{taskId}.log
@@ -220,6 +215,40 @@ function runMigrations(db: BetterSqlite3.Database): void {
           range_id    TEXT    NOT NULL,
           updated_at  INTEGER NOT NULL
         );
+      `)
+    },
+
+    // v7 — Local audit log for Ludus VM destroys and GOAD extension removals (LUX UI).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS vm_operation_log (
+          id              TEXT    PRIMARY KEY,
+          ts              INTEGER NOT NULL,
+          username        TEXT    NOT NULL,
+          kind            TEXT    NOT NULL,
+          range_id        TEXT,
+          instance_id     TEXT,
+          vm_id           INTEGER,
+          vm_name         TEXT,
+          extension_name  TEXT,
+          status          TEXT    NOT NULL,
+          detail          TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_vm_op_ts ON vm_operation_log(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_vm_op_range ON vm_operation_log(range_id);
+        CREATE INDEX IF NOT EXISTS idx_vm_op_instance ON vm_operation_log(instance_id);
+      `)
+    },
+
+    // v8 — Deploy-queue phase tracking on GOAD tasks.
+    // Replaces sessionStorage so deploy state is visible to all browsers and
+    // impersonation sessions (same precedent as v4 pending_allow_ops).
+    // phase: NULL = idle, "network-deploy" = post-GOAD firewall redeploy running
+    // has_network_rules: 1 = this task involved custom firewall rules
+    (db) => {
+      db.exec(`
+        ALTER TABLE goad_tasks ADD COLUMN phase TEXT;
+        ALTER TABLE goad_tasks ADD COLUMN has_network_rules INTEGER NOT NULL DEFAULT 0;
       `)
     },
   ]

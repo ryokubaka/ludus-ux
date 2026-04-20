@@ -26,6 +26,7 @@ import { SWRCache } from "@/lib/server-cache"
 import { getAdminDataCached } from "@/lib/admin-data"
 import { queryKeys } from "@/lib/query-keys"
 import type { RangeAccessEntry, RangeObject } from "@/lib/types"
+import { extractArray } from "@/lib/utils"
 
 // ── Module-level SWR caches (persist across requests in the same process) ──
 
@@ -37,17 +38,6 @@ const versionCache = new SWRCache<unknown>(5 * 60_000)
 
 /** Default range status per effective API key (15 s TTL — matches client poll) */
 const rangeStatusCache = new SWRCache<RangeObject | null>(15_000)
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function extractArray<T>(data: unknown): T[] {
-  if (Array.isArray(data)) return data as T[]
-  if (data && typeof data === "object" && "result" in data) {
-    const r = (data as { result: unknown }).result
-    if (Array.isArray(r)) return r as T[]
-  }
-  return []
-}
 
 // ── Prefetch functions ───────────────────────────────────────────────────────
 

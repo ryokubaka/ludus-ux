@@ -262,28 +262,28 @@ function RuleRow({
             <div className="space-y-1">
               <Label className="text-xs">
                 Source IP last octet{" "}
-                <span className="text-muted-foreground font-normal">(optional)</span>
+                <span className="text-muted-foreground font-normal">(optional; empty = all)</span>
               </Label>
               <Input
                 value={rule.ip_last_octet_src ?? ""}
                 onChange={(e) =>
                   update({ ip_last_octet_src: e.target.value || undefined })
                 }
-                placeholder="21 or 21-25"
+                placeholder="Single or range; e.g., 21 or 21-25"
                 className="h-8 text-sm font-mono text-center"
               />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">
                 Destination IP last octet{" "}
-                <span className="text-muted-foreground font-normal">(optional)</span>
+                <span className="text-muted-foreground font-normal">(optional; empty = all)</span>
               </Label>
               <Input
                 value={rule.ip_last_octet_dst ?? ""}
                 onChange={(e) =>
                   update({ ip_last_octet_dst: e.target.value || undefined })
                 }
-                placeholder="31 or 31-35"
+                placeholder="Single or range; e.g., 31 or 31-35"
                 className="h-8 text-sm font-mono text-center"
               />
             </div>

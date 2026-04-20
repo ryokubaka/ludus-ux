@@ -82,7 +82,7 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
 
 export default function RangeConfigPage() {
   const { toast } = useToast()
-  const { selectedRangeId } = useRange()
+  const { selectedRangeId, ranges, loading: rangesLoading } = useRange()
   const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const [config, setConfig] = useState("")
@@ -109,6 +109,13 @@ export default function RangeConfigPage() {
   // Range config — cached, reloads when selectedRangeId changes.
   // Config rarely changes externally, so use a long stale time to avoid
   // spurious background refetches overwriting the user's unsaved edits.
+  //
+  // Gate on `selectedRangeId`: without it the proxy hits Ludus `/range/config`
+  // (no rangeID query), which falls back to the caller's default range and
+  // returns 404 if the default range has been deleted (common after GOAD
+  // range reassignment). That 404 is both noisy in devtools and misleading
+  // since the user actually has other ranges — the selector just hasn't
+  // hydrated yet. Empty-state UI below handles `ranges.length === 0`.
   const { data: cachedConfig, isLoading: loading } = useQuery({
     queryKey: queryKeys.rangeConfig(selectedRangeId),
     queryFn: async () => {
@@ -119,6 +126,7 @@ export default function RangeConfigPage() {
         ? raw
         : (raw as { result?: string })?.result || JSON.stringify(raw, null, 2)
     },
+    enabled: !!selectedRangeId,
     staleTime: STALE.long,
     placeholderData: keepPreviousData,
   })
@@ -137,14 +145,17 @@ export default function RangeConfigPage() {
   }, [cachedConfig, selectedRangeId])
 
   // On mount: check if a deployment is already running so navigating
-  // away and back doesn't lose the in-progress status.
+  // away and back doesn't lose the in-progress status. Skip entirely when
+  // no range is selected yet — same 404 rationale as the rangeConfig query
+  // above.
   useEffect(() => {
+    if (!selectedRangeId) return
     const checkDeployStatus = async () => {
-      const rangeResult = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
+      const rangeResult = await ludusApi.getRangeStatus(selectedRangeId)
       if (rangeResult.data?.rangeState === "DEPLOYING") {
         setDeploying(true)
         setShowLogs(true)
-        startStreaming(selectedRangeId ?? undefined)
+        startStreaming(selectedRangeId)
       }
     }
     checkDeployStatus()
@@ -160,8 +171,12 @@ export default function RangeConfigPage() {
       setOriginalConfig(config)
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
-      toast({ title: "Config saved" })
-      // Update the cached config so navigating away and back shows the saved version
+      const msg = result.data?.result ?? ""
+      if (/warning/i.test(msg)) {
+        toast({ variant: "destructive", title: "Config saved with warning", description: msg })
+      } else {
+        toast({ title: "Config saved" })
+      }
       queryClient.setQueryData(queryKeys.rangeConfig(selectedRangeId), config)
     }
     setSaving(false)
@@ -212,6 +227,43 @@ export default function RangeConfigPage() {
   }
 
   const isDirty = config !== originalConfig
+
+  // No range available yet (either still hydrating or the user actually has
+  // zero ranges). Bail out before rendering the editor rather than firing
+  // `/range/config` against no rangeID (→ 404 on the default range lookup).
+  if (!selectedRangeId) {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardContent className="p-8 flex flex-col items-center justify-center gap-3 text-center">
+            {rangesLoading ? (
+              <>
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Loading ranges…</p>
+              </>
+            ) : ranges.length === 0 ? (
+              <>
+                <AlertTriangle className="h-6 w-6 text-yellow-400" />
+                <div>
+                  <p className="text-sm font-medium text-foreground">No ranges available</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Deploy a new range first, or ask an admin to share one with you.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <Info className="h-6 w-6 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  Select a range from the sidebar to edit its configuration.
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">

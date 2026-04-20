@@ -6,7 +6,16 @@ import { loader } from "@monaco-editor/react"
 // Serve Monaco from the local /monaco-vs path (copied from node_modules at build time)
 // instead of loading from cdn.jsdelivr.net, so the editor works in air-gapped / restricted
 // network environments and doesn't suffer from CDN latency on first load.
-loader.config({ paths: { vs: "/monaco-vs" } })
+//
+// `'vs/nls'.availableLanguages = { '*': '' }` forces Monaco's worker to use
+// its built-in English strings instead of trying to fetch `vs/nls.messages.*`
+// files that we don't ship in public/monaco-vs. Without this you get a benign
+// but noisy "Failed trying to load default language strings — Not Found"
+// warning from workerMain.js on every Range Config / yaml editor load.
+loader.config({
+  paths: { vs: "/monaco-vs" },
+  "vs/nls": { availableLanguages: { "*": "" } },
+})
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
   ssr: false,

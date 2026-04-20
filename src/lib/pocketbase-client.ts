@@ -466,6 +466,68 @@ export async function setPbRangeOwner(
 }
 
 /**
+ * Forces a Ludus range's `rangeState` field directly in PocketBase.
+ *
+ * Last-resort reconciliation path for the unified abort flow: when Ludus's
+ * `/range/abort` returned 2xx (or 5xx) but the deploy goroutine already exited
+ * without flipping `rangeState` away from `DEPLOYING`/`WAITING`, LUX used to
+ * leave the user to edit the record by hand in the PB admin UI. This helper
+ * lets `/api/range/abort` do that write on their behalf.
+ *
+ * Returns an error string on failure, or null on success.
+ */
+export async function setPbRangeState(
+  rangeId: string,
+  state: RangeState,
+): Promise<string | null> {
+  try {
+    const token = await getToken()
+    if (!token) return "PocketBase authentication failed — check LUDUS_ROOT_API_KEY"
+
+    const settings = getSettings()
+    const base = settings.ludusUrl.replace(/\/$/, "")
+
+    // Find the PocketBase record ID for this Ludus rangeID
+    const searchUrl = new URL(`${base}/api/collections/ranges/records`)
+    searchUrl.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId)}"`)
+    searchUrl.searchParams.set("perPage", "1")
+
+    const searchRes = await fetch(searchUrl.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+    if (!searchRes.ok) {
+      if (searchRes.status === 401) bustPbTokenCache()
+      return `PocketBase range lookup failed: HTTP ${searchRes.status}`
+    }
+
+    const searchBody = await searchRes.json() as { items?: Array<{ id: string }> }
+    const record = searchBody.items?.[0]
+    if (!record?.id) return `Range "${rangeId}" not found in PocketBase`
+
+    const patchRes = await fetch(`${base}/api/collections/ranges/records/${record.id}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ rangeState: state }),
+      cache: "no-store",
+    })
+
+    if (!patchRes.ok) {
+      if (patchRes.status === 401) bustPbTokenCache()
+      const errBody = await patchRes.json().catch(() => ({})) as { message?: string }
+      return `PocketBase PATCH failed: HTTP ${patchRes.status} ${errBody.message ?? ""}`
+    }
+
+    return null // success
+  } catch (err) {
+    return `PocketBase error: ${(err as Error).message}`
+  }
+}
+
+/**
  * Fetches all ranges + users from PocketBase in two parallel requests.
  *
  * Returns null when:

@@ -767,19 +767,29 @@ paths:
   /api/logo:
     get:
       tags: [Logo]
-      summary: Get custom logo
-      description: Serves the uploaded custom logo image. No authentication required.
+      summary: Get logo image
+      description: Serves the uploaded custom logo if present; otherwise the bundled default image from `public/default-logo.jpeg`.
       operationId: getLogo
       responses:
         '200':
-          description: Logo image file.
+          description: Logo image bytes (custom or default).
           content:
             image/*:
               schema:
                 type: string
                 format: binary
         '404':
-          description: No custom logo has been set.
+          description: Neither a custom logo nor the bundled default file is available.
+    head:
+      tags: [Logo]
+      summary: Probe for custom logo
+      description: Returns 200 if a custom logo file exists on disk, 204 if only the default would be served by GET.
+      operationId: headLogo
+      responses:
+        '200':
+          description: Custom logo is set.
+        '204':
+          description: No custom logo; GET would serve the bundled default.
     post:
       tags: [Logo]
       summary: Upload custom logo

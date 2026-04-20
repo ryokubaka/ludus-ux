@@ -318,76 +318,100 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
 
 // ── useGoadStream ─────────────────────────────────────────────────────────────
 
+export type UseGoadStreamOptions = {
+  /** Same headers as other LUX API calls (e.g. impersonation) — required for GET /tasks/:id + resume SSE. */
+  getExtraHeaders?: () => Record<string, string>
+}
+
 /**
  * Hook for streaming GOAD command output via SSE.
- * Persists the active task ID in sessionStorage (keyed by storageKey) so that
- * switching pages and coming back can resume from the server-side task store.
+ * Task IDs are stored server-side (goad_tasks SQLite table). The page-level
+ * server-fallback effect in goad/[id]/page.tsx queries /api/goad/tasks on
+ * mount to auto-resume any in-flight task, making GOAD logs visible across
+ * browsers, incognito sessions, and admin impersonation without sessionStorage.
  */
-export function useGoadStream(storageKey?: string) {
+export function useGoadStream(options?: UseGoadStreamOptions) {
   const [lines, setLines] = useState<string[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const initializedRef = useRef(false)
-
-  // On mount: check sessionStorage for a persisted task and resume if present
-  useEffect(() => {
-    if (!storageKey || initializedRef.current) return
-    initializedRef.current = true
-    const savedTaskId = sessionStorage.getItem(storageKey)
-    if (savedTaskId) {
-      // Check if the task still exists and whether it's still running
-      fetch(`/api/goad/tasks/${savedTaskId}`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((task) => {
-          if (!task) return
-          // Always show the historical output; if still running, stream it live
-          resumeTask(savedTaskId)
-        })
-        .catch(() => {})
-    }
-  }, [storageKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  const getExtraHeadersRef = useRef(options?.getExtraHeaders)
+  getExtraHeadersRef.current = options?.getExtraHeaders
 
   const connectToStream = useCallback(async (
     url: string,
     fetchOptions: RequestInit,
     captureTaskId: boolean
-  ) => {
+  ): Promise<number | null> => {
     setLines([])
     setExitCode(null)
     setIsRunning(true)
+    let streamExit: number | null = null
+
+    const extra = getExtraHeadersRef.current?.() ?? {}
+    const merged = new Headers()
+    for (const [k, v] of Object.entries(extra)) {
+      if (v) merged.set(k, v)
+    }
+    if (fetchOptions.headers) {
+      const inner = new Headers(fetchOptions.headers as HeadersInit)
+      inner.forEach((v, k) => merged.set(k, v))
+    }
 
     try {
-      const response = await fetch(url, fetchOptions)
+      const response = await fetch(url, {
+        ...fetchOptions,
+        headers: merged,
+        credentials: "include",
+      })
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`)
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      /** Accumulate bytes until SSE double-newline so chunk splits never drop `data:` lines. */
+      let sseCarry = ""
+
+      const dispatchPayload = (line: string) => {
+        // Capture task ID emitted by the execute route
+        if (captureTaskId && line.startsWith("[TASKID] ")) {
+          const tid = line.slice(9).trim()
+          setTaskId(tid)
+          return // hide [TASKID] lines from display
+        }
+        if (line.startsWith("[EXIT] ")) {
+          const code = parseInt(line.match(/code (\d+)/)?.[1] || "0", 10)
+          streamExit = Number.isNaN(code) ? null : code
+          setExitCode(streamExit)
+        }
+        setLines((prev) => [...prev, line])
+      }
 
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
-
-        const chunk = decoder.decode(value, { stream: true })
-        const newLines = chunk
-          .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6))
-
-        for (const line of newLines) {
-          // Capture task ID emitted by the execute route
-          if (captureTaskId && line.startsWith("[TASKID] ")) {
-            const tid = line.slice(9).trim()
-            setTaskId(tid)
-            if (storageKey) sessionStorage.setItem(storageKey, tid)
-            continue // hide [TASKID] lines from display
+        if (done) {
+          sseCarry += decoder.decode()
+          if (sseCarry.includes("\n\n")) {
+            const tailBlocks = sseCarry.split("\n\n")
+            sseCarry = tailBlocks.pop() ?? ""
+            for (const block of tailBlocks) {
+              for (const raw of block.split("\n")) {
+                if (raw.startsWith("data: ")) dispatchPayload(raw.slice(6))
+                else if (raw.startsWith("data:")) dispatchPayload(raw.slice(5))
+              }
+            }
           }
-          if (line.startsWith("[EXIT] ")) {
-            const code = parseInt(line.match(/code (\d+)/)?.[1] || "0")
-            setExitCode(code)
+          break
+        }
+
+        sseCarry += decoder.decode(value, { stream: true })
+        const blocks = sseCarry.split("\n\n")
+        sseCarry = blocks.pop() ?? ""
+        for (const block of blocks) {
+          for (const raw of block.split("\n")) {
+            if (raw.startsWith("data: ")) dispatchPayload(raw.slice(6))
+            else if (raw.startsWith("data:")) dispatchPayload(raw.slice(5))
           }
-          setLines((prev) => [...prev, line])
         }
       }
     } catch (err) {
@@ -397,7 +421,21 @@ export function useGoadStream(storageKey?: string) {
     } finally {
       setIsRunning(false)
     }
-  }, [storageKey])
+    return streamExit
+  }, [])
+
+  const resumeTask = useCallback(async (tid: string) => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    setTaskId(tid)
+
+    return connectToStream(
+      `/api/goad/tasks/${tid}/stream`,
+      { signal: controller.signal },
+      false
+    )
+  }, [connectToStream])
 
   const run = useCallback(async (
     args: string,
@@ -412,7 +450,7 @@ export function useGoadStream(storageKey?: string) {
     abortRef.current = controller
     setTaskId(null)
 
-    await connectToStream(
+    return connectToStream(
       "/api/goad/execute",
       {
         method: "POST",
@@ -424,19 +462,6 @@ export function useGoadStream(storageKey?: string) {
     )
   }, [connectToStream])
 
-  const resumeTask = useCallback(async (tid: string) => {
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    setTaskId(tid)
-
-    await connectToStream(
-      `/api/goad/tasks/${tid}/stream`,
-      { signal: controller.signal },
-      false
-    )
-  }, [connectToStream])
-
   const stop = useCallback(async () => {
     // Capture current taskId before any state updates
     const tid = taskId
@@ -445,7 +470,12 @@ export function useGoadStream(storageKey?: string) {
       // the original SSE connection (execute route) has already disconnected,
       // e.g. after sign-out/back-in + resume.
       try {
-        await fetch(`/api/goad/tasks/${tid}/stop`, { method: "POST" })
+        const extra = getExtraHeadersRef.current?.() ?? {}
+        await fetch(`/api/goad/tasks/${tid}/stop`, {
+          method: "POST",
+          credentials: "include",
+          headers: { ...extra },
+        })
       } catch {
         // Best-effort; continue to tear down the client side regardless
       }
@@ -460,8 +490,7 @@ export function useGoadStream(storageKey?: string) {
     setExitCode(null)
     setTaskId(null)
     setIsRunning(false)
-    if (storageKey) sessionStorage.removeItem(storageKey)
-  }, [storageKey])
+  }, [])
 
   return { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear }
 }

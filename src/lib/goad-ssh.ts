@@ -14,6 +14,66 @@ import type { GoadInstance, GoadCatalog } from "./types"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
 
+// ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
+//
+// REAL_LUDUS_PATH is replaced by sed at deploy time with the actual binary path.
+// Two responsibilities:
+//  1. Inject --range $LUDUS_RANGE_ID into every ludus call (range scoping).
+//  2. For `range config set -f <file>`: re-inject the user's network: block from
+//     a sidecar JSON written by sync-network, so GOAD's template regeneration
+//     (which wipes the block) doesn't cause iptables to be flushed during deploy.
+const LUDUS_WRAPPER_SH = [
+  '#!/bin/sh',
+  '_R="REAL_LUDUS_PATH"',
+  '',
+  '# Firewall preservation: detect `range config set` anywhere in argv (GOAD',
+  '# prepends `--user <id>` when impersonating — see goad/command/linux.py).',
+  '_has_rcs=0',
+  '_p2=""',
+  '_p1=""',
+  'for _a in "$@"; do',
+  '  if [ "$_p2" = "range" ] && [ "$_p1" = "config" ] && [ "$_a" = "set" ]; then',
+  '    _has_rcs=1',
+  '    break',
+  '  fi',
+  '  _p2="$_p1"',
+  '  _p1="$_a"',
+  'done',
+  '',
+  'if [ "$_has_rcs" -eq 1 ]; then',
+  '  _CF=""',
+  '  _P=""',
+  '  for _a in "$@"; do',
+  '    case "$_P" in -f|-c) _CF="$_a"; break;; esac',
+  '    _P="$_a"',
+  '  done',
+  '  if [ -n "$_CF" ]; then',
+  '    _SD="$(dirname "$_CF")/.lux-network-snapshot.json"',
+  '    if [ -f "$_SD" ]; then',
+  "      _LUX_ERR=$(mktemp 2>/dev/null || echo /tmp/lux-net-err.$$)",
+  // python3 -c: double-quoted strings only inside single-quoted -c body.
+  "      if ! python3 -c '",
+  'import json,yaml,sys',
+  'with open(sys.argv[2]) as f: n=json.load(f)',
+  'with open(sys.argv[1]) as f: d=yaml.safe_load(f) or {}',
+  'if isinstance(d,dict):',
+  ' d["network"]=n',
+  ' with open(sys.argv[1],"w") as f: yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False)',
+  "' \"$_CF\" \"$_SD\" 2>\"$_LUX_ERR\"; then",
+  '        echo "[LUX] network snapshot merge failed (config + .lux-network-snapshot.json). First lines of stderr:" >&2',
+  '        head -n 8 "$_LUX_ERR" >&2',
+  '      fi',
+  '      rm -f "$_LUX_ERR" 2>/dev/null',
+  '    fi',
+  '  fi',
+  'fi',
+  '',
+  '# Range scoping: inject --range unless already supplied.',
+  'for _a in "$@"; do case "$_a" in --range|-r) exec "$_R" "$@";; esac; done',
+  'exec "$_R" --range "$LUDUS_RANGE_ID" "$@"',
+].join('\n')
+const LUDUS_WRAPPER_B64 = Buffer.from(LUDUS_WRAPPER_SH).toString("base64")
+
 /**
  * Strip ANSI/VT100 escape sequences from terminal output so raw text
  * is stored in the task store and displayed cleanly in the web UI.
@@ -232,22 +292,27 @@ export async function streamGoadCommand(
   // `env = os.environ.copy()` before every subprocess.run(), so the modified PATH
   // (and LUDUS_RANGE_ID) propagate into every `ludus` call inside GOAD.
   //
-  // The wrapper intercepts `ludus …` calls and rewrites them to
-  // `ludus --range $LUDUS_RANGE_ID …` unless --range/-r was already supplied.
-  // $LUDUS_RANGE_ID is evaluated at wrapper-execution time (from the inherited
-  // env), so the wrapper file itself is range-agnostic and safe to reuse.
-  // Written as a single inline string so that `then` is never followed by `;`
-  // (bash treats `then;` as a syntax error — only `fi;`, `done;`, etc. are valid).
-  // The two nested `if` guards are spelled out in one expression with each
-  // `then` followed directly by the next command (space-separated, no `;`).
+  // The wrapper does two things:
+  //
+  // 1. **Range scoping** — rewrites `ludus …` to `ludus --range $LUDUS_RANGE_ID …`
+  //    unless --range/-r was already supplied.
+  //
+  // 2. **Firewall preservation** — when GOAD calls `ludus range config set -f
+  //    <file>`, the wrapper checks for a `.lux-network-snapshot.json` sidecar
+  //    (written by sync-network before the GOAD session) and injects the user's
+  //    `network:` block into the config file *right before* pushing it to Ludus.
+  //    This closes the window where GOAD's template regeneration wipes firewall
+  //    rules: the deploy runs against a config that already contains them, so
+  //    iptables on the router is never flushed.
+  //
+  // The wrapper is base64-encoded and decoded on the remote to avoid shell
+  // quoting nightmares (nested single/double quotes, Python inside sh, etc.).
   const ludusWrapSetup = safeRangeId
     ? `_LUDUS_REAL=$(command -v ludus 2>/dev/null || true);` +
       ` if [ -n "$_LUDUS_REAL" ]; then` +
       ` _LUDUS_WRAP=$(mktemp -d 2>/dev/null || true);` +
       ` if [ -n "$_LUDUS_WRAP" ]; then` +
-      // printf %s embeds the real binary path at wrapper-creation time.
-      // $LUDUS_RANGE_ID is evaluated at wrapper-execution time from the env.
-      ` printf '#!/bin/sh\\n_R="%s"\\nfor _a in "$@"; do case "$_a" in --range|-r) exec "$_R" "$@";; esac; done\\nexec "$_R" --range "$LUDUS_RANGE_ID" "$@"\\n' "$_LUDUS_REAL" > "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
+      ` echo '${LUDUS_WRAPPER_B64}' | base64 -d | sed "s#REAL_LUDUS_PATH#$_LUDUS_REAL#" > "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
       ` chmod +x "$_LUDUS_WRAP/ludus" 2>/dev/null &&` +
       ` export PATH="$_LUDUS_WRAP:$PATH";` +
       ` fi; fi`
@@ -736,10 +801,15 @@ def discover(goad_path):
                     with open(cfg_file) as f:
                         cfg = json.load(f)
                     required_templates = get_required_templates(ext_dir)
+                    machines = cfg.get("machines") or []
+                    if not machines and isinstance(cfg.get("lab"), dict):
+                        hosts = cfg["lab"].get("hosts") or {}
+                        if isinstance(hosts, dict):
+                            machines = list(hosts.keys())
                     result["extensions"].append({
                         "name": cfg.get("name", ext_name),
                         "description": cfg.get("description", ""),
-                        "machines": cfg.get("machines", []),
+                        "machines": machines,
                         "compatibility": cfg.get("compatibility", ["*"]),
                         "impact": cfg.get("impact", ""),
                         "requiredTemplates": required_templates,

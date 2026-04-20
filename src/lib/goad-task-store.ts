@@ -42,6 +42,10 @@ export interface GoadTask {
   startedAt: number
   endedAt?: number
   exitCode?: number
+  /** Post-GOAD processing phase: "network-deploy" while firewall rules are redeploying, null otherwise. */
+  phase?: "network-deploy" | null
+  /** True when this task involved custom firewall rules requiring a network-tag redeploy. */
+  hasNetworkRules?: boolean
 }
 
 type LineSubscriber = (line: string) => void
@@ -76,6 +80,8 @@ function hydrateFromDb(): void {
       ended_at: number | null
       exit_code: number | null
       line_count: number
+      phase: string | null
+      has_network_rules: number
     }
     // Any task still marked "running" in the DB is stale — the process died with
     // the container. Mark them as "error" immediately so the UI doesn't spin forever.
@@ -87,7 +93,7 @@ function hydrateFromDb(): void {
 
     const rows = db
       .prepare(
-        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count
+        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count, phase, has_network_rules
          FROM goad_tasks
          ORDER BY started_at ASC
          LIMIT ?`
@@ -106,6 +112,8 @@ function hydrateFromDb(): void {
         exitCode: row.exit_code ?? undefined,
         lines: [],
         lineCount: row.line_count,
+        phase: (row.phase as "network-deploy" | null) ?? null,
+        hasNetworkRules: row.has_network_rules === 1,
       }
       taskMap.set(row.id, {
         task,
@@ -197,22 +205,32 @@ hydrateFromDb()
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function resolveLogFile(taskId: string, instanceId?: string | null): string {
-  const newPath = taskLogPath(taskId, instanceId)
-  if (fs.existsSync(newPath)) return newPath
-  // Fallback: pre-subdirectory layout stored files flat in tasks/
-  return legacyTaskLogPath(taskId)
+/** Distinct on-disk locations a task log may live (migration + instance linking). */
+function logFileCandidates(taskId: string, instanceId?: string | null): string[] {
+  return [
+    ...new Set([
+      legacyTaskLogPath(taskId),
+      taskLogPath(taskId, null),
+      taskLogPath(taskId, instanceId),
+    ]),
+  ]
 }
 
 function loadLinesFromFile(entry: TaskEntry): void {
   if (entry.linesLoaded) return
   try {
-    const logFile = resolveLogFile(entry.task.id, entry.task.instanceId)
-    if (fs.existsSync(logFile)) {
+    const merged: string[] = []
+    // Oldest layout first so a task that moved from flat → _global → per-instance
+    // replays in chronological order when multiple files exist.
+    for (const logFile of logFileCandidates(entry.task.id, entry.task.instanceId)) {
+      if (!fs.existsSync(logFile)) continue
       const content = fs.readFileSync(logFile, "utf8")
-      entry.task.lines = content.split("\n").filter((l) => l.length > 0)
-      entry.task.lineCount = entry.task.lines.length
+      for (const line of content.split("\n")) {
+        if (line.length > 0) merged.push(line)
+      }
     }
+    entry.task.lines = merged
+    entry.task.lineCount = merged.length
   } catch (err) {
     console.error("[task-store] loadLines failed:", err)
   }
@@ -226,12 +244,9 @@ function evictOldestIfNeeded(): void {
     taskMap.delete(oldest)
     try {
       getDb().prepare("DELETE FROM goad_tasks WHERE id = ?").run(oldest)
-      // Delete new per-instance path
-      const logFile = taskLogPath(oldest, entry?.task.instanceId)
-      if (fs.existsSync(logFile)) fs.unlinkSync(logFile)
-      // Also delete legacy flat path if it exists (backward compat)
-      const legacyFile = legacyTaskLogPath(oldest)
-      if (fs.existsSync(legacyFile)) fs.unlinkSync(legacyFile)
+      for (const p of logFileCandidates(oldest, entry?.task.instanceId)) {
+        if (fs.existsSync(p)) fs.unlinkSync(p)
+      }
     } catch {}
   }
 }
@@ -376,6 +391,36 @@ export function updateTaskInstance(taskId: string, instanceId: string): boolean 
   return true
 }
 
+/**
+ * Update the post-GOAD processing phase on a task.
+ * "network-deploy" = firewall rules are being redeployed; null = idle/done.
+ */
+export function updateTaskPhase(taskId: string, phase: "network-deploy" | null): void {
+  const entry = taskMap.get(taskId)
+  if (!entry) return
+  entry.task.phase = phase
+  try {
+    getDb().prepare("UPDATE goad_tasks SET phase = ? WHERE id = ?").run(phase ?? null, taskId)
+  } catch (err) {
+    console.error("[task-store] updateTaskPhase DB write failed:", err)
+  }
+}
+
+/**
+ * Mark whether this task involved custom firewall rules requiring a network-tag redeploy.
+ * Used by the dashboard to show a "Firewall rules redeploying" banner.
+ */
+export function setTaskHasNetworkRules(taskId: string, hasRules: boolean): void {
+  const entry = taskMap.get(taskId)
+  if (!entry) return
+  entry.task.hasNetworkRules = hasRules
+  try {
+    getDb().prepare("UPDATE goad_tasks SET has_network_rules = ? WHERE id = ?").run(hasRules ? 1 : 0, taskId)
+  } catch (err) {
+    console.error("[task-store] setTaskHasNetworkRules DB write failed:", err)
+  }
+}
+
 /** Returns the most recently-started task for a given instanceId, or null. */
 export function getLatestTaskForInstance(instanceId: string): GoadTask | null {
   for (let i = taskOrder.length - 1; i >= 0; i--) {
@@ -383,6 +428,22 @@ export function getLatestTaskForInstance(instanceId: string): GoadTask | null {
     if (task?.instanceId === instanceId) return task
   }
   return null
+}
+
+/**
+ * Returns every task currently in `running` state for a given instanceId
+ * (newest-first). Used by the unified abort route to kill any in-flight
+ * GOAD SSH/ansible process before aborting the Ludus range.
+ */
+export function getRunningTasksForInstance(instanceId: string): GoadTask[] {
+  const out: GoadTask[] = []
+  for (let i = taskOrder.length - 1; i >= 0; i--) {
+    const task = taskMap.get(taskOrder[i])?.task
+    if (task && task.instanceId === instanceId && task.status === "running") {
+      out.push(task)
+    }
+  }
+  return out
 }
 
 // ── Subscription (for SSE replay + live stream) ───────────────────────────────

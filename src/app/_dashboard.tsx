@@ -376,6 +376,13 @@ export function DashboardPageClient() {
       setDeploying(true)
       setShowLogs(true)
       if (!streamIsForThisRange) startStreaming(selectedRangeId ?? undefined)
+    } else if (!deployingLike) {
+      // Ludus GET confirms a terminal state (ERROR / SUCCESS / ABORTED / etc.).
+      // Clear deploying unconditionally — this covers the case where the SSE
+      // stream ended via [ERROR] line or onerror without sending a [DONE]
+      // message, leaving streamRangeState null and the stream-completion effect
+      // unable to fire setDeploying(false).
+      setDeploying(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRangeId, rangeCtxLoading, rangeDataId, rangeStateForStream])
@@ -404,7 +411,12 @@ export function DashboardPageClient() {
 
   // ── Stream completion → refresh data and hide logs ─────────────────────────
   useEffect(() => {
-    if (!isStreaming && streamRangeState && streamRangeState !== "DEPLOYING" && streamRangeState !== "WAITING") {
+    if (isStreaming) return
+    // streamRangeState is set when the SSE server sends [DONE] with the final
+    // state. If the stream ended via [ERROR] line or a network onerror it stays
+    // null — fall back to what Ludus's GET already told us.
+    const finalState = streamRangeState ?? rangeData?.rangeState ?? null
+    if (finalState && finalState !== "DEPLOYING" && finalState !== "WAITING") {
       setDeploying(false)
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })

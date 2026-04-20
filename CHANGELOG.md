@@ -7,6 +7,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 ## [0.9.4] — 2026-04-20
 
 **LUX**
+- [Fix] Range stuck in "Deploying…" / Abort visible after deploy errors — `deploying` flag now cleared when Ludus GET returns a terminal state; stream-completion fallback added for streams that end without a `[DONE]` message
 - [Add] Deploy History and Build History — click any past run to view full output; paginated (5/page)
 - [Add] VM operation audit log — per-VM destroy and extension removal logged on Dashboard and Range Logs
 - [Add] Per-VM destroy action from the Dashboard range card

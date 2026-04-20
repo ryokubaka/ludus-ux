@@ -4,22 +4,37 @@ import { Button } from "@/components/ui/button"
 import { AlertTriangle } from "lucide-react"
 
 interface ConfirmBarProps {
-  pending: { label: string; fn: () => void } | null
+  pending: { label: string; fn: () => void; key?: string } | null
   onConfirm: () => void
   onCancel: () => void
   /** Extra Tailwind classes applied to the outer wrapper */
   className?: string
+  /**
+   * Scope filter. When set, this bar only renders when `pending.key === scope`,
+   * enabling inline per-row confirmations. When omitted, only unscoped
+   * pending actions render (the global / page-level bar).
+   */
+  scope?: string
 }
 
 /**
- * Inline confirmation bar.  Renders nothing when `pending` is null.
+ * Inline confirmation bar.  Renders nothing when `pending` is null or when
+ * the scope doesn't match (see `scope` prop).
  *
  * Drop this just above (or below) any group of action buttons and pass the
  * `pendingAction` / `commitConfirm` / `cancelConfirm` values from
- * `useConfirm()`.
+ * `useConfirm()`. For per-row confirmations pass `scope="<same key you used in confirm()>"`.
  */
-export function ConfirmBar({ pending, onConfirm, onCancel, className }: ConfirmBarProps) {
+export function ConfirmBar({ pending, onConfirm, onCancel, className, scope }: ConfirmBarProps) {
   if (!pending) return null
+  // Scope gating: a scoped bar only shows when the pending action matches;
+  // an unscoped (global) bar only shows when the pending action is unscoped,
+  // so we never render two bars for the same confirmation.
+  if (scope !== undefined) {
+    if (pending.key !== scope) return null
+  } else if (pending.key !== undefined) {
+    return null
+  }
 
   return (
     <div

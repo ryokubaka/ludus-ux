@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, Fragment } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -30,8 +30,11 @@ import {
   Monitor,
   Apple,
   HelpCircle,
+  History,
+  ArrowLeft,
 } from "lucide-react"
 import { ludusApi, del } from "@/lib/api"
+import { LogHistoryList } from "@/components/range/log-history-list"
 import type { TemplateObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
@@ -386,20 +389,53 @@ export default function TemplatesPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const confirmBarRef = useRef<HTMLDivElement>(null)
-
-  // Scroll the confirm bar into view whenever a new confirmation is requested
-  useEffect(() => {
-    if (pendingAction) {
-      confirmBarRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })
-    }
-  }, [pendingAction])
+  // Per-row confirmations (build-single / delete) now render inline next to
+  // the triggering template, so no auto-scroll is needed. Multi-select build
+  // / abort still use the unscoped bar at the top of the page.
 
   const [building, setBuilding] = useState(false)
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set())
   const [logLines, setLogLines] = useState<string[]>([])
   const [showLogs, setShowLogs] = useState(false)
   const [filterBuilt, setFilterBuilt] = useState<"all" | "built" | "unbuilt">("all")
+
+  // ── Build history ─────────────────────────────────────────────────────────
+  const [buildHistoryOpen, setBuildHistoryOpen] = useState(false)
+  const [selectedBuildLogId, setSelectedBuildLogId] = useState<string | null>(null)
+  const [buildHistoryLines, setBuildHistoryLines] = useState<string[]>([])
+  const [buildHistoryDetailLoading, setBuildHistoryDetailLoading] = useState(false)
+  // Ludus's /templates/logs/history currently returns every deploy log the
+  // backend has on disk (template builds AND range deploys share the same
+  // table). This toggle filters to rows whose `template` field matches a
+  // known template name, which is the cheapest reliable discriminator we
+  // have on the client. "Show all" flips back to the raw upstream list.
+  const [buildHistoryShowAll, setBuildHistoryShowAll] = useState(false)
+
+  const { data: buildHistory = [], isLoading: buildHistoryLoading, isFetching: buildHistoryRefreshing } = useQuery({
+    queryKey: queryKeys.templateLogHistory(),
+    queryFn: async () => {
+      const result = await ludusApi.getTemplateLogHistory()
+      return result.data ?? []
+    },
+    staleTime: STALE.short,
+  })
+
+  const handleSelectBuildLog = useCallback(async (logId: string) => {
+    setBuildHistoryOpen(true)
+    setSelectedBuildLogId(logId)
+    setBuildHistoryLines([])
+    setBuildHistoryDetailLoading(true)
+    const result = await ludusApi.getTemplateLogHistoryById(logId)
+    if (result.data?.result) {
+      setBuildHistoryLines(result.data.result.split("\n").filter((l: string) => l.trim()))
+    }
+    setBuildHistoryDetailLoading(false)
+  }, [])
+
+  const clearBuildHistorySelection = useCallback(() => {
+    setSelectedBuildLogId(null)
+    setBuildHistoryLines([])
+  }, [])
 
   // Template list — cached for fast subsequent loads
   const { data: templates = [], isLoading: loading } = useQuery({
@@ -410,6 +446,20 @@ export default function TemplatesPage() {
     },
     staleTime: STALE.long,
   })
+
+  // Names of every template currently known to Ludus. Used to decide which
+  // rows in /templates/logs/history are actual packer builds vs range deploys.
+  const templateNames = useMemo(() => new Set(templates.map((t) => t.name)), [templates])
+
+  const visibleBuildHistory = useMemo(() => {
+    if (buildHistoryShowAll) return buildHistory
+    // If templates haven't loaded yet, fall back to the raw list so we don't
+    // flash "0 entries" while the name set is warming up.
+    if (templateNames.size === 0) return buildHistory
+    return buildHistory.filter((e) => !!e.template && templateNames.has(e.template))
+  }, [buildHistory, templateNames, buildHistoryShowAll])
+
+  const hiddenBuildHistoryCount = buildHistory.length - visibleBuildHistory.length
 
   const fetchLogs = useCallback(async () => {
     const logsResult = await ludusApi.getTemplateLogs()
@@ -466,6 +516,7 @@ export default function TemplatesPage() {
       if (!stillBuilding) {
         setBuilding(false)
         queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory() })
       }
     }, 3000)
 
@@ -501,9 +552,13 @@ export default function TemplatesPage() {
   const handleBuild = (templateNames?: string[]) => {
     const names = templateNames || Array.from(selectedTemplates)
     if (names.length === 0) { toast({ variant: "destructive", title: "No templates selected" }); return }
+    // Single-template builds are scoped so the prompt renders next to the row.
+    // Multi-select builds stay unscoped (page-top bar) — no single row to attach to.
+    const singleRow = templateNames && templateNames.length === 1 ? templateNames[0] : null
     confirm(
       names.length === 1 ? `Build template "${names[0]}"?` : `Build ${names.length} selected templates?`,
-      () => doBuild(templateNames)
+      () => doBuild(templateNames),
+      singleRow ? `tpl-build:${singleRow}` : undefined,
     )
   }
 
@@ -524,7 +579,11 @@ export default function TemplatesPage() {
     }
   }
   const handleDelete = (name: string) =>
-    confirm(`Delete template "${name}"? This cannot be undone.`, () => doDelete(name))
+    confirm(
+      `Delete template "${name}"? This cannot be undone.`,
+      () => doDelete(name),
+      `tpl-delete:${name}`,
+    )
 
   const filtered = templates
     .filter((t) => {
@@ -562,7 +621,7 @@ export default function TemplatesPage() {
       </div>
 
       {/* Actions */}
-      <Card ref={confirmBarRef}>
+      <Card>
         <CardContent className="p-3 space-y-2">
           <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
           <div className="flex flex-wrap gap-2 items-center">
@@ -622,6 +681,105 @@ export default function TemplatesPage() {
         </Card>
       )}
 
+      {/* Build History */}
+      <Card>
+        <button type="button" className="w-full text-left" onClick={() => setBuildHistoryOpen((o) => !o)}>
+          <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+              {buildHistoryOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+              <History className="h-4 w-4 text-primary shrink-0" />
+              Build History
+              {visibleBuildHistory.length > 0 && (
+                <Badge variant="secondary" className="text-xs">{visibleBuildHistory.length}</Badge>
+              )}
+              <span className="text-xs text-muted-foreground font-normal">
+                — {buildHistoryShowAll ? "all Ludus log runs (template + range)" : "past template packer runs"}
+              </span>
+              {!buildHistoryShowAll && hiddenBuildHistoryCount > 0 && (
+                <span className="text-[10px] text-muted-foreground font-normal">
+                  ({hiddenBuildHistoryCount} range deploy{hiddenBuildHistoryCount === 1 ? "" : "s"} hidden)
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+        </button>
+        {buildHistoryOpen && (
+          <CardContent>
+            {!selectedBuildLogId && (
+              <div className="flex items-center justify-end pb-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setBuildHistoryShowAll((v) => !v)}
+                  title={
+                    buildHistoryShowAll
+                      ? "Hide range deploy logs"
+                      : "Ludus stores range deploys and template builds in the same history; toggle to include range deploys"
+                  }
+                >
+                  {buildHistoryShowAll ? "Hide range deploys" : "Show all log runs"}
+                </Button>
+              </div>
+            )}
+            {selectedBuildLogId ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={clearBuildHistorySelection} className="gap-1.5">
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Back to list
+                  </Button>
+                  {buildHistory.find((e) => e.id === selectedBuildLogId)?.template && (
+                    <code className="font-mono text-xs text-primary">
+                      {buildHistory.find((e) => e.id === selectedBuildLogId)!.template}
+                    </code>
+                  )}
+                  {buildHistory.find((e) => e.id === selectedBuildLogId) && (
+                    <Badge
+                      variant={
+                        buildHistory.find((e) => e.id === selectedBuildLogId)!.status.toLowerCase() === "success"
+                          ? "success"
+                          : buildHistory.find((e) => e.id === selectedBuildLogId)!.status.toLowerCase() === "running"
+                            ? "warning"
+                            : "destructive"
+                      }
+                      className="text-xs capitalize"
+                    >
+                      {buildHistory.find((e) => e.id === selectedBuildLogId)!.status}
+                    </Badge>
+                  )}
+                </div>
+                {buildHistoryDetailLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <LogViewer lines={buildHistoryLines} autoScroll={false} maxHeight="400px" />
+                )}
+              </div>
+            ) : (
+              <LogHistoryList
+                entries={visibleBuildHistory}
+                loading={buildHistoryLoading}
+                onSelect={handleSelectBuildLog}
+                selectedId={selectedBuildLogId}
+                onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory() })}
+                refreshing={buildHistoryRefreshing}
+                showTemplate
+                emptyMessage={
+                  buildHistoryShowAll
+                    ? "No build history yet"
+                    : hiddenBuildHistoryCount > 0
+                      ? "No template builds yet — enable 'Show all log runs' to see range deploys"
+                      : "No build history yet"
+                }
+              />
+            )}
+          </CardContent>
+        )}
+      </Card>
+
       {/* Add from Source */}
       <AddFromSource installedNames={installedNames} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates() })} />
 
@@ -673,63 +831,89 @@ export default function TemplatesPage() {
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((template) => (
-                      <tr
-                        key={template.name}
-                        className={cn(
-                          "border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors",
-                          selectedTemplates.has(template.name) && "bg-primary/5"
-                        )}
-                      >
-                        <td className="p-3">
-                          <input
-                            type="checkbox"
-                            className="rounded"
-                            checked={selectedTemplates.has(template.name)}
-                            onChange={() => toggleSelect(template.name)}
-                          />
-                        </td>
-                        <td className="p-3">
-                          <span className="font-mono text-xs">{template.name}</span>
-                        </td>
-                        <td className="p-3">
-                          <OsBadge os={template.os} />
-                        </td>
-                        <td className="p-3">
-                          {template.built ? (
-                            <div className="flex items-center gap-1.5 text-green-400">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              <span className="text-xs">Built</span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1.5 text-muted-foreground">
-                              <XCircle className="h-3.5 w-3.5" />
-                              <span className="text-xs">Not Built</span>
-                            </div>
+                    filtered.map((template) => {
+                      const scopeBuild = `tpl-build:${template.name}`
+                      const scopeDelete = `tpl-delete:${template.name}`
+                      const rowHasPending =
+                        pendingAction?.key === scopeBuild || pendingAction?.key === scopeDelete
+                      return (
+                        <Fragment key={template.name}>
+                          <tr
+                            className={cn(
+                              "border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors",
+                              selectedTemplates.has(template.name) && "bg-primary/5",
+                              rowHasPending && "bg-yellow-500/5",
+                            )}
+                          >
+                            <td className="p-3">
+                              <input
+                                type="checkbox"
+                                className="rounded"
+                                checked={selectedTemplates.has(template.name)}
+                                onChange={() => toggleSelect(template.name)}
+                              />
+                            </td>
+                            <td className="p-3">
+                              <span className="font-mono text-xs">{template.name}</span>
+                            </td>
+                            <td className="p-3">
+                              <OsBadge os={template.os} />
+                            </td>
+                            <td className="p-3">
+                              {template.built ? (
+                                <div className="flex items-center gap-1.5 text-green-400">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  <span className="text-xs">Built</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 text-muted-foreground">
+                                  <XCircle className="h-3.5 w-3.5" />
+                                  <span className="text-xs">Not Built</span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  onClick={() => handleBuild([template.name])}
+                                  disabled={building || (!!pendingAction && !rowHasPending)}
+                                >
+                                  <Play className="h-3 w-3 text-green-400" />
+                                </Button>
+                                <Button
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  onClick={() => handleDelete(template.name)}
+                                  disabled={!!pendingAction && !rowHasPending}
+                                >
+                                  <Trash2 className="h-3 w-3 text-red-400" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                          {rowHasPending && (
+                            <tr className="border-b border-border/50 last:border-0">
+                              <td colSpan={5} className="p-2">
+                                <ConfirmBar
+                                  pending={pendingAction}
+                                  scope={scopeBuild}
+                                  onConfirm={commitConfirm}
+                                  onCancel={cancelConfirm}
+                                />
+                                <ConfirmBar
+                                  pending={pendingAction}
+                                  scope={scopeDelete}
+                                  onConfirm={commitConfirm}
+                                  onCancel={cancelConfirm}
+                                />
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button
-                              size="icon-sm"
-                              variant="ghost"
-                              onClick={() => handleBuild([template.name])}
-                              disabled={building || !!pendingAction}
-                            >
-                              <Play className="h-3 w-3 text-green-400" />
-                            </Button>
-                            <Button
-                              size="icon-sm"
-                              variant="ghost"
-                              onClick={() => handleDelete(template.name)}
-                              disabled={!!pendingAction}
-                            >
-                              <Trash2 className="h-3 w-3 text-red-400" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
+                        </Fragment>
+                      )
+                    })
                   )}
                 </tbody>
               </table>

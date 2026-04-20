@@ -14,9 +14,8 @@ export const queryKeys = {
   /** PB-backed testing/deploy dots for one range (GET /api/range/pb-status?rangeId=) */
   rangePbStatusDot: (rangeId: string) => ["range", "pb-status-dot", rangeId] as const,
   rangeConfig:      (rangeId?: string | null) => ["range", "config", rangeId ?? "default"] as const,
-  rangeEtcHosts:    (rangeId?: string | null) => ["range", "etchosts", rangeId ?? "default"] as const,
-  rangeInventory:   (rangeId?: string | null) => ["range", "inventory", rangeId ?? "default"] as const,
-  rangeLogs:        (rangeId?: string | null) => ["range", "logs", rangeId ?? "default"] as const,
+
+  rangeLogHistory:  (rangeId?: string | null) => ["range", "logs", "history", rangeId ?? "default"] as const,
 
   // ── Range lists ───────────────────────────────────────────────────────────
   accessibleRanges: () => ["ranges", "accessible"] as const,
@@ -27,20 +26,16 @@ export const queryKeys = {
   // ── Templates ─────────────────────────────────────────────────────────────
   templates:        () => ["templates"] as const,
   templateStatus:   () => ["templates", "status"] as const,
-  templateSources:  (source?: string) => ["templates", "sources", source ?? "default"] as const,
+  templateLogHistory: () => ["templates", "logs", "history"] as const,
 
   // ── Users & Auth ──────────────────────────────────────────────────────────
   users:            () => ["users"] as const,
-  session:          () => ["session"] as const,
 
   // ── Ansible ───────────────────────────────────────────────────────────────
   ansible:          () => ["ansible"] as const,
 
   // ── Blueprints ────────────────────────────────────────────────────────────
   blueprints:            ()           => ["blueprints"] as const,
-  blueprintConfig:       (id: string) => ["blueprints", id, "config"] as const,
-  blueprintAccessUsers:  (id: string) => ["blueprints", id, "access", "users"] as const,
-  blueprintAccessGroups: (id: string) => ["blueprints", id, "access", "groups"] as const,
   /** Combined access lists for blueprint cards / share dialog */
   blueprintSharing: (id: string) => ["blueprints", id, "sharing"] as const,
 
@@ -56,19 +51,15 @@ export const queryKeys = {
   adminRangesData:  () => ["admin", "ranges-data"] as const,
   adminSharedVms:   () => ["admin", "shared-vms"] as const,
 
-  // ── Settings ──────────────────────────────────────────────────────────────
-  settings:         () => ["settings"] as const,
+  // ── Version ───────────────────────────────────────────────────────────────
   version:          () => ["version"] as const,
+
+  // ── VM operation audit log (LUX-local SQLite: destroy_vm / remove_extension) ──
+  vmOperationLog:   (rangeId?: string | null) => ["vm-operation-log", rangeId ?? "all"] as const,
 
   // ── GOAD ──────────────────────────────────────────────────────────────────
   goadInstances:    () => ["goad", "instances"] as const,
+  /** SQLite map: Ludus rangeID → GOAD instance workspace id */
+  goadInstanceForRange: (rangeId: string) => ["goad", "by-range", rangeId] as const,
   goadTasks:        () => ["goad", "tasks"] as const,
-  goadCatalog:      () => ["goad", "catalog"] as const,
-  goadInventories:  (instanceId: string) => ["goad", "instances", instanceId, "inventories"] as const,
-
-  // ── Testing ───────────────────────────────────────────────────────────────
-  testingStatus:    (rangeId?: string | null) => ["testing", "status", rangeId ?? "default"] as const,
-  allowedDomains:   (rangeId?: string | null) => ["testing", "allowed-domains", rangeId ?? "default"] as const,
-  pendingAllows:    (rangeId?: string | null) => ["testing", "pending-allows", rangeId ?? "default"] as const,
-  rangeOps:         (rangeId?: string | null) => ["testing", "ops", rangeId ?? "default"] as const,
 }

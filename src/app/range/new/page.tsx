@@ -33,7 +33,7 @@ import {
   FileCode2,
   Shield,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
@@ -510,12 +510,16 @@ export default function NewRangePage() {
       if (mode === "existing" && existingDeployedVMs.length > 0) {
         setDeletingVMs(true)
         setDeployStatus("Destroying existing VMs…")
+        const ipsForHosts = existingDeployedVMs
+          .map((v) => v.ip)
+          .filter((ip): ip is string => typeof ip === "string" && ip.trim() !== "")
         const delRes = await ludusApi.deleteRangeVMs(selectedExistingRange)
         if (delRes.error) {
           toast({ title: "VM deletion failed", description: delRes.error, variant: "destructive" })
           setDeploying(false); setDeletingVMs(false); setDeployStatus("")
           return
         }
+        if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
         const maxWait = 90_000, poll = 4_000, start = Date.now()
         while (Date.now() - start < maxWait) {
           await new Promise((r) => setTimeout(r, poll))

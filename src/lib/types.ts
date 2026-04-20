@@ -87,6 +87,11 @@ export interface UserObject {
   // v2 extras
   email?: string
   defaultRangeID?: string
+  // Per-user quota overrides (enterprise; 0 = unlimited / not set)
+  quotaRAM?: number
+  quotaCPU?: number
+  quotaVMs?: number
+  quotaRanges?: number
   // Legacy aliases
   rangeID?: string
   lastActivity?: string
@@ -236,6 +241,28 @@ export interface LogLine {
 }
 
 export type PowerAction = "on" | "off"
+
+// ── Log History ──────────────────────────────────────────────────────────────
+
+/** Entry from GET /range/logs/history or /templates/logs/history */
+export interface LogHistoryEntry {
+  id: string
+  template: string
+  status: string
+  start: string
+  end: string
+  created: string
+}
+
+/** Detail from GET /range/logs/history/{id} or /templates/logs/history/{id} */
+export interface LogHistoryDetail {
+  id: string
+  status: string
+  start: string
+  end: string
+  created: string
+  result: string
+}
 
 // ── GOAD ──────────────────────────────────────────────────────────────────────
 

@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useRange } from "@/lib/range-context"
 import { useSidebar } from "@/lib/sidebar-context"
+import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 
 interface NavItem {
   href: string
@@ -106,11 +107,9 @@ export function Sidebar() {
   // The API calls below run in the background to verify and refresh the cache.
   const [isAdmin, setIsAdmin] = useState(false)
   const [goadEnabled, setGoadEnabled] = useState(true)
-  const [hasCustomLogo, setHasCustomLogo] = useState(false)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
-
   // On mount: apply cached values instantly, then verify in background
   useEffect(() => {
     const cachedAdmin = sessionStorage.getItem(ADMIN_CACHE_KEY)
@@ -140,12 +139,6 @@ export function Sidebar() {
       })
       .catch(() => {})
   }, [])
-
-  useEffect(() => {
-    fetch("/api/logo", { method: "HEAD" })
-      .then((r) => setHasCustomLogo(r.ok))
-      .catch(() => setHasCustomLogo(false))
-  }, [logoKey])
 
   useEffect(() => {
     const handler = () => setLogoKey((k) => k + 1)
@@ -180,7 +173,7 @@ export function Sidebar() {
               <div className="flex h-10 w-10 items-center justify-center rounded-md overflow-hidden flex-shrink-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={hasCustomLogo ? `/api/logo?v=${logoKey}` : "/default-logo.jpeg"}
+                  src={`/api/logo?v=${logoKey}`}
                   alt="Logo"
                   className="h-full w-full object-contain"
                 />
@@ -377,17 +370,17 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <div className="flex flex-col gap-0.5">
-              <p className="text-xs font-semibold text-muted-foreground">v0.9.3 <span className="font-normal text-muted-foreground/60">beta</span></p>
+            <Link href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
+              <p className="text-xs font-semibold text-muted-foreground">v{APP_VERSION} <span className="font-normal text-muted-foreground/60">{APP_VERSION_LABEL}</span></p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
-            </div>
+            </Link>
           )}
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="text-[10px] text-muted-foreground/50 font-mono cursor-default select-none">v0.9</span>
+                <Link href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION.split(".").slice(0, 2).join(".")}</Link>
               </TooltipTrigger>
-              <TooltipContent side="right">v0.9.3 beta — Open Source · Apache 2.0</TooltipContent>
+              <TooltipContent side="right">v{APP_VERSION} {APP_VERSION_LABEL} — Open Source · Apache 2.0</TooltipContent>
             </Tooltip>
           )}
           <Tooltip>

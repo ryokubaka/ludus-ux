@@ -10,6 +10,10 @@ export interface GoadTaskForCorrelation {
   endedAt?: number
   exitCode?: number
   lineCount: number
+  /** Post-GOAD processing phase: "network-deploy" while firewall rules are redeploying. */
+  phase?: "network-deploy" | null
+  /** True when this task involved custom firewall rules requiring a network-tag redeploy. */
+  hasNetworkRules?: boolean
 }
 
 export interface CorrelatedHistoryEntry {
@@ -61,7 +65,7 @@ export function goadTaskShortKind(command: string): string {
  */
 export function goadHistoryTitle(command: string): string {
   const installNames: string[] = []
-  const installRe = /install_extension\s+([^\s;]+)/g
+  const installRe = /install_extension\s+([^\s;"]+)/g
   let im: RegExpExecArray | null
   while ((im = installRe.exec(command)) !== null) {
     installNames.push(im[1])
@@ -71,7 +75,7 @@ export function goadHistoryTitle(command: string): string {
     const label = `Install extensions: ${installNames.join(", ")}`
     return label.length > 120 ? `${label.slice(0, 117)}…` : label
   }
-  const mProvExt = command.match(/provision_extension\s+([^\s;]+)/)
+  const mProvExt = command.match(/provision_extension\s+([^\s;"]+)/)
   if (mProvExt) return `Re-provision extension: ${mProvExt[1]}`
   if (/;\s*provision_lab\b/.test(command)) return "Provision lab"
   if (/;\s*provide\b/.test(command)) return "Provide"

@@ -42,6 +42,10 @@ export interface GoadTask {
   startedAt: number
   endedAt?: number
   exitCode?: number
+  /** Post-GOAD processing phase: "network-deploy" while firewall rules are redeploying, null otherwise. */
+  phase?: "network-deploy" | null
+  /** True when this task involved custom firewall rules requiring a network-tag redeploy. */
+  hasNetworkRules?: boolean
 }
 
 type LineSubscriber = (line: string) => void
@@ -76,6 +80,8 @@ function hydrateFromDb(): void {
       ended_at: number | null
       exit_code: number | null
       line_count: number
+      phase: string | null
+      has_network_rules: number
     }
     // Any task still marked "running" in the DB is stale — the process died with
     // the container. Mark them as "error" immediately so the UI doesn't spin forever.
@@ -87,7 +93,7 @@ function hydrateFromDb(): void {
 
     const rows = db
       .prepare(
-        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count
+        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count, phase, has_network_rules
          FROM goad_tasks
          ORDER BY started_at ASC
          LIMIT ?`
@@ -106,6 +112,8 @@ function hydrateFromDb(): void {
         exitCode: row.exit_code ?? undefined,
         lines: [],
         lineCount: row.line_count,
+        phase: (row.phase as "network-deploy" | null) ?? null,
+        hasNetworkRules: row.has_network_rules === 1,
       }
       taskMap.set(row.id, {
         task,
@@ -381,6 +389,36 @@ export function updateTaskInstance(taskId: string, instanceId: string): boolean 
     console.error("[task-store] updateTaskInstance DB write failed:", err)
   }
   return true
+}
+
+/**
+ * Update the post-GOAD processing phase on a task.
+ * "network-deploy" = firewall rules are being redeployed; null = idle/done.
+ */
+export function updateTaskPhase(taskId: string, phase: "network-deploy" | null): void {
+  const entry = taskMap.get(taskId)
+  if (!entry) return
+  entry.task.phase = phase
+  try {
+    getDb().prepare("UPDATE goad_tasks SET phase = ? WHERE id = ?").run(phase ?? null, taskId)
+  } catch (err) {
+    console.error("[task-store] updateTaskPhase DB write failed:", err)
+  }
+}
+
+/**
+ * Mark whether this task involved custom firewall rules requiring a network-tag redeploy.
+ * Used by the dashboard to show a "Firewall rules redeploying" banner.
+ */
+export function setTaskHasNetworkRules(taskId: string, hasRules: boolean): void {
+  const entry = taskMap.get(taskId)
+  if (!entry) return
+  entry.task.hasNetworkRules = hasRules
+  try {
+    getDb().prepare("UPDATE goad_tasks SET has_network_rules = ? WHERE id = ?").run(hasRules ? 1 : 0, taskId)
+  } catch (err) {
+    console.error("[task-store] setTaskHasNetworkRules DB write failed:", err)
+  }
 }
 
 /** Returns the most recently-started task for a given instanceId, or null. */

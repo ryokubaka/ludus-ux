@@ -18,6 +18,8 @@ interface DeployLogContextValue {
   rangeState: string | null
   /** The rangeId currently being streamed (null when idle). */
   activeRangeId: string | null
+  /** Unix-ms timestamp of when the current stream started (null when idle). */
+  streamStartedAt: number | null
   startStreaming: (rangeId?: string, opts?: StartRangeStreamOptions) => void
   stopStreaming: () => void
   clearLogs: () => void
@@ -36,6 +38,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [rangeState, setRangeState] = useState<string | null>(null)
   const [activeRangeId, setActiveRangeId] = useState<string | null>(null)
+  const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null)
 
   const esRef = useRef<EventSource | null>(null)
   const isStreamingRef = useRef(false)
@@ -65,6 +68,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     setIsStreaming(true)
     setRangeState(null)
     setLines([])
+    setStreamStartedAt(Date.now())
 
     // Build the URL for the server-side SSE stream.  The server polls the Ludus
     // API internally every 2 s and pushes incremental log lines + state changes —
@@ -119,6 +123,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     setLines([])
     setRangeState(null)
     setActiveRangeId(null)
+    setStreamStartedAt(null)
   }, [])
 
   const refreshRangeStateFromServer = useCallback(async (rangeId: string) => {
@@ -149,6 +154,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         isStreaming,
         rangeState,
         activeRangeId,
+        streamStartedAt,
         startStreaming,
         stopStreaming,
         clearLogs,

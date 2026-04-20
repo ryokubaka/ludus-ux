@@ -22,7 +22,6 @@ import {
   PowerOff,
   Puzzle,
   Plus,
-  ShoppingCart,
   Loader2,
   RefreshCw,
   Wifi,
@@ -46,6 +45,7 @@ import {
   PackageX,
   AlertTriangle,
   Info,
+  Shield,
 } from "lucide-react"
 import type {
   GoadInstance,
@@ -60,6 +60,7 @@ import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn, timeAgo } from "@/lib/utils"
+import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
@@ -76,16 +77,11 @@ import {
   correlateHistoryEntries,
   aggregateDeployStatuses,
 } from "@/lib/goad-deploy-history-correlation"
-import { extractNetworkSection, applyNetworkSection, removeExtensionVmsFromRangeConfig } from "@/lib/network-rules"
+import { extractNetworkSection, applyNetworkSection, removeExtensionVmsFromRangeConfig, hasNetworkRules, networkSectionEqual } from "@/lib/network-rules"
 import { clearRangeAborting } from "@/lib/range-aborting"
 import { useAbortRange } from "@/lib/use-abort-range"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
-import {
-  LUX_EXT_INSTALL_QUEUE_EVENT,
-  luxExtInstallQueueStorageKey,
-  type LuxExtInstallQueuePayload,
-} from "@/lib/ext-install-queue"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -205,8 +201,8 @@ function normalizeGoadInstanceTab(tab: string): string {
   return "deploy"
 }
 
-/** First paint: URL ?tab= wins (normalized); else Deploy Status if a deploy-class action is mid-flight in sessionStorage; else Deploy Status. */
-function readInitialGoadTab(instanceId: string): string {
+/** First paint: URL ?tab= wins (normalized); otherwise default to "deploy". */
+function readInitialGoadTab(): string {
   if (typeof window === "undefined") return "deploy"
   try {
     const raw = new URLSearchParams(window.location.search).get("tab")
@@ -214,13 +210,17 @@ function readInitialGoadTab(instanceId: string): string {
   } catch {
     /* ignore */
   }
-  try {
-    const action = sessionStorage.getItem(`goad-task-${instanceId}-action`) ?? ""
-    if (DEPLOY_TAB_ACTIONS.has(action)) return "deploy"
-  } catch {
-    /* SSR / private mode */
-  }
   return "deploy"
+}
+
+/**
+ * True when a GOAD command string corresponds to a deploy-class action (one
+ * that triggers a Ludus range deploy and should land on the Deploy Status tab).
+ * Replaces the old sessionStorage `actionStorageKey` approach so that action
+ * type is derived from the server-stored task command — no browser state needed.
+ */
+function isDeployActionCommand(command: string): boolean {
+  return /;\s*(provide|install_extension|provision_lab)\b/.test(command)
 }
 
 function GoadInstancePage() {
@@ -230,10 +230,6 @@ function GoadInstancePage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const instanceId = decodeURIComponent(params.id as string)
-  const storageKey = `goad-task-${instanceId}`
-  // Persists the type of the running action so the auto-resume effect can decide
-  // whether to switch to the Deploy Status tab on page (re-)load.
-  const actionStorageKey = `goad-task-${instanceId}-action`
   /**
    * GOAD actions that (re)generate Ludus range-config YAML from GOAD templates and
    * would therefore wipe the user's `network:` block (firewall rules + defaults).
@@ -286,7 +282,7 @@ function GoadInstancePage() {
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange()
   const { impersonation, impersonationHeaders } = useImpersonation()
-  const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream(storageKey, {
+  const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
   const [currentAction, setCurrentAction] = useState<string | null>(null)
@@ -295,6 +291,7 @@ function GoadInstancePage() {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
     rangeState,
+    streamStartedAt: rangeStreamStartedAt,
     startStreaming: startRangeStreaming,
     stopStreaming: stopRangeStreaming,
     clearLogs: clearRangeLogs,
@@ -303,6 +300,19 @@ function GoadInstancePage() {
 
   const isRangeStreamingRef = useRef(isRangeStreaming)
   isRangeStreamingRef.current = isRangeStreaming
+
+  // Track when the GOAD process started so we can show a live elapsed timer.
+  const [goadStreamStartedAt, setGoadStreamStartedAt] = useState<number | null>(null)
+  // Clear timer when the task stops; start time is set from server data in the
+  // taskId useEffect so it survives page refresh (uses task.startedAt, not Date.now).
+  useEffect(() => {
+    if (!isRunning) setGoadStreamStartedAt(null)
+  }, [isRunning])
+
+  // Range log timer: prefer the server-persisted GOAD task start time so it
+  // survives refresh; fall back to context's streamStartedAt for non-GOAD deploys.
+  const rangeElapsed = useElapsed(isRangeStreaming ? (goadStreamStartedAt ?? rangeStreamStartedAt) : null)
+  const goadElapsed = useElapsed(goadStreamStartedAt)
 
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
   const [taskHistory, setTaskHistory] = useState<GoadTaskForCorrelation[]>([])
@@ -313,7 +323,7 @@ function GoadInstancePage() {
   const [historyDeployLines, setHistoryDeployLines] = useState<string[]>([])
   const [historyGoadLines, setHistoryGoadLines] = useState<string[]>([])
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState(() => readInitialGoadTab(instanceId))
+  const [activeTab, setActiveTab] = useState(() => readInitialGoadTab())
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
@@ -324,12 +334,41 @@ function GoadInstancePage() {
   const sawDeployingRef   = useRef(false)
   // Guard against triggering both watchdogs for the same failure event.
   const autoStoppedRef    = useRef(false)
+  /**
+   * True while runAction is executing the post-GOAD network-tag deploy.
+   * Watchdog B checks this to avoid aborting a legitimate LUX-initiated deploy.
+   */
+  const postProcessingRef = useRef(false)
+  /** Always contains the latest task ID from useGoadStream for use in async closures. */
+  const taskIdRef = useRef<string | null>(null)
+  taskIdRef.current = taskId
+  /**
+   * Set to true before run() when the action has network rules — cleared in the
+   * taskId useEffect once the hasNetworkRules PATCH has been sent. Allows the
+   * dashboard to show "firewall redeploy queued" as soon as the task appears.
+   */
+  /**
+   * "idle" — no post-processing in progress
+   * "network-pending" — GOAD is running, network-tag deploy will follow
+   * "network-deploying" — network-tag deploy is in progress
+   */
+  const [postProcessingStep, setPostProcessingStep] = useState<"idle" | "network-pending" | "network-deploying">("idle")
+  /** Prevents re-processing wizard network rules for the same task. */
+  const wizardNetworkHandledRef = useRef(false)
+  /**
+   * Set by the server-side resume fallback when it finds a deploy-class task
+   * running. Replaces the old sessionStorage actionStorageKey lookup: we now
+   * derive the tab-switch hint from the server-stored task command instead of
+   * a browser-local key that is invisible to other browsers / impersonators.
+   */
+  const resumedAsDeployRef = useRef(false)
 
   // Reset guards whenever a new deployment run begins.
   useEffect(() => {
     if (isRunning) {
       sawDeployingRef.current  = false
       autoStoppedRef.current   = false
+      wizardNetworkHandledRef.current = false
     }
   }, [isRunning])
 
@@ -355,10 +394,13 @@ function GoadInstancePage() {
   // Watchdog B: GOAD exited but the range is still stuck in DEPLOYING.
   // Route through the unified abort hook so it goes through Ludus (user →
   // admin) and falls back to PocketBase if the goroutine has already exited.
+  // Skip if postProcessingRef is set: runAction intentionally launched a
+  // network-tag deploy AFTER GOAD finished — that's the DEPLOYING we see.
   useEffect(() => {
     if (exitCode === null || !instance?.ludusRangeId) return
     if (rangeState !== "DEPLOYING" && rangeState !== "WAITING") return
     if (autoStoppedRef.current) return
+    if (postProcessingRef.current) return
     autoStoppedRef.current = true
     const rangeId = instance.ludusRangeId
     void abortRangeUnified({
@@ -384,8 +426,8 @@ function GoadInstancePage() {
   // tab whenever a task is running.  Covers two scenarios:
   //   1. runAction() — startRangeStreaming is already called there, but instance
   //      data may not be loaded yet on first render so we re-check here.
-  //   2. Auto-resume from sessionStorage — useGoadStream detects a running task
-  //      on mount and sets isRunning=true; this effect kicks in.
+  //   2. Server-side resume — the mount effect queries /api/goad/tasks and calls
+  //      resumeTask(), which sets isRunning=true; this effect kicks in.
   //
   // Tab-switching rules:
   //   • Only switch to "deploy" if the running action is one that involves Ludus
@@ -405,15 +447,20 @@ function GoadInstancePage() {
       return
     }
     wasGoadRunningRef.current = true
-    // Determine the running action from sessionStorage (written by runAction).
-    const runningAction = sessionStorage.getItem(actionStorageKey) ?? ""
-    let isDeployAction = DEPLOY_TAB_ACTIONS.has(runningAction)
+    // Determine whether the running action is a deploy-class action.
+    // For fresh runs, currentAction is set by runAction() directly.
+    // For cross-browser/impersonation resumes, resumedAsDeployRef is set by
+    // the server-side resume fallback after inspecting the task command — no
+    // sessionStorage needed.
+    const isDeployAction = currentAction
+      ? DEPLOY_TAB_ACTIONS.has(currentAction)
+      : resumedAsDeployRef.current
     const rid = instance?.ludusRangeId
 
     // Start range streaming as soon as we have both a running task AND a known rangeId.
     // We watch both `isRunning` and `instance?.ludusRangeId` because the two values
     // arrive at different times:
-    //   • isRunning goes true quickly (useGoadStream reads sessionStorage on mount)
+    //   • isRunning goes true quickly (server-side resume fires on mount)
     //   • instance.ludusRangeId arrives later (fetchInstances is async)
     // Without this dual dep, the effect would fire while instance is still null and
     // never restart once the data loads — resulting in "Waiting for output..." forever.
@@ -430,7 +477,7 @@ function GoadInstancePage() {
       setActiveTab("deploy")
     }
 
-    // Fallback: action key missing (edge cases) but a GOAD task is still running and
+    // Fallback: deploy hint missing but a GOAD task is still running and
     // Ludus is deploying — still stream + Deploy tab.
     if (!isDeployAction && rid && !isRangeStreaming) {
       let cancelled = false
@@ -459,32 +506,122 @@ function GoadInstancePage() {
       }
     }
   }, [isRunning, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
-  /** True while a multi-extension `install_extension` chain is running. */
-  const [installingExtensionBatch, setInstallingExtensionBatch] = useState(false)
-  /** `"elk (2/3)"` — human label for the extension currently being installed. */
-  const [extensionInstallProgress, setExtensionInstallProgress] = useState<string | null>(null)
-  /** Full cart order while a multi-extension batch runs (queue hint on Deploy tab). */
-  const [extensionInstallBatchNames, setExtensionInstallBatchNames] = useState<string[] | null>(null)
-  /** Uninstalled extensions queued in add order (install cart). */
-  const [extensionInstallCart, setExtensionInstallCart] = useState<string[]>([])
 
+  // On page load / refresh OR when a new task starts: read the server-persisted
+  // phase to restore postProcessingStep, and sync the timer from task.startedAt.
   useEffect(() => {
-    if (!catalog?.extensions?.length || !instance) return
-    const allowed = new Set(
-      catalog.extensions
-        .filter((ext) => {
-          if (instance.extensions?.includes(ext.name)) return false
-          if (!instance.lab) return true
-          return ext.compatibility.includes("*") || ext.compatibility.includes(instance.lab)
+    if (!taskId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch(`/api/goad/tasks/${taskId}`)
+        if (!res.ok || cancelled) return
+        const data = await res.json() as {
+          phase?: "network-deploy" | null
+          startedAt?: number
+        }
+        if (cancelled) return
+        // Use server-persisted startedAt so the timer survives page refresh.
+        if (data.startedAt) setGoadStreamStartedAt(data.startedAt)
+        // Only restore the deploying state — "network-pending" is no longer
+        // shown proactively; the pipeline appears only when Branch A actually
+        // fires (YAML was wrong after GOAD and a tag deploy is needed).
+        if (data.phase === "network-deploy") {
+          setPostProcessingStep("network-deploying")
+        }
+      } catch { /* best-effort */ }
+    })()
+    return () => { cancelled = true }
+  }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Server-side resume: on mount, query /api/goad/tasks for any running task on
+  // this instance and call resumeTask() so GOAD logs are visible across browsers,
+  // incognito sessions, and admin impersonation without any browser-local state.
+  useEffect(() => {
+    if (!instanceId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        // Short wait so React can finish its initial render pass; if taskId is
+        // already set (e.g. from a same-tab run that never unmounted) we skip.
+        await new Promise((r) => setTimeout(r, 50))
+        if (cancelled) return
+        if (taskIdRef.current) return
+        const res = await fetch("/api/goad/tasks", {
+          credentials: "include",
+          headers: impersonationHeaders(),
         })
-        .map((e) => e.name),
-    )
-    setExtensionInstallCart((prev) => {
-      const next = prev.filter((n) => allowed.has(n))
-      if (next.length === prev.length && next.every((n, i) => n === prev[i])) return prev
-      return next
-    })
-  }, [catalog?.extensions, instance?.extensions, instance?.lab])
+        if (!res.ok || cancelled) return
+        const data = await res.json() as { tasks: GoadTaskForCorrelation[] }
+        const running = (data.tasks ?? []).find(
+          (t) => t.instanceId === instanceId && t.status === "running"
+        )
+        if (!running || cancelled) return
+        // Flag whether this task should switch to the Deploy tab so the
+        // auto-tab effect can act on it when isRunning becomes true.
+        resumedAsDeployRef.current = isDeployActionCommand(running.command)
+        await resumeTask(running.id)
+      } catch { /* best-effort */ }
+    })()
+    return () => { cancelled = true }
+  }, [instanceId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wizard post-deploy effect: after a wizard-initiated GOAD task finishes,
+  // apply the network rules the user defined in the wizard (stored server-side
+  // before the redirect because GOAD's install process overwrites range-config).
+  useEffect(() => {
+    if (exitCode === null || !instance?.ludusRangeId || !instance?.instanceId) return
+    if (wizardNetworkHandledRef.current) return
+    const rangeId = instance.ludusRangeId
+    const id = instance.instanceId
+    wizardNetworkHandledRef.current = true
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/goad/instances/${encodeURIComponent(id)}/pending-network`)
+        if (!res.ok) return
+        const data = await res.json() as { snapshot: Record<string, unknown> | null }
+        const snapshot = data.snapshot
+        if (!snapshot) return
+
+        const completedId = taskIdRef.current
+        setPostProcessingStep("network-deploying")
+        postProcessingRef.current = true
+        if (completedId) {
+          await fetch(`/api/goad/tasks/${completedId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hasNetworkRules: true, phase: "network-deploy" }),
+          }).catch(() => {})
+        }
+
+        try {
+          const current = await ludusApi.getRangeConfig(rangeId)
+          const yaml = current.data?.result
+          if (yaml && !networkSectionEqual(yaml, snapshot)) {
+            const merged = applyNetworkSection(yaml, snapshot)
+            await ludusApi.setRangeConfig(merged, rangeId)
+          }
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const dep = await ludusApi.deployRange(["network"], undefined, rangeId)
+            if (!dep.error) break
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 2000))
+          }
+        } finally {
+          postProcessingRef.current = false
+          if (completedId) {
+            await fetch(`/api/goad/tasks/${completedId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phase: null }),
+            }).catch(() => {})
+          }
+          setPostProcessingStep("idle")
+        }
+      } catch { /* best-effort */ }
+    })()
+  }, [exitCode, instance?.instanceId, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [reprovisioningExtension, setReprovisioningExtension] = useState<string | null>(null)
   const [removingExtension, setRemovingExtension] = useState<string | null>(null)
   const [inventories, setInventories] = useState<InstanceInventoryFile[]>([])
@@ -792,6 +929,7 @@ function GoadInstancePage() {
   const runAction = async (action: string, goadArgs: string) => {
     setCurrentAction(action)
     clear()
+    clearRangeLogs()
     const rangeIdForRestore = instance?.ludusRangeId
     let networkSnapshot: Record<string, unknown> | null = null
     if (RANGE_YAML_TOUCHING_ACTIONS.has(action) && rangeIdForRestore) {
@@ -836,25 +974,21 @@ function GoadInstancePage() {
     if (DEPLOY_TAB_ACTIONS.has(action)) {
       setActiveTab("deploy")
       if (instance?.ludusRangeId) {
-        // Must match auto-resume effect: default snapshotStart=true would skip the
-        // entire Ludus log buffer on first poll while isRangeStreaming stays true, so
-        // the effect never re-opens with false — Range Logs look empty until new output.
-        startRangeStreaming(instance.ludusRangeId, { snapshotStart: false })
+        // snapshotStart: true — for a fresh action we do NOT want to replay the
+        // existing Ludus log buffer (which contains the previous deploy's output).
+        // The panel shows "Waiting for output..." until GOAD triggers a new
+        // range deploy, then streams only the new logs cleanly.
+        startRangeStreaming(instance.ludusRangeId, { snapshotStart: true })
       }
     } else if (TERMINAL_TAB_ACTIONS.has(action)) {
       setActiveTab("terminal")
     }
-    // Persist action type so the auto-resume effect on page reload can decide
-    // whether to switch to Deploy tab (only for deploy-relevant actions).
-    sessionStorage.setItem(actionStorageKey, action)
+    const rulesPresent = hasNetworkRules(networkSnapshot)
+
     const code = await run(goadArgs, instanceId, impersonation ?? undefined, instance?.ludusRangeId ?? undefined)
     setCurrentAction(null)
-    // Keep `actionStorageKey` set until ALL post-run work finishes (firewall
-    // restore + optional network-tag deploy). If we cleared it immediately after
-    // `run()` returned, a page refresh during that window would lose the deploy-tab
-    // hint — `readInitialGoadTab` / the auto-stream effect would not treat this as
-    // a deploy-class action while Ludus is still DEPLOYING, leaving GOAD + range
-    // log panels empty until the next line.
+    // Capture task ID now — taskIdRef.current is kept in sync via render-time assignment
+    const completedTaskId = taskIdRef.current
     try {
     // Always try to restore the user's `network:` block when we captured a
     // snapshot, regardless of exit code. Rationale: even a failed GOAD run can
@@ -866,9 +1000,40 @@ function GoadInstancePage() {
       const after = await ludusApi.getRangeConfig(rangeIdForRestore)
       const yamlAfter = after.data?.result
       if (yamlAfter != null) {
-        const merged = applyNetworkSection(yamlAfter, networkSnapshot)
+        // Semantic comparison: normalize both sides through the same yaml.dump so
+        // Ludus's native YAML formatting vs js-yaml's output don't create false positives.
+        const networkAlreadyCorrect = networkSectionEqual(yamlAfter, networkSnapshot)
+        // Only compute merged (full-doc reformat) when we actually need to PUT.
+        const merged = networkAlreadyCorrect ? yamlAfter : applyNetworkSection(yamlAfter, networkSnapshot)
 
-        const runNetworkTagDeploy = async (): Promise<string | null> => {
+        const startNetworkTagDeploy = async (): Promise<string | null> => {
+          postProcessingRef.current = true
+          if (completedTaskId) {
+            await fetch(`/api/goad/tasks/${completedTaskId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phase: "network-deploy" }),
+            }).catch(() => {})
+          }
+          setPostProcessingStep("network-deploying")
+
+          // GOAD's Ansible run drives a Ludus range deploy internally. Even after
+          // the GOAD SSH process exits, Ludus may still be in DEPLOYING/WAITING for
+          // several more seconds (or minutes for large installs). Attempting to
+          // start a second deploy while one is active fails immediately. Poll until
+          // the range settles before firing the network-tag deploy.
+          if (rangeIdForRestore) {
+            const SETTLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 min max wait
+            const SETTLE_POLL_MS = 5_000
+            const settleStart = Date.now()
+            while (Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
+              const status = await ludusApi.getRangeStatus(rangeIdForRestore)
+              const stateNow = status.data?.rangeState
+              if (stateNow !== "DEPLOYING" && stateNow !== "WAITING") break
+              await new Promise((r) => setTimeout(r, SETTLE_POLL_MS))
+            }
+          }
+
           let deployErr: string | null = null
           for (let attempt = 0; attempt < 3; attempt++) {
             const dep = await ludusApi.deployRange(["network"], undefined, rangeIdForRestore)
@@ -882,7 +1047,8 @@ function GoadInstancePage() {
           return deployErr
         }
 
-        if (merged !== yamlAfter) {
+        if (!networkAlreadyCorrect) {
+          // Network section was missing or different after GOAD — restore it.
           // Retry PUT — Ludus sometimes rejects range config writes momentarily
           // while it's finalising a deploy. 3 tries × 2s is short enough that
           // users don't notice the delay, but long enough to clear most locks.
@@ -936,14 +1102,14 @@ function GoadInstancePage() {
               )
               console.warn(JSON.stringify(networkSnapshot, null, 2))
             } catch { /* ignore */ }
-          } else {
+          } else if (rulesPresent) {
             // Config is restored, but iptables on the router was already flushed
             // by GOAD's earlier deploy (which saw a config with no network: block).
             // A tag-scoped deploy re-runs only the router's firewall/network
             // Ansible tasks, which is fast (~30 s) and non-destructive. Without
             // this step the restored rules sit in range-config but aren't
             // actually enforced until the next full deploy.
-            const deployErr = await runNetworkTagDeploy()
+            const deployErr = await startNetworkTagDeploy()
             if (deployErr) {
               toast({
                 variant: "destructive",
@@ -965,32 +1131,23 @@ function GoadInstancePage() {
               })
             }
           }
-        } else if (
-          merged === yamlAfter &&
-          (action === "install-extension" ||
-            action === "provision-extension" ||
-            action === "provision-lab")
-        ) {
-          // Pre-inject kept range-config aligned with the snapshot, so there is
-          // nothing to PUT — but Ansible may still have flushed/rebuilt iptables on
-          // the router. Re-run the network tag so rules on disk match enforcement.
-          const deployErr = await runNetworkTagDeploy()
-          if (deployErr) {
-            toast({
-              variant: "destructive",
-              title: "Firewall — network deploy failed",
-              description: `Could not run tag "network" (${deployErr}). Router iptables may not match range-config until you deploy that tag manually.`,
-            })
-          }
         }
+        // NOTE: if networkAlreadyCorrect the Ludus wrapper (goad-ssh.ts) already
+        // intercepted GOAD's "ludus range config set" and re-injected the network
+        // block before the config was pushed to Ludus. GOAD's own range deploy ran
+        // with the correct config, so iptables are already enforced. No extra deploy.
       }
     }
     } finally {
-      try {
-        sessionStorage.removeItem(actionStorageKey)
-      } catch {
-        /* private mode */
+      postProcessingRef.current = false
+      if (completedTaskId) {
+        await fetch(`/api/goad/tasks/${completedTaskId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phase: null }),
+        }).catch(() => {})
       }
+      setPostProcessingStep("idle")
     }
     fetchInstances()
     return code
@@ -1136,77 +1293,12 @@ function GoadInstancePage() {
       }
     )
 
-  /** Installs extensions one-at-a-time so each gets its own Ludus deploy + GOAD task + log entry. */
-  const handleInstallExtensionCart = () => {
-    const names = [...extensionInstallCart]
-    if (names.length === 0) return
-    const listDesc = names.map((n) => `· ${n}`).join("\n")
+  const handleInstallExtension = (name: string) =>
     confirm(
-      `Install ${names.length} extension${names.length !== 1 ? "s" : ""}?\n\n${listDesc}`,
-      async () => {
-        const rangeIdForQueue = instance?.ludusRangeId
-        const startedAt = Date.now()
-        const writeQueuePayload = (payload: LuxExtInstallQueuePayload | null) => {
-          if (!rangeIdForQueue || names.length < 2) return
-          try {
-            if (!payload) {
-              sessionStorage.removeItem(luxExtInstallQueueStorageKey(rangeIdForQueue))
-            } else {
-              sessionStorage.setItem(
-                luxExtInstallQueueStorageKey(rangeIdForQueue),
-                JSON.stringify(payload),
-              )
-            }
-            window.dispatchEvent(new Event(LUX_EXT_INSTALL_QUEUE_EVENT))
-          } catch {
-            /* private mode */
-          }
-        }
-        setInstallingExtensionBatch(true)
-        setExtensionInstallBatchNames(names.length > 1 ? [...names] : null)
-        setActiveTab("deploy")
-        writeQueuePayload({ names, startedAt, total: names.length })
-        const failed: string[] = []
-        try {
-          for (let i = 0; i < names.length; i++) {
-            const name = names[i]
-            setExtensionInstallProgress(
-              names.length > 1 ? `${name} (${i + 1}/${names.length})` : name,
-            )
-            writeQueuePayload({
-              names,
-              startedAt,
-              current: name,
-              index: i + 1,
-              total: names.length,
-            })
-            const inner = `use ${instanceId};install_extension ${name}`
-            const code = await runAction("install-extension", `--repl "${inner}"`)
-            if (code !== 0) failed.push(name)
-          }
-        } finally {
-          writeQueuePayload(null)
-          setInstallingExtensionBatch(false)
-          setExtensionInstallProgress(null)
-          setExtensionInstallBatchNames(null)
-        }
-        setExtensionInstallCart([])
-        if (failed.length > 0) {
-          toast({
-            variant: "destructive",
-            title: "Some extensions failed",
-            description: `Failed: ${failed.join(", ")}. Check Deploy History for details.`,
-          })
-        } else {
-          toast({
-            title: "Extension install finished",
-            description: `Review Deploy History for: ${names.join(", ")}`,
-          })
-        }
-      },
-      "ext-install-cart",
+      `Install "${name}"? Deploys new VMs and runs Ansible — can take 30–90 min.`,
+      () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
+      `ext-install:${name}`,
     )
-  }
 
   // provision_extension runs Ansible only (no infrastructure changes) — safe to re-run
   const handleReprovisionExtension = (ext: string) =>
@@ -1348,12 +1440,19 @@ function GoadInstancePage() {
           if ((rmData.deletedFiles?.length ?? 0) > 0) {
             cleanupParts.push(`${rmData.deletedFiles!.length} inventory file(s)`)
           }
-          const cfgEntries = (rmData.updatedConfigs ?? []).flatMap((c) => c.entries)
+          // GOAD config entries contain Ansible/Jinja2 template strings like
+          // "{{ range_id }}-GOAD-ext". Resolve the common variable so the audit
+          // log shows actual values instead of raw template syntax.
+          const resolveGoadTemplates = (s: string) =>
+            s.replace(/\{\{\s*range_id\s*\}\}/g, rangeId)
+          const cfgEntries = (rmData.updatedConfigs ?? [])
+            .flatMap((c) => c.entries)
+            .map(resolveGoadTemplates)
           if (cfgEntries.length > 0) {
             cleanupParts.push(`config.yml -${cfgEntries.join(",")}`)
           }
           if (rangeConfigRemoved.length > 0) {
-            cleanupParts.push(`range-config.yml -${rangeConfigRemoved.join(",")}`)
+            cleanupParts.push(`range-config.yml -${rangeConfigRemoved.map(resolveGoadTemplates).join(",")}`)
           }
 
           void postVmOperationAudit({
@@ -1799,26 +1898,40 @@ function GoadInstancePage() {
             )}
           </div>
 
-          {installingExtensionBatch &&
-            extensionInstallBatchNames &&
-            extensionInstallBatchNames.length > 1 && (
-              <Alert className="mb-3 flex-shrink-0 border-primary/40 bg-primary/5">
-                <AlertDescription className="text-xs space-y-1">
-                  <div>
-                    <strong>Extension install queue</strong> ({extensionInstallBatchNames.length}{" "}
-                    total, one Ludus deploy + GOAD run per item):
-                  </div>
-                  <div className="font-mono text-[11px] leading-relaxed break-all">
-                    {extensionInstallBatchNames.join(" → ")}
-                  </div>
-                  {extensionInstallProgress ? (
-                    <div className="text-muted-foreground">
-                      <span className="text-foreground font-medium">Now:</span> {extensionInstallProgress}
-                    </div>
-                  ) : null}
-                </AlertDescription>
-              </Alert>
-            )}
+          {/* Deploy pipeline — shown while GOAD is running with network rules or
+               while the post-GOAD network-tag deploy is in progress. */}
+          {postProcessingStep !== "idle" && (
+            <div className="mb-3 flex-shrink-0 flex items-center gap-2 rounded-lg border border-blue-500/25 bg-blue-500/[0.05] px-3 py-2 text-xs">
+              <Shield className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded border text-[11px]",
+                  postProcessingStep === "network-deploying"
+                    ? "border-green-500/30 bg-green-500/10 text-green-400"
+                    : "border-amber-500/30 bg-amber-500/10 text-amber-400",
+                )}>
+                  {postProcessingStep === "network-deploying"
+                    ? <Check className="h-2.5 w-2.5" />
+                    : <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  }
+                  Step 1 — GOAD {postProcessingStep === "network-deploying" ? "done" : "running"}
+                </span>
+                <span className="text-muted-foreground/60">→</span>
+                <span className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded border text-[11px]",
+                  postProcessingStep === "network-deploying"
+                    ? "border-blue-500/40 bg-blue-500/10 text-blue-300 animate-pulse"
+                    : "border-border/60 bg-muted/30 text-muted-foreground",
+                )}>
+                  {postProcessingStep === "network-deploying"
+                    ? <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    : <Shield className="h-2.5 w-2.5" />
+                  }
+                  Step 2 — Firewall redeploy {postProcessingStep === "network-deploying" ? "running" : "pending"}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Stuck-DEPLOYING warning — shown when the stream has closed but the
                range is still in DEPLOYING (Ludus goroutine exited without updating
@@ -1842,13 +1955,13 @@ function GoadInstancePage() {
             <GoadTerminal
               lines={rangeLogLines}
               onClear={clearRangeLogs}
-              label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? " (live)" : rangeState ? ` · ${rangeState}` : ""}`}
+              label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
               className="flex flex-col min-h-0 h-full"
             />
             <GoadTerminal
               lines={lines}
               onClear={clear}
-              label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+              label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
               className="flex flex-col min-h-0 h-full"
             />
           </div>
@@ -2154,194 +2267,85 @@ function GoadInstancePage() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Available to Install</p>
                 <p className="text-[11px] text-muted-foreground mb-3">
-                  Use <strong>Add</strong> to queue extensions in the cart. Order in the cart is the install order
-                  in one GOAD session. Use <strong>Install # extensions</strong> in the cart, confirm, then follow
-                  progress on the Deploy Status tab.
+                  Install adds new VMs and runs Ansible (30–90 min). Re-provision re-runs Ansible only. Remove destroys extension VMs.
                 </p>
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-                  <div className="min-w-0 flex-1 grid gap-2">
-                    {uninstalledExtensions.map((ext) => {
-                      const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
-                      const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
-                      const extInstallBusy = isRunning || installingExtensionBatch
-                      const inCart = extensionInstallCart.includes(ext.name)
-                      const canAdd =
-                        templatesReady &&
-                        !!instance.ludusRangeId &&
-                        instance.status !== "CREATED" &&
-                        !extInstallBusy &&
-                        !inCart
-                      return (
-                        <div
-                          key={ext.name}
-                          className={cn(
-                            "rounded-lg border",
-                            !templatesReady
-                              ? "border-border opacity-70"
-                              : "border-border hover:border-primary/30",
-                          )}
-                        >
-                          <div className="flex items-start justify-between p-3">
-                            <div className="flex items-start gap-3 min-w-0">
-                              <Package className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <code className="font-mono text-sm">{ext.name}</code>
-                                  {ext.machines.length > 0 && (
-                                    <span className="text-xs text-muted-foreground">
-                                      +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
-                                    </span>
-                                  )}
-                                  {inCart && (
-                                    <Badge variant="secondary" className="text-[10px]">
-                                      In cart
-                                    </Badge>
-                                  )}
-                                  {!templatesReady && (
-                                    <Badge variant="destructive" className="text-xs gap-1">
-                                      <PackageX className="h-2.5 w-2.5" /> Missing templates
-                                    </Badge>
-                                  )}
-                                </div>
-                                {ext.description && (
-                                  <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
+                <div className="grid gap-2">
+                  {uninstalledExtensions.map((ext) => {
+                    const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                    const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                    const canInstall =
+                      templatesReady &&
+                      !!instance.ludusRangeId &&
+                      instance.status !== "CREATED" &&
+                      !isRunning
+                    const scopeInstall = `ext-install:${ext.name}`
+                    return (
+                      <div
+                        key={ext.name}
+                        className={cn(
+                          "rounded-lg border",
+                          !templatesReady
+                            ? "border-border opacity-70"
+                            : "border-border hover:border-primary/30",
+                        )}
+                      >
+                        <div className="flex items-start justify-between p-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <Package className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <code className="font-mono text-sm">{ext.name}</code>
+                                {ext.machines.length > 0 && (
+                                  <span className="text-xs text-muted-foreground">
+                                    +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
+                                  </span>
                                 )}
-                                {(ext.requiredTemplates ?? []).length > 0 && (
-                                  <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                                {!templatesReady && (
+                                  <Badge variant="destructive" className="text-xs gap-1">
+                                    <PackageX className="h-2.5 w-2.5" /> Missing templates
+                                  </Badge>
                                 )}
                               </div>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant={inCart ? "secondary" : "outline"}
-                              className="flex-shrink-0 ml-3"
-                              onClick={() =>
-                                setExtensionInstallCart((prev) =>
-                                  prev.includes(ext.name) ? prev : [...prev, ext.name],
-                                )
-                              }
-                              disabled={!canAdd}
-                              title={
-                                instance.status === "CREATED"
-                                  ? "Run Provide before installing extensions"
-                                  : !instance.ludusRangeId
-                                  ? "Run Provide first — a dedicated Ludus range is required"
-                                  : inCart
-                                  ? "Already in install cart"
-                                  : !templatesReady
-                                  ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
-                                  : "Add to install cart"
-                              }
-                            >
-                              {inCart ? (
-                                "Added"
-                              ) : (
-                                <>
-                                  <Plus className="h-3.5 w-3.5" />
-                                  Add
-                                </>
+                              {ext.description && (
+                                <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
                               )}
-                            </Button>
+                              {(ext.requiredTemplates ?? []).length > 0 && (
+                                <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                              )}
+                            </div>
                           </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-shrink-0 ml-3 gap-1.5"
+                            onClick={() => handleInstallExtension(ext.name)}
+                            disabled={!canInstall}
+                            title={
+                              instance.status === "CREATED"
+                                ? "Run Provide before installing extensions"
+                                : !instance.ludusRangeId
+                                ? "Run Provide first — a dedicated Ludus range is required"
+                                : !templatesReady
+                                ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
+                                : isRunning
+                                ? "Wait for current action to finish"
+                                : "Install this extension"
+                            }
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            Install
+                          </Button>
                         </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="w-full lg:w-[min(22rem,100%)] shrink-0 flex flex-col rounded-lg border border-primary/25 bg-muted/20">
-                    <div className="p-3 border-b border-border/60 space-y-2">
-                      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase">
-                        <ShoppingCart className="h-3.5 w-3.5" />
-                        Install cart
+                        <ConfirmBar
+                          pending={pendingAction}
+                          scope={scopeInstall}
+                          onConfirm={commitConfirm}
+                          onCancel={cancelConfirm}
+                          className="mx-3 mb-3"
+                        />
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="w-full gap-1.5"
-                        disabled={
-                          extensionInstallCart.length === 0 ||
-                          isRunning ||
-                          installingExtensionBatch ||
-                          !instance.ludusRangeId ||
-                          instance.status === "CREATED" ||
-                          extensionInstallCart.some((name) => {
-                            const def = extMap[name]
-                            if (!def) return true
-                            const t = checkTemplates(def.requiredTemplates ?? [], builtNames, allNames)
-                            return !t.ready && (def.requiredTemplates ?? []).length > 0
-                          })
-                        }
-                        title={
-                          !instance.ludusRangeId
-                            ? "Run Provide first — a dedicated Ludus range is required"
-                            : undefined
-                        }
-                        onClick={handleInstallExtensionCart}
-                      >
-                        {installingExtensionBatch ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Play className="h-3.5 w-3.5" />
-                        )}
-                        {extensionInstallProgress
-                          ? `Installing ${extensionInstallProgress}`
-                          : `Install ${extensionInstallCart.length} extension${extensionInstallCart.length !== 1 ? "s" : ""}`}
-                      </Button>
-                      <ConfirmBar
-                        pending={pendingAction}
-                        scope="ext-install-cart"
-                        onConfirm={commitConfirm}
-                        onCancel={cancelConfirm}
-                      />
-                    </div>
-                    <div className="flex-1 p-3 min-h-[8rem] flex flex-col">
-                      {extensionInstallCart.length === 0 ? (
-                        <p className="text-xs text-muted-foreground text-center py-6">
-                          Cart is empty — click <strong>Add</strong> on an extension.
-                        </p>
-                      ) : (
-                        <ul className="space-y-2 flex-1 overflow-y-auto max-h-[min(50vh,20rem)]">
-                          {extensionInstallCart.map((name) => (
-                            <li
-                              key={name}
-                              className="flex items-center justify-between gap-2 rounded border border-border/80 bg-background/50 px-2 py-1.5 text-sm"
-                            >
-                              <code className="font-mono text-xs truncate">{name}</code>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon-sm"
-                                className="h-7 w-7 shrink-0"
-                                disabled={installingExtensionBatch || isRunning}
-                                onClick={() =>
-                                  setExtensionInstallCart((prev) => prev.filter((n) => n !== name))
-                                }
-                                aria-label={`Remove ${name} from cart`}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </Button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {extensionInstallCart.length > 0 && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="mt-2 text-muted-foreground"
-                          disabled={
-                            installingExtensionBatch ||
-                            isRunning ||
-                            extensionInstallCart.length === 0
-                          }
-                          onClick={() => setExtensionInstallCart([])}
-                        >
-                          Clear cart
-                        </Button>
-                      )}
-                    </div>
-                  </div>
+                    )
+                  })}
                 </div>
               </div>
             )}

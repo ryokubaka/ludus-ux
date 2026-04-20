@@ -39,6 +39,18 @@ export function timeAgo(input: string | number | Date): string {
 }
 
 /**
+ * Format elapsed milliseconds as a compact human-readable string.
+ * e.g. 0 → "0s", 90_000 → "1m 30s", 3_720_000 → "1h 2m"
+ */
+export function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+/**
  * Unwrap `[...]` or `{ result: [...] }` shapes returned by Ludus endpoints
  * (legacy responses wrap the payload in `{ result }`, newer ones return the
  * array directly). Returns `[]` for anything that can't be coerced.

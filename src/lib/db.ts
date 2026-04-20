@@ -239,6 +239,18 @@ function runMigrations(db: BetterSqlite3.Database): void {
         CREATE INDEX IF NOT EXISTS idx_vm_op_instance ON vm_operation_log(instance_id);
       `)
     },
+
+    // v8 — Deploy-queue phase tracking on GOAD tasks.
+    // Replaces sessionStorage so deploy state is visible to all browsers and
+    // impersonation sessions (same precedent as v4 pending_allow_ops).
+    // phase: NULL = idle, "network-deploy" = post-GOAD firewall redeploy running
+    // has_network_rules: 1 = this task involved custom firewall rules
+    (db) => {
+      db.exec(`
+        ALTER TABLE goad_tasks ADD COLUMN phase TEXT;
+        ALTER TABLE goad_tasks ADD COLUMN has_network_rules INTEGER NOT NULL DEFAULT 0;
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

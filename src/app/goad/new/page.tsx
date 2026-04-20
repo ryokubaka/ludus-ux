@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -36,7 +36,7 @@ import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, injectNetworkRules } from "@/lib/network-rules"
+import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
 import { Shield } from "lucide-react"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
@@ -207,9 +207,13 @@ export default function NewGoadInstancePage() {
       })
       .catch(() => {})
   }, [])
-  const { lines, isRunning, exitCode, run, stop, clear } = useGoadStream("goad-task-new", {
+  const { lines, isRunning, exitCode, taskId: goadTaskId, run, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
+  // Keep a ref so async closures (handleDeploy) can read the latest taskId without
+  // a stale closure — same pattern as goad/[id]/page.tsx.
+  const goadTaskIdRef = useRef<string | null>(null)
+  goadTaskIdRef.current = goadTaskId
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -434,8 +438,10 @@ export default function NewGoadInstancePage() {
       const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(existingInstance.instanceId)} -t install${extArgs ? ` ${extArgs}` : ""}`
       run(args, undefined, impersonation ?? undefined, rangeId ?? undefined)
 
-      // Wait for useGoadStream to write the [TASKID] into sessionStorage ("goad-task-new"),
-      // then transfer it to the instance-scoped key so /goad/[id] can auto-resume.
+      // Wait for the [TASKID] line to arrive from the SSE stream so we can link
+      // the task to the instance server-side. We poll the ref (not sessionStorage)
+      // because useGoadStream no longer writes to browser storage — task state is
+      // fully server-side.
       const existingId = existingInstance.instanceId
       const capturedRangeId = rangeId
       ;(async () => {
@@ -443,11 +449,10 @@ export default function NewGoadInstancePage() {
         let taskId: string | null = null
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 500))
-          try { taskId = sessionStorage.getItem("goad-task-new") } catch { /* SSR */ }
+          taskId = goadTaskIdRef.current
           if (taskId) break
         }
         if (taskId) {
-          try { sessionStorage.setItem(`goad-task-${existingId}`, taskId) } catch { /* SSR */ }
           // Link the task to the instance on the server (instanceId may be absent
           // on the task if the execute route was called without it).
           fetch(`/api/goad/tasks/${taskId}/link-instance`, {
@@ -456,14 +461,25 @@ export default function NewGoadInstancePage() {
             body: JSON.stringify({ instanceId: existingId }),
           }).catch(() => {})
         }
-        // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
-        try { sessionStorage.setItem(`goad-task-${existingId}-action`, "provide") } catch { /* SSR */ }
         if (capturedRangeId) {
           fetch("/api/goad/instances/set-range", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
             body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [existingId] }),
           }).catch(() => {})
+        }
+        // Persist wizard network rules so [id]/page.tsx can re-apply them after
+        // GOAD finishes (GOAD's install may overwrite range-config with a version
+        // that drops the network: block).
+        if (networkRules.length > 0) {
+          const snapshot = extractNetworkSection(injectNetworkRules("", networkRules))
+          if (snapshot) {
+            fetch(`/api/goad/instances/${encodeURIComponent(existingId)}/pending-network`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(snapshot),
+            }).catch(() => {})
+          }
         }
         router.push(`/goad/${encodeURIComponent(existingId)}?tab=deploy`)
       })()
@@ -543,10 +559,9 @@ export default function NewGoadInstancePage() {
                   body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [newId] }),
                 }).catch(() => {})
               }
-              try {
-                const taskId = sessionStorage.getItem("goad-task-new")
+              {
+                const taskId = goadTaskIdRef.current
                 if (taskId) {
-                  sessionStorage.setItem(`goad-task-${newId}`, taskId)
                   // Link the creation task to the new instance on the server so it
                   // shows up in the instance's Logs History tab.  Best-effort.
                   fetch(`/api/goad/tasks/${taskId}/link-instance`, {
@@ -555,9 +570,19 @@ export default function NewGoadInstancePage() {
                     body: JSON.stringify({ instanceId: newId }),
                   }).catch(() => {})
                 }
-                // Tell [id]/page.tsx this is a deploy action so it starts range log streaming.
-                sessionStorage.setItem(`goad-task-${newId}-action`, "provide")
-              } catch { /* SSR */ }
+              }
+              // Persist wizard network rules so [id]/page.tsx can re-apply them
+              // after GOAD finishes (GOAD's install may overwrite range-config).
+              if (networkRules.length > 0) {
+                const snapshot = extractNetworkSection(injectNetworkRules("", networkRules))
+                if (snapshot) {
+                  fetch(`/api/goad/instances/${encodeURIComponent(newId)}/pending-network`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(snapshot),
+                  }).catch(() => {})
+                }
+              }
               router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy`)
             }
           } catch { /* retry */ }

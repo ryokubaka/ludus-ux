@@ -325,10 +325,12 @@ export type UseGoadStreamOptions = {
 
 /**
  * Hook for streaming GOAD command output via SSE.
- * Persists the active task ID in sessionStorage (keyed by storageKey) so that
- * switching pages and coming back can resume from the server-side task store.
+ * Task IDs are stored server-side (goad_tasks SQLite table). The page-level
+ * server-fallback effect in goad/[id]/page.tsx queries /api/goad/tasks on
+ * mount to auto-resume any in-flight task, making GOAD logs visible across
+ * browsers, incognito sessions, and admin impersonation without sessionStorage.
  */
-export function useGoadStream(storageKey?: string, options?: UseGoadStreamOptions) {
+export function useGoadStream(options?: UseGoadStreamOptions) {
   const [lines, setLines] = useState<string[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [exitCode, setExitCode] = useState<number | null>(null)
@@ -375,7 +377,6 @@ export function useGoadStream(storageKey?: string, options?: UseGoadStreamOption
         if (captureTaskId && line.startsWith("[TASKID] ")) {
           const tid = line.slice(9).trim()
           setTaskId(tid)
-          if (storageKey) sessionStorage.setItem(storageKey, tid)
           return // hide [TASKID] lines from display
         }
         if (line.startsWith("[EXIT] ")) {
@@ -421,7 +422,7 @@ export function useGoadStream(storageKey?: string, options?: UseGoadStreamOption
       setIsRunning(false)
     }
     return streamExit
-  }, [storageKey])
+  }, [])
 
   const resumeTask = useCallback(async (tid: string) => {
     abortRef.current?.abort()
@@ -435,35 +436,6 @@ export function useGoadStream(storageKey?: string, options?: UseGoadStreamOption
       false
     )
   }, [connectToStream])
-
-  // After navigate away/back: reconnect to SSE — replays log file + live buffer.
-  // Always call resume when a task id is saved; optional GET is best-effort (must
-  // send impersonation headers or ownership checks can 404 and we used to skip resume).
-  useEffect(() => {
-    if (!storageKey) return
-    const savedTaskId = sessionStorage.getItem(storageKey)
-    if (!savedTaskId) return
-
-    let cancelled = false
-    void (async () => {
-      const extra = getExtraHeadersRef.current?.() ?? {}
-      try {
-        await fetch(`/api/goad/tasks/${savedTaskId}`, {
-          credentials: "include",
-          headers: { ...extra },
-        })
-      } catch {
-        /* non-fatal — stream may still work */
-      }
-      if (cancelled) return
-      await resumeTask(savedTaskId)
-    })()
-
-    return () => {
-      cancelled = true
-      abortRef.current?.abort()
-    }
-  }, [storageKey, resumeTask])
 
   const run = useCallback(async (
     args: string,
@@ -518,8 +490,7 @@ export function useGoadStream(storageKey?: string, options?: UseGoadStreamOption
     setExitCode(null)
     setTaskId(null)
     setIsRunning(false)
-    if (storageKey) sessionStorage.removeItem(storageKey)
-  }, [storageKey])
+  }, [])
 
   return { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear }
 }

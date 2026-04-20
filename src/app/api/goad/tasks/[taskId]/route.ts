@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getTask } from "@/lib/goad-task-store"
+import { getTask, updateTaskPhase, setTaskHasNetworkRules } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
@@ -29,4 +29,26 @@ export async function GET(
   }
 
   return NextResponse.json(task)
+}
+
+/** PATCH /api/goad/tasks/[taskId] — update deploy-queue phase metadata */
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ taskId: string }> }
+) {
+  const session = await getSessionFromRequest(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
+  const { taskId } = await params
+  const body = (await request.json().catch(() => ({}))) as {
+    phase?: "network-deploy" | null
+    hasNetworkRules?: boolean
+  }
+
+  if ("phase" in body) updateTaskPhase(taskId, body.phase ?? null)
+  if ("hasNetworkRules" in body) setTaskHasNetworkRules(taskId, body.hasNetworkRules ?? false)
+
+  return NextResponse.json({ ok: true })
 }

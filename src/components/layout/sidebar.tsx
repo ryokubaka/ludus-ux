@@ -37,7 +37,6 @@ import {
 } from "@/components/ui/tooltip"
 import { useRange } from "@/lib/range-context"
 import { useSidebar } from "@/lib/sidebar-context"
-import { ChangelogDialog } from "@/components/layout/changelog-dialog"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 
 interface NavItem {
@@ -111,8 +110,6 @@ export function Sidebar() {
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
-  const [changelogOpen, setChangelogOpen] = useState(false)
-
   // On mount: apply cached values instantly, then verify in background
   useEffect(() => {
     const cachedAdmin = sessionStorage.getItem(ADMIN_CACHE_KEY)
@@ -373,20 +370,19 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <button onClick={() => setChangelogOpen(true)} className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
+            <Link href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
               <p className="text-xs font-semibold text-muted-foreground">v{APP_VERSION} <span className="font-normal text-muted-foreground/60">{APP_VERSION_LABEL}</span></p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
-            </button>
+            </Link>
           )}
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <button onClick={() => setChangelogOpen(true)} className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION.split(".").slice(0, 2).join(".")}</button>
+                <Link href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION.split(".").slice(0, 2).join(".")}</Link>
               </TooltipTrigger>
               <TooltipContent side="right">v{APP_VERSION} {APP_VERSION_LABEL} — Open Source · Apache 2.0</TooltipContent>
             </Tooltip>
           )}
-          <ChangelogDialog open={changelogOpen} onOpenChange={setChangelogOpen} />
           <Tooltip>
             <TooltipTrigger asChild>
               <button

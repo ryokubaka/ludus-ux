@@ -32,6 +32,7 @@ import {
   Shield,
   AlertTriangle,
   CheckCircle2,
+  Check,
   Loader2,
   Wifi,
   ChevronDown,
@@ -49,11 +50,6 @@ import {
 } from "lucide-react"
 import { ludusApi, getImpersonationHeaders, getVmOperationLog, pruneKnownHosts } from "@/lib/api"
 import {
-  LUX_EXT_INSTALL_QUEUE_EVENT,
-  luxExtInstallQueueStorageKey,
-  type LuxExtInstallQueuePayload,
-} from "@/lib/ext-install-queue"
-import {
   goadTaskShortKind,
   correlateHistoryEntries,
   aggregateDeployStatuses,
@@ -64,6 +60,7 @@ import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
+import { useElapsed } from "@/hooks/use-elapsed"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { queryKeys } from "@/lib/query-keys"
@@ -136,7 +133,7 @@ export function DashboardPageClient() {
   const [deployHistoryDetailLoading, setDeployHistoryDetailLoading] = useState(false)
 
   // ── Deploy log stream ───────────────────────────────────────────────────────
-  const { lines: logLines, isStreaming, rangeState: streamRangeState, activeRangeId: streamingRangeId, startStreaming, stopStreaming, clearLogs } = useDeployLogContext()
+  const { lines: logLines, isStreaming, rangeState: streamRangeState, activeRangeId: streamingRangeId, streamStartedAt, startStreaming, stopStreaming, clearLogs } = useDeployLogContext()
 
   // ── Range status query ──────────────────────────────────────────────────────
   // Replaces fetchRanges + silentRefresh + setInterval(silentRefresh, 15000).
@@ -743,32 +740,12 @@ export function DashboardPageClient() {
   // badge + in-card banner; refreshed every 3s by the polling query above.
   const activeGoadTask = (goadTasksForRange ?? []).find((t) => t.status === "running") ?? null
   const activeGoadKind = activeGoadTask ? goadTaskShortKind(activeGoadTask.command) : null
-
-  const [extInstallQueue, setExtInstallQueue] = useState<LuxExtInstallQueuePayload | null>(null)
-  useEffect(() => {
-    if (!selectedRangeId) {
-      setExtInstallQueue(null)
-      return
-    }
-    const read = () => {
-      try {
-        const raw = sessionStorage.getItem(luxExtInstallQueueStorageKey(selectedRangeId))
-        setExtInstallQueue(raw ? (JSON.parse(raw) as LuxExtInstallQueuePayload) : null)
-      } catch {
-        setExtInstallQueue(null)
-      }
-    }
-    read()
-    const on = () => read()
-    window.addEventListener(LUX_EXT_INSTALL_QUEUE_EVENT, on)
-    window.addEventListener("storage", on)
-    const id = setInterval(read, 2000)
-    return () => {
-      window.removeEventListener(LUX_EXT_INSTALL_QUEUE_EVENT, on)
-      window.removeEventListener("storage", on)
-      clearInterval(id)
-    }
-  }, [selectedRangeId])
+  // Most recent task (regardless of status) — used to detect post-GOAD phases.
+  const latestGoadTask = (goadTasksForRange ?? [])[0] ?? null
+  const goadElapsed = useElapsed(activeGoadTask ? activeGoadTask.startedAt : null)
+  // Range log timer: prefer GOAD task's server-persisted startedAt over the
+  // context's Date.now()-based streamStartedAt so it survives page refresh.
+  const rangeElapsed = useElapsed(isStreaming ? (activeGoadTask?.startedAt ?? streamStartedAt) : null)
 
   // When a running GOAD task ends, refetch range status + deploy history + tasks
   // so the banner disappears immediately and any range-state changes GOAD made
@@ -1048,27 +1025,6 @@ export function DashboardPageClient() {
                     </Button>
                   </div>
 
-                  {/* ── GOAD provisioning banner ────────────────────────── */}
-                  {extInstallQueue && extInstallQueue.names.length > 1 && (
-                    <Alert className="border-blue-500/30 bg-blue-500/[0.06]">
-                      <Puzzle className="h-4 w-4 text-blue-400" />
-                      <AlertDescription className="text-xs space-y-1">
-                        <p className="font-medium">
-                          Extension install queue ({extInstallQueue.total ?? extInstallQueue.names.length}{" "}
-                          total)
-                        </p>
-                        <p className="font-mono text-[11px] leading-relaxed break-all">
-                          {extInstallQueue.names.join(" → ")}
-                        </p>
-                        {extInstallQueue.current != null && extInstallQueue.index != null ? (
-                          <p className="text-muted-foreground">
-                            Now: {extInstallQueue.current} ({extInstallQueue.index}/
-                            {extInstallQueue.total ?? extInstallQueue.names.length})
-                          </p>
-                        ) : null}
-                      </AlertDescription>
-                    </Alert>
-                  )}
                   {/* Ludus range state can flip to SUCCESS while the GOAD container is still
                       running Ansible for provide / install-extension / provision-lab. Surface
                       that here so users don't have to open the GOAD instance to notice. */}
@@ -1092,6 +1048,9 @@ export function DashboardPageClient() {
                             <p className="text-xs font-medium">{headline}</p>
                             <p className="text-[11px] text-muted-foreground">
                               Started {timeAgo(activeGoadTask.startedAt)}
+                              {goadElapsed && (
+                                <> · <span className="font-mono text-amber-400/80">{goadElapsed}</span></>
+                              )}
                               {" · "}
                               {activeGoadTask.lineCount.toLocaleString()} log lines
                               {" · "}
@@ -1111,6 +1070,40 @@ export function DashboardPageClient() {
                     )
                   })()}
 
+                  {/* Post-GOAD firewall redeploy banner — shown when the network-tag
+                      deploy is in progress after a GOAD action completed. */}
+                  {!activeGoadTask && latestGoadTask?.phase === "network-deploy" && goadInstanceForRange && (
+                    <Alert className="border-blue-500/30 bg-blue-500/[0.06]">
+                      <Shield className="h-4 w-4 text-blue-400" />
+                      <AlertDescription className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <p className="text-xs font-medium">
+                            Firewall redeploy running (post-GOAD {goadTaskShortKind(latestGoadTask.command).toLowerCase()})
+                          </p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 text-[11px]">
+                              <Check className="h-2.5 w-2.5" />
+                              Step 1 — GOAD done
+                            </span>
+                            <span className="text-muted-foreground/60 text-[11px]">→</span>
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-300 text-[11px] animate-pulse">
+                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                              Step 2 — Firewall redeploy running
+                            </span>
+                          </div>
+                        </div>
+                        <Link
+                          href={`/goad/${encodeURIComponent(goadInstanceForRange)}?tab=deploy`}
+                          className="shrink-0"
+                        >
+                          <Button size="sm" variant="outline" className="gap-1.5">
+                            <ExternalLink className="h-3 w-3" /> Open GOAD
+                          </Button>
+                        </Link>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
                   {/* ── Deploy logs ─────────────────────────────────────── */}
                   {showLogs && (
                     <div>
@@ -1119,6 +1112,11 @@ export function DashboardPageClient() {
                           <Activity className={cn("h-3.5 w-3.5", isStreaming && "animate-pulse text-green-400")} />
                           Deploy Logs
                           {isStreaming && <Badge variant="success" className="text-xs">Live</Badge>}
+                          {rangeElapsed && (
+                            <span className="font-mono text-[11px] text-green-400/80 border border-green-500/20 bg-green-500/5 px-1.5 py-0.5 rounded">
+                              {rangeElapsed}
+                            </span>
+                          )}
                         </h4>
                         <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>
                           <X className="h-3.5 w-3.5" />

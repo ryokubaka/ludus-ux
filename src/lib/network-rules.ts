@@ -266,6 +266,37 @@ export function removeExtensionVmsFromRangeConfig(
   return out
 }
 
+/** True when the network snapshot contains at least one custom firewall rule. */
+export function hasNetworkRules(snapshot: Record<string, unknown> | null): boolean {
+  if (!snapshot) return false
+  const rules = snapshot.rules
+  return Array.isArray(rules) && rules.length > 0
+}
+
+/**
+ * Return true when the `network:` section in the given YAML string is
+ * semantically equal to the snapshot.  Uses yaml.dump with the same
+ * normalisation options so formatting differences between Ludus's native
+ * YAML and js-yaml's output don't produce false positives.
+ */
+export function networkSectionEqual(
+  yamlText: string,
+  snapshot: Record<string, unknown>,
+): boolean {
+  try {
+    const doc = yaml.load(yamlText) as Record<string, unknown> | null
+    if (!doc || typeof doc !== "object") return false
+    const network = doc.network
+    if (!network || typeof network !== "object" || Array.isArray(network)) return false
+    return (
+      yaml.dump(network as Record<string, unknown>, YAML_DUMP_OPTS) ===
+      yaml.dump(snapshot, YAML_DUMP_OPTS)
+    )
+  } catch {
+    return false
+  }
+}
+
 /** Return a blank NetworkRule with sensible defaults. */
 export function blankRule(): NetworkRule {
   return {

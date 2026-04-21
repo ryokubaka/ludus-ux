@@ -438,12 +438,22 @@ function GoadInstancePage() {
   const autoTabRef = useRef(false)
   const wasGoadRunningRef = useRef(false)
   useEffect(() => {
+    const rid = instance?.ludusRangeId
     if (!isRunning) {
       // Only clear auto-tab latching after a task actually finished — not on the
       // initial paint while resumeTask is still fetching (that would undo a
       // readInitialGoadTab() of "deploy" and leave the user stuck on Terminal).
       if (wasGoadRunningRef.current) autoTabRef.current = false
       wasGoadRunningRef.current = false
+      // Start a buffer-replay stream when no task is running so the last
+      // deploy's logs remain visible after page refresh or navigation.
+      // snapshotStart: false replays the Ludus log buffer from the beginning
+      // of the last run. runAction() clears these and restarts with
+      // snapshotStart: true when a new deploy begins, so this doesn't
+      // interfere with fresh deploys.
+      if (rid && !isRangeStreaming) {
+        startRangeStreaming(rid, { snapshotStart: false })
+      }
       return
     }
     wasGoadRunningRef.current = true
@@ -455,7 +465,6 @@ function GoadInstancePage() {
     const isDeployAction = currentAction
       ? DEPLOY_TAB_ACTIONS.has(currentAction)
       : resumedAsDeployRef.current
-    const rid = instance?.ludusRangeId
 
     // Start range streaming as soon as we have both a running task AND a known rangeId.
     // We watch both `isRunning` and `instance?.ludusRangeId` because the two values

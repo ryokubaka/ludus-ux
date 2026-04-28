@@ -4,7 +4,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
-## [0.95] — 2026-04-28
+## [0.9.5] — 2026-04-28
 
 **LUX**
 - [Add] Additional controls on streamed and static logs — pause (freeze display while the buffer keeps filling), toggle auto-follow, font size stepper (A− / A+), word-wrap, light vs dark log pane, search with match navigation, copy all, download, clear

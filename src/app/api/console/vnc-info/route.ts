@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { getSessionFromRequest, type SessionData } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
-import { proxmoxLogin, proxmoxGetFirstNode, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
+import { proxmoxLogin, proxmoxGetNodeForVmid, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
 import { storeVncSession } from "@/lib/vnc-token-store"
-import { hasProxmoxPamOrSessionPassword } from "@/lib/root-ssh-auth"
+import { ludusRequest } from "@/lib/ludus-client"
+import type { UserObject } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
+
+async function resolveSessionProxmoxUser(session: SessionData): Promise<string> {
+  const result = await ludusRequest<UserObject | UserObject[]>("/user", { apiKey: session.apiKey })
+  if (result.error || result.status !== 200) {
+    throw new Error(`Failed to resolve logged-in user's Proxmox username from Ludus API (HTTP ${result.status}): ${result.error || "unknown error"}`)
+  }
+
+  const raw = Array.isArray(result.data) ? result.data[0] : result.data
+  const user = (raw?.proxmoxUsername || raw?.userID || session.username).trim().toLowerCase()
+  if (!user) throw new Error("Failed to resolve logged-in user's Proxmox username from Ludus API")
+  return user
+}
 
 export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)
@@ -16,27 +29,27 @@ export async function GET(request: NextRequest) {
   if (!vmId) return NextResponse.json({ error: "vmId required" }, { status: 400 })
 
   const settings = getSettings()
-  // Prefer dedicated Proxmox credentials; fall back to the logged-in user's SSH password.
-  // For a typical Ludus deployment, root's SSH password == Proxmox root@pam password.
-  const password = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!hasProxmoxPamOrSessionPassword(settings, session.sshPassword)) {
+  const password = (session.sshPassword || "").trim()
+  if (!password) {
     return NextResponse.json(
       {
         error:
-          "In-browser VNC needs a Proxmox PAM password (same as Linux root/user password for API login). SSH keys work for SPICE and pvesh-over-SSH but not for the Proxmox REST ticket used by noVNC. Set PROXMOX_SSH_PASSWORD or log in with your SSH password.",
+          "In-browser VNC needs your Ludus login password so LUX can request a Proxmox PAM ticket for your user. SSH keys work for SPICE and pvesh-over-SSH, but not for the Proxmox REST ticket used by noVNC. Log out and log in with your SSH/PAM password.",
       },
       { status: 503 },
     )
   }
 
-  const { sshHost, proxmoxSshUser: user } = settings
+  const { sshHost } = settings
 
   try {
-    // Authenticate to Proxmox API as root@pam (same credentials as SSH root).
+    const user = await resolveSessionProxmoxUser(session)
+
+    // Authenticate to Proxmox API as the logged-in user's PAM account.
     // The PVEAuthCookie is needed so the WebSocket proxy can authenticate the
     // upstream connection on the browser's behalf — the browser never sees it.
     const auth = await proxmoxLogin(sshHost, user, password)
-    const node = await proxmoxGetFirstNode(sshHost, auth)
+    const node = await proxmoxGetNodeForVmid(sshHost, auth, vmId)
     const vnc = await proxmoxCreateVncProxy(sshHost, auth, node, vmId)
 
     // Store all connection data under a short-lived token.

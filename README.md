@@ -15,6 +15,7 @@
 - [Ludus Pro vs LUX](#ludus-pro-vs-lux)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
+- [Upgrade / downgrade](#upgrade--downgrade)
 - [SSH authentication (root vs session)](#ssh-authentication-root-vs-session)
 - [Configuration](#configuration)
 - [Features](#features)
@@ -45,6 +46,8 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 > **This project was largely vibe-coded (AI-assisted development) and has not undergone a formal security audit.**
 >
 > It handles sensitive credentials — SSH passwords, API keys, session secrets — and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source code yourself before deploying in any environment you care about.** Use at your own risk. Please raise an issue if you identify concerns.
+>
+> As of **0.95**, `proxmoxSshPassword` values saved through Settings are encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
 >
 > This is an independent tool and is not affiliated with or endorsed by Ludus or GOAD.
 
@@ -138,7 +141,7 @@ cp .env.example .env
    | `LUDUS_SSH_HOST` | Ludus server hostname or IP (SSH, GOAD, and default Ludus API URLs) |
    | `APP_SECRET` | Long random secret for session encryption (`openssl rand -hex 32`) |
    | `LUDUS_ROOT_API_KEY` | Ludus v2 root API key (admin users/ranges) — from `/opt/ludus/install/root-api-key` on the server |
-   | Root SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** set `PROXMOX_SSH_PASSWORD` |
+   | Root SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** set `PROXMOX_SSH_PASSWORD` for server-side admin operations. In-browser noVNC uses the logged-in user's PAM password separately. |
 
 
 3. **Root SSH private key: from the Ludus server onto the LUX host**
@@ -185,13 +188,41 @@ docker compose up -d --build
 # http://localhost:3000   (plain HTTP, also available)
 ```
 
-7. Log in with your Ludus user’s (not root!) **SSH username and password** (used for per-user GOAD and session context). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+7. Log in with your Ludus user’s (not root!) **SSH username and password**. LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash
 > git clone https://github.com/Orange-Cyberdefense/GOAD.git /opt/GOAD
 > apt install python3.11-venv
 > ```
+
+### Upgrade / Downgrade
+
+Use this when you already have a **git clone** of the repo on the Docker host (same layout as [Manual setup](#manual-setup)). The helper script talks to **whatever remote your clone uses** (`origin` if present, otherwise the first remote)—GitHub, GitLab, or any other URL—so you do not edit URLs by hand.
+
+**What it does**
+
+1. Quiet `git fetch` from your remote (`--prune --tags`) so your view matches the server without noisy deleted-ref lines.
+2. Lists **active branches** and **release tags** straight from the remote (`git ls-remote`) — only refs that still exist; stale deleted branches are not offered.
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.5`).
+4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
+5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
+
+**Requirements:** `git`, `docker`, and Docker Compose on `PATH` (same expectations as [Verify Docker and Compose](#verify-docker-and-compose)).
+
+```bash
+cd ludus-ux
+bash scripts/upgrade.sh
+```
+
+Non-interactive (examples):
+
+```bash
+bash scripts/upgrade.sh main
+bash scripts/upgrade.sh v0.9.5
+```
+
+Persistent data (`./data`, `./ssh`, `./certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
 
 ### Quick SSH sanity check
 
@@ -207,9 +238,28 @@ With the stack up and `./ssh/id_rsa` readable in the container:
 | Mechanism | What it’s for |
 |---|---|
 | **`PROXMOX_SSH_PASSWORD` or root key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side root SSH: admin tunnel to Ludus admin API, `pvesh` (SPICE, admin VM delete/power, shared pool discovery), GOAD impersonation, template install, log tail via SSH, `chpasswd`, rolling API keys in user `~/.bashrc`. **Key auth is the recommended default** on hardened Proxmox hosts. |
-| **User password stored in session (login)** | Per-user GOAD, and **fallback** for `pvesh` when root password/key is not set. |
+| **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when root password/key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
 
 Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
+
+### Console / noVNC authentication
+
+Changed in **0.95**: noVNC uses the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
+
+The browser console uses two separate Proxmox mechanisms:
+
+- **SPICE / VNC `.vv` downloads** use `pvesh` over server-side SSH. Root key auth works here.
+- **In-browser noVNC** uses the Proxmox HTTP API on `https://<LUDUS_SSH_HOST>:8006`. LUX logs in as the current LUX user's Ludus `proxmoxUsername@pam` using the password captured during LUX login, then requests the VM's VNC proxy ticket.
+
+Green **Settings -> Test root SSH & admin API** results do not prove noVNC will work. That test validates root SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.
+
+If noVNC fails with `Proxmox login failed (HTTP 401)`:
+
+- Confirm the user can log in to Proxmox as `proxmoxUsername@pam` with the same password they used for LUX.
+- Confirm Ludus has the expected `proxmoxUsername` for that user.
+- Confirm `LUDUS_SSH_HOST` points at the Proxmox node or cluster endpoint serving port 8006.
+- If an admin is using LUX impersonation, the console still uses the admin's own PAM credentials, not the impersonated user's password. That admin must have Proxmox permission to access the target VM.
+- Root SSH key auth can be fully working while noVNC fails, because Proxmox's HTTP ticket endpoint does not accept SSH keys.
 
 ### Admin API URL (`LUDUS_ADMIN_URL`)
 
@@ -263,7 +313,7 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 | `LUDUS_SSH_PORT` | SSH port | `22` |
 | `LUDUS_SERVER_IP` | Optional IP when `LUDUS_SSH_HOST` is not resolvable inside the container | — |
 | `LUDUS_URL` | Ludus API URL (port **8080**) | Compose default: `https://` + `LUDUS_SSH_HOST` + `:8080`; override in `.env` if needed |
-| `APP_SECRET` | Session encryption key (32+ chars) | — |
+| `APP_SECRET` | Session encryption key (32+ chars). Also encrypts sensitive Settings values stored in SQLite, including `proxmoxSshPassword`; changing it invalidates those encrypted values. | — |
 | `LUDUS_VERIFY_TLS` | Verify Ludus TLS certificate | `false` |
 
 ### Docker Compose (host → container)
@@ -280,7 +330,7 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 | `LUDUS_ADMIN_URL` | Admin API base URL (port **8081**). Compose default uses `LUDUS_SSH_HOST` with `:8081` (override in `.env` if needed). Prefer `https://<ludus-host>:8081` when reachable from the container. SSH tunnel to `127.0.0.1:18081` is optional when 8081 is loopback-only; remote URLs are not overwritten by the tunnel. |
 | `LUDUS_ROOT_API_KEY` | Root API key (from `/opt/ludus/install/root-api-key` on the server) |
 | `PROXMOX_SSH_USER` | Root (or privileged) SSH user for server-side Proxmox/Ludus operations |
-| `PROXMOX_SSH_PASSWORD` | Optional if using key auth |
+| `PROXMOX_SSH_PASSWORD` | Optional for server-side root SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not the root key. |
 | `PROXMOX_SSH_KEY_PATH` | Private key path **inside** the container; must match the file under `SSH_KEY_PATH` on the host (default `/app/ssh/id_rsa`) |
 | `PROXMOX_SSH_KEY_PASSPHRASE` | Optional passphrase for the key |
 
@@ -332,7 +382,7 @@ If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's
 
 ### VM Access
 
-- **Consoles** — noVNC in browser (needs PAM password path); SPICE / VNC `.vv` via `pvesh` over SSH (works with key-based root SSH)
+- **Consoles** — noVNC in browser (uses the logged-in user's PAM password with Proxmox HTTP API on port 8006); SPICE / VNC `.vv` via `pvesh` over SSH (works with key-based root SSH)
 - **Console range picker** — Choose any accessible range and VM from the Consoles page
 
 ### GOAD Integration
@@ -401,7 +451,7 @@ Browser
   │                                 ├─ /api/proxy/* ──► Ludus API (8080/8081)
   │                                 ├─ /api/goad/*  ──► SSH → Ludus server (GOAD)
   │                                 ├─ /api/admin/* ──► SSH → Proxmox (pvesh)
-  │                                 └─ /api/console/* ► SSH → Proxmox (pvesh) + HTTP for noVNC tickets
+  │                                 └─ /api/console/* ► SSH → Proxmox (pvesh) + user PAM HTTP for noVNC tickets
   │
   └─ WSS (same port) ────────► ws-server.ts ──► Proxmox VNC WebSocket
 ```
@@ -409,7 +459,7 @@ Browser
 ### Key Design Decisions
 
 - **No external database** — SQLite under `data/` is the only persistence layer
-- **Session-encrypted credentials** — User SSH password in an `httpOnly` cookie for GOAD reuse
+- **Session-encrypted credentials** — User SSH/PAM password in an `httpOnly` cookie for GOAD and noVNC ticket reuse
 - **Admin credential hygiene** — Root password, root API key, and stored SSH password are not returned to non-admin clients
 - **SSE** — Deployment and GOAD logs stream over Server-Sent Events
 - **Task persistence** — GOAD task IDs in `sessionStorage` for stream resume across navigation

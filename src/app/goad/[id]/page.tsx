@@ -59,7 +59,7 @@ import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
 import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
-import { cn, timeAgo } from "@/lib/utils"
+import { cn, extractArray, timeAgo } from "@/lib/utils"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -438,12 +438,22 @@ function GoadInstancePage() {
   const autoTabRef = useRef(false)
   const wasGoadRunningRef = useRef(false)
   useEffect(() => {
+    const rid = instance?.ludusRangeId
     if (!isRunning) {
       // Only clear auto-tab latching after a task actually finished — not on the
       // initial paint while resumeTask is still fetching (that would undo a
       // readInitialGoadTab() of "deploy" and leave the user stuck on Terminal).
       if (wasGoadRunningRef.current) autoTabRef.current = false
       wasGoadRunningRef.current = false
+      // Start a buffer-replay stream when no task is running so the last
+      // deploy's logs remain visible after page refresh or navigation.
+      // snapshotStart: false replays the Ludus log buffer from the beginning
+      // of the last run. runAction() clears these and restarts with
+      // snapshotStart: true when a new deploy begins, so this doesn't
+      // interfere with fresh deploys.
+      if (rid && !isRangeStreaming) {
+        startRangeStreaming(rid, { snapshotStart: false })
+      }
       return
     }
     wasGoadRunningRef.current = true
@@ -455,7 +465,6 @@ function GoadInstancePage() {
     const isDeployAction = currentAction
       ? DEPLOY_TAB_ACTIONS.has(currentAction)
       : resumedAsDeployRef.current
-    const rid = instance?.ludusRangeId
 
     // Start range streaming as soon as we have both a running task AND a known rangeId.
     // We watch both `isRunning` and `instance?.ludusRangeId` because the two values
@@ -785,7 +794,7 @@ function GoadInstancePage() {
     setDeployHistoryLoading(true)
     try {
       const result = await ludusApi.getRangeLogHistory(instance.ludusRangeId)
-      setDeployHistory(result.data ?? [])
+      setDeployHistory(extractArray<LogHistoryEntry>(result.data as unknown))
     } catch {}
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
@@ -855,8 +864,7 @@ function GoadInstancePage() {
     fetch("/api/proxy/templates")
       .then((r) => r.ok ? r.json() : [])
       .then((d) => {
-        const list: TemplateObject[] = Array.isArray(d) ? d : (d?.result ?? [])
-        setTemplates(list)
+        setTemplates(extractArray<TemplateObject>(d))
       })
       .catch(() => {})
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -886,7 +894,7 @@ function GoadInstancePage() {
         fetch("/api/goad/tasks", { headers: impersonationHeaders() }).then((r) => r.json()),
       ])
       if (cancelled) return
-      const dh = deployResult.data ?? []
+      const dh = extractArray<LogHistoryEntry>(deployResult.data as unknown)
       const allTasks = (tasksRes.tasks ?? []) as GoadTaskForCorrelation[]
       const th = allTasks.filter(
         (t) => t.instanceId === instanceId || t.command.includes(instanceId),

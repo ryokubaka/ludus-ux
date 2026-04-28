@@ -1,11 +1,19 @@
 "use client"
 
-import { useEffect, useRef, useCallback, useState, useMemo } from "react"
+import { useEffect, useRef, useCallback, useState } from "react"
 import type { ReactNode } from "react"
-import { Button } from "@/components/ui/button"
-import { Download, Trash2, ArrowDown, Search, ChevronUp, ChevronDown, X } from "lucide-react"
+import { ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
+import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
+import { useLogSearch } from "@/components/range/use-log-search"
+import {
+  LogDockToolbar,
+  LogDockSearchBar,
+  type LogDockTheme,
+  type LogFontSize,
+  DEFAULT_FONT_SIZE,
+} from "@/components/range/log-dock-toolbar"
 
 // Strip ANSI/VT100 codes so stored history with raw escape sequences renders cleanly.
 function stripAnsi(s: string): string {
@@ -42,7 +50,7 @@ interface GoadTerminalProps {
   label?: string
 }
 
-const BOTTOM_THRESHOLD = 80 // px
+const BOTTOM_THRESHOLD = 80
 
 export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalProps) {
   const containerRef        = useRef<HTMLDivElement>(null)
@@ -51,25 +59,48 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
   const prevLinesLenRef     = useRef(0)
   const [showJumpBtn, setShowJumpBtn] = useState(false)
 
-  // ── Search state ──────────────────────────────────────────────────────────
-  const [searchOpen, setSearchOpen]       = useState(false)
-  const [searchQuery, setSearchQuery]     = useState("")
-  const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
-  const searchInputRef   = useRef<HTMLInputElement>(null)
-  const matchLineRefsRef = useRef<Map<number, HTMLDivElement>>(new Map())
+  // ── Toolbar state ─────────────────────────────────────────────────────────
+  const [localAutoScroll, setLocalAutoScroll] = useState(true)
+  const [fontSize, setFontSize] = useState<LogFontSize>(DEFAULT_FONT_SIZE)
+  const [wrap, setWrap]         = useState(false)
+  const [theme, setTheme]       = useState<LogDockTheme>("dark")
 
-  // Auto-scroll new lines into view
+  // ── Pause ─────────────────────────────────────────────────────────────────
+  const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
+
+  // ── Search (search against ANSI-stripped text, operate on display view) ───
+  const {
+    searchOpen,
+    searchQuery,
+    setSearchQuery,
+    setSearchOpen,
+    currentMatchIdx,
+    matchIndices,
+    matchSet,
+    searchInputRef,
+    matchLineRefsRef,
+    navigateMatch,
+    toggleSearch,
+    handleSearchKeyDown,
+  } = useLogSearch(displayLines, { normalizeLine: stripAnsi })
+
+  // ── Auto-scroll new lines ─────────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
-    const hasNew = lines.length > prevLinesLenRef.current
-    prevLinesLenRef.current = lines.length
+    const hasNew = displayLines.length > prevLinesLenRef.current
+    prevLinesLenRef.current = displayLines.length
 
-    if (lines.length === 0) {
+    if (displayLines.length === 0) {
       userScrolledUpRef.current = false
       prevScrollTopRef.current  = 0
       setShowJumpBtn(false)
+      return
+    }
+
+    if (!localAutoScroll) {
+      if (hasNew) setShowJumpBtn(true)
       return
     }
 
@@ -79,30 +110,18 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
     } else if (hasNew) {
       setShowJumpBtn(true)
     }
-  }, [lines])
-
-  // Reset search state when lines become empty
-  useEffect(() => {
-    if (lines.length === 0) {
-      setSearchQuery("")
-      setCurrentMatchIdx(0)
-    }
-  }, [lines])
+  }, [displayLines, localAutoScroll])
 
   const handleScroll = () => {
     const el = containerRef.current
     if (!el) return
-
-    const isNearBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
-
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
     if (isNearBottom) {
       userScrolledUpRef.current = false
       setShowJumpBtn(false)
     } else if (el.scrollTop < prevScrollTopRef.current) {
       userScrolledUpRef.current = true
     }
-
     prevScrollTopRef.current = el.scrollTop
   }
 
@@ -110,173 +129,101 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
     const el = containerRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-    prevScrollTopRef.current  = el.scrollTop
-    userScrolledUpRef.current = false
+    prevScrollTopRef.current   = el.scrollTop
+    userScrolledUpRef.current  = false
     setShowJumpBtn(false)
   }
 
-  const downloadLog = () => {
-    const content = lines.join("\n")
-    const blob = new Blob([content], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `goad-${new Date().toISOString().slice(0, 19)}.log`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // ── Search logic ──────────────────────────────────────────────────────────
-
-  const matchIndices = useMemo(() => {
-    if (!searchQuery.trim()) return []
-    const q = searchQuery.toLowerCase()
-    const result: number[] = []
-    lines.forEach((line, i) => {
-      if (stripAnsi(line).toLowerCase().includes(q)) result.push(i)
-    })
-    return result
-  }, [lines, searchQuery])
-
-  const matchSet = useMemo(() => new Set(matchIndices), [matchIndices])
-
-  // Reset to first match whenever the query changes
-  useEffect(() => {
-    setCurrentMatchIdx(0)
-  }, [searchQuery])
-
-  // Scroll the current match into view whenever it changes
-  useEffect(() => {
-    if (matchIndices.length === 0) return
-    const lineIdx = matchIndices[currentMatchIdx]
-    matchLineRefsRef.current.get(lineIdx)?.scrollIntoView({ block: "nearest" })
-  }, [matchIndices, currentMatchIdx])
-
-  const navigateMatch = useCallback((dir: 1 | -1) => {
-    if (matchIndices.length === 0) return
-    setCurrentMatchIdx(i => (i + dir + matchIndices.length) % matchIndices.length)
-  }, [matchIndices])
-
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
-      setSearchOpen(false)
-      setSearchQuery("")
-    } else if (e.key === "Enter") {
-      navigateMatch(e.shiftKey ? -1 : 1)
-    }
-  }
-
-  const toggleSearch = () => {
-    setSearchOpen(o => {
-      if (o) {
-        setSearchQuery("")
-        setCurrentMatchIdx(0)
-      }
-      return !o
-    })
-  }
+  // ── Toolbar left slot: mac dots + label ───────────────────────────────────
+  const dark = theme === "dark"
+  const leftSlot = (
+    <div className="flex items-center gap-2">
+      <div className="flex gap-1.5 flex-shrink-0">
+        <div className="w-3 h-3 rounded-full bg-red-500/80" />
+        <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+        <div className="w-3 h-3 rounded-full bg-green-500/80" />
+      </div>
+      {paused ? (
+        <span className="text-yellow-400 font-mono text-xs ml-1">
+          Paused · {frozenAt} / {lines.length}
+        </span>
+      ) : (
+        <span className={cn("text-xs font-mono ml-1", dark ? "text-gray-400" : "text-gray-600")}>
+          {label ?? "GOAD terminal"}
+        </span>
+      )}
+    </div>
+  )
 
   return (
     <div className={cn("flex flex-col min-h-0", className)}>
-      {/* ── Terminal header ── */}
-      <div className="bg-gray-900 border border-gray-700 rounded-t-lg border-b-0 flex-shrink-0">
-        {/* Top toolbar row */}
-        <div className="flex items-center justify-between px-3 py-2">
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-red-500/80" />
-              <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
-              <div className="w-3 h-3 rounded-full bg-green-500/80" />
-            </div>
-            <span className="text-xs text-gray-400 font-mono ml-2">{label ?? "GOAD terminal"}</span>
-          </div>
-          <div className="flex gap-1 items-center">
-            <Button size="icon-sm" variant="ghost" onClick={toggleSearch}>
-              <Search className={cn("h-3 w-3", searchOpen ? "text-yellow-400" : "text-gray-400")} />
-            </Button>
-            <Button size="icon-sm" variant="ghost" onClick={downloadLog} disabled={lines.length === 0}>
-              <Download className="h-3 w-3 text-gray-400" />
-            </Button>
-            {onClear && (
-              <Button size="icon-sm" variant="ghost" onClick={onClear} disabled={lines.length === 0}>
-                <Trash2 className="h-3 w-3 text-gray-400" />
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Collapsible search row */}
+      {/* Terminal header chrome */}
+      <div className={cn(
+        "border rounded-t-lg border-b-0 flex-shrink-0",
+        dark ? "bg-gray-900 border-gray-700" : "bg-gray-100 border-gray-200",
+      )}>
+        <LogDockToolbar
+          lines={lines}
+          downloadFilename={`goad-${label ?? "terminal"}`}
+          paused={paused}
+          onPause={() => pause(lines.length)}
+          onResume={() => { resume(); scrollToBottom() }}
+          autoScroll={localAutoScroll}
+          onAutoScrollToggle={() => setLocalAutoScroll(v => !v)}
+          fontSize={fontSize}
+          onFontSizeChange={setFontSize}
+          wrap={wrap}
+          onWrapToggle={() => setWrap(v => !v)}
+          theme={theme}
+          onThemeToggle={() => setTheme(t => t === "dark" ? "light" : "dark")}
+          searchOpen={searchOpen}
+          onSearchToggle={toggleSearch}
+          onClear={onClear ? () => { resume(); onClear() } : undefined}
+          leftSlot={leftSlot}
+          className="border-b-0 rounded-t-lg"
+        />
         {searchOpen && (
-          <div className="px-3 pb-2 flex items-center gap-2">
-            <div className="relative flex-1">
-              <input
-                ref={searchInputRef}
-                autoFocus
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                placeholder="Search..."
-                className="w-full bg-gray-800 text-gray-200 text-xs font-mono px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-gray-400 pr-6"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(""); setSearchOpen(false) }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-            {searchQuery && (
-              <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
-                {matchIndices.length === 0
-                  ? "No results"
-                  : `${currentMatchIdx + 1} / ${matchIndices.length}`}
-              </span>
-            )}
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => navigateMatch(-1)}
-              disabled={matchIndices.length === 0}
-            >
-              <ChevronUp className="h-3 w-3 text-gray-400" />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => navigateMatch(1)}
-              disabled={matchIndices.length === 0}
-            >
-              <ChevronDown className="h-3 w-3 text-gray-400" />
-            </Button>
-          </div>
+          <LogDockSearchBar
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            matchIndices={matchIndices}
+            currentMatchIdx={currentMatchIdx}
+            navigateMatch={navigateMatch}
+            onClose={() => setSearchOpen(false)}
+            searchInputRef={searchInputRef}
+            handleSearchKeyDown={handleSearchKeyDown}
+            theme={theme}
+          />
         )}
       </div>
 
+      {/* Log body */}
       <div className="relative flex-1 min-h-0 flex flex-col">
         <div
           ref={containerRef}
           onScroll={handleScroll}
-          className="bg-gray-950 border border-gray-700 rounded-b-lg p-4 font-mono text-xs overflow-y-auto overflow-x-hidden min-h-[12rem] flex-1"
+          className={cn(
+            "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1",
+            dark ? "border-gray-700" : "border-gray-200",
+            dark ? "bg-gray-950 text-gray-200" : "bg-gray-50 text-gray-800",
+            wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
+          )}
+          style={{ fontSize: `${fontSize}px`, lineHeight: "1.5" }}
         >
-          {lines.length === 0 ? (
-            <p className="text-gray-600 italic">Waiting for output...</p>
+          {displayLines.length === 0 ? (
+            <p className={cn("italic", dark ? "text-gray-600" : "text-gray-400")}>
+              Waiting for output…
+            </p>
           ) : (
-            <pre className="m-0 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words">
-              {lines.map((line, i) => {
+            <pre className="m-0 font-mono leading-relaxed" style={{ fontSize: "inherit" }}>
+              {displayLines.map((line, i) => {
                 const clean = stripAnsi(line)
                 if (!clean.trim()) return null
 
-                const isMatch   = searchQuery.trim() !== "" && matchSet.has(i)
-                const isCurrent = isMatch && matchIndices[currentMatchIdx] === i
-                const highlightCls = isCurrent
-                  ? "bg-yellow-400/40"
-                  : isMatch
-                  ? "bg-yellow-500/20"
-                  : ""
-                const refCallback = isMatch
+                const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
+                const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
+                const highlightCls = isCurrent ? "bg-yellow-400/40" : isMatch ? "bg-yellow-500/20" : ""
+                const refCallback  = isMatch
                   ? (el: HTMLDivElement | null) => {
                       if (el) matchLineRefsRef.current.set(i, el)
                       else matchLineRefsRef.current.delete(i)

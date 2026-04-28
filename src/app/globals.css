@@ -80,8 +80,9 @@
     @apply w-2 h-2 rounded-full inline-block;
   }
 
+  /** font-size inherits from LogViewer toolbar — never pin text-xs here or A+/A− has no visible effect */
   .log-line {
-    @apply font-mono text-xs leading-relaxed;
+    @apply font-mono leading-relaxed;
   }
 }
 

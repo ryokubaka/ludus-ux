@@ -4,6 +4,22 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.95] — 2026-04-28
+
+**LUX**
+- [Add] Additional controls on streamed and static logs — pause (freeze display while the buffer keeps filling), toggle auto-follow, font size stepper (A− / A+), word-wrap, light vs dark log pane, search with match navigation, copy all, download, clear
+- [Add] Shared `LogDockToolbar` across `LogViewer` (Dashboard, Range Logs, Templates, Testing, Range Config, …) and `GoadTerminal` (GOAD instance pages); Range Logs toolbar shows Live when SSE is connected
+- [Fix] Log body font-size now follows the toolbar (`.log-line` no longer pinned `text-xs`, which blocked resizing on Ludus Ansible output)
+- [Change] noVNC now authenticates to Proxmox as the logged-in LUX user's PAM account (`proxmoxUsername@pam`) using the user's session password, instead of reusing `PROXMOX_SSH_USER` / root PAM credentials.
+- [Fix] noVNC resolves the Proxmox node from cluster resources by VMID before creating the VNC proxy ticket, instead of assuming the first node.
+- [Fix] noVNC missing-password errors now clearly explain that Proxmox HTTP tickets require the user's PAM password; SSH keys still work for SPICE and `pvesh` paths only.
+- [Security] `proxmoxSshPassword` saved from the Settings UI is encrypted at rest in SQLite using `APP_SECRET`; existing plaintext values are rewritten encrypted on next settings load.
+- [Docs] README now separates root SSH auth from browser-console PAM auth and adds VNC 401 troubleshooting.
+- [Docs] Quickstart now explains the optional root `PROXMOX_SSH_PASSWORD` and that in-browser noVNC uses the logged-in user's password.
+- [Docs] `scripts/upgrade.sh` — upgrade/downgrade helper; quiet `git fetch`, lists active remote branches and tags via `git ls-remote` (no stale deleted branches), supports tag checkout; README section updated.
+
+---
+
 ## [0.9.4] — 2026-04-20
 
 **LUX**
@@ -11,7 +27,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Add] Deploy History and Build History — click any past run to view full output; paginated (5/page)
 - [Add] VM operation audit log — per-VM destroy and extension removal logged on Dashboard and Range Logs
 - [Add] Per-VM destroy action from the Dashboard range card
-- [Add] Settings page redesigned with Dockhand-style tabs (General, SSH & GOAD, Branding, About)
+- [Add] Settings page redesigned with tabs (General, SSH & GOAD, Branding, About)
 - [Add] About tab — version badge, release notes accordion, and dependency list
 - [Fix] Abort shows "Aborting…" immediately and polls until range exits DEPLOYING
 - [Fix] Power On/Off scoped to selected range — fixes errors on non-default ranges

@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { RefreshCw, Clock, Loader2, ScrollText, Puzzle, Server, ChevronLeft, ChevronRight } from "lucide-react"
-import { cn, timeAgo } from "@/lib/utils"
+import { cn, extractArray, timeAgo } from "@/lib/utils"
 import type { LogHistoryEntry } from "@/lib/types"
 import {
   type CorrelatedHistoryEntry,
@@ -289,6 +289,8 @@ export function PaginatedLogHistoryList({
   paginationResetKey = "",
   ...rest
 }: PaginatedLogHistoryListProps) {
+  /** Ludus sometimes returns `{ result: [...] }` or bad cached shapes — never crash `.slice`. */
+  const safeEntries = extractArray<LogHistoryEntry>(allEntries as unknown)
   const [page, setPage] = useState(0)
   const {
     goadInstanceId,
@@ -312,10 +314,10 @@ export function PaginatedLogHistoryList({
   // so this is only used in the correlated path.
   const rows: CorrelatedHistoryEntry[] = useMemo(() => {
     if (!hasGoadContext) return []
-    return correlateHistoryEntries(allEntries, goadTasks ?? [])
-  }, [allEntries, goadTasks, hasGoadContext])
+    return correlateHistoryEntries(safeEntries, goadTasks ?? [])
+  }, [safeEntries, goadTasks, hasGoadContext])
 
-  const total = hasGoadContext ? rows.length : allEntries.length
+  const total = hasGoadContext ? rows.length : safeEntries.length
   const pageCount = Math.max(1, Math.ceil(total / DEPLOY_HISTORY_PAGE_SIZE))
 
   useEffect(() => {
@@ -346,7 +348,7 @@ export function PaginatedLogHistoryList({
 
   // Non-GOAD path: delegate a paged slice to LogHistoryList (templates page).
   if (!hasGoadContext) {
-    const slice = allEntries.slice(start, end)
+    const slice = safeEntries.slice(start, end)
     return (
       <div className="space-y-2">
         <LogHistoryList
@@ -366,7 +368,7 @@ export function PaginatedLogHistoryList({
     )
   }
 
-  if (loading && allEntries.length === 0) {
+  if (loading && safeEntries.length === 0) {
     return (
       <div className="space-y-2">
         {onRefresh && (

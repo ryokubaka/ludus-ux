@@ -37,7 +37,7 @@ import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn, extractArray } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
@@ -275,12 +275,10 @@ export default function NewRangePage() {
 
   useEffect(() => {
     ludusApi.listTemplates().then((res) => {
-      if (res.data) {
-        const built = (Array.isArray(res.data) ? res.data : [])
-          .filter((t) => t.built)
-          .sort((a, b) => a.name.localeCompare(b.name))
-        setTemplates(built)
-      }
+      const built = extractArray<TemplateObject>(res.data as unknown)
+        .filter((t) => t.built)
+        .sort((a, b) => a.name.localeCompare(b.name))
+      setTemplates(built)
       setTemplatesLoading(false)
     })
     ludusApi.getRanges().then((res) => {
@@ -723,11 +721,11 @@ export default function NewRangePage() {
                       <Alert className="border-amber-500/50 bg-amber-500/10">
                         <AlertTriangle className="h-4 w-4 text-amber-500" />
                         <AlertDescription className="text-xs leading-relaxed">
-                          Ludus UI could not load a <strong className="text-foreground">server-wide</strong> range list
+                          Ludus UX could not load a <strong className="text-foreground">server-wide</strong> range list
                           for your session. The suggested <code className="font-mono text-primary">10.{nextRangeNumber}.*</code>{" "}
                           can be wrong and overlap another tenant. Set{" "}
-                          <code className="text-[10px] bg-muted px-1 rounded">LUDUS_ROOT_API_KEY</code> in Ludus UI
-                          environment so this wizard can query every range and show the correct next block.
+                          <code className="text-[10px] bg-muted px-1 rounded">LUDUS_ROOT_API_KEY</code> in Ludus UX Settings
+                          (or your deployment&apos;s .env) so this wizard can query every range and show the correct next block.
                         </AlertDescription>
                       </Alert>
                     )}

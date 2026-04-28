@@ -19,7 +19,8 @@ import {
 } from "@/lib/goad-deploy-history-correlation"
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn, extractArray } from "@/lib/utils"
+import type { LogHistoryEntry } from "@/lib/types"
 
 export default function LogsPage() {
   const { toast } = useToast()
@@ -40,7 +41,7 @@ export default function LogsPage() {
     queryKey: queryKeys.rangeLogHistory(selectedRangeId),
     queryFn: async () => {
       const result = await ludusApi.getRangeLogHistory(selectedRangeId ?? undefined)
-      return result.data ?? []
+      return extractArray<LogHistoryEntry>(result.data as unknown)
     },
     staleTime: STALE.short,
   })
@@ -268,6 +269,7 @@ export default function LogsPage() {
           <LogViewer
             lines={lines}
             autoScroll={isStreaming}
+            live={isStreaming}
             maxHeight="calc(100vh - 560px)"
           />
         </CardContent>

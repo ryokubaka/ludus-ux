@@ -378,7 +378,7 @@ export function Sidebar() {
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Link href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION.split(".").slice(0, 2).join(".")}</Link>
+                <Link href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
               </TooltipTrigger>
               <TooltipContent side="right">v{APP_VERSION} {APP_VERSION_LABEL} — Open Source · Apache 2.0</TooltipContent>
             </Tooltip>

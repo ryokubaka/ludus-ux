@@ -25,7 +25,7 @@
  * control.
  */
 
-const STORAGE_PREFIX = "ludus-ui:aborting:"
+const STORAGE_PREFIX = "ludus-ux:aborting:"
 /** Grace window during which we trust our own abort over Ludus's state. */
 export const ABORT_GRACE_MS = 20_000
 

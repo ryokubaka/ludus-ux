@@ -218,7 +218,7 @@ function runMigrations(db: BetterSqlite3.Database): void {
       `)
     },
 
-    // v7 — Local audit log for Ludus VM destroys and GOAD extension removals (LUX UI).
+    // v7 — Local audit log for Ludus VM destroys and GOAD extension removals (Ludus UX / LUX).
     (db) => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS vm_operation_log (

@@ -1,98 +1,117 @@
 "use client"
 
-import { useEffect, useRef, useState, useMemo, useCallback } from "react"
-import { Button } from "@/components/ui/button"
-import { Trash2, Download, ArrowDown, Search, ChevronUp, ChevronDown, X } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
+import { usePauseAwareLines } from "./use-pause-aware-lines"
+import { useLogSearch } from "./use-log-search"
+import {
+  LogDockToolbar,
+  LogDockSearchBar,
+  type LogDockTheme,
+  type LogFontSize,
+  DEFAULT_FONT_SIZE,
+} from "./log-dock-toolbar"
 
 interface LogViewerProps {
   lines: string[]
   onClear?: () => void
+  /** When true, auto-scroll follows new lines. When false (static history view), auto-scroll controls are hidden. */
   autoScroll?: boolean
   className?: string
   maxHeight?: string
+  /** Show a live pulse indicator in the toolbar. */
+  live?: boolean
+  /** Label shown next to the live indicator (e.g. "Range Logs"). */
+  liveLabel?: string
+  /** Download filename prefix (without extension). */
+  downloadFilename?: string
 }
 
-const BOTTOM_THRESHOLD = 80 // px — within this distance = "at bottom"
+const BOTTOM_THRESHOLD = 80
 
 export function LogViewer({
   lines,
   onClear,
-  autoScroll = true,
+  autoScroll: parentAutoScroll = true,
   className,
   maxHeight = "400px",
+  live = false,
+  liveLabel,
+  downloadFilename = "ludus-deploy",
 }: LogViewerProps) {
-  const containerRef      = useRef<HTMLDivElement>(null)
-  // true  = user has scrolled up and wants to read history; suppress auto-scroll
-  // false = user is at (or near) the bottom; follow new lines automatically
+  const containerRef     = useRef<HTMLDivElement>(null)
   const userScrolledUpRef = useRef(false)
   const prevScrollTopRef  = useRef(0)
   const prevLinesLenRef   = useRef(0)
   const [showJumpBtn, setShowJumpBtn] = useState(false)
 
-  // ── Search state ──────────────────────────────────────────────────────────
-  const [searchOpen, setSearchOpen]           = useState(false)
-  const [searchQuery, setSearchQuery]         = useState("")
-  const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
-  const searchInputRef   = useRef<HTMLInputElement>(null)
-  const matchLineRefsRef = useRef<Map<number, HTMLDivElement>>(new Map())
+  // ── Toolbar state ─────────────────────────────────────────────────────────
+  const [localAutoScroll, setLocalAutoScroll] = useState(parentAutoScroll !== false)
+  const [fontSize, setFontSize]   = useState<LogFontSize>(DEFAULT_FONT_SIZE)
+  const [wrap, setWrap]           = useState(true)
+  const [theme, setTheme]         = useState<LogDockTheme>("dark")
 
-  // ── Scroll new lines into view ─────────────────────────────────────────────
+  const effectiveAutoScroll = parentAutoScroll !== false && localAutoScroll
+
+  // ── Pause ─────────────────────────────────────────────────────────────────
+  const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
+
+  // ── Search (operates on the frozen/display view) ──────────────────────────
+  const {
+    searchOpen,
+    searchQuery,
+    setSearchQuery,
+    setSearchOpen,
+    currentMatchIdx,
+    matchIndices,
+    matchSet,
+    searchInputRef,
+    matchLineRefsRef,
+    navigateMatch,
+    toggleSearch,
+    handleSearchKeyDown,
+  } = useLogSearch(displayLines)
+
+  // ── Auto-scroll new lines ─────────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
-    const hasNew = lines.length > prevLinesLenRef.current
-    prevLinesLenRef.current = lines.length
+    const hasNew = displayLines.length > prevLinesLenRef.current
+    prevLinesLenRef.current = displayLines.length
 
-    if (lines.length === 0) {
-      // Content was cleared — reset everything
+    if (displayLines.length === 0) {
       userScrolledUpRef.current = false
       prevScrollTopRef.current  = 0
       setShowJumpBtn(false)
       return
     }
 
-    if (!autoScroll) {
+    if (!effectiveAutoScroll) {
       if (hasNew) setShowJumpBtn(true)
       return
     }
 
     if (!userScrolledUpRef.current) {
-      // User is following the log — jump to bottom immediately
       el.scrollTop = el.scrollHeight
       prevScrollTopRef.current = el.scrollTop
     } else if (hasNew) {
       setShowJumpBtn(true)
     }
-  }, [lines, autoScroll])
+  }, [displayLines, effectiveAutoScroll])
 
-  // Reset search state when lines become empty
-  useEffect(() => {
-    if (lines.length === 0) {
-      setSearchQuery("")
-      setCurrentMatchIdx(0)
-    }
-  }, [lines])
-
-  // ── Detect user scroll ─────────────────────────────────────────────────────
   const handleScroll = () => {
     const el = containerRef.current
     if (!el) return
-
-    const isNearBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
-
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
     if (isNearBottom) {
-      // Reached bottom — resume auto-scroll
       userScrolledUpRef.current = false
       setShowJumpBtn(false)
     } else if (el.scrollTop < prevScrollTopRef.current) {
-      // scrollTop decreased = user actively scrolled up
       userScrolledUpRef.current = true
     }
-
     prevScrollTopRef.current = el.scrollTop
   }
 
@@ -100,170 +119,91 @@ export function LogViewer({
     const el = containerRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-    prevScrollTopRef.current  = el.scrollTop
-    userScrolledUpRef.current = false
+    prevScrollTopRef.current   = el.scrollTop
+    userScrolledUpRef.current  = false
     setShowJumpBtn(false)
   }
 
-  const downloadLogs = () => {
-    const content = lines.join("\n")
-    const blob = new Blob([content], { type: "text/plain" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `ludus-deploy-${new Date().toISOString().slice(0, 19)}.log`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // ── Search logic ──────────────────────────────────────────────────────────
-
-  const matchIndices = useMemo(() => {
-    if (!searchQuery.trim()) return []
-    const q = searchQuery.toLowerCase()
-    const result: number[] = []
-    lines.forEach((line, i) => {
-      if (line.toLowerCase().includes(q)) result.push(i)
-    })
-    return result
-  }, [lines, searchQuery])
-
-  const matchSet = useMemo(() => new Set(matchIndices), [matchIndices])
-
-  // Reset to first match whenever the query changes
-  useEffect(() => {
-    setCurrentMatchIdx(0)
-  }, [searchQuery])
-
-  // Scroll the current match into view whenever it changes
-  useEffect(() => {
-    if (matchIndices.length === 0) return
-    const lineIdx = matchIndices[currentMatchIdx]
-    matchLineRefsRef.current.get(lineIdx)?.scrollIntoView({ block: "nearest" })
-  }, [matchIndices, currentMatchIdx])
-
-  const navigateMatch = useCallback((dir: 1 | -1) => {
-    if (matchIndices.length === 0) return
-    setCurrentMatchIdx(i => (i + dir + matchIndices.length) % matchIndices.length)
-  }, [matchIndices])
-
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
-      setSearchOpen(false)
-      setSearchQuery("")
-    } else if (e.key === "Enter") {
-      navigateMatch(e.shiftKey ? -1 : 1)
-    }
-  }
-
-  const toggleSearch = () => {
-    setSearchOpen(o => {
-      if (o) {
-        setSearchQuery("")
-        setCurrentMatchIdx(0)
-      }
-      return !o
-    })
-  }
+  // ── Left slot content ─────────────────────────────────────────────────────
+  const dark = theme === "dark"
+  const leftSlot = paused ? (
+    <span className="text-yellow-400 font-mono text-xs">
+      Paused · {frozenAt} / {lines.length} lines
+    </span>
+  ) : live ? (
+    <span className="flex items-center gap-1.5 text-xs font-mono">
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
+      <span className={dark ? "text-green-400" : "text-green-600"}>
+        {liveLabel ? `${liveLabel} · ` : ""}{lines.length} lines
+      </span>
+    </span>
+  ) : (
+    <span className={cn("text-xs font-mono", dark ? "text-gray-400" : "text-gray-500")}>
+      {lines.length} lines
+    </span>
+  )
 
   return (
-    <div className={cn("rounded-lg border border-border overflow-hidden", className)}>
-      {/* ── Log header ── */}
-      <div className="bg-muted/50 border-b border-border">
-        {/* Top toolbar row */}
-        <div className="flex items-center justify-between px-3 py-2">
-          <span className="text-xs font-mono text-muted-foreground">
-            {lines.length} lines
-          </span>
-          <div className="flex gap-1">
-            <Button size="icon-sm" variant="ghost" onClick={toggleSearch}>
-              <Search className={cn("h-3 w-3", searchOpen ? "text-yellow-400" : "")} />
-            </Button>
-            <Button size="icon-sm" variant="ghost" onClick={downloadLogs} disabled={lines.length === 0}>
-              <Download className="h-3 w-3" />
-            </Button>
-            {onClear && (
-              <Button size="icon-sm" variant="ghost" onClick={onClear} disabled={lines.length === 0}>
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            )}
-          </div>
-        </div>
+    <div className={cn("rounded-lg border overflow-hidden", dark ? "border-gray-700" : "border-gray-200", className)}>
+      <LogDockToolbar
+        lines={lines}
+        downloadFilename={downloadFilename}
+        paused={paused}
+        onPause={() => pause(lines.length)}
+        onResume={() => { resume(); scrollToBottom() }}
+        autoScroll={localAutoScroll}
+        onAutoScrollToggle={() => setLocalAutoScroll(v => !v)}
+        showAutoScroll={parentAutoScroll !== false}
+        fontSize={fontSize}
+        onFontSizeChange={setFontSize}
+        wrap={wrap}
+        onWrapToggle={() => setWrap(v => !v)}
+        theme={theme}
+        onThemeToggle={() => setTheme(t => t === "dark" ? "light" : "dark")}
+        searchOpen={searchOpen}
+        onSearchToggle={toggleSearch}
+        onClear={onClear ? () => { resume(); onClear() } : undefined}
+        leftSlot={leftSlot}
+      />
 
-        {/* Collapsible search row */}
-        {searchOpen && (
-          <div className="px-3 pb-2 flex items-center gap-2">
-            <div className="relative flex-1">
-              <input
-                ref={searchInputRef}
-                autoFocus
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                placeholder="Search..."
-                className="w-full bg-background text-foreground text-xs font-mono px-2 py-1 rounded border border-border focus:outline-none focus:border-ring pr-6"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => { setSearchQuery(""); setSearchOpen(false) }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-            {searchQuery && (
-              <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
-                {matchIndices.length === 0
-                  ? "No results"
-                  : `${currentMatchIdx + 1} / ${matchIndices.length}`}
-              </span>
-            )}
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => navigateMatch(-1)}
-              disabled={matchIndices.length === 0}
-            >
-              <ChevronUp className="h-3 w-3" />
-            </Button>
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => navigateMatch(1)}
-              disabled={matchIndices.length === 0}
-            >
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </div>
-        )}
-      </div>
+      {searchOpen && (
+        <LogDockSearchBar
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          matchIndices={matchIndices}
+          currentMatchIdx={currentMatchIdx}
+          navigateMatch={navigateMatch}
+          onClose={() => setSearchOpen(false)}
+          searchInputRef={searchInputRef}
+          handleSearchKeyDown={handleSearchKeyDown}
+          theme={theme}
+        />
+      )}
 
       <div className="relative">
         <div
           ref={containerRef}
           onScroll={handleScroll}
-          className="bg-black/80 p-4 overflow-auto font-mono text-xs"
-          style={{ maxHeight }}
+          className={cn(
+            "p-4 overflow-y-auto font-mono leading-relaxed",
+            dark ? "bg-black/80 text-gray-200" : "bg-gray-50 text-gray-800",
+            wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
+          )}
+          style={{ maxHeight, fontSize: `${fontSize}px` }}
         >
-          {lines.length === 0 ? (
-            <p className="text-muted-foreground italic">No logs yet...</p>
+          {displayLines.length === 0 ? (
+            <p className={cn("italic", dark ? "text-gray-600" : "text-gray-400")}>No logs yet…</p>
           ) : (
-            lines.map((line, i) => {
+            displayLines.map((line, i) => {
               const ludusMatch = line.match(/^\[LUDUS\] (.*)$/)
               const goadMatch  = line.match(/^\[GOAD\] (.*)$/)
               const errorMatch = line.match(/^\[ERROR\] (.*)$/)
               const rest = ludusMatch?.[1] ?? goadMatch?.[1] ?? errorMatch?.[1] ?? line
 
-              const isMatch   = searchQuery.trim() !== "" && matchSet.has(i)
-              const isCurrent = isMatch && matchIndices[currentMatchIdx] === i
-              const highlightCls = isCurrent
-                ? "bg-yellow-400/40"
-                : isMatch
-                ? "bg-yellow-500/20"
-                : ""
-              const refCallback = isMatch
+              const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
+              const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
+              const highlightCls = isCurrent ? "bg-yellow-400/40" : isMatch ? "bg-yellow-500/20" : ""
+              const refCallback  = isMatch
                 ? (el: HTMLDivElement | null) => {
                     if (el) matchLineRefsRef.current.set(i, el)
                     else matchLineRefsRef.current.delete(i)
@@ -274,7 +214,7 @@ export function LogViewer({
                 <div
                   key={i}
                   ref={refCallback}
-                  className={cn("log-line whitespace-pre-wrap break-words flex gap-1.5", highlightCls)}
+                  className={cn("log-line flex gap-1.5", highlightCls)}
                 >
                   {ludusMatch && (
                     <span className="flex-shrink-0 text-primary/70 font-bold text-[10px] leading-4 mt-[1px]">[L]</span>
@@ -306,9 +246,13 @@ export function LogViewer({
         {showJumpBtn && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full
-                       bg-primary/90 text-primary-foreground text-xs font-mono shadow-lg
-                       hover:bg-primary transition-colors z-10"
+            className={cn(
+              "absolute bottom-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full",
+              "text-xs font-mono shadow-lg transition-colors z-10",
+              dark
+                ? "bg-primary/90 text-primary-foreground hover:bg-primary"
+                : "bg-gray-700/90 text-white hover:bg-gray-600",
+            )}
           >
             <ArrowDown className="h-3 w-3" />
             new logs

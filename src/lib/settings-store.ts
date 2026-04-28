@@ -10,6 +10,7 @@
  * volume-mounted SQLite database at $DATA_DIR/ludus-ux.db.
  */
 
+import crypto from "crypto"
 import { getDb } from "./db"
 
 export interface RuntimeSettings {
@@ -40,6 +41,7 @@ export interface RuntimeSettings {
 // Instead, `getSettings()` lazily merges runtime env vars on first call.
 let overrides: Partial<RuntimeSettings> = {}
 let initialized = false
+const ENCRYPTED_VALUE_PREFIX = "enc:v1:"
 
 function defaults(): RuntimeSettings {
   return {
@@ -73,9 +75,53 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "proxmoxSshKeyPath",
 ]
 
+function deriveSettingsEncryptionKey(): Buffer {
+  return crypto.createHash("sha256").update(process.env.APP_SECRET || "change-me-in-production-32-chars!!").digest()
+}
+
+function encryptSettingValue(value: string): string {
+  if (!value) return value
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv("aes-256-gcm", deriveSettingsEncryptionKey(), iv)
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return `${ENCRYPTED_VALUE_PREFIX}${Buffer.concat([iv, tag, ciphertext]).toString("base64")}`
+}
+
+function decryptSettingValue(value: string): string {
+  if (!value || !value.startsWith(ENCRYPTED_VALUE_PREFIX)) return value
+  const raw = Buffer.from(value.slice(ENCRYPTED_VALUE_PREFIX.length), "base64")
+  if (raw.length < 29) throw new Error("encrypted setting payload is too short")
+  const iv = raw.subarray(0, 12)
+  const tag = raw.subarray(12, 28)
+  const ciphertext = raw.subarray(28)
+  const decipher = crypto.createDecipheriv("aes-256-gcm", deriveSettingsEncryptionKey(), iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")
+}
+
+function encodeSettingForDb(key: string, value: unknown): string {
+  const text = String(value)
+  return key === "proxmoxSshPassword" ? encryptSettingValue(text) : text
+}
+
+function decodeSettingFromDb(key: string, value: string): { value: string; needsRewrite: boolean } {
+  if (key !== "proxmoxSshPassword") return { value, needsRewrite: false }
+  if (!value || !value.startsWith(ENCRYPTED_VALUE_PREFIX)) {
+    return { value, needsRewrite: !!value }
+  }
+  try {
+    return { value: decryptSettingValue(value), needsRewrite: false }
+  } catch (err) {
+    console.error("[settings-store] Failed to decrypt proxmoxSshPassword from DB:", err)
+    return { value: "", needsRewrite: false }
+  }
+}
+
 function loadOverridesFromDb(): Partial<RuntimeSettings> {
   try {
-    const rows = getDb()
+    const db = getDb()
+    const rows = db
       .prepare("SELECT key, value FROM settings")
       .all() as Array<{ key: string; value: string }>
 
@@ -83,14 +129,19 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
     for (const { key, value } of rows) {
       if (!SETTINGS_KEYS.includes(key as keyof RuntimeSettings)) continue
       const k = key as keyof RuntimeSettings
+      const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
       if (k === "verifyTls" || k === "goadEnabled") {
-        (result as Record<string, unknown>)[k] = value === "true"
+        (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
-        const n = parseInt(value, 10)
+        const n = parseInt(decoded.value, 10)
         if (!isNaN(n)) (result as Record<string, unknown>)[k] = n
       } else {
-        (result as Record<string, unknown>)[k] = value
+        (result as Record<string, unknown>)[k] = decoded.value
+      }
+      if (decoded.needsRewrite) {
+        db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
+          .run(encryptSettingValue(decoded.value), Date.now(), key)
       }
     }
     return result
@@ -110,7 +161,7 @@ function saveOverridesToDb(patch: Partial<RuntimeSettings>): void {
     const saveAll = db.transaction(() => {
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) continue
-        upsert.run(k, String(v), now)
+        upsert.run(k, encodeSettingForDb(k, v), now)
       }
     })
     saveAll()

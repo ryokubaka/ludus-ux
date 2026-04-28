@@ -59,7 +59,7 @@ import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
 import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
-import { cn, timeAgo } from "@/lib/utils"
+import { cn, extractArray, timeAgo } from "@/lib/utils"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -794,7 +794,7 @@ function GoadInstancePage() {
     setDeployHistoryLoading(true)
     try {
       const result = await ludusApi.getRangeLogHistory(instance.ludusRangeId)
-      setDeployHistory(result.data ?? [])
+      setDeployHistory(extractArray<LogHistoryEntry>(result.data as unknown))
     } catch {}
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
@@ -864,8 +864,7 @@ function GoadInstancePage() {
     fetch("/api/proxy/templates")
       .then((r) => r.ok ? r.json() : [])
       .then((d) => {
-        const list: TemplateObject[] = Array.isArray(d) ? d : (d?.result ?? [])
-        setTemplates(list)
+        setTemplates(extractArray<TemplateObject>(d))
       })
       .catch(() => {})
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -895,7 +894,7 @@ function GoadInstancePage() {
         fetch("/api/goad/tasks", { headers: impersonationHeaders() }).then((r) => r.json()),
       ])
       if (cancelled) return
-      const dh = deployResult.data ?? []
+      const dh = extractArray<LogHistoryEntry>(deployResult.data as unknown)
       const allTasks = (tasksRes.tasks ?? []) as GoadTaskForCorrelation[]
       const th = allTasks.filter(
         (t) => t.instanceId === instanceId || t.command.includes(instanceId),

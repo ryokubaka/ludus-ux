@@ -35,8 +35,8 @@ import {
 } from "lucide-react"
 import { ludusApi, del } from "@/lib/api"
 import { LogHistoryList } from "@/components/range/log-history-list"
-import type { TemplateObject } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
+import { cn, extractArray } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
@@ -415,7 +415,7 @@ export default function TemplatesPage() {
     queryKey: queryKeys.templateLogHistory(),
     queryFn: async () => {
       const result = await ludusApi.getTemplateLogHistory()
-      return result.data ?? []
+      return extractArray<LogHistoryEntry>(result.data as unknown)
     },
     staleTime: STALE.short,
   })
@@ -442,7 +442,7 @@ export default function TemplatesPage() {
     queryKey: queryKeys.templates(),
     queryFn: async () => {
       const result = await ludusApi.listTemplates()
-      return result.data ?? []
+      return extractArray<TemplateObject>(result.data as unknown)
     },
     staleTime: STALE.long,
   })

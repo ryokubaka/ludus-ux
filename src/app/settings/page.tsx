@@ -501,7 +501,11 @@ function SettingsContent() {
         toast({ variant: "destructive", title: "Error", description: data.error })
       } else {
         setSettings(data); setDraft(data)
-        toast({ title: "Settings saved", description: "Changes are active until the container restarts." })
+        toast({
+          title: "Settings saved",
+          description:
+            "Applied immediately and persisted to SQLite—they survive container restarts and override matching .env defaults.",
+        })
       }
     } catch {
       toast({ variant: "destructive", title: "Save failed" })
@@ -624,9 +628,10 @@ function SettingsContent() {
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription className="text-xs">
-              Settings changed here are <strong>active immediately</strong> but are <strong>reset on container restart</strong>.
-              Persist changes permanently by updating your <code className="text-primary">.env</code> file and running{" "}
-              <code className="text-primary">docker-compose up -d</code>.
+              Values saved here apply <strong>immediately</strong> and are stored in SQLite on your mounted data volume (
+              <code className="text-primary">ludus-ux.db</code>). They <strong>persist across container restarts</strong> and
+              override matching variables from <code className="text-primary">.env</code> at runtime. Keep{" "}
+              <code className="text-primary">.env</code> aligned if you rely on it for fresh installs or automation before the DB is seeded.
             </AlertDescription>
           </Alert>
 

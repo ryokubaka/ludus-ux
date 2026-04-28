@@ -1,7 +1,7 @@
 /**
  * Direct HTTP calls to the Proxmox VE API.
  *
- * Used for in-browser VNC — authenticates as root@pam with a password (PAM).
+ * Used for in-browser VNC — authenticates with a PAM password.
  * SSH key auth is not used here; SPICE / pvesh paths use SSH separately.
  *
  * TLS verification is already disabled globally by ludus-client.ts
@@ -57,6 +57,32 @@ export async function proxmoxGetFirstNode(host: string, auth: ProxmoxAuth): Prom
   const node = json.data?.[0]?.node
   if (!node) throw new Error("No Proxmox nodes found")
   return node
+}
+
+export async function proxmoxGetNodeForVmid(
+  host: string,
+  auth: ProxmoxAuth,
+  vmid: string,
+): Promise<string> {
+  const res = await fetch(`https://${host}:8006/api2/json/cluster/resources?type=vm`, {
+    headers: {
+      Cookie: `PVEAuthCookie=${auth.cookie}`,
+      CSRFPreventionToken: auth.csrf,
+    },
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`Failed to find Proxmox node for VM ${vmid} (HTTP ${res.status}): ${text.slice(0, 200)}`)
+  }
+
+  const json = (await res.json()) as {
+    data?: Array<{ vmid?: number | string; node?: string; type?: string }>
+  }
+  const vm = json.data?.find((item) => String(item.vmid) === vmid && (!item.type || item.type === "qemu"))
+  if (!vm?.node) {
+    throw new Error(`VM ${vmid} was not found in Proxmox cluster resources, or this user cannot access it.`)
+  }
+  return vm.node
 }
 
 export interface VncProxyInfo {

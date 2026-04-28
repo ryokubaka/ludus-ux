@@ -18,7 +18,7 @@ import {
 import { VMTable } from "@/components/range/vm-table"
 import { LogViewer } from "@/components/range/log-viewer"
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
-import { timeAgo } from "@/lib/utils"
+import { timeAgo, cn, extractArray, getRangeStateBadge } from "@/lib/utils"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import {
   Server,
@@ -57,7 +57,6 @@ import {
 } from "@/lib/goad-deploy-history-correlation"
 import { useRange } from "@/lib/range-context"
 import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/types"
-import { cn, getRangeStateBadge } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useElapsed } from "@/hooks/use-elapsed"
@@ -201,7 +200,7 @@ export function DashboardPageClient() {
       queryKey: queryKeys.rangeLogHistory(selectedRangeId),
       queryFn: async () => {
         const result = await ludusApi.getRangeLogHistory(selectedRangeId ?? undefined)
-        return result.data ?? []
+        return extractArray<LogHistoryEntry>(result.data as unknown)
       },
     enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
     staleTime: STALE.short,

@@ -163,6 +163,7 @@ echo "  1) Fetch private key from the server (scp as root; non-root + /root/ use
 echo "  2) Copy from a file already on this machine"
 echo "  3) Use password only (PROXMOX_SSH_PASSWORD)"
 read -r -p "Choose [1/2/3]: " auth_choice
+root_ssh_key_auth=0
 
 case "${auth_choice:-1}" in
   1)
@@ -291,6 +292,7 @@ case "${auth_choice:-1}" in
     set_kv "PROXMOX_SSH_USER" "root"
     set_kv "PROXMOX_SSH_PASSWORD" ""
     set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+    root_ssh_key_auth=1
     echo "Key installed. If this key is root's, add the matching public key to /root/.ssh/authorized_keys on the server (see README)."
     ;;
   2)
@@ -306,6 +308,7 @@ case "${auth_choice:-1}" in
     set_kv "PROXMOX_SSH_USER" "${px_user:-root}"
     set_kv "PROXMOX_SSH_PASSWORD" ""
     set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+    root_ssh_key_auth=1
     ;;
   3)
     read -r -s -p "PROXMOX_SSH_PASSWORD: " px_pw
@@ -319,6 +322,18 @@ case "${auth_choice:-1}" in
     exit 1
     ;;
 esac
+
+if [[ "$root_ssh_key_auth" == "1" ]]; then
+  echo ""
+  echo "Optional: root PROXMOX_SSH_PASSWORD for server-side root SSH only."
+  echo "In-browser noVNC now uses the LUX user's login password with their Proxmox PAM user; the root SSH key is not used for that HTTP ticket."
+  read -r -s -p "Root PROXMOX_SSH_PASSWORD [Enter to keep key-only root SSH]: " optional_root_pw
+  echo
+  if [[ -n "$optional_root_pw" ]]; then
+    set_kv "PROXMOX_SSH_PASSWORD" "$optional_root_pw"
+  fi
+  unset optional_root_pw
+fi
 
 read -r -p "LUDUS_VERIFY_TLS=true (only if Ludus uses a real CA cert)? [y/N] " vtls
 if [[ "${vtls,,}" =~ ^y ]]; then
@@ -361,7 +376,7 @@ echo ""
 echo "=== Next steps ==="
 echo "  • HTTPS: https://localhost (port 443) or https://localhost:3000 — self-signed warning unless you add certificates/"
 echo "  • HTTP:  http://localhost:3000"
-echo "  • Log in with a Ludus (non-root) SSH user."
+echo "  • Log in with a Ludus (non-root) SSH/PAM user. In-browser noVNC uses that session password for the user's Proxmox ticket."
 echo "  • On the Ludus server: put LUDUS_API_KEY in ~/.bashrc for that user (and root) if needed — see README."
 echo "  • In LUX: Settings → Test root SSH & admin API"
 echo ""

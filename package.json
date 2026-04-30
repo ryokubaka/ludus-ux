@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -54,7 +54,10 @@
     "cross-spawn": ">=7.0.5",
     "glob": ">=10.5.0",
     "minimatch": ">=9.0.7",
-    "tar": ">=7.5.11"
+    "tar": ">=7.5.11",
+    "next": {
+      "postcss": "8.5.10"
+    }
   },
   "devDependencies": {
     "@tanstack/react-query-devtools": "^5.91.3",
@@ -68,7 +71,7 @@
     "autoprefixer": "^10.0.1",
     "eslint": "^8",
     "eslint-config-next": "15.5.15",
-    "postcss": "^8",
+    "postcss": "^8.5.10",
     "tailwindcss": "^3.3.0",
     "typescript": "^5"
   }

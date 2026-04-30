@@ -4,15 +4,27 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.9.6] — 2026-04-29
+
+**LUX**
+- [Add] Range Configuration: optional **Force save & deploy** (`--force`) for Ludus testing mode — applies to config upload and to `POST /range/deploy`
+- [Add] Dashboard: **Destroy all VMs** (range object kept) via `DELETE /range/{rangeID}/vms`; confirmation copy contrasts with **Delete Range**
+- [Add] VM Operations audit entry for bulk destroy-all-VMs
+- [Fix] `ConfirmBar` preserves newline characters in multi-line confirmation prompts (`whitespace-pre-line`)
+- [Change] Configuration page: removed non-functional yaml-language-server schema tip banner
+- [Security] **postcss** 8.5.10+ (CVE-2026-41305 / GHSA-qx2v-qp2m-jg93) — direct devDependency; `overrides.next.postcss` so Next’s nested copy matches patched release
+
+---
+
 ## [0.9.5] — 2026-04-28
 
 **LUX**
 - [Add] Additional controls on streamed and static logs — pause (freeze display while the buffer keeps filling), toggle auto-follow, font size stepper (A− / A+), word-wrap, light vs dark log pane, search with match navigation, copy all, download, clear
 - [Add] Shared `LogDockToolbar` across `LogViewer` (Dashboard, Range Logs, Templates, Testing, Range Config, …) and `GoadTerminal` (GOAD instance pages); Range Logs toolbar shows Live when SSE is connected
 - [Fix] Log body font-size now follows the toolbar (`.log-line` no longer pinned `text-xs`, which blocked resizing on Ludus Ansible output)
-- [Change] noVNC now authenticates to Proxmox as the logged-in LUX user's PAM account (`proxmoxUsername@pam`) using the user's session password, instead of reusing `PROXMOX_SSH_USER` / root PAM credentials.
 - [Fix] noVNC resolves the Proxmox node from cluster resources by VMID before creating the VNC proxy ticket, instead of assuming the first node.
 - [Fix] noVNC missing-password errors now clearly explain that Proxmox HTTP tickets require the user's PAM password; SSH keys still work for SPICE and `pvesh` paths only.
+- [Change] noVNC now authenticates to Proxmox as the logged-in LUX user's PAM account (`proxmoxUsername@pam`) using the user's session password, instead of reusing `PROXMOX_SSH_USER` / root PAM credentials.
 - [Security] `proxmoxSshPassword` saved from the Settings UI is encrypted at rest in SQLite using `APP_SECRET`; existing plaintext values are rewritten encrypted on next settings load.
 - [Docs] README now separates root SSH auth from browser-console PAM auth and adds VNC 401 troubleshooting.
 - [Docs] Quickstart now explains the optional root `PROXMOX_SSH_PASSWORD` and that in-browser noVNC uses the logged-in user's password.

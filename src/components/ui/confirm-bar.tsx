@@ -39,19 +39,21 @@ export function ConfirmBar({ pending, onConfirm, onCancel, className, scope }: C
   return (
     <div
       className={[
-        "flex items-center gap-3 rounded-md border border-yellow-500/40",
+        "flex items-start gap-3 rounded-md border border-yellow-500/40",
         "bg-yellow-500/10 px-3 py-2",
         className ?? "",
       ].join(" ")}
     >
-      <AlertTriangle className="h-3.5 w-3.5 text-yellow-400 flex-shrink-0" />
-      <span className="text-xs text-yellow-300 flex-1">{pending.label}</span>
-      <Button size="sm" variant="default" onClick={onConfirm}>
-        Confirm
-      </Button>
-      <Button size="sm" variant="ghost" onClick={onCancel}>
-        Cancel
-      </Button>
+      <AlertTriangle className="h-3.5 w-3.5 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <span className="text-xs text-yellow-300 flex-1 min-w-0 whitespace-pre-line">{pending.label}</span>
+      <div className="flex shrink-0 gap-2 self-start">
+        <Button size="sm" variant="default" onClick={onConfirm}>
+          Confirm
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   )
 }

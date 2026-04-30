@@ -47,8 +47,6 @@ Ludus ships a first-party **Pro Web UI** with a commercial license. Teams can re
 >
 > It handles sensitive credentials — SSH passwords, API keys, session secrets — and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source code yourself before deploying in any environment you care about.** Use at your own risk. Please raise an issue if you identify concerns.
 >
-> As of **0.9.5**, `proxmoxSshPassword` values saved through Settings are encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
->
 > This is an independent tool and is not affiliated with or endorsed by Ludus or GOAD.
 
 ---
@@ -143,6 +141,7 @@ cp .env.example .env
    | `LUDUS_ROOT_API_KEY` | Ludus v2 root API key (admin users/ranges) — from `/opt/ludus/install/root-api-key` on the server |
    | Root SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** set `PROXMOX_SSH_PASSWORD` for server-side admin operations. In-browser noVNC uses the logged-in user's PAM password separately. |
 
+> As of **0.9.5**, the `PROXMOX_SSH_PASSWORD` value saved through Settings is encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
 
 3. **Root SSH private key: from the Ludus server onto the LUX host**
 
@@ -204,7 +203,7 @@ Use this when you already have a **git clone** of the repo on the Docker host (s
 
 1. Quiet `git fetch` from your remote (`--prune --tags`) so your view matches the server without noisy deleted-ref lines.
 2. Lists **active branches** and **release tags** straight from the remote (`git ls-remote`) — only refs that still exist; stale deleted branches are not offered.
-3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.5`).
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.6`).
 4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
@@ -219,7 +218,7 @@ Non-interactive (examples):
 
 ```bash
 bash scripts/upgrade.sh main
-bash scripts/upgrade.sh v0.9.5
+bash scripts/upgrade.sh v0.9.6
 ```
 
 Persistent data (`./data`, `./ssh`, `./certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
@@ -244,7 +243,7 @@ Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
 
 ### Console / noVNC authentication
 
-Changed in **0.9.5**: noVNC uses the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
+noVNC uses the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
 
 The browser console uses two separate Proxmox mechanisms:
 

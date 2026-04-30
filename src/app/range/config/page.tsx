@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { LogViewer } from "@/components/range/log-viewer"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import {
@@ -99,6 +98,8 @@ export default function RangeConfigPage() {
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
   const [showNetworkRules, setShowNetworkRules] = useState(false)
+  /** Ludus blocks config PUT and range deploy in testing mode unless force is set (CLI `--force`). */
+  const [forceLudus, setForceLudus] = useState(false)
 
   const { lines, isStreaming, startStreaming, stopStreaming, clearLogs } = useDeployLogs({
     onComplete: () => setDeploying(false),
@@ -162,12 +163,14 @@ export default function RangeConfigPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRangeId])
 
-  const handleSave = async () => {
+  const handleSave = async (): Promise<boolean> => {
     setSaving(true)
-    const result = await ludusApi.setRangeConfig(config, selectedRangeId ?? undefined)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Save failed", description: result.error })
-    } else {
+    try {
+      const result = await ludusApi.setRangeConfig(config, selectedRangeId ?? undefined, forceLudus)
+      if (result.error) {
+        toast({ variant: "destructive", title: "Save failed", description: result.error })
+        return false
+      }
       setOriginalConfig(config)
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
@@ -178,13 +181,16 @@ export default function RangeConfigPage() {
         toast({ title: "Config saved" })
       }
       queryClient.setQueryData(queryKeys.rangeConfig(selectedRangeId), config)
+      return true
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   const doDeploy = async () => {
     if (config !== originalConfig) {
-      await handleSave()
+      const saved = await handleSave()
+      if (!saved) return
     }
     clearLogs()
     setShowLogs(true)
@@ -194,7 +200,8 @@ export default function RangeConfigPage() {
     const result = await ludusApi.deployRange(
       selectedTags.length > 0 ? selectedTags : undefined,
       limitVM || undefined,
-      selectedRangeId ?? undefined
+      selectedRangeId ?? undefined,
+      forceLudus,
     )
     if (result.error) {
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
@@ -345,6 +352,22 @@ export default function RangeConfigPage() {
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/50">
+            <Checkbox
+              id="force-range-ludus-testing"
+              checked={forceLudus}
+              onCheckedChange={(v) => setForceLudus(v === true)}
+              disabled={!!pendingAction || saving}
+            />
+            <Label
+              htmlFor="force-range-ludus-testing"
+              className="text-xs text-muted-foreground font-normal cursor-pointer leading-snug max-w-2xl"
+            >
+              Force save & deploy (same as Ludus CLI{" "}
+              <code className="text-[11px] text-primary/90">--force</code>) — Ludus blocks saving config and starting
+              deployment while the range is in testing mode unless this is checked. Does not turn testing mode off.
+            </Label>
+          </div>
         </CardContent>
       </Card>
 
@@ -395,18 +418,6 @@ export default function RangeConfigPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Info banner */}
-      <Alert>
-        <Info className="h-4 w-4" />
-        <AlertDescription className="text-xs">
-          Add{" "}
-          <code className="text-primary text-xs">
-            # yaml-language-server: $schema=https://docs.ludus.cloud/schemas/range-config.json
-          </code>{" "}
-          to the top of your config for schema validation hints.
-        </AlertDescription>
-      </Alert>
 
       {/* Network Rules panel */}
       <Card>

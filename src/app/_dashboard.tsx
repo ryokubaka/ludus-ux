@@ -42,13 +42,14 @@ import {
   Download,
   X,
   Trash2,
+  ServerOff,
   History,
   ArrowLeft,
   Puzzle,
   ExternalLink,
   ShieldAlert,
 } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog, pruneKnownHosts } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
@@ -108,6 +109,7 @@ export function DashboardPageClient() {
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const inventoryCacheRef = useRef(new Map<string, { text: string; at: number }>())
   const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
+  const [destroyingAllVmsRangeId, setDestroyingAllVmsRangeId] = useState<string | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [downloadingVm, setDownloadingVm] = useState<string | null>(null)
@@ -542,6 +544,70 @@ export function DashboardPageClient() {
         `This CANNOT be undone.`,
       ].join("\n"),
       () => doDeleteRange(rangeId, vmCount, ipsForKnownHosts),
+    )
+
+  const doDestroyAllVms = async (rangeId: string, ipsForKnownHosts: string[] | undefined, vmCount: number) => {
+    setDestroyingAllVmsRangeId(rangeId)
+    try {
+      const result = await ludusApi.deleteRangeVMs(rangeId)
+      if (result.error) {
+        toast({ variant: "destructive", title: "Destroy VMs failed", description: result.error })
+        void postVmOperationAudit({
+          kind: "destroy_vm",
+          rangeId,
+          instanceId: goadInstanceForRange ?? undefined,
+          vmName: "All VMs in range (bulk)",
+          status: "error",
+          detail: result.error,
+        })
+        return
+      }
+      void postVmOperationAudit({
+        kind: "destroy_vm",
+        rangeId,
+        instanceId: goadInstanceForRange ?? undefined,
+        vmName: "All VMs in range (bulk)",
+        status: "ok",
+        detail: `DELETE /range/${rangeId}/vms — ${vmCount} VM${vmCount !== 1 ? "s" : ""} targeted`,
+      })
+      if (ipsForKnownHosts && ipsForKnownHosts.length > 0) {
+        void pruneKnownHosts(ipsForKnownHosts)
+      }
+      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(selectedRangeId) })
+      void refreshRanges()
+      toast({
+        title: "VMs destroying",
+        description: "Ludus is removing all VMs in this range. The range and its config remain; you can deploy again.",
+      })
+      setTimeout(invalidateRangeStatus, 3000)
+    } finally {
+      setDestroyingAllVmsRangeId(null)
+    }
+  }
+
+  const handleDestroyAllVms = (
+    rangeId: string,
+    rangeName: string,
+    vmCount: number,
+    ipsForKnownHosts?: string[],
+  ) =>
+    confirm(
+      [
+        `Destroy all VMs in range "${rangeName}"?`,
+        "",
+        `This will:`,
+        `  • Power off and destroy all ${vmCount} VM${vmCount !== 1 ? "s" : ""}`,
+        "",
+        `This will NOT:`,
+        `  • Remove the Ludus range or Proxmox pool "${rangeId}"`,
+        `  • Delete your range-config.yml`,
+        "",
+        `You can deploy again afterward.`,
+        "",
+        `This is different from Delete Range, which also removes the pool and the range record.`,
+      ].join("\n"),
+      () => doDestroyAllVms(rangeId, ipsForKnownHosts, vmCount),
     )
 
   const doPowerAll = async (action: "on" | "off") => {
@@ -1013,10 +1079,43 @@ export function DashboardPageClient() {
                     {/* Destructive zone — separated to avoid accidental clicks */}
                     <div className="w-px h-6 bg-border/60 mx-1 self-center" />
                     <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5 text-amber-400/90 hover:text-amber-300 border-amber-500/40 hover:bg-amber-500/10"
+                      disabled={
+                        !!pendingAction ||
+                        state === "DEPLOYING" ||
+                        vms.length === 0 ||
+                        !!deletingRangeId ||
+                        destroyingAllVmsRangeId === (range.rangeID || rangeKey)
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDestroyAllVms(
+                          range.rangeID || rangeKey,
+                          range.name || range.rangeID || rangeKey,
+                          vms.length,
+                          vms.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== ""),
+                        )
+                      }}
+                    >
+                      {destroyingAllVmsRangeId === (range.rangeID || rangeKey) ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ServerOff className="h-3.5 w-3.5" />
+                      )}
+                      {destroyingAllVmsRangeId === (range.rangeID || rangeKey) ? "Destroying…" : "Destroy all VMs"}
+                    </Button>
+                    <Button
                       variant="ghost"
                       size="sm"
                       className="gap-1.5 text-red-400/70 hover:text-red-400 hover:bg-red-400/10 border border-transparent hover:border-red-400/30"
-                      disabled={!!pendingAction || state === "DEPLOYING" || !!deletingRangeId}
+                      disabled={
+                        !!pendingAction ||
+                        state === "DEPLOYING" ||
+                        !!deletingRangeId ||
+                        destroyingAllVmsRangeId === (range.rangeID || rangeKey)
+                      }
                       onClick={(e) => {
                         e.stopPropagation()
                         handleDeleteRange(

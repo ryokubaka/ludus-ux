@@ -7,7 +7,7 @@
 # Usage:
 #   bash scripts/upgrade.sh              # interactive: pick branch or tag
 #   bash scripts/upgrade.sh main          # non-interactive
-#   bash scripts/upgrade.sh v0.9.5        # checkout tag (detached HEAD)
+#   bash scripts/upgrade.sh v0.9.6        # checkout tag (detached HEAD)
 #
 # Run from the repository root:
 #   bash scripts/upgrade.sh

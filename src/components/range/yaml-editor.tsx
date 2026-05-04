@@ -3,17 +3,25 @@
 import dynamic from "next/dynamic"
 import { loader } from "@monaco-editor/react"
 
-// Serve Monaco from the local /monaco-vs path (copied from node_modules at build time)
-// instead of loading from cdn.jsdelivr.net, so the editor works in air-gapped / restricted
-// network environments and doesn't suffer from CDN latency on first load.
+// Serve Monaco from local static files (copied by scripts/copy-monaco.js at build/dev time).
 //
-// `'vs/nls'.availableLanguages = { '*': '' }` forces Monaco's worker to use
-// its built-in English strings instead of trying to fetch `vs/nls.messages.*`
-// files that we don't ship in public/monaco-vs. Without this you get a benign
-// but noisy "Failed trying to load default language strings — Not Found"
-// warning from workerMain.js on every Range Config / yaml editor load.
+// workerMain.js loads the AMD loader as `MonacoEnvironment.baseUrl + "vs/loader.js"`.
+// So assets must live at …/monaco-vs/vs/loader.js and baseUrl must be …/monaco-vs/
+// (parent of the `vs` directory, trailing slash). A flat copy into /monaco-vs/ alone
+// makes that URL 404 and nls then logs "Failed trying to load default language strings".
+//
+// `paths.vs` is the AMD root (the `vs` folder). `availableLanguages['*'] === ''` is falsy
+// in the loader so nls falls back to the default `.nls` bundles shipped under vs/.
+const monacoParent =
+  typeof window !== "undefined" ? `${window.location.origin}/monaco-vs/` : "/monaco-vs/"
+const monacoVsAmd =
+  typeof window !== "undefined" ? `${window.location.origin}/monaco-vs/vs` : "/monaco-vs/vs"
+if (typeof window !== "undefined") {
+  const w = window as Window & { MonacoEnvironment?: { baseUrl?: string } }
+  w.MonacoEnvironment = { ...w.MonacoEnvironment, baseUrl: monacoParent }
+}
 loader.config({
-  paths: { vs: "/monaco-vs" },
+  paths: { vs: monacoVsAmd },
   "vs/nls": { availableLanguages: { "*": "" } },
 })
 

@@ -1,0 +1,35 @@
+### E2E (Playwright)
+
+With `docker compose up` and HTTPS on `https://localhost` (self-signed), first install browsers once: `npx playwright install`.
+
+```bash
+# Optional if not using default https://localhost:
+# export PLAYWRIGHT_BASE_URL=https://localhost
+# If login stops at Ludus API key, or impersonation cannot auto-read ~/.bashrc:
+# export E2E_LUDUS_API_KEY='JUF3QT....'
+npm run test:e2e
+```
+
+Playwright config path: `config/playwright.config.ts` (via `npm run test:e2e`).
+
+Credentials default to `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser` (override via env).
+
+**Specs:** `health` + `auth-gate` + `login-ui` (no session); `navigation` + `logout` + `impersonation` (session; impersonation may need `E2E_LUDUS_API_KEY`). Shared login: `e2e/helpers/auth.ts`.
+
+#### E2E from WSL (Ubuntu)
+
+`npm install` / `node_modules` on `/mnt/e/...` often hits **EACCES** (drvfs). Use a Linux-native copy and sync the lockfile back:
+
+```bash
+export PATH="$HOME/.local/node-v22.14.0-linux-x64/bin:$PATH"   # or your nvm/fnm Node 22+
+SRC=/mnt/e/gitlab/ludus-ux
+DST="$HOME/ludus-ux-wsl"
+rsync -a --delete --exclude node_modules --exclude .next --exclude test-results --exclude playwright-report \
+  --exclude 'certificates/*.pem' --exclude 'ssh/id_rsa' "$SRC/" "$DST/"
+cd "$DST" && npm install
+npx playwright install chromium
+npx playwright install-deps chromium   # sudo; pulls libnspr4/libnss3 etc. for headless shell
+PLAYWRIGHT_BASE_URL=https://localhost npm run test:e2e
+```
+
+`https://localhost` must answer **inside WSL** (start stack first: `docker compose up` from the repo). If you see `net::ERR_CONNECTION_REFUSED`, nothing is listening on 443 yet. After `npm install` in `~/ludus-ux-wsl`, copy the lockfile back: `cp "$HOME/ludus-ux-wsl/package-lock.json" "$SRC/"`.

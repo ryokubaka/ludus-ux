@@ -82,6 +82,7 @@ import { clearRangeAborting } from "@/lib/range-aborting"
 import { useAbortRange } from "@/lib/use-abort-range"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -280,7 +281,8 @@ function GoadInstancePage() {
   // Extension install / remove / reprovision use scoped keys so the prompt
   // renders inline next to the triggering row instead of jumping to the top.
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const { abortRange: abortRangeUnified, isAborting } = useAbortRange()
+  const scopeTag = useEffectiveScopeTag()
+  const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
   const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
@@ -1091,7 +1093,7 @@ function GoadInstancePage() {
             const put = await ludusApi.setRangeConfig(payload, rangeIdForRestore, attempt > 0)
             if (!put.error) {
               putErr = null
-              queryClient.setQueryData(queryKeys.rangeConfig(rangeIdForRestore), payload)
+              queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, rangeIdForRestore), payload)
               break
             }
             putErr = typeof put.error === "string" ? put.error : "Unknown error"
@@ -1414,7 +1416,7 @@ function GoadInstancePage() {
               if (putErr) {
                 errors.push(`Range config cleanup: ${putErr}`)
               } else {
-                queryClient.setQueryData(queryKeys.rangeConfig(rangeId), yamlAfter)
+                queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, rangeId), yamlAfter)
               }
             }
           }

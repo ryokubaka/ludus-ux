@@ -16,17 +16,21 @@
  * Result: HTML delivery is NEVER blocked by a live Ludus API call.
  * Only the very first request after a cold container start may show a loading
  * state; every subsequent request renders with cached data.
+ *
+ * Query keys include the same `scopeTag` the browser uses (login|view) so
+ * HydrationBoundary lines up with client TanStack keys.
  */
 
 import "server-only"
 import { QueryClient, dehydrate } from "@tanstack/react-query"
-import { getSession } from "@/lib/session"
+import type { SessionData } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { SWRCache } from "@/lib/server-cache"
 import { getAdminDataCached } from "@/lib/admin-data"
 import { queryKeys } from "@/lib/query-keys"
-import type { RangeAccessEntry, RangeObject } from "@/lib/types"
+import type { RangeAccessEntry } from "@/lib/types"
 import { extractArray } from "@/lib/utils"
+import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 
 // ── Module-level SWR caches (persist across requests in the same process) ──
 
@@ -35,9 +39,6 @@ const rangesCache = new SWRCache<RangeAccessEntry[]>(30_000)
 
 /** Ludus server version (rarely changes — 5 min TTL) */
 const versionCache = new SWRCache<unknown>(5 * 60_000)
-
-/** Default range status per effective API key (15 s TTL — matches client poll) */
-const rangeStatusCache = new SWRCache<RangeObject | null>(15_000)
 
 // ── Prefetch functions ───────────────────────────────────────────────────────
 
@@ -49,14 +50,13 @@ const rangeStatusCache = new SWRCache<RangeObject | null>(15_000)
  *
  * Respects impersonation via the session cookie.
  */
-export async function prefetchGlobal() {
+export async function prefetchGlobal(session: SessionData | null) {
   const queryClient = new QueryClient()
   try {
-    const session = await getSession()
     if (!session) return dehydrate(queryClient)
 
+    const scopeTag = effectiveScopeTagFromSession(session)
     const effectiveApiKey = session.impersonationApiKey || session.apiKey
-    const effectiveUserId = session.impersonationUserId ?? "self"
     const isImpersonating = !!session.impersonationUserId
 
     // peek() is synchronous: returns from cache or null (never awaits Ludus)
@@ -77,32 +77,8 @@ export async function prefetchGlobal() {
         )
       : null
 
-    if (ranges) queryClient.setQueryData([...queryKeys.accessibleRanges(), effectiveUserId], ranges)
-    if (version) queryClient.setQueryData(queryKeys.version(), version)
-  } catch { /* best-effort */ }
-  return dehydrate(queryClient)
-}
-
-/**
- * Dashboard prefetch — default range status for the authenticated user.
- * Key: rangeStatus(null) — matches the client query before selectedRangeId
- * is restored from localStorage.
- */
-export async function prefetchRangeStatus() {
-  const queryClient = new QueryClient()
-  try {
-    const session = await getSession()
-    if (!session) return dehydrate(queryClient)
-
-    const effectiveApiKey = session.impersonationApiKey || session.apiKey
-
-    const status = rangeStatusCache.peek(
-      effectiveApiKey,
-      () => ludusRequest<RangeObject>("/range", { apiKey: effectiveApiKey })
-        .then((r) => r.data ?? null),
-    )
-
-    if (status !== undefined) queryClient.setQueryData(queryKeys.rangeStatus(null), status)
+    if (ranges) queryClient.setQueryData(queryKeys.accessibleRangesList(scopeTag), ranges)
+    if (version) queryClient.setQueryData(queryKeys.version(scopeTag), version)
   } catch { /* best-effort */ }
   return dehydrate(queryClient)
 }
@@ -112,14 +88,14 @@ export async function prefetchRangeStatus() {
  * getAdminDataCached() is non-blocking: reads the SWR cache and triggers a
  * background revalidation, never waiting for the Ludus API.
  */
-export async function prefetchAdminData() {
+export async function prefetchAdminData(session: SessionData | null) {
   const queryClient = new QueryClient()
   try {
-    const session = await getSession()
     if (!session?.isAdmin) return dehydrate(queryClient)
 
+    const scopeTag = effectiveScopeTagFromSession(session)
     const data = getAdminDataCached(session.apiKey)
-    if (data) queryClient.setQueryData(queryKeys.adminRangesData(), data)
+    if (data) queryClient.setQueryData(queryKeys.adminRangesData(scopeTag), data)
   } catch { /* best-effort */ }
   return dehydrate(queryClient)
 }

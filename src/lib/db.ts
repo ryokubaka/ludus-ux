@@ -16,7 +16,7 @@
  *   This mirrors how production log systems work (Loki, PM2, Docker log driver):
  *   metadata in a DB, content in files.  Benefits:
  *     - O(1) per-line write (fs.appendFileSync, no SQL overhead)
- *     - Human-readable — `cat data/tasks/GOAD-smeowden/goad-xxxx.log` works directly
+ *     - Human-readable — `cat data/tasks/GOAD-testuser/goad-xxxx.log` works directly
  *     - DB stays small; no row-per-line amplification
  *     - Files are trivially backed up or rotated independently per range
  *

@@ -55,6 +55,7 @@ import type {
 import { useToast } from "@/hooks/use-toast"
 import { cn, formatDate } from "@/lib/utils"
 import { useRange } from "@/lib/range-context"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 /** Ludus sometimes returns `{ result: [...] }`, a single row, or a bare array. */
 function asObjectArray<T>(data: unknown): T[] {
@@ -154,6 +155,7 @@ function viewerMayUseBlueprint(bp: BlueprintListItem, gate: BlueprintListGate): 
 export default function BlueprintsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const { selectedRangeId, ranges: accessibleRanges, refreshRanges, selectRange } = useRange()
   const [createDialog, setCreateDialog] = useState(false)
   const [viewDialog, setViewDialog] = useState<{ id: string; yaml: string } | null>(null)
@@ -183,7 +185,7 @@ export default function BlueprintsPage() {
     isFetching: blueprintsFetching,
     refetch: refetchBlueprints,
   } = useQuery({
-    queryKey: queryKeys.blueprints(),
+    queryKey: queryKeys.blueprints(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listBlueprints()
       return asObjectArray<BlueprintListItem>(result.data)
@@ -225,7 +227,7 @@ export default function BlueprintsPage() {
     queries: visibleBlueprints.map((bp) => {
       const id = bp.id || bp.blueprintID || ""
       return {
-        queryKey: queryKeys.blueprintSharing(id),
+        queryKey: queryKeys.blueprintSharing(scopeTag, id),
         queryFn: async () => {
           const [u, g] = await Promise.all([
             ludusApi.getBlueprintAccessUsers(id),
@@ -243,7 +245,7 @@ export default function BlueprintsPage() {
   })
 
   const invalidateBlueprints = () => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(), exact: false })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag), exact: false })
   }
 
   const refreshBlueprints = () => {
@@ -252,7 +254,7 @@ export default function BlueprintsPage() {
   }
 
   const { data: ownedRanges = [], isLoading: loadingOwnedRanges } = useQuery({
-    queryKey: queryKeys.rangesOwned(),
+    queryKey: queryKeys.rangesOwned(scopeTag),
     queryFn: async () => {
       const r = await ludusApi.getRangesForUser()
       return r.data ?? []
@@ -272,7 +274,7 @@ export default function BlueprintsPage() {
   }, [createDialog, ownedRanges, selectedRangeId])
 
   const { data: sharePickerUsers = [], isLoading: loadingShareUsers } = useQuery({
-    queryKey: queryKeys.users(),
+    queryKey: queryKeys.users(scopeTag),
     queryFn: async () => {
       const r = await ludusApi.listAllUsers().catch(() => ludusApi.listUsers())
       return asObjectArray<UserObject>(r.data)
@@ -282,7 +284,7 @@ export default function BlueprintsPage() {
   })
 
   const { data: sharePickerGroups = [], isLoading: loadingShareGroups } = useQuery({
-    queryKey: queryKeys.groups(),
+    queryKey: queryKeys.groups(scopeTag),
     queryFn: async () => {
       const r = await ludusApi.listGroups()
       const raw = r.data as unknown
@@ -296,7 +298,7 @@ export default function BlueprintsPage() {
   })
 
   const { data: shareDialogAccess, isLoading: loadingShareDialogAccess } = useQuery({
-    queryKey: queryKeys.blueprintSharing(shareDialog || "_"),
+    queryKey: queryKeys.blueprintSharing(scopeTag, shareDialog || "_"),
     queryFn: async () => {
       const [u, g] = await Promise.all([
         ludusApi.getBlueprintAccessUsers(shareDialog!),
@@ -468,7 +470,7 @@ export default function BlueprintsPage() {
     } else {
       toast({ title: "Blueprint applied", description: "Don't forget to deploy your range" })
       setApplyDialogBpId(null)
-      await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
     }
     setApplySubmitting(null)
   }
@@ -514,7 +516,7 @@ export default function BlueprintsPage() {
     setNewRangeId("")
     await refreshRanges()
     selectRange(rid)
-    await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(rid) })
+    await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rid) })
     setApplySubmitting(null)
   }
 
@@ -570,8 +572,8 @@ export default function BlueprintsPage() {
       toast({ variant: "destructive", title: "Error", description: error })
     } else {
       toast({ title: "Blueprint shared" })
-      await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(shareDialog) })
-      await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints() })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(scopeTag, shareDialog) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag) })
       setShareDialog(null)
       setShareUserSearch("")
       setShareGroupSearch("")
@@ -600,8 +602,8 @@ export default function BlueprintsPage() {
         toast({ title: "Access removed", description: userId })
       }
       if (!r.error) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(shareDialog) })
-        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(), exact: false })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(scopeTag, shareDialog) })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag), exact: false })
       }
     } finally {
       setUnsharingUserId(null)
@@ -627,8 +629,8 @@ export default function BlueprintsPage() {
         toast({ title: "Group access removed", description: groupName })
       }
       if (!r.error) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(shareDialog) })
-        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(), exact: false })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprintSharing(scopeTag, shareDialog) })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag), exact: false })
       }
     } finally {
       setUnsharingGroupName(null)

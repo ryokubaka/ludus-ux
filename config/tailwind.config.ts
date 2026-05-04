@@ -1,11 +1,14 @@
-import type { Config } from "tailwindcss";
+import type { Config } from "tailwindcss"
+import path from "path"
+
+const src = path.join(process.cwd(), "src")
 
 const config: Config = {
   darkMode: ["class"],
   content: [
-    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    path.join(src, "pages/**/*.{js,ts,jsx,tsx,mdx}"),
+    path.join(src, "components/**/*.{js,ts,jsx,tsx,mdx}"),
+    path.join(src, "app/**/*.{js,ts,jsx,tsx,mdx}"),
   ],
   theme: {
     container: {
@@ -88,5 +91,5 @@ const config: Config = {
     },
   },
   plugins: [require("tailwindcss-animate")],
-};
-export default config;
+}
+export default config

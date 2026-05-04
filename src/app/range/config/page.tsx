@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { keepPreviousData } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -82,6 +83,7 @@ const TAG_DESCRIPTIONS: Record<string, string> = {
 export default function RangeConfigPage() {
   const { toast } = useToast()
   const { selectedRangeId, ranges, loading: rangesLoading } = useRange()
+  const scopeTag = useEffectiveScopeTag()
   const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const [config, setConfig] = useState("")
@@ -118,7 +120,7 @@ export default function RangeConfigPage() {
   // since the user actually has other ranges — the selector just hasn't
   // hydrated yet. Empty-state UI below handles `ranges.length === 0`.
   const { data: cachedConfig, isLoading: loading } = useQuery({
-    queryKey: queryKeys.rangeConfig(selectedRangeId),
+    queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId),
     queryFn: async () => {
       const result = await ludusApi.getRangeConfig(selectedRangeId ?? undefined)
       if (result.error) throw new Error(result.error)
@@ -180,7 +182,7 @@ export default function RangeConfigPage() {
       } else {
         toast({ title: "Config saved" })
       }
-      queryClient.setQueryData(queryKeys.rangeConfig(selectedRangeId), config)
+      queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), config)
       return true
     } finally {
       setSaving(false)
@@ -347,7 +349,7 @@ export default function RangeConfigPage() {
 
             <Button variant="ghost" size="icon" onClick={() => {
               lastSyncedRangeRef.current = null // allow the incoming data to replace editor content
-              queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(selectedRangeId) })
+              queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId) })
             }} disabled={loading}>
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>

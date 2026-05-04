@@ -34,6 +34,7 @@ import type { GroupObject, UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useRange } from "@/lib/range-context"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 /** GET /groups only returns counts — members/ranges come from sub-resources ([Ludus API](https://api-docs.ludus.cloud/list-all-groups-24252024e0)). */
 type GroupDetail = { members: string[]; ranges: string[] }
@@ -134,6 +135,7 @@ function asUserObjectArray(data: unknown): UserObject[] {
 export default function GroupsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const { refreshRanges } = useRange()
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [createDialog, setCreateDialog] = useState(false)
@@ -152,7 +154,7 @@ export default function GroupsPage() {
   const [removingRange, setRemovingRange] = useState<{ group: string; rangeId: string } | null>(null)
 
   const { data: groupsRaw, isLoading: loading } = useQuery({
-    queryKey: queryKeys.groups(),
+    queryKey: queryKeys.groups(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listGroups()
       return asGroupObjectArray(result.data)
@@ -164,18 +166,17 @@ export default function GroupsPage() {
   /** Group list + detail caches. Skip range refetch unless membership affects /ranges/accessible (e.g. delete group). */
   const invalidateGroups = useCallback(
     async (opts?: { refreshAccessibleRanges?: boolean }) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.groups() })
-      await queryClient.invalidateQueries({ queryKey: ["groups", "detail"], exact: false })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.groups(scopeTag), exact: false })
       if (opts?.refreshAccessibleRanges) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRanges() })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRangesList(scopeTag) })
         await refreshRanges()
       }
     },
-    [queryClient, refreshRanges]
+    [queryClient, refreshRanges, scopeTag],
   )
 
   const { data: pickerUsers = [], isLoading: loadingPickerUsers } = useQuery({
-    queryKey: queryKeys.users(),
+    queryKey: queryKeys.users(scopeTag),
     queryFn: async () => {
       const r = await ludusApi.listAllUsers().catch(() => ludusApi.listUsers())
       return asUserObjectArray(r.data)
@@ -185,7 +186,7 @@ export default function GroupsPage() {
   })
 
   const { data: pickerRangesRaw, isLoading: loadingPickerRanges } = useQuery({
-    queryKey: queryKeys.allRanges(),
+    queryKey: queryKeys.allRanges(scopeTag),
     queryFn: async () => {
       const r = await ludusApi.listAllRanges()
       if (r.error || r.data == null) return [] as RangeObject[]
@@ -197,14 +198,14 @@ export default function GroupsPage() {
   const pickerRanges = Array.isArray(pickerRangesRaw) ? pickerRangesRaw : []
 
   const { data: addUserDialogDetail, isLoading: loadingAddUserDetail } = useQuery({
-    queryKey: queryKeys.groupDetail(addUserDialog || "_"),
+    queryKey: queryKeys.groupDetail(scopeTag, addUserDialog || "_"),
     queryFn: () => fetchGroupDetail(addUserDialog!),
     enabled: !!addUserDialog,
     staleTime: STALE.short,
   })
 
   const { data: addRangeDialogDetail, isLoading: loadingAddRangeDetail } = useQuery({
-    queryKey: queryKeys.groupDetail(addRangeDialog || "_"),
+    queryKey: queryKeys.groupDetail(scopeTag, addRangeDialog || "_"),
     queryFn: () => fetchGroupDetail(addRangeDialog!),
     enabled: !!addRangeDialog,
     staleTime: STALE.short,
@@ -214,7 +215,7 @@ export default function GroupsPage() {
 
   const expandedDetailQueries = useQueries({
     queries: expandedSorted.map((gName) => ({
-      queryKey: queryKeys.groupDetail(gName),
+      queryKey: queryKeys.groupDetail(scopeTag, gName),
       queryFn: () => fetchGroupDetail(gName),
       staleTime: STALE.short,
     })),

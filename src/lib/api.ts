@@ -175,6 +175,9 @@ export const del = <T>(path: string, body?: unknown, opts?: Parameters<typeof ap
 
 // ── Ludus API wrappers (Ludus Server v2.x paths) ─────────────────────────────
 
+/** Same shape as `apiRequest<T>` — short-circuit `{ error, status }` branches still allow `result.data` in callers. */
+type LudusEnvelope<T = unknown> = { data?: T; error?: string; status: number }
+
 export const ludusApi = {
   // Version — GET /
   getVersion: () => get<{ result: string; version?: string }>("/"),
@@ -190,9 +193,14 @@ export const ludusApi = {
   listAllUsers: () =>
     get<import("./types").UserObject[]>("/user/all"),
 
-  // Range — GET /range
-  getRangeStatus: (rangeId?: string) =>
-    get<import("./types").RangeObject>(rangeId ? `/range?rangeID=${rangeId}` : "/range"),
+  // Range — GET /range?rangeID=…  (bare GET /range returns 404 on several Ludus v2 builds)
+  getRangeStatus: (rangeId?: string): Promise<LudusEnvelope<import("./types").RangeObject>> => {
+    const id = rangeId?.trim()
+    if (!id) {
+      return Promise.resolve({ status: 400, error: "rangeID is required" })
+    }
+    return get<import("./types").RangeObject>(`/range?rangeID=${encodeURIComponent(id)}`)
+  },
 
   // All ranges (admin) — GET /range/all
   listAllRanges: () =>
@@ -200,34 +208,47 @@ export const ludusApi = {
 
   /**
    * Returns ALL ranges across all users (admin only, uses /range/all).
-   * For regular users, falls back to /range.
-   * NOTE: use getRangesForUser() on the Testing page — this function returns
-   * every user's ranges for admins, which is not useful for per-user operations.
+   * For regular users, falls back to GET /ranges/accessible (GET /range without rangeID is not reliable).
    */
   getRanges: async (): Promise<{ data?: import("./types").RangeObject[]; error?: string; status: number }> => {
     const all = await get<import("./types").RangeObject[]>("/range/all")
     if (!all.error && Array.isArray(all.data)) return all
-    const single = await get<import("./types").RangeObject | import("./types").RangeObject[]>("/range")
-    if (!single.data) return { error: single.error, status: single.status }
-    const data = Array.isArray(single.data) ? single.data : [single.data]
-    return { data, status: single.status }
+    const acc = await get<import("./types").RangeAccessEntry[]>("/ranges/accessible")
+    if (acc.error || !acc.data) return { error: acc.error || all.error, status: acc.status || all.status }
+    const list = Array.isArray(acc.data) ? acc.data : []
+    const data: import("./types").RangeObject[] = list.map((e) => ({
+      rangeID: e.rangeID,
+      rangeNumber: e.rangeNumber,
+      name: e.rangeID,
+      rangeState: "NEVER DEPLOYED",
+      VMs: [],
+    }))
+    return { data, status: acc.status }
   },
 
   /**
-   * Returns only the ranges belonging to the currently authenticated user
-   * (or impersonated user).  Always uses GET /range so it's scoped by the
-   * API key in use — safe for admin and non-admin alike.
+   * Ranges for the current API key — uses GET /ranges/accessible (GET /range without rangeID is not reliable).
    */
   getRangesForUser: async (): Promise<{ data?: import("./types").RangeObject[]; error?: string; status: number }> => {
-    const result = await get<import("./types").RangeObject | import("./types").RangeObject[]>("/range")
-    if (!result.data) return { error: result.error, status: result.status }
-    const data = Array.isArray(result.data) ? result.data : [result.data]
+    const result = await get<import("./types").RangeAccessEntry[]>("/ranges/accessible")
+    if (!result.data || result.error) return { error: result.error, status: result.status }
+    const list = Array.isArray(result.data) ? result.data : []
+    const data: import("./types").RangeObject[] = list.map((e) => ({
+      rangeID: e.rangeID,
+      rangeNumber: e.rangeNumber,
+      name: e.rangeID,
+      rangeState: "NEVER DEPLOYED",
+      VMs: [],
+    }))
     return { data, status: result.status }
   },
 
   // Range config — GET /range/config → {"result":"yaml..."}
-  getRangeConfig: (rangeId?: string) =>
-    get<{ result: string }>(rangeId ? `/range/config?rangeID=${rangeId}` : "/range/config"),
+  getRangeConfig: (rangeId?: string): Promise<LudusEnvelope<{ result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ result: string }>(`/range/config?rangeID=${encodeURIComponent(id)}`)
+  },
 
   // Upload range config YAML (routed through dedicated endpoint that sends multipart/form-data)
   setRangeConfig: async (yaml: string, rangeId?: string, force?: boolean): Promise<{ data?: { result: string }; error?: string; status: number }> => {
@@ -277,20 +298,25 @@ export const ludusApi = {
     if (force) body.force = true
     return post(`/range/deploy${q}`, Object.keys(body).length > 0 ? body : undefined)
   },
-  abortDeploy: (rangeId?: string) =>
-    post(rangeId ? `/range/abort?rangeID=${rangeId}` : "/range/abort"),
+  abortDeploy: (rangeId?: string): Promise<LudusEnvelope> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return post(`/range/abort?rangeID=${encodeURIComponent(id)}`)
+  },
 
   // Logs — GET /range/logs → {"cursor":N,"result":"log text"}
-  getRangeLogs: (rangeId?: string) =>
-    get<{ cursor: number; result: string }>(rangeId ? `/range/logs?rangeID=${rangeId}` : "/range/logs"),
+  getRangeLogs: (rangeId?: string): Promise<LudusEnvelope<{ cursor: number; result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ cursor: number; result: string }>(`/range/logs?rangeID=${encodeURIComponent(id)}`)
+  },
 
   // Ansible inventory — GET /range/ansibleinventory
-  getRangeAnsibleInventory: (rangeId?: string) =>
-    get<{ result: string }>(
-      rangeId
-        ? `/range/ansibleinventory?rangeID=${encodeURIComponent(rangeId)}`
-        : "/range/ansibleinventory",
-    ),
+  getRangeAnsibleInventory: (rangeId?: string): Promise<LudusEnvelope<{ result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ result: string }>(`/range/ansibleinventory?rangeID=${encodeURIComponent(id)}`)
+  },
 
   // Range creation — routed through dedicated endpoint that proxies to admin API (port 8081)
   createRange: async (data: { name: string; rangeID: string; description?: string; purpose?: string; userID?: string[] }): Promise<{ data?: { result: string }; error?: string; status: number }> => {
@@ -318,12 +344,21 @@ export const ludusApi = {
   getTemplateLogs: () => get<{ cursor: number; result: string }>("/templates/logs"),
 
   // Log history — range deploys
-  getRangeLogHistory: (rangeId?: string) =>
-    get<import("./types").LogHistoryEntry[]>(rangeId ? `/range/logs/history?rangeID=${rangeId}` : "/range/logs/history"),
-  getRangeLogHistoryById: (logId: string, rangeId?: string) =>
-    get<import("./types").LogHistoryDetail>(
-      rangeId ? `/range/logs/history/${logId}?rangeID=${rangeId}` : `/range/logs/history/${logId}`,
-    ),
+  getRangeLogHistory: (rangeId?: string): Promise<LudusEnvelope<import("./types").LogHistoryEntry[]>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<import("./types").LogHistoryEntry[]>(`/range/logs/history?rangeID=${encodeURIComponent(id)}`)
+  },
+  getRangeLogHistoryById: (
+    logId: string,
+    rangeId?: string,
+  ): Promise<LudusEnvelope<import("./types").LogHistoryDetail>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<import("./types").LogHistoryDetail>(
+      `/range/logs/history/${encodeURIComponent(logId)}?rangeID=${encodeURIComponent(id)}`,
+    )
+  },
 
   // Log history — template builds
   getTemplateLogHistory: () =>
@@ -367,8 +402,12 @@ export const ludusApi = {
   denyIP: (ip: string, rangeId?: string) =>
     post(rangeId ? `/testing/deny?rangeID=${rangeId}` : "/testing/deny", { ips: [ip] }),
 
-  // Snapshots — v2 paths
-  listSnapshots: () => get<import("./types").SnapshotListResponse>("/snapshots/list"),
+  // Snapshots — v2 paths (rangeID matches other range-scoped GETs; Ludus resolves range from context if omitted)
+  listSnapshots: (rangeId?: string) => {
+    const id = rangeId?.trim()
+    const q = id ? `?rangeID=${encodeURIComponent(id)}` : ""
+    return get<import("./types").SnapshotListResponse>(`/snapshots/list${q}`)
+  },
   createSnapshot: (payload: import("./types").SnapshotCreatePayload) =>
     post("/snapshots/create", payload),
   revertSnapshot: (payload: import("./types").SnapshotCreatePayload) =>

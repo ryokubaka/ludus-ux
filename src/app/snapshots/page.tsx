@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -31,6 +32,7 @@ import {
   Clock,
   Layers,
   MapPin,
+  AlertTriangle,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { SnapshotInfo } from "@/lib/types"
@@ -38,6 +40,8 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
+import { useRange } from "@/lib/range-context"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 // ── derived data types ────────────────────────────────────────────────────────
 
@@ -58,6 +62,12 @@ interface SnapshotGroup {
   vms: SnapshotInfo[]
 }
 
+interface SnapshotsViewData {
+  vmGroups: VMGroup[]
+  snapGroups: SnapshotGroup[]
+  snapshotsUnsupported?: boolean
+}
+
 const PAGE_SIZE = 20
 
 function formatSnaptime(snaptime?: number): string {
@@ -73,6 +83,8 @@ function formatSnaptime(snaptime?: number): string {
 export default function SnapshotsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
+  const { selectedRangeId, loading: rangeCtxLoading } = useRange()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const [view, setView] = useState<"vm" | "snapshot">("vm")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -85,10 +97,18 @@ export default function SnapshotsPage() {
   const [snapshotVisibleCount, setSnapshotVisibleCount] = useState(PAGE_SIZE)
 
   const { data: snapshotData, isLoading: loading } = useQuery({
-    queryKey: queryKeys.snapshots(),
-    queryFn: async () => {
-      const result = await ludusApi.listSnapshots()
-      if (!result.data) return { vmGroups: [] as VMGroup[], snapGroups: [] as SnapshotGroup[] }
+    queryKey: queryKeys.snapshots(scopeTag, selectedRangeId),
+    enabled: !rangeCtxLoading && !!selectedRangeId,
+    queryFn: async (): Promise<SnapshotsViewData> => {
+      const empty = (unsupported?: boolean): SnapshotsViewData => ({
+        vmGroups: [],
+        snapGroups: [],
+        snapshotsUnsupported: unsupported,
+      })
+      const result = await ludusApi.listSnapshots(selectedRangeId ?? undefined)
+      if (result.status === 404) return empty(true)
+      if (result.error) throw new Error(result.error)
+      if (!result.data) return empty()
       const flat = result.data.snapshots ?? []
 
       // Build VM-centric groups
@@ -124,7 +144,7 @@ export default function SnapshotsPage() {
       const snapGroups = Array.from(snapMap.values()).sort(
         (a, b) => (b.snaptime ?? 0) - (a.snaptime ?? 0)
       )
-      return { vmGroups, snapGroups }
+      return { vmGroups, snapGroups, snapshotsUnsupported: false }
     },
     staleTime: STALE.medium,
   })
@@ -173,7 +193,7 @@ export default function SnapshotsPage() {
       setCreateDialog(false)
       setNewSnapshotName("")
       setNewSnapshotDesc("")
-      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
     }
     setCreating(false)
   }
@@ -195,7 +215,7 @@ export default function SnapshotsPage() {
       toast({ variant: "destructive", title: "Delete failed", description: result.error })
     } else {
       toast({ title: "Snapshot deleted" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
     }
   }
   const handleDelete = (snapshotName: string, vmCount: number) =>
@@ -209,6 +229,18 @@ export default function SnapshotsPage() {
       {/* Confirm bar */}
       <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
 
+      {snapshotData?.snapshotsUnsupported && (
+        <Alert variant="warning" className="gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <div>
+            <AlertTitle className="text-sm">Snapshots API unavailable</AlertTitle>
+            <AlertDescription className="text-xs text-muted-foreground">
+              Ludus returned 404 for <code className="font-mono">GET /api/v2/snapshots/list</code>. Upgrade Ludus to a
+              build that registers snapshot routes, or confirm your reverse proxy forwards <code className="font-mono">/api/v2/snapshots/*</code>.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
@@ -233,7 +265,7 @@ export default function SnapshotsPage() {
             <Plus className="h-4 w-4" />
             New Snapshot
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.snapshots() })} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
         </div>

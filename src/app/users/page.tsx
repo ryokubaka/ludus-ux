@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -45,6 +46,7 @@ import { saveImpersonation } from "@/lib/impersonation-context"
 export default function UsersPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const router = useRouter()
 
   // ── Impersonation ──────────────────────────────────────────────────────────
@@ -124,7 +126,7 @@ export default function UsersPage() {
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
   const { data: usersData, isLoading: loading } = useQuery({
-    queryKey: queryKeys.users(),
+    queryKey: queryKeys.users(scopeTag),
     queryFn: async () => {
       const [usersResult, rangesResult] = await Promise.all([
         ludusApi.listAllUsers().catch(() => ludusApi.listUsers()),
@@ -156,7 +158,7 @@ export default function UsersPage() {
   )
   const rangeMap = useMemo(() => usersData?.rangeMap ?? {}, [usersData])
 
-  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: queryKeys.users() })
+  const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: queryKeys.users(scopeTag) })
 
   // ── Add user ───────────────────────────────────────────────────────────────
   const handleAdd = async () => {

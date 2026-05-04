@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +35,7 @@ import { cn } from "@/lib/utils"
 export default function AnsiblePage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const [addRoleDialog, setAddRoleDialog] = useState(false)
   const [addCollDialog, setAddCollDialog] = useState(false)
   const [newRoleName, setNewRoleName] = useState("")
@@ -43,7 +45,7 @@ export default function AnsiblePage() {
   const [adding, setAdding] = useState(false)
 
   const { data: ansibleData, isLoading: loading } = useQuery({
-    queryKey: queryKeys.ansible(),
+    queryKey: queryKeys.ansible(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listAnsible()
       const list = result.data ?? []
@@ -57,7 +59,7 @@ export default function AnsiblePage() {
 
   const roles = ansibleData?.roles ?? []
   const collections = ansibleData?.collections ?? []
-  const invalidateAnsible = () => queryClient.invalidateQueries({ queryKey: queryKeys.ansible() })
+  const invalidateAnsible = () => queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
 
   const handleAddRole = async () => {
     if (!newRoleName.trim()) return

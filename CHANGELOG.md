@@ -4,6 +4,20 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.9.7] — 2026-05-04
+
+**LUX**
+- [Add] Playwright smoke (`npm run test:e2e`) — optional `E2E_*` env vars; see `config/playwright.config.ts`
+- [Add] Playwright: health, auth-gate, login UI, navigation, logout (`e2e/helpers/auth.ts`)
+- [Change] Tooling layout: `config/next.config.cjs`, `tailwind.config.ts`, `playwright.config.ts`, `postcss.config.cjs`, and `tsconfig.base.json` under `config/`
+- [Perf] TanStack cache + `localStorage` namespaced per login/impersonation scope (`@sc` query keys); dashboard inventory cache keyed by scope; manual refresh no longer blocked by 15s poll
+- [Fix] Admin manual impersonation waits for `/api/auth/impersonate` cookie before navigating home
+- [Fix] Login: derive `isAdmin` from the correct Ludus `GET /user` row when the API returns an array; fixes missing admin sidebar for real admins
+- [Fix] Stop calling Ludus `GET /range` without `rangeID` (404 on v2); dashboard range query waits for selection; logs page passes `rangeID`; remove SSR prefetch that hit bare `/range`
+- [Fix] Dashboard: merge partial or empty `GET /range` VM lists with cached rows — use `numberOfVMs` when it exceeds `VMs.length`, union-merge subset responses; manual refresh / 15s poll no longer intermittently drops VMs
+
+---
+
 ## [0.9.6] — 2026-04-29
 
 **LUX**

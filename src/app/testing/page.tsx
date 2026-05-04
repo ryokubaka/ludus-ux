@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { useRange } from "@/lib/range-context"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
 
@@ -203,13 +204,14 @@ export default function TestingPage() {
     selectRange,             // updates global context + sessionStorage
     loading: rangesLoading,
   } = useRange()
+  const scopeTag = useEffectiveScopeTag()
 
   // ── Per-range PB status for selector dots (all accessible ranges) ─────────
   // Bulk GET /pb-status only returns ranges "owned" by the effective user; group-shared
   // ranges are missing. One ?rangeId= fetch per sidebar range keeps dots correct.
   const testingDotQueries = useQueries({
     queries: contextRanges.map((r) => ({
-      queryKey: queryKeys.rangePbStatusDot(r.rangeID),
+      queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID),
       queryFn: () => fetchPbStatusForRange(r.rangeID),
       enabled: !rangesLoading && !!r.rangeID,
       staleTime: STALE.short,

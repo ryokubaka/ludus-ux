@@ -6,6 +6,8 @@ import type { RangeAccessEntry } from "./types"
 import { queryKeys } from "./query-keys"
 import { STALE } from "./query-client"
 import { extractArray } from "./utils"
+import { readClientEffectiveScopeTagSync } from "./effective-scope"
+import { useEffectiveScopeTag } from "./effective-scope-context"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -39,6 +41,7 @@ async function fetchAccessibleRanges(impersonationHeaders: Record<string, string
 
 export function RangeProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [impersonationHeaders, setImpersonationHeaders] = useState<Record<string, string>>({})
 
@@ -62,7 +65,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   // QueryProvider). Stale window + refetchInterval cover ACL changes from
   // group membership without requiring a full reload.
   const { data: ranges = [], isLoading, isFetching: rangesFetching } = useQuery({
-    queryKey: [...queryKeys.accessibleRanges(), impersonationHeaders["X-Impersonate-As"] ?? "self"],
+    queryKey: queryKeys.accessibleRangesList(scopeTag),
     queryFn: () => fetchAccessibleRanges(impersonationHeaders),
     // Group/range ACL changes are made by other users/admins — no client-side
     // invalidation for recipients. Short stale + interval keeps the sidebar honest.
@@ -104,8 +107,8 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     // network round-trip so callers (e.g. deploy flow in range/new/page.tsx)
     // are guaranteed the fresh list includes any newly created range before
     // they call selectRange() and navigate away.
-    await queryClient.refetchQueries({ queryKey: queryKeys.accessibleRanges() })
-  }, [queryClient])
+    await queryClient.refetchQueries({ queryKey: queryKeys.accessibleRangesList(scopeTag) })
+  }, [queryClient, scopeTag])
 
   // When impersonation changes, clear stale range selection and re-fetch
   useEffect(() => {
@@ -115,7 +118,9 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
       setSelectedRangeId(null)
       sessionStorage.removeItem(STORAGE_KEY)
       // Invalidate so the query re-runs with new headers
-      queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRanges() })
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.accessibleRangesList(readClientEffectiveScopeTagSync()),
+      })
     }
     window.addEventListener("impersonation-changed", handler)
     return () => window.removeEventListener("impersonation-changed", handler)

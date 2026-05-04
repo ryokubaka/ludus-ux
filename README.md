@@ -203,7 +203,7 @@ Use this when you already have a **git clone** of the repo on the Docker host (s
 
 1. Quiet `git fetch` from your remote (`--prune --tags`) so your view matches the server without noisy deleted-ref lines.
 2. Lists **active branches** and **release tags** straight from the remote (`git ls-remote`) — only refs that still exist; stale deleted branches are not offered.
-3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.6`).
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.7`).
 4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
@@ -218,7 +218,7 @@ Non-interactive (examples):
 
 ```bash
 bash scripts/upgrade.sh main
-bash scripts/upgrade.sh v0.9.6
+bash scripts/upgrade.sh v0.9.7
 ```
 
 Persistent data (`./data`, `./ssh`, `./certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
@@ -474,6 +474,20 @@ npm run dev
 ```
 
 For local development, set `DISABLE_HTTPS=true` in your `.env` to skip TLS.
+
+### E2E (Playwright)
+
+With the stack up and HTTPS (e.g. `docker compose up`, `https://localhost`), install browsers once: `npx playwright install` (Linux/WSL: `npx playwright install-deps chromium` if the runner errors on missing `.so` libraries).
+
+```bash
+# Optional: PLAYWRIGHT_BASE_URL=https://localhost
+# If login stops at Ludus API key: E2E_LUDUS_API_KEY='...'
+npm run test:e2e
+```
+
+Config file: [`config/playwright.config.ts`](config/playwright.config.ts).
+
+Default creds: `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser`. **Unauthenticated** specs (`e2e/health.spec.ts`, `auth-gate`, `login-ui`) only need the app reachable. **Authenticated** specs (`navigation`, `logout`, `impersonation`) need valid SSH login; impersonation may need `E2E_LUDUS_API_KEY`. Shared helper: `e2e/helpers/auth.ts`. WSL notes: [`docs/playwright.yaml`](docs/playwright.yaml).
 
 ---
 

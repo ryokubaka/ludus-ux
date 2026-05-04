@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { HydrationBoundary } from "@tanstack/react-query"
 import { prefetchGlobal } from "@/lib/server-prefetch"
+import { getSession } from "@/lib/session"
+import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 
 export const metadata: Metadata = {
   title: "Ludus UX - Cyber Range User eXperience",
@@ -22,12 +24,14 @@ export const metadata: Metadata = {
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const dehydratedState = await prefetchGlobal()
+  const session = await getSession()
+  const dehydratedState = await prefetchGlobal(session)
+  const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"
 
   return (
     <html lang="en" className="dark">
       <body className="font-sans antialiased">
-        <QueryProvider>
+        <QueryProvider initialScopeTag={initialScopeTag}>
           <HydrationBoundary state={dehydratedState}>
             <TooltipProvider>
               <AppShell>{children}</AppShell>

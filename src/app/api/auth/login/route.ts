@@ -3,18 +3,41 @@ import { authenticateUser, saveApiKeyToBashrc } from "@/lib/auth-ssh"
 import { setSessionCookie, type SessionData } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 
-/** Ask Ludus for this user's info using their API key. Returns null if the key is invalid. */
-async function checkLudusUser(apiKey: string): Promise<{ isAdmin: boolean; valid: boolean }> {
+function userIdFromRecord(u: Record<string, unknown>): string {
+  const id = u.userID ?? u.user_id
+  return typeof id === "string" ? id : ""
+}
+
+function isAdminFromRecord(u: Record<string, unknown>): boolean {
+  return u.isAdmin === true || u.is_admin === true
+}
+
+/**
+ * Pick the UserObject for this login from GET /user (single object, or array when
+ * Ludus returns several users — never assume `array[0]` is the current user).
+ */
+function pickUserRecord(raw: unknown, ludusUsername: string): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null
+  const list: Record<string, unknown>[] = Array.isArray(raw)
+    ? raw.filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+    : [raw as Record<string, unknown>]
+  if (list.length === 0) return null
+  if (list.length === 1) return list[0]
+  const want = ludusUsername.trim().toLowerCase()
+  const matched = list.find((u) => userIdFromRecord(u).toLowerCase() === want)
+  return matched ?? null
+}
+
+/** Ask Ludus for this user's info using their API key. */
+async function checkLudusUser(apiKey: string, ludusUsername: string): Promise<{ isAdmin: boolean; valid: boolean }> {
   try {
     const result = await ludusRequest<unknown>("/user", { apiKey })
     if (result.error || result.status !== 200) {
       return { isAdmin: false, valid: false }
     }
-    const raw = result.data
-    // Ludus v2 may return a single UserObject or UserObject[] — handle both
-    const user = Array.isArray(raw) ? raw[0] : raw
-    if (!user || typeof user !== "object") return { isAdmin: false, valid: true }
-    return { isAdmin: (user as Record<string, unknown>).isAdmin === true, valid: true }
+    const user = pickUserRecord(result.data, ludusUsername)
+    if (!user) return { isAdmin: false, valid: true }
+    return { isAdmin: isAdminFromRecord(user), valid: true }
   } catch {
     return { isAdmin: false, valid: false }
   }
@@ -40,7 +63,7 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       )
     }
-    const { isAdmin, valid } = await checkLudusUser(manualApiKey)
+    const { isAdmin, valid } = await checkLudusUser(manualApiKey, username)
     if (!valid) {
       return NextResponse.json({ error: "API key is invalid — please check it and try again" }, { status: 401 })
     }
@@ -68,7 +91,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Verify the API key works and get real admin status from Ludus
-  const { isAdmin, valid } = await checkLudusUser(result.apiKey)
+  const { isAdmin, valid } = await checkLudusUser(result.apiKey, username)
 
   // If the key in .bashrc is stale/invalid, prompt the user to enter their current key
   if (!valid) {

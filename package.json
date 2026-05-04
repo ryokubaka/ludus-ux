@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev": "npm run copy:monaco && next dev",
     "build": "npm run copy:monaco && next build",
     "start": "next start -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:e2e": "playwright test -c config/playwright.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",
@@ -60,6 +61,7 @@
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.1",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",

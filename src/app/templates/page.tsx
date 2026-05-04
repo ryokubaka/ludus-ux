@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, Fragment } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -388,6 +389,7 @@ function OsBadge({ os }: { os?: LudusOS }) {
 export default function TemplatesPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   // Per-row confirmations (build-single / delete) now render inline next to
   // the triggering template, so no auto-scroll is needed. Multi-select build
@@ -412,7 +414,7 @@ export default function TemplatesPage() {
   const [buildHistoryShowAll, setBuildHistoryShowAll] = useState(false)
 
   const { data: buildHistory = [], isLoading: buildHistoryLoading, isFetching: buildHistoryRefreshing } = useQuery({
-    queryKey: queryKeys.templateLogHistory(),
+    queryKey: queryKeys.templateLogHistory(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getTemplateLogHistory()
       return extractArray<LogHistoryEntry>(result.data as unknown)
@@ -439,7 +441,7 @@ export default function TemplatesPage() {
 
   // Template list — cached for fast subsequent loads
   const { data: templates = [], isLoading: loading } = useQuery({
-    queryKey: queryKeys.templates(),
+    queryKey: queryKeys.templates(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listTemplates()
       return extractArray<TemplateObject>(result.data as unknown)
@@ -472,7 +474,7 @@ export default function TemplatesPage() {
 
   // Template build status — polls every 3 s while building, otherwise only checks on mount
   useQuery({
-    queryKey: queryKeys.templateStatus(),
+    queryKey: queryKeys.templateStatus(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getTemplateStatus()
       return result.data ?? null
@@ -515,8 +517,8 @@ export default function TemplatesPage() {
         : statusResult.data != null && !statusResult.error
       if (!stillBuilding) {
         setBuilding(false)
-        queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
-        queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory() })
+        queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
       }
     }, 3000)
 
@@ -575,7 +577,7 @@ export default function TemplatesPage() {
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Template deleted" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.templates() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
     }
   }
   const handleDelete = (name: string) =>
@@ -655,7 +657,7 @@ export default function TemplatesPage() {
 
           <div className="flex-1" />
 
-          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates() })} disabled={loading}>
+          <Button variant="ghost" size="icon" onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
           </div>
@@ -764,7 +766,7 @@ export default function TemplatesPage() {
                 loading={buildHistoryLoading}
                 onSelect={handleSelectBuildLog}
                 selectedId={selectedBuildLogId}
-                onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory() })}
+                onRefresh={() => queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })}
                 refreshing={buildHistoryRefreshing}
                 showTemplate
                 emptyMessage={
@@ -781,7 +783,7 @@ export default function TemplatesPage() {
       </Card>
 
       {/* Add from Source */}
-      <AddFromSource installedNames={installedNames} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates() })} />
+      <AddFromSource installedNames={installedNames} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
 
       {/* Template List */}
       <Card>

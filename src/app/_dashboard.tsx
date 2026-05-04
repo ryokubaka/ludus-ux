@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -64,24 +64,124 @@ import { useElapsed } from "@/hooks/use-elapsed"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import {
   clearRangeAborting,
   isRangeAborting,
 } from "@/lib/range-aborting"
 import { useAbortRange } from "@/lib/use-abort-range"
+import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
 
 /** Re-open inventory for the same range without waiting on Ludus again. */
 const INVENTORY_CACHE_MS = 3 * 60 * 1000
 
+/** Stable row identity for merge/dedupe (Proxmox ID preferred, then Ludus VM ID, then name). */
+function vmIdentityKey(vm: VMObject): string {
+  const p = vm.proxmoxID
+  if (p != null && Number(p) !== 0) return `p:${Number(p)}`
+  const id = vm.ID
+  if (id != null && Number(id) !== 0) return `i:${Number(id)}`
+  const n = (vm.name || vm.vmName || "").toString().trim().toLowerCase()
+  return n ? `n:${n}` : `z:${JSON.stringify([vm.ID, vm.proxmoxID, vm.name])}`
+}
+
 function dedupeVMs(vms: VMObject[]): VMObject[] {
-  const seen = new Set<number | string>()
+  const seen = new Set<string>()
   return vms.filter((vm) => {
-    const key = vm.proxmoxID ?? vm.ID
+    const key = vmIdentityKey(vm)
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
+}
+
+function mergeVmUnionPreferNext(prev: VMObject[], next: VMObject[]): VMObject[] {
+  const m = new Map<string, VMObject>()
+  for (const vm of prev) m.set(vmIdentityKey(vm), vm)
+  for (const vm of next) m.set(vmIdentityKey(vm), vm)
+  return dedupeVMs(Array.from(m.values()))
+}
+
+function nextVmKeysAreSubsetOfPrev(next: VMObject[], prev: VMObject[]): boolean {
+  if (next.length === 0 || prev.length === 0) return false
+  const prevKeys = new Set(prev.map(vmIdentityKey))
+  return next.every((vm) => prevKeys.has(vmIdentityKey(vm)))
+}
+
+/**
+ * When GET /range returns fewer VM rows than we already had (or than numberOfVMs says exist),
+ * Ludus/Proxmox sometimes omits rows on a single poll. Merge with cache so refresh does not
+ * hide VMs. When numberOfVMs matches the new list length, treat the list as authoritative.
+ * When numberOfVMs is absent but the same short list repeats twice, trust the shrink.
+ */
+const vmPartialListStreak = new Map<string, { signature: string; streak: number }>()
+
+function vmPartialStreakKey(scopeTag: string, rangeId: string) {
+  return `${scopeTag}::${rangeId}`
+}
+
+function resolveVmListForRangeQuery(args: {
+  data: RangeObject
+  newVMs: VMObject[]
+  prevVMs: VMObject[]
+  stateUpper: string
+  scopeTag: string
+  rangeId: string
+}): VMObject[] {
+  const { data, newVMs, prevVMs, stateUpper, scopeTag, rangeId } = args
+  const transientVmGap = stateUpper === "DEPLOYING" || stateUpper === "WAITING"
+  const streakKey = vmPartialStreakKey(scopeTag, rangeId)
+
+  const expected =
+    typeof data.numberOfVMs === "number" && Number.isFinite(data.numberOfVMs) && data.numberOfVMs >= 0
+      ? data.numberOfVMs
+      : undefined
+
+  // Empty payload: keep prior VMs only during deploy/wait hiccups; otherwise trust empty.
+  if (newVMs.length === 0) {
+    vmPartialListStreak.delete(streakKey)
+    if (prevVMs.length > 0 && transientVmGap) return prevVMs
+    return []
+  }
+
+  // Ludus says this many VMs exist and the array length matches → full snapshot, use as-is.
+  if (expected !== undefined && expected === newVMs.length) {
+    vmPartialListStreak.delete(streakKey)
+    return newVMs
+  }
+
+  // Ludus reports more VMs than rows returned → merge so missing rows stay visible.
+  if (expected !== undefined && newVMs.length < expected) {
+    vmPartialListStreak.delete(streakKey)
+    return mergeVmUnionPreferNext(prevVMs, newVMs)
+  }
+
+  // No numberOfVMs (or malformed): short partial list whose keys are all known from cache → union.
+  // Repeat the exact same short list twice in a row → treat as a real shrink (e.g. destroy) and
+  // drop cached-only rows so we do not ghost VMs forever.
+  if (
+    prevVMs.length > 0 &&
+    newVMs.length < prevVMs.length &&
+    nextVmKeysAreSubsetOfPrev(newVMs, prevVMs)
+  ) {
+    const signature = newVMs
+      .map(vmIdentityKey)
+      .sort()
+      .join("|")
+    const row = vmPartialListStreak.get(streakKey)
+    if (row && row.signature === signature) row.streak += 1
+    else vmPartialListStreak.set(streakKey, { signature, streak: 1 })
+    const streak = vmPartialListStreak.get(streakKey)!.streak
+    if (streak >= 2) {
+      vmPartialListStreak.delete(streakKey)
+      return newVMs
+    }
+    return mergeVmUnionPreferNext(prevVMs, newVMs)
+  }
+
+  vmPartialListStreak.delete(streakKey)
+  return newVMs
 }
 
 export function DashboardPageClient() {
@@ -89,7 +189,6 @@ export function DashboardPageClient() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  const { abortRange } = useAbortRange()
   const {
     selectedRangeId,
     ranges: accessibleRanges,
@@ -98,16 +197,27 @@ export function DashboardPageClient() {
     selectRange,
     refreshRanges,
   } = useRange()
+  const scopeTag = useEffectiveScopeTag()
+
+  useEffect(() => {
+    vmPartialListStreak.clear()
+  }, [selectedRangeId, scopeTag])
+
+  const { abortRange } = useAbortRange(scopeTag)
 
   const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0 && !selectedRangeId
 
   // ── UI state ────────────────────────────────────────────────────────────────
-  const [expandedRanges, setExpandedRanges] = useState<Set<string>>(new Set())
   const [wireguardDownloading, setWireguardDownloading] = useState(false)
   /** Modal inventory — same path as before: client → /api/proxy → Ludus (impersonation headers on every ludusApi call). */
   const [inventoryDialog, setInventoryDialog] = useState<{ rangeId: string; label: string; text: string } | null>(null)
   const [inventoryLoading, setInventoryLoading] = useState(false)
   const inventoryCacheRef = useRef(new Map<string, { text: string; at: number }>())
+  useEffect(() => {
+    const clearInv = () => inventoryCacheRef.current.clear()
+    window.addEventListener(IMPERSONATION_CHANGED_EVENT, clearInv)
+    return () => window.removeEventListener(IMPERSONATION_CHANGED_EVENT, clearInv)
+  }, [])
   const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
   const [destroyingAllVmsRangeId, setDestroyingAllVmsRangeId] = useState<string | null>(null)
   const [deploying, setDeploying] = useState(false)
@@ -150,7 +260,7 @@ export function DashboardPageClient() {
     refetch: refetchRangeStatus,
     dataUpdatedAt: rangeDataUpdatedAt,
   } = useQuery({
-    queryKey: queryKeys.rangeStatus(selectedRangeId),
+    queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId),
     queryFn: async () => {
       const result = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
       if (result.error) {
@@ -163,32 +273,39 @@ export function DashboardPageClient() {
       const rawVMs = data.VMs || (data as RangeObject & { vms?: VMObject[] }).vms || []
       const newVMs = dedupeVMs(rawVMs)
 
-      // Ludus GET /range occasionally returns an empty VMs array mid-deploy or
-      // during short Proxmox hiccups, even though the VMs still exist. When
-      // that happens, prefer the previously-cached VM list so rows don't flash
-      // in and out of existence. We only trust an empty response when the
-      // range is in a terminal state where "no VMs" is meaningful.
-      const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(selectedRangeId))
+      // Ludus GET /range sometimes returns an empty or *short* VMs array on one poll (deploy,
+      // Proxmox hiccup, or slow inventory). Prefer cache / numberOfVMs so refresh does not hide VMs.
+      const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(scopeTag, selectedRangeId))
       const prevVMs = prev?.VMs || (prev as (RangeObject & { vms?: VMObject[] }) | undefined)?.vms || []
       const state = (data.rangeState || "").toString().toUpperCase()
-      const terminal = state === "DESTROYED" || state === "NEVER DEPLOYED" || state === "ERROR"
-      const vms = newVMs.length === 0 && prevVMs.length > 0 && !terminal ? prevVMs : newVMs
+      const vms = resolveVmListForRangeQuery({
+        data,
+        newVMs,
+        prevVMs,
+        stateUpper: state,
+        scopeTag,
+        rangeId: selectedRangeId ?? "",
+      })
 
       return { ...data, VMs: vms }
     },
-    enabled: !rangeCtxLoading && !hasNoRanges,
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
     staleTime: STALE.realtime,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
-    // When selectedRangeId transitions from null → saved ID, keep showing
-    // the previous key's data as a placeholder while the new key fetches.
-    // Prevents the "data disappears → loading → data reappears" flash.
-    placeholderData: keepPreviousData,
+      // When switching ranges, do not show the previous range's VM table as a placeholder.
+      placeholderData: (previousData, previousQuery) => {
+        if (!previousData || !previousQuery) return previousData
+        const pk = previousQuery.queryKey
+        const ck = queryKeys.rangeStatus(scopeTag, selectedRangeId)
+        if (pk[pk.length - 1] !== ck[ck.length - 1]) return undefined
+        return previousData
+      },
   })
 
   // ── Version query ───────────────────────────────────────────────────────────
   const { data: versionData } = useQuery({
-    queryKey: queryKeys.version(),
+    queryKey: queryKeys.version(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getVersion()
       return result.data ?? null
@@ -199,7 +316,7 @@ export function DashboardPageClient() {
 
   const { data: deployHistoryEntries = [], isLoading: deployHistoryListLoading, isFetching: deployHistoryRefreshing } =
     useQuery({
-      queryKey: queryKeys.rangeLogHistory(selectedRangeId),
+      queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId),
       queryFn: async () => {
         const result = await ludusApi.getRangeLogHistory(selectedRangeId ?? undefined)
         return extractArray<LogHistoryEntry>(result.data as unknown)
@@ -220,7 +337,7 @@ export function DashboardPageClient() {
   }, [deployHistoryEntries, rangeData?.rangeState])
 
   const { data: goadInstanceForRange = null } = useQuery({
-    queryKey: queryKeys.goadInstanceForRange(selectedRangeId ?? ""),
+    queryKey: queryKeys.goadInstanceForRange(scopeTag, selectedRangeId ?? ""),
     queryFn: async () => {
       if (!selectedRangeId) return null
       const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`)
@@ -233,7 +350,7 @@ export function DashboardPageClient() {
   })
 
   const { data: goadTasksForRange, isLoading: goadTasksListLoading } = useQuery({
-    queryKey: [...queryKeys.goadTasks(), "for-instance", goadInstanceForRange ?? ""],
+    queryKey: queryKeys.goadTasksForInstance(scopeTag, goadInstanceForRange ?? ""),
     queryFn: async () => {
       const iid = goadInstanceForRange!
       const res = await fetch("/api/goad/tasks", { headers: getImpersonationHeaders() })
@@ -264,7 +381,7 @@ export function DashboardPageClient() {
     isLoading: vmOperationLoading,
     isFetching: vmOperationRefreshing,
   } = useQuery({
-    queryKey: queryKeys.vmOperationLog(selectedRangeId),
+    queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId),
     queryFn: async () => {
       const res = await getVmOperationLog({ rangeId: selectedRangeId ?? undefined })
       return res.entries
@@ -277,10 +394,10 @@ export function DashboardPageClient() {
   // (VM destroy from Dashboard, GOAD remove-extension, Range Logs, ...).
   useEffect(() => {
     const handler = () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId) })
     window.addEventListener("vm-operation-log-updated", handler)
     return () => window.removeEventListener("vm-operation-log-updated", handler)
-  }, [queryClient, selectedRangeId])
+  }, [queryClient, selectedRangeId, scopeTag])
 
   const clearDeployHistorySelection = useCallback(() => {
     setDeployHistorySelectedId(null)
@@ -319,13 +436,6 @@ export function DashboardPageClient() {
     [selectedRangeId, toast, deployHistoryEntries, goadTasksForRange],
   )
 
-  // ── Auto-expand range when data arrives ────────────────────────────────────
-  useEffect(() => {
-    if (!rangeData) return
-    const rangeKey = rangeData.rangeID || rangeData.name || "range-0"
-    setExpandedRanges((e) => (e.has(rangeKey) ? e : new Set([...e, rangeKey])))
-  }, [rangeData])
-
   useEffect(() => {
     setDeployHistoryOpen(false)
     clearDeployHistorySelection()
@@ -357,7 +467,7 @@ export function DashboardPageClient() {
   // rangeState === "DEPLOYING", starting the log stream automatically.
   //
   // isPlaceholderData guard prevents the previous range's stale data (shown
-  // during key transition via keepPreviousData) from triggering a false positive.
+  // during key transition via range-scoped placeholder) from triggering a false positive.
   const streamIsForThisRange = isStreaming && streamingRangeId === (selectedRangeId ?? null)
   const rangeDataId = !isPlaceholderData ? (rangeData?.rangeID ?? rangeData?.name ?? null) : null
   // Must depend on range state, not only range id: first fetch after redirect can still
@@ -405,7 +515,7 @@ export function DashboardPageClient() {
   useEffect(() => {
     if (!aborting || !selectedRangeId) return
     const id = setInterval(() => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
     }, 2000)
     return () => clearInterval(id)
   }, [aborting, selectedRangeId, queryClient])
@@ -419,22 +529,29 @@ export function DashboardPageClient() {
     const finalState = streamRangeState ?? rangeData?.rangeState ?? null
     if (finalState && finalState !== "DEPLOYING" && finalState !== "WAITING") {
       setDeploying(false)
-      queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
       setTimeout(() => setShowLogs(false), 5000)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreaming, streamRangeState])
 
   const invalidateRangeStatus = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
-  }, [queryClient, selectedRangeId])
+    queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+  }, [queryClient, selectedRangeId, scopeTag])
 
-  const dashboardRefreshing = rangeCtxLoading || rangesFetching || isFetching
+  /** Background poll / range list fetch — status dot only, not the manual refresh control. */
+  const dashboardDataSyncing = rangeCtxLoading || rangesFetching || isFetching
+  const [manualDashboardRefresh, setManualDashboardRefresh] = useState(false)
 
   const handleRefreshDashboard = useCallback(async () => {
-    await refreshRanges()
-    await refetchRangeStatus()
+    setManualDashboardRefresh(true)
+    try {
+      await refreshRanges()
+      await refetchRangeStatus()
+    } finally {
+      setManualDashboardRefresh(false)
+    }
   }, [refreshRanges, refetchRangeStatus])
 
   // ── Deploy actions ──────────────────────────────────────────────────────────
@@ -514,7 +631,7 @@ export function DashboardPageClient() {
 
       // Remove stale cache entry immediately so the UI shows nothing while the
       // context picks the next range.
-      queryClient.removeQueries({ queryKey: queryKeys.rangeStatus(rangeId) })
+      queryClient.removeQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
 
       await refreshRanges()
 
@@ -573,8 +690,8 @@ export function DashboardPageClient() {
       if (ipsForKnownHosts && ipsForKnownHosts.length > 0) {
         void pruneKnownHosts(ipsForKnownHosts)
       }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(selectedRangeId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId) })
       void refreshRanges()
       toast({
         title: "VMs destroying",
@@ -751,7 +868,8 @@ export function DashboardPageClient() {
       accessibleRanges.find((r) => r.rangeID === rid)?.rangeID ||
       rid
     const labelStr = String(label)
-    const cached = inventoryCacheRef.current.get(rid)
+    const invKey = `${scopeTag}::${rid}`
+    const cached = inventoryCacheRef.current.get(invKey)
     if (cached && Date.now() - cached.at < INVENTORY_CACHE_MS) {
       setInventoryDialog({ rangeId: rid, label: labelStr, text: cached.text })
       return
@@ -766,7 +884,7 @@ export function DashboardPageClient() {
         return
       }
       const text = extractText(result.data)
-      inventoryCacheRef.current.set(rid, { text, at: Date.now() })
+      inventoryCacheRef.current.set(invKey, { text, at: Date.now() })
       setInventoryDialog({ rangeId: rid, label: labelStr, text })
       if (!text.trim()) {
         toast({ title: "Inventory", description: "Server returned an empty inventory for this range." })
@@ -786,16 +904,7 @@ export function DashboardPageClient() {
   const rangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
   const error = rangeError ? (rangeError as Error).message : null
 
-  const toggleRange = (id: string) => {
-    setExpandedRanges((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  // Use ranges array for the accordion (single range from the query)
+  // Single range card from the selected range's status query (range picker lives in the sidebar).
   const ranges = primaryRange ? [primaryRange] : []
 
   const selectedDeployHistoryEntry = deployHistorySelectedId
@@ -832,9 +941,9 @@ export function DashboardPageClient() {
     const prev = prevActiveTaskIdRef.current
     const curr = activeGoadTask?.id ?? null
     if (prev && !curr) {
-      queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(selectedRangeId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })
-      queryClient.invalidateQueries({ queryKey: queryKeys.goadTasks() })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
     }
     prevActiveTaskIdRef.current = curr
   }, [activeGoadTask?.id, selectedRangeId, queryClient])
@@ -909,7 +1018,7 @@ export function DashboardPageClient() {
         </CardContent>
       </Card>
 
-      {/* ── Range accordions ──────────────────────────────────────────────── */}
+      {/* ── Selected range (single card; range switcher is in the sidebar) ─── */}
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -929,24 +1038,15 @@ export function DashboardPageClient() {
       ) : (
         ranges.map((range, idx) => {
           const rangeKey = range.rangeID || range.name || `range-${idx}`
-          const isExpanded = expandedRanges.has(rangeKey)
           const vms = range.VMs || (range as RangeObject & { vms?: VMObject[] }).vms || []
           const running = vms.filter((v) => v.poweredOn || v.powerState === "running").length
           const state = range.rangeState || "NEVER DEPLOYED"
 
           return (
             <Card key={rangeKey} className="overflow-hidden">
-              {/* ── Accordion header ──────────────────────────────────────── */}
-              <button
-                className="w-full text-left"
-                onClick={() => toggleRange(rangeKey)}
-              >
-                <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
+              <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      {isExpanded
-                        ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                        : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
                       <Server className="h-4 w-4 text-primary" />
                       <CardTitle className="text-sm font-semibold">
                         {range.name || range.rangeID || `Range ${range.rangeNumber ?? idx + 1}`}
@@ -973,16 +1073,14 @@ export function DashboardPageClient() {
                       )}
                       {rangeDataUpdatedAt > 0 && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Wifi className={cn("h-3 w-3", dashboardRefreshing ? "text-yellow-400 animate-pulse" : "text-green-400")} />
+                          <Wifi className={cn("h-3 w-3", dashboardDataSyncing ? "text-yellow-400 animate-pulse" : "text-green-400")} />
                           {new Date(rangeDataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </div>
                       )}
                     </div>
                   </div>
-                </CardHeader>
-              </button>
+              </CardHeader>
 
-              {isExpanded && (
                 <CardContent className="pt-0 space-y-4">
                   {/* ── Action bar ──────────────────────────────────────── */}
                   <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
@@ -1066,10 +1164,10 @@ export function DashboardPageClient() {
                       variant="ghost"
                       size="icon"
                       onClick={() => void handleRefreshDashboard()}
-                      disabled={dashboardRefreshing}
+                      disabled={manualDashboardRefresh || rangeCtxLoading || rangesFetching}
                       className="ml-auto"
                     >
-                      <RefreshCw className={cn("h-4 w-4", dashboardRefreshing && "animate-spin")} />
+                      <RefreshCw className={cn("h-4 w-4", manualDashboardRefresh && "animate-spin")} />
                     </Button>
                     {range.testingEnabled && (
                       <Badge variant="warning" className="flex items-center gap-1 px-3 py-1.5">
@@ -1315,8 +1413,8 @@ export function DashboardPageClient() {
                                 : undefined
                             }
                             onRefresh={() => {
-                              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })
-                              void queryClient.invalidateQueries({ queryKey: queryKeys.goadTasks() })
+                              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                              void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
                             }}
                             refreshing={deployHistoryRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}
                             emptyMessage="No deploy history for this range"
@@ -1370,7 +1468,7 @@ export function DashboardPageClient() {
                           paginationResetKey={selectedRangeId ?? ""}
                           onRefresh={() =>
                             void queryClient.invalidateQueries({
-                              queryKey: queryKeys.vmOperationLog(selectedRangeId),
+                              queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId),
                             })
                           }
                           emptyMessage="No VM destroys or extension removals recorded for this range"
@@ -1398,7 +1496,6 @@ export function DashboardPageClient() {
                     openingVm={openingVm}
                   />
                 </CardContent>
-              )}
             </Card>
           )
         })

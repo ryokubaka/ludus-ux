@@ -32,15 +32,23 @@
  *  • PERSIST  – Subscribes to QueryClient cache changes and writes a
  *               throttled snapshot to localStorage (1 s debounce) so the
  *               next page-load can restore.
+ *
+ * localStorage keys are namespaced per effective user + impersonation view
+ * (`lux_query_cache_v2:${scope}`) so one browser profile never restores
+ * another identity's TanStack snapshot.
  */
 
 import { useState, useEffect } from "react"
-import { QueryClientProvider, dehydrate } from "@tanstack/react-query"
+import { QueryClientProvider, dehydrate, useQueryClient } from "@tanstack/react-query"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { makeQueryClient } from "@/lib/query-client"
 import { queryKeys } from "@/lib/query-keys"
+import { LEGACY_LUX_QUERY_CACHE_KEY } from "@/lib/effective-scope"
+import {
+  EffectiveScopeProvider,
+  useEffectiveScopeTag,
+} from "@/lib/effective-scope-context"
 
-const CACHE_KEY = "lux_query_cache"
 const MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 h
 
 interface PersistedQuery {
@@ -53,13 +61,19 @@ interface PersistedClient {
   clientState?: { queries?: PersistedQuery[] }
 }
 
-export function QueryProvider({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(makeQueryClient)
+function QueryPersistenceLayer() {
+  const scopeTag = useEffectiveScopeTag()
+  const queryClient = useQueryClient()
 
   useEffect(() => {
-    // ── Restore from localStorage ──────────────────────────────────────────
-    // Only fill keys that SSR's HydrationBoundary didn't already populate.
-    // This keeps fresher server-prefetched data and fills the rest from cache.
+    const CACHE_KEY = `lux_query_cache_v2:${encodeURIComponent(scopeTag)}`
+
+    try {
+      localStorage.removeItem(LEGACY_LUX_QUERY_CACHE_KEY)
+    } catch {
+      /* ignore */
+    }
+
     try {
       const raw = localStorage.getItem(CACHE_KEY)
       if (raw) {
@@ -77,16 +91,19 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(CACHE_KEY)
         }
       }
-    } catch { /* malformed JSON or private-browsing quota */ }
+    } catch {
+      /* malformed JSON or private-browsing quota */
+    }
 
-    // Permission lists restored via setQueryData() look "fresh" to TanStack Query
-    // (dataUpdatedAt ≈ now), so staleTime would block refetch for minutes even
-    // when another user just shared a range/blueprint. Invalidate once so mounted
-    // observers immediately background-refetch from Ludus.
-    void queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRanges(), exact: false })
-    void queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(), exact: false })
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.accessibleRangesList(scopeTag),
+      exact: false,
+    })
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.blueprints(scopeTag),
+      exact: false,
+    })
 
-    // ── Persist cache changes (throttled) ─────────────────────────────────
     let saveTimer: ReturnType<typeof setTimeout> | null = null
 
     const persist = () => {
@@ -98,7 +115,9 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
           CACHE_KEY,
           JSON.stringify({ timestamp: Date.now(), clientState: state }),
         )
-      } catch { /* localStorage full or unavailable */ }
+      } catch {
+        /* localStorage full or unavailable */
+      }
     }
 
     const unsubscribe = queryClient.getQueryCache().subscribe(() => {
@@ -110,12 +129,27 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       if (saveTimer) clearTimeout(saveTimer)
       unsubscribe()
     }
-  }, [queryClient])
+  }, [queryClient, scopeTag])
+
+  return null
+}
+
+export function QueryProvider({
+  children,
+  initialScopeTag,
+}: {
+  children: React.ReactNode
+  initialScopeTag: string
+}) {
+  const [queryClient] = useState(makeQueryClient)
 
   return (
     <QueryClientProvider client={queryClient}>
-      {children}
-      <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
+      <EffectiveScopeProvider initialScopeTag={initialScopeTag}>
+        <QueryPersistenceLayer />
+        {children}
+        <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
+      </EffectiveScopeProvider>
     </QueryClientProvider>
   )
 }

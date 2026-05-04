@@ -1,65 +1,76 @@
 // ---------------------------------------------------------------------------
 // Centralised query key factory
 //
-// Using a single source of truth for query keys ensures:
-//   1. Cache entries are shared between components that fetch the same data
-//      (e.g. range list in sidebar context + admin page)
-//   2. `invalidateQueries` calls after mutations are surgical and consistent
-//   3. TypeScript can infer key shapes from usage
+// Every key is prefixed with ["@sc", scopeTag, ...] so cache entries never
+// bleed across logins or impersonation views (see effective-scope.ts).
 // ---------------------------------------------------------------------------
+
+const sc = (scopeTag: string, parts: readonly unknown[]) => ["@sc", scopeTag, ...parts] as const
 
 export const queryKeys = {
   // ── Range ─────────────────────────────────────────────────────────────────
-  rangeStatus:      (rangeId?: string | null) => ["range", "status", rangeId ?? "default"] as const,
-  /** PB-backed testing/deploy dots for one range (GET /api/range/pb-status?rangeId=) */
-  rangePbStatusDot: (rangeId: string) => ["range", "pb-status-dot", rangeId] as const,
-  rangeConfig:      (rangeId?: string | null) => ["range", "config", rangeId ?? "default"] as const,
+  rangeStatus: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["range", "status", rangeId ?? "default"]),
+  rangePbStatusDot: (scopeTag: string, rangeId: string) => sc(scopeTag, ["range", "pb-status-dot", rangeId]),
+  rangeConfig: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["range", "config", rangeId ?? "default"]),
 
-  rangeLogHistory:  (rangeId?: string | null) => ["range", "logs", "history", rangeId ?? "default"] as const,
+  rangeLogHistory: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["range", "logs", "history", rangeId ?? "default"]),
 
   // ── Range lists ───────────────────────────────────────────────────────────
+  /** Prefix only — prefer `accessibleRangesList` for full keys. */
   accessibleRanges: () => ["ranges", "accessible"] as const,
+  accessibleRangesList: (scopeTag: string) => sc(scopeTag, ["ranges", "accessible"]),
   /** GET /range — ranges owned by the effective user (not group-shared-only). */
-  rangesOwned:      () => ["ranges", "owned"] as const,
-  allRanges:        () => ["ranges", "all"] as const,
+  rangesOwned: (scopeTag: string) => sc(scopeTag, ["ranges", "owned"]),
+  allRanges: (scopeTag: string) => sc(scopeTag, ["ranges", "all"]),
 
   // ── Templates ─────────────────────────────────────────────────────────────
-  templates:        () => ["templates"] as const,
-  templateStatus:   () => ["templates", "status"] as const,
-  templateLogHistory: () => ["templates", "logs", "history"] as const,
+  templates: (scopeTag: string) => sc(scopeTag, ["templates"]),
+  templateStatus: (scopeTag: string) => sc(scopeTag, ["templates", "status"]),
+  templateLogHistory: (scopeTag: string) => sc(scopeTag, ["templates", "logs", "history"]),
 
   // ── Users & Auth ──────────────────────────────────────────────────────────
-  users:            () => ["users"] as const,
+  users: (scopeTag: string) => sc(scopeTag, ["users"]),
 
   // ── Ansible ───────────────────────────────────────────────────────────────
-  ansible:          () => ["ansible"] as const,
+  ansible: (scopeTag: string) => sc(scopeTag, ["ansible"]),
 
   // ── Blueprints ────────────────────────────────────────────────────────────
-  blueprints:            ()           => ["blueprints"] as const,
-  /** Combined access lists for blueprint cards / share dialog */
-  blueprintSharing: (id: string) => ["blueprints", id, "sharing"] as const,
+  blueprints: (scopeTag: string) => sc(scopeTag, ["blueprints"]),
+  blueprintSharing: (scopeTag: string, id: string) => sc(scopeTag, ["blueprints", id, "sharing"]),
 
   // ── Groups ────────────────────────────────────────────────────────────────
-  groups:           () => ["groups"] as const,
-  /** Members + range IDs for one group (GET /groups/{name}/users + /ranges). */
-  groupDetail:      (groupName: string) => ["groups", "detail", groupName] as const,
+  /** With `invalidateQueries(..., { exact: false })`, also invalidates all `groupDetail` keys under this scope. */
+  groups: (scopeTag: string) => sc(scopeTag, ["groups"]),
+  groupDetail: (scopeTag: string, groupName: string) => sc(scopeTag, ["groups", "detail", groupName]),
 
   // ── Snapshots ─────────────────────────────────────────────────────────────
-  snapshots:        () => ["snapshots"] as const,
+  snapshots: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["snapshots", rangeId ?? "default"]),
+  /** Prefix for invalidateQueries — matches every `snapshots(scopeTag, *)` key. */
+  snapshotsRoot: (scopeTag: string) => sc(scopeTag, ["snapshots"]),
 
   // ── Admin ─────────────────────────────────────────────────────────────────
-  adminRangesData:  () => ["admin", "ranges-data"] as const,
-  adminSharedVms:   () => ["admin", "shared-vms"] as const,
+  adminRangesData: (scopeTag: string) => sc(scopeTag, ["admin", "ranges-data"]),
+  adminSharedVms: (scopeTag: string) => sc(scopeTag, ["admin", "shared-vms"]),
 
   // ── Version ───────────────────────────────────────────────────────────────
-  version:          () => ["version"] as const,
+  version: (scopeTag: string) => sc(scopeTag, ["version"]),
 
   // ── VM operation audit log (LUX-local SQLite: destroy_vm / remove_extension) ──
-  vmOperationLog:   (rangeId?: string | null) => ["vm-operation-log", rangeId ?? "all"] as const,
+  vmOperationLog: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["vm-operation-log", rangeId ?? "all"]),
 
   // ── GOAD ──────────────────────────────────────────────────────────────────
-  goadInstances:    () => ["goad", "instances"] as const,
-  /** SQLite map: Ludus rangeID → GOAD instance workspace id */
-  goadInstanceForRange: (rangeId: string) => ["goad", "by-range", rangeId] as const,
-  goadTasks:        () => ["goad", "tasks"] as const,
+  goadInstances: () => ["goad", "instances"] as const,
+  goadInstancesList: (scopeTag: string, bucket: string) => [...queryKeys.goadInstances(), scopeTag, bucket] as const,
+  goadInstanceForRange: (scopeTag: string, rangeId: string) => sc(scopeTag, ["goad", "by-range", rangeId]),
+  goadTasks: () => ["goad", "tasks"] as const,
+  /** Dashboard: poll tasks for one GOAD instance. */
+  goadTasksForInstance: (scopeTag: string, instanceId: string) =>
+    [...queryKeys.goadTasks(), scopeTag, "for-instance", instanceId] as const,
+  /** GOAD home: recent tasks for impersonation bucket. */
+  goadTasksForUser: (scopeTag: string, impUser: string) => [...queryKeys.goadTasks(), scopeTag, impUser] as const,
 }

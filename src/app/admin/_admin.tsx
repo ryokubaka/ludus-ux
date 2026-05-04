@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -57,6 +58,7 @@ export function AdminPageClient() {
   const { toast } = useToast()
   const router = useRouter()
   const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
 
   // ── Ranges + users data (replaces fetchData + useState) ───────────────────
   const {
@@ -64,7 +66,7 @@ export function AdminPageClient() {
     isLoading: loading,
     error: adminDataError,
   } = useQuery({
-    queryKey: queryKeys.adminRangesData(),
+    queryKey: queryKeys.adminRangesData(scopeTag),
     queryFn: async () => {
       const res = await fetch("/api/admin/ranges-data")
       if (!res.ok) {
@@ -120,7 +122,7 @@ export function AdminPageClient() {
     data: sharedVmsData,
     isLoading: loadingAdminVMs,
   } = useQuery({
-    queryKey: queryKeys.adminSharedVms(),
+    queryKey: queryKeys.adminSharedVms(scopeTag),
     queryFn: async () => {
       const res = await fetch("/api/admin/shared-vms")
       if (!res.ok) return { vms: [] as SharedAdminVM[] }
@@ -132,7 +134,7 @@ export function AdminPageClient() {
   const adminPoolVMs = sharedVmsData?.vms ?? []
 
   const fetchAdminPoolVMs = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms(scopeTag) })
   }, [queryClient])
 
   const nexusVMs = useMemo(() => adminPoolVMs.filter((v) => v.serviceType === "nexus"), [adminPoolVMs])
@@ -259,7 +261,7 @@ export function AdminPageClient() {
   }, [adminData, applyData])
 
   const invalidateAdminData = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData() })
+    queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
   }, [queryClient])
 
   const toggleExpanded = (userID: string) =>
@@ -376,13 +378,14 @@ export function AdminPageClient() {
     setTimeout(() => apiKeyInputRef.current?.focus(), 50)
   }, [router, toast])
 
-  const commitImpersonate = () => {
+  const commitImpersonate = async () => {
     if (!impersonateTarget || !impersonateApiKey.trim()) {
       toast({ variant: "destructive", title: "API key required" })
       return
     }
-    saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
-    toast({ title: `Now managing as ${impersonateTarget.displayName}` })
+    const target = impersonateTarget
+    await saveImpersonation({ username: target.userID, apiKey: impersonateApiKey.trim() })
+    toast({ title: `Now managing as ${target.displayName}` })
     setImpersonateTarget(null)
     router.push("/")
   }

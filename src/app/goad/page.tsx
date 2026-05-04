@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -50,6 +51,7 @@ export default function GoadPage() {
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null)
   const { lines: taskLines, resumeTask } = useGoadStream()
   const { impersonation, impersonationHeaders } = useImpersonation()
+  const scopeTag = useEffectiveScopeTag()
   const { selectedRangeId, selectRange } = useRange()
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -157,7 +159,7 @@ export default function GoadPage() {
     data: instancesData,
     isLoading: loading,
   } = useQuery({
-    queryKey: [...queryKeys.goadInstances(), impUser],
+    queryKey: queryKeys.goadInstancesList(scopeTag, impUser),
     queryFn: async () => {
       const response = await fetch("/api/goad/instances", { headers: impersonationHeaders() })
       const data = await response.json().catch(() => ({}))
@@ -171,7 +173,7 @@ export default function GoadPage() {
   // Admin global query: always fetches ALL instances regardless of impersonation.
   // Used for the admin management table so the admin can see and assign every instance.
   const { data: adminInstancesData, isLoading: adminLoading } = useQuery({
-    queryKey: [...queryKeys.goadInstances(), "admin-global"],
+    queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global"),
     queryFn: async () => {
       const response = await fetch("/api/goad/instances?adminView=1")
       const data = await response.json().catch(() => ({}))
@@ -202,7 +204,7 @@ export default function GoadPage() {
 
   // Recent GOAD tasks — polls while any task is running
   const { data: tasksData } = useQuery({
-    queryKey: [...queryKeys.goadTasks(), impUser],
+    queryKey: queryKeys.goadTasksForUser(scopeTag, impUser),
     queryFn: async () => {
       const res = await fetch("/api/goad/tasks", { headers: impersonationHeaders() })
       const data = await res.json()
@@ -218,9 +220,9 @@ export default function GoadPage() {
   const recentTasks = tasksData ?? []
 
   const invalidateGoad = () => {
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.goadInstances(), impUser] })
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.goadInstances(), "admin-global"] })
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), impUser] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, impUser) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
+    queryClient.invalidateQueries({ queryKey: queryKeys.goadTasksForUser(scopeTag, impUser) })
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps

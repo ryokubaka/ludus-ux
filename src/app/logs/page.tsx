@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,7 @@ export default function LogsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const { selectedRangeId } = useRange()
+  const scopeTag = useEffectiveScopeTag()
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [rangeState, setRangeState] = useState<string>("")
@@ -38,16 +40,17 @@ export default function LogsPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
 
   const { data: historyEntries = [], isLoading: historyListLoading, isFetching: historyRefreshing } = useQuery({
-    queryKey: queryKeys.rangeLogHistory(selectedRangeId),
+    queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId),
     queryFn: async () => {
       const result = await ludusApi.getRangeLogHistory(selectedRangeId ?? undefined)
       return extractArray<LogHistoryEntry>(result.data as unknown)
     },
     staleTime: STALE.short,
+    enabled: !!selectedRangeId,
   })
 
   const { data: goadInstanceForRange = null } = useQuery({
-    queryKey: queryKeys.goadInstanceForRange(selectedRangeId ?? ""),
+    queryKey: queryKeys.goadInstanceForRange(scopeTag, selectedRangeId ?? ""),
     queryFn: async () => {
       if (!selectedRangeId) return null
       const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`)
@@ -60,7 +63,7 @@ export default function LogsPage() {
   })
 
   const { data: goadTasksForRange, isLoading: goadTasksListLoading } = useQuery({
-    queryKey: [...queryKeys.goadTasks(), "for-instance", goadInstanceForRange ?? ""],
+    queryKey: queryKeys.goadTasksForInstance(scopeTag, goadInstanceForRange ?? ""),
     queryFn: async () => {
       const iid = goadInstanceForRange!
       const res = await fetch("/api/goad/tasks", { headers: getImpersonationHeaders() })
@@ -79,7 +82,7 @@ export default function LogsPage() {
     isLoading: vmOperationLoading,
     isFetching: vmOperationRefreshing,
   } = useQuery({
-    queryKey: queryKeys.vmOperationLog(selectedRangeId),
+    queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId),
     queryFn: async () => {
       const res = await getVmOperationLog({ rangeId: selectedRangeId ?? undefined })
       return res.entries
@@ -130,7 +133,7 @@ export default function LogsPage() {
   // (Dashboard per-VM destroy, GOAD remove-extension, this-page destroy, ...).
   useEffect(() => {
     const handler = () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId) })
     window.addEventListener("vm-operation-log-updated", handler)
     return () => window.removeEventListener("vm-operation-log-updated", handler)
   }, [queryClient, selectedRangeId])
@@ -138,10 +141,16 @@ export default function LogsPage() {
   // ── Live streaming (existing) ─────────────────────────────────────────────
 
   const loadLogs = useCallback(async () => {
+    if (!selectedRangeId) {
+      setLines([])
+      setRangeState("")
+      setLoading(false)
+      return
+    }
     setLoading(true)
     const [logResult, rangeResult] = await Promise.all([
-      ludusApi.getRangeLogs(),
-      ludusApi.getRangeStatus(),
+      ludusApi.getRangeLogs(selectedRangeId),
+      ludusApi.getRangeStatus(selectedRangeId),
     ])
     if (logResult.data) {
       const text = logResult.data.result || ""
@@ -151,7 +160,7 @@ export default function LogsPage() {
     }
     if (rangeResult.data) setRangeState(rangeResult.data.rangeState)
     setLoading(false)
-  }, [toast])
+  }, [toast, selectedRangeId])
 
   const startStreaming = useCallback(() => {
     abortRef.current?.abort()
@@ -189,7 +198,7 @@ export default function LogsPage() {
           if (doneLine) {
             setRangeState(doneLine.slice(7).trim())
             loadLogs()
-            queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })
+            queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
           }
           const stateLine = newLines.findLast?.((l) => l.startsWith("[STATE] ")) ??
             [...newLines].reverse().find((l) => l.startsWith("[STATE] "))
@@ -342,8 +351,8 @@ export default function LogsPage() {
                   : undefined
               }
               onRefresh={() => {
-                void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(selectedRangeId) })
-                void queryClient.invalidateQueries({ queryKey: queryKeys.goadTasks() })
+                void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
               }}
               refreshing={historyRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}
               emptyMessage="No deploy history for this range"
@@ -377,7 +386,7 @@ export default function LogsPage() {
             paginationResetKey={selectedRangeId ?? ""}
             onRefresh={() =>
               void queryClient.invalidateQueries({
-                queryKey: queryKeys.vmOperationLog(selectedRangeId),
+                queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId),
               })
             }
             emptyMessage={

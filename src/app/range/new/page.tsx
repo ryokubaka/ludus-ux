@@ -36,6 +36,7 @@ import {
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
@@ -213,6 +214,7 @@ export default function NewRangePage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
+  const scopeTag = useEffectiveScopeTag()
   const [step, setStep] = useState(0)
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
@@ -549,7 +551,7 @@ export default function NewRangePage() {
       await refreshRanges()
       if (effectiveRangeId) {
         // Drop stale dashboard cache (e.g. persisted READY) so "/" refetches DEPLOYING and opens logs.
-        await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(effectiveRangeId) })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, effectiveRangeId) })
         selectRange(effectiveRangeId)
       }
       toast({ title: "Deployment started", description: `Range ${effectiveRangeId ?? "default"} is being provisioned.` })

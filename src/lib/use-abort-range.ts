@@ -47,7 +47,7 @@ export interface AbortRangeResult {
   error?: string
 }
 
-export function useAbortRange() {
+export function useAbortRange(scopeTag: string) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [isAborting, setIsAborting] = useState(false)
@@ -99,10 +99,10 @@ export function useAbortRange() {
         // Ask react-query to refetch the range card + GOAD task list immediately
         // so the UI swaps into the aborted state without waiting for the 15 s
         // background poll.
-        queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(rangeId) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(null) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.goadTasks() })
-        queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(rangeId) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, null) })
+        queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
+        queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, rangeId) })
 
         // Compose a friendly "what happened" line so the user knows when LUX
         // had to fall back to the PB writer (Ludus was stuck).
@@ -137,7 +137,7 @@ export function useAbortRange() {
         setIsAborting(false)
       }
     },
-    [queryClient, toast],
+    [queryClient, toast, scopeTag],
   )
 
   return { abortRange, isAborting }

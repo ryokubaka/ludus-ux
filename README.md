@@ -496,20 +496,6 @@ Config file: [`config/playwright.config.ts`](config/playwright.config.ts).
 
 Default creds: `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser`. **Unauthenticated** specs (`e2e/health.spec.ts`, `auth-gate`, `login-ui`) only need the app reachable. **Authenticated** specs (`navigation`, `logout`, `impersonation`) need valid SSH login; impersonation may need `E2E_LUDUS_API_KEY`. Shared helper: `e2e/helpers/auth.ts`. WSL notes: [`docs/playwright.yaml`](docs/playwright.yaml).
 
-### E2E (Playwright)
-
-With the stack up and HTTPS (e.g. `docker compose up`, `https://localhost`), install browsers once: `npx playwright install` (Linux/WSL: `npx playwright install-deps chromium` if the runner errors on missing `.so` libraries).
-
-```bash
-# Optional: PLAYWRIGHT_BASE_URL=https://localhost
-# If login stops at Ludus API key: E2E_LUDUS_API_KEY='...'
-npm run test:e2e
-```
-
-Config file: [`config/playwright.config.ts`](config/playwright.config.ts).
-
-Default creds: `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser`. **Unauthenticated** specs (`e2e/health.spec.ts`, `auth-gate`, `login-ui`) only need the app reachable. **Authenticated** specs (`navigation`, `logout`, `impersonation`) need valid SSH login; impersonation may need `E2E_LUDUS_API_KEY`. Shared helper: `e2e/helpers/auth.ts`. WSL notes: [`docs/playwright.yaml`](docs/playwright.yaml).
-
 ---
 
 ## API Reference

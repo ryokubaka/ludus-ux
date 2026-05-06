@@ -318,6 +318,21 @@ export function appendLine(taskId: string, line: string): void {
   for (const sub of entry.lineSubscribers) {
     try { sub(line) } catch {}
   }
+
+  // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
+  // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
+  // runs every N lines (see goad-ludus-reconcile.ts).
+  if (entry.task.lineCount % 25 === 0 && entry.task.status === "running") {
+    const snap = {
+      taskId,
+      instanceId: entry.task.instanceId,
+      status: entry.task.status,
+      logText: entry.task.lines.join("\n"),
+    }
+    void import("./goad-ludus-reconcile")
+      .then((m) => m.tryReconcileStuckDeploySnapshot(snap))
+      .catch(() => {})
+  }
 }
 
 export function completeTask(

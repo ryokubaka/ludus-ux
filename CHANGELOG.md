@@ -14,6 +14,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Change] Light log theme — black body text on GOAD terminal and shared `LogViewer`; Ansible / PLAY RECAP line colours for light backgrounds via `ansibleClassForTheme`
 
 **GOAD**
+- [Fix] `provide` stuck on **deployment in progress (DEPLOYING)** after Ansible **PLAY RECAP** succeeds — LUX watches streamed GOAD logs; when Ludus never flips PocketBase `rangeState` off DEPLOYING/WAITING, writes **SUCCESS** via PB (same escape hatch as abort; requires configured Ludus root API key and root SSH to read `.goad_range_id`)
 - [Fix] Dedicated-range deploy uses the logged-in API user — seed missing `~/.goad/goad.ini` with GOAD’s stock sections plus `[ludus] use_impersonation=no` before `goad.sh` (GOAD does not overwrite an existing file)
 - [Fix] Ludus CLI shim omits `--range` for `ludus user …` so `user list` / `user list all` match GOAD expectations
 - [Fix] When `LUDUS_RANGE_ID` is set, patch `use_impersonation=no` before and after `goad.sh` so stale configs cannot re-enable synthetic-user mode mid-session

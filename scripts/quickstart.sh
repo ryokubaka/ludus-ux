@@ -335,20 +335,6 @@ if [[ "$root_ssh_key_auth" == "1" ]]; then
   unset optional_root_pw
 fi
 
-read -r -p "LUDUS_VERIFY_TLS=true (only if Ludus uses a real CA cert)? [y/N] " vtls
-if [[ "${vtls,,}" =~ ^y ]]; then
-  set_kv "LUDUS_VERIFY_TLS" "true"
-else
-  set_kv "LUDUS_VERIFY_TLS" "false"
-fi
-
-read -r -p "DISABLE_HTTPS=true (plain HTTP for local browser testing)? [y/N] " dhttp
-if [[ "${dhttp,,}" =~ ^y ]]; then
-  set_kv "DISABLE_HTTPS" "true"
-else
-  set_kv "DISABLE_HTTPS" "false"
-fi
-
 read -r -p "GOAD path on Ludus server [/opt/GOAD]: " goad_path
 goad_path="${goad_path:-/opt/GOAD}"
 set_kv "GOAD_PATH" "$goad_path"
@@ -374,8 +360,8 @@ fi
 
 echo ""
 echo "=== Next steps ==="
-echo "  • HTTPS: https://localhost (port 443) or https://localhost:3000 — self-signed warning unless you add certificates/"
-echo "  • HTTP:  http://localhost:3000"
+echo "  • HTTPS UI: https://localhost (port 443 via bundled nginx) — self-signed warning unless you add docker/nginx/certificates/cert.pem + key.pem before first start"
+echo "  • Optional: docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d exposes http://127.0.0.1:3000 to the app directly (bypass nginx)"
 echo "  • Log in with a Ludus (non-root) SSH/PAM user. In-browser noVNC uses that session password for the user's Proxmox ticket."
 echo "  • On the Ludus server: put LUDUS_API_KEY in ~/.bashrc for that user (and root) if needed — see README."
 echo "  • In LUX: Settings → Test root SSH & admin API"

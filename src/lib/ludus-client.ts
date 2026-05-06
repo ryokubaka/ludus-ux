@@ -8,6 +8,18 @@
 
 import { getSettings } from "./settings-store"
 
+/** Walk Error.cause (Node fetch) so logs/UI show ECONNREFUSED etc., not only "fetch failed". */
+function describeFetchFailure(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const parts: string[] = [err.message]
+  let c: unknown = err.cause
+  for (let i = 0; i < 6 && c instanceof Error; i++) {
+    parts.push(c.message)
+    c = c.cause
+  }
+  return parts.join(" — ")
+}
+
 export interface LudusRequestOptions {
   method?: string
   body?: unknown
@@ -20,7 +32,7 @@ export interface LudusRequestOptions {
 
 export async function ludusRequest<T = unknown>(
   path: string,
-  options: LudusRequestOptions = {}
+  options: LudusRequestOptions = {},
 ): Promise<{ data?: T; error?: string; status: number }> {
   const {
     method = "GET",
@@ -32,18 +44,26 @@ export async function ludusRequest<T = unknown>(
   } = options
 
   const settings = getSettings()
-  let baseUrl = settings.ludusUrl
+  let baseUrl = settings.ludusUrl.trim()
   if (useAdminEndpoint) {
-    if (settings.ludusAdminUrl) {
-      baseUrl = settings.ludusAdminUrl
+    const admin = settings.ludusAdminUrl?.trim()
+    if (admin) {
+      baseUrl = admin
     } else {
-      baseUrl = settings.ludusUrl.replace(/:8080\b/, ":8081")
+      baseUrl = settings.ludusUrl.replace(/:8080\b/, ":8081").trim()
     }
   }
 
   // Build URL — prepend /api/v2 for Ludus v2 API.
   // The root path "/" maps to "/api/v2/" (the version endpoint).
-  const cleanBase = baseUrl.replace(/\/$/, "")
+  const cleanBase = baseUrl.replace(/\/$/, "").trim()
+  if (!cleanBase) {
+    return {
+      error:
+        "Ludus base URL is empty — set LUDUS_URL / Ludus API URL in Settings, or clear blank overrides (SQLite stored '' for an optional URL).",
+      status: 0,
+    }
+  }
   const cleanPath = path === "/" ? "/" : (path.startsWith("/") ? path : "/" + path)
   // Only add /api/v2 if not already present
   const apiPath = cleanPath.startsWith("/api/v2") ? cleanPath : `/api/v2${cleanPath}`
@@ -100,8 +120,9 @@ export async function ludusRequest<T = unknown>(
     if (err instanceof Error && err.name === "AbortError") {
       return { error: "Connection timed out after 30 s — is the Ludus server reachable?", status: 0 }
     }
-    const message = err instanceof Error ? err.message : String(err)
-    return { error: `Connection failed: ${message}`, status: 0 }
+    const detail = describeFetchFailure(err)
+    console.warn("[ludusRequest]", method, url, detail)
+    return { error: `Connection failed: ${detail}`, status: 0 }
   }
 }
 

@@ -16,7 +16,6 @@ import { getDb } from "./db"
 export interface RuntimeSettings {
   ludusUrl: string
   ludusAdminUrl: string
-  verifyTls: boolean
   sshHost: string
   sshPort: number
   goadPath: string
@@ -35,19 +34,19 @@ export interface RuntimeSettings {
   proxmoxSshKeyPath: string
 }
 
-// Module-level overrides loaded from the DB + any in-process mutations.
 // NOTE: Do NOT read process.env here at module-level; Next.js standalone builds
 // may inline those values at build time (before the container env is set).
-// Instead, `getSettings()` lazily merges runtime env vars on first call.
-let overrides: Partial<RuntimeSettings> = {}
-let initialized = false
+// `getSettings()` merges lazily-read env via `defaults()` on each call.
+//
+// SQLite overrides are read on every `getSettings()` — no in-process cache.
+// Next can run multiple workers; a save on one worker must be visible to others
+// (cached module state caused stale ludusUrl / admin URL until restart).
 const ENCRYPTED_VALUE_PREFIX = "enc:v1:"
 
 function defaults(): RuntimeSettings {
   return {
     ludusUrl: process.env.LUDUS_URL || "https://198.51.100.1:8080",
     ludusAdminUrl: process.env.LUDUS_ADMIN_URL || "",
-    verifyTls: process.env.LUDUS_VERIFY_TLS === "true",
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
     goadPath: process.env.GOAD_PATH || "/opt/GOAD",
@@ -64,7 +63,6 @@ function defaults(): RuntimeSettings {
 const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "ludusUrl",
   "ludusAdminUrl",
-  "verifyTls",
   "sshHost",
   "sshPort",
   "goadPath",
@@ -113,7 +111,7 @@ function decodeSettingFromDb(key: string, value: string): { value: string; needs
   try {
     return { value: decryptSettingValue(value), needsRewrite: false }
   } catch (err) {
-    console.error("[settings-store] Failed to decrypt proxmoxSshPassword from DB:", err)
+    console.error(`[settings-store] Failed to decrypt ${key} from DB:`, err)
     return { value: "", needsRewrite: false }
   }
 }
@@ -131,7 +129,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "verifyTls" || k === "goadEnabled") {
+      if (k === "goadEnabled") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)
@@ -173,30 +171,22 @@ function saveOverridesToDb(patch: Partial<RuntimeSettings>): void {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function getSettings(): RuntimeSettings {
-  if (!initialized) {
-    overrides = loadOverridesFromDb()
-    const d = defaults()
-    const effective = { ...d, ...overrides }
-    if (!effective.verifyTls) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
-    }
-    initialized = true
+  const overrides = loadOverridesFromDb()
+  // SQLite "" for optional URLs must not override env / boot tunnel — Settings POST
+  // sends the full form; blank fields serialize as "" and would wipe LUDUS_* defaults.
+  if ((overrides.ludusUrl ?? "").trim() === "") {
+    delete overrides.ludusUrl
   }
-  return { ...defaults(), ...overrides }
+  if ((overrides.ludusAdminUrl ?? "").trim() === "") {
+    delete overrides.ludusAdminUrl
+  }
+  const effective = { ...defaults(), ...overrides }
+  effective.ludusUrl = effective.ludusUrl.trim()
+  effective.ludusAdminUrl = effective.ludusAdminUrl.trim()
+  return effective
 }
 
 export function updateSettings(patch: Partial<RuntimeSettings>): RuntimeSettings {
-  // Ensure overrides are loaded before mutating
-  if (!initialized) getSettings()
-  overrides = { ...overrides, ...patch }
   saveOverridesToDb(patch)
-  if ("verifyTls" in patch) {
-    const effective = { ...defaults(), ...overrides }
-    if (!effective.verifyTls) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
-    } else {
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
-    }
-  }
   return getSettings()
 }

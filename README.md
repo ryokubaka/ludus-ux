@@ -163,14 +163,17 @@ scp -P 22 root@<ludus-host>:/root/.ssh/id_rsa ssh/id_rsa
 chmod 600 ssh/id_rsa
 ```
 
-4. (Optional) Add your own cert + key to the `certificates/` directory to host the UI. If not provided, LUX will auto-generate self-signed certs:
+4. (Optional) Add your own TLS cert + key for the **nginx** edge proxy: place `cert.pem` and `key.pem` in **`docker/nginx/certificates/`** before the first start. If missing, the nginx container generates a self-signed pair on first boot:
 
 ```bash
-cp <path-to-your-cert.pem> certificates/cert.pem
-cp <path-to-your-key.pem> certificates/key.pem
-chmod 600 certificates/cert.pem
-chmod 600 certificates/key.pem
+mkdir -p docker/nginx/certificates
+cp <path-to-your-cert.pem> docker/nginx/certificates/cert.pem
+cp <path-to-your-key.pem> docker/nginx/certificates/key.pem
+chmod 644 docker/nginx/certificates/cert.pem
+chmod 600 docker/nginx/certificates/key.pem
 ```
+
+If you previously used the repo-root **`certificates/`** directory, move those files into **`docker/nginx/certificates/`**.
 
 5. Confirm Docker and Compose ([Verify Docker and Compose](#verify-docker-and-compose)) — same checks the quickstart script performs:
 
@@ -179,12 +182,11 @@ docker --version
 docker compose version
 ```
 
-6. Start the container:
+6. Start the stack (nginx on **:443**, app on internal HTTP only):
 
 ```bash
 docker compose up -d --build
-# https://localhost       (port 443 — expected self-signed cert warning)
-# http://localhost:3000   (plain HTTP, also available)
+# https://localhost   (port 443 — expected self-signed cert warning if using generated certs)
 ```
 
 7. Log in with your Ludus user’s (not root!) **SSH username and password**. LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
@@ -203,7 +205,7 @@ Use this when you already have a **git clone** of the repo on the Docker host (s
 
 1. Quiet `git fetch` from your remote (`--prune --tags`) so your view matches the server without noisy deleted-ref lines.
 2. Lists **active branches** and **release tags** straight from the remote (`git ls-remote`) — only refs that still exist; stale deleted branches are not offered.
-3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.7`).
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.8`).
 4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
@@ -218,10 +220,10 @@ Non-interactive (examples):
 
 ```bash
 bash scripts/upgrade.sh main
-bash scripts/upgrade.sh v0.9.7
+bash scripts/upgrade.sh v0.9.8
 ```
 
-Persistent data (`./data`, `./ssh`, `./certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
+Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
 
 ### Quick SSH sanity check
 
@@ -313,7 +315,6 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 | `LUDUS_SERVER_IP` | Optional IP when `LUDUS_SSH_HOST` is not resolvable inside the container | — |
 | `LUDUS_URL` | Ludus API URL (port **8080**) | Compose default: `https://` + `LUDUS_SSH_HOST` + `:8080`; override in `.env` if needed |
 | `APP_SECRET` | Session encryption key (32+ chars). Also encrypts sensitive Settings values stored in SQLite, including `proxmoxSshPassword`; changing it invalidates those encrypted values. | — |
-| `LUDUS_VERIFY_TLS` | Verify Ludus TLS certificate | `false` |
 
 ### Docker Compose (host → container)
 
@@ -343,14 +344,19 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 
 ### TLS / HTTPS
 
-The container serves HTTPS on port 3000 (mapped to 443 on the host). On first startup it auto-generates a self-signed certificate. To use your own cert, place `cert.pem` and `key.pem` in the `certificates/` directory before starting.
+**Docker Compose:** TLS terminates at the **`nginx`** service (`ludus-ux-web`). The host publishes **443→443** only; place **`docker/nginx/certificates/cert.pem`** and **`docker/nginx/certificates/key.pem`** on the LUX host (or let nginx generate self-signed files on first boot). The **`ludus-ux`** container listens on **plain HTTP :3000** inside the Docker network; **`DISABLE_HTTPS=true`** and **`TRUST_PROXY_TLS=true`** are the compose defaults so session cookies and HSTS still match HTTPS in the browser.
 
 | Variable | Description |
 |---|---|
-| `TLS_HOSTNAME` | Hostname for the auto-generated cert CN/SAN |
-| `TLS_CERT_PATH` | Custom cert path inside container (default: `/app/certificates/cert.pem`) |
-| `TLS_KEY_PATH` | Custom key path inside container (default: `/app/certificates/key.pem`) |
-| `DISABLE_HTTPS` | Set to `true` for plain HTTP (development only) |
+| `DISABLE_HTTPS` | When `true`, Node does not terminate TLS (normal with bundled nginx). |
+| `TRUST_PROXY_TLS` | When `true`, treat the deployment as HTTPS for cookies/HSTS while Node listens on HTTP (required behind nginx). |
+| `TLS_HOSTNAME` | Optional CN/SAN hint when nginx auto-generates the edge certificate |
+
+LUX calls the **Ludus** API over HTTPS **without** validating the Ludus server certificate (typical for Proxmox-issued or lab certs).
+
+**Local `npm run dev`:** use **`http://localhost:3000`**; unset or override `DISABLE_HTTPS` / `TRUST_PROXY_TLS` as needed — see [Development](#development).
+
+**Debug:** `docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d` publishes **`127.0.0.1:3000`** to the app directly (bypass nginx).
 
 ### DNS Resolution
 
@@ -421,7 +427,7 @@ All persistent state lives in the `data/` directory (Docker volume):
 | `data/ludus-ux.db` | SQLite: settings, GOAD tasks, range ownership, pending ops, instance→range mappings, `vm_operation_log` (VM/extension deletion audit) |
 | `data/tasks/` | GOAD task log files |
 | `data/uploads/` | Custom logo |
-| `certificates/` | TLS material (auto-generated or provided) |
+| `docker/nginx/certificates/` | TLS PEMs for the **nginx** edge proxy (`cert.pem`, `key.pem`); auto-generated on first nginx boot if missing |
 | `SSH_KEY_PATH` (default `./ssh/`) | Root private key **from the Ludus server**, placed on the LUX host; mounted at **`/app/ssh`**. Writable mount so the entrypoint can `chown` for user `nextjs`. Use **`chmod 755`** on this directory on Linux. |
 
 ---
@@ -438,25 +444,26 @@ All persistent state lives in the `data/` directory (Docker volume):
 | Terminal/console | noVNC (esbuild bundle), xterm.js |
 | SSH | `ssh2` (server-side only) |
 | Database | `better-sqlite3` |
-| WebSockets | Custom `ws` server for VNC proxy |
+| WebSockets | nginx → Next.js `ws-server.ts` (VNC proxy); TLS at nginx edge |
 
 ### Request Flow
 
 ```
 Browser
   │
-  ├─ HTTPS (port 443/3000) ──► Next.js (App Router)
-  │                                 │
-  │                                 ├─ /api/proxy/* ──► Ludus API (8080/8081)
-  │                                 ├─ /api/goad/*  ──► SSH → Ludus server (GOAD)
-  │                                 ├─ /api/admin/* ──► SSH → Proxmox (pvesh)
-  │                                 └─ /api/console/* ► SSH → Proxmox (pvesh) + user PAM HTTP for noVNC tickets
+  ├─ HTTPS :443 ──► nginx (TLS) ──► HTTP :3000 ──► Next.js (App Router) / ws-server.ts
+  │                      │                              │
+  │                      │                              ├─ /api/proxy/* ──► Ludus API (8080/8081)
+  │                      │                              ├─ /api/goad/*  ──► SSH → Ludus server (GOAD)
+  │                      │                              ├─ /api/admin/* ──► SSH → Proxmox (pvesh)
+  │                      │                              └─ /api/console/* ► SSH → Proxmox (pvesh) + user PAM HTTP for noVNC tickets
   │
-  └─ WSS (same port) ────────► ws-server.ts ──► Proxmox VNC WebSocket
+  └─ WSS (same origin :443) ──► nginx ──► ws-server.ts ──► Proxmox VNC WebSocket
 ```
 
 ### Key Design Decisions
 
+- **nginx edge in Compose** — TLS on host **:443**; app container speaks HTTP only on the internal network (`TRUST_PROXY_TLS` preserves secure cookies).
 - **No external database** — SQLite under `data/` is the only persistence layer
 - **Session-encrypted credentials** — User SSH/PAM password in an `httpOnly` cookie for GOAD and noVNC ticket reuse
 - **Admin credential hygiene** — Root password, root API key, and stored SSH password are not returned to non-admin clients
@@ -473,7 +480,7 @@ npm run dev
 # http://localhost:3000
 ```
 
-For local development, set `DISABLE_HTTPS=true` in your `.env` to skip TLS.
+Local dev does **not** use Compose nginx; unset **`TRUST_PROXY_TLS`** / **`DISABLE_HTTPS`** or set **`DISABLE_HTTPS=false`** so cookies match plain HTTP. The **Docker Compose** stack uses **`DISABLE_HTTPS=true`** + **`TRUST_PROXY_TLS=true`** with nginx on **:443** instead.
 
 ### E2E (Playwright)
 

@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   try {
+    const settings = getSettings()
     const res = await fetch(buildLudusUrl(ludusPath, false), {
       method: "GET",
       headers: {
@@ -84,6 +85,7 @@ export async function PUT(request: NextRequest) {
   if (force) formData.append("force", "true")
 
   try {
+    const settings = getSettings()
     const res = await fetch(buildLudusUrl(ludusPath, false), {
       method: "PUT",
       headers: {

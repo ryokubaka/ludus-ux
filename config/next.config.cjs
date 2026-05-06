@@ -18,7 +18,6 @@ const nextConfig = {
         config.externals = [config.externals]
       }
       config.externals.push("ssh2")
-      config.externals.push("better-sqlite3")
     }
     return config
   },

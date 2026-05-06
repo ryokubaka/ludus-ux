@@ -19,21 +19,23 @@
  * PVEAuthCookie continues to coexist harmlessly in browser requests; our
  * session token is cryptographically isolated from it.
  *
- * On plain HTTP (development / DISABLE_HTTPS=true) the __Host- prefix
- * requires Secure which isn't available, so we fall back to the
- * unprefixed name "ludus_session" for local development only.
+ * On plain HTTP without TLS at the browser (development only, or misconfiguration)
+ * we fall back to the unprefixed name "ludus_session".
+ *
+ * Production behind nginx (HTTPS to browser, HTTP to Node): set DISABLE_HTTPS=true
+ * and TRUST_PROXY_TLS=true so __Host- cookies and Secure still apply.
  */
 
 import { cookies } from "next/headers"
 import { NextRequest, NextResponse } from "next/server"
 
 /**
- * Whether the runtime environment serves over HTTPS.
- * The __Host- prefix REQUIRES the Secure attribute; using it on plain HTTP
- * causes browsers to silently drop the Set-Cookie entirely.
+ * Whether production uses HTTPS toward the browser (__Host- cookies, HSTS).
+ * True when Node terminates TLS, or when nginx terminates TLS and TRUST_PROXY_TLS is set.
  */
 const IS_SECURE_CONTEXT =
-  process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true"
+  process.env.NODE_ENV === "production" &&
+  (process.env.DISABLE_HTTPS !== "true" || process.env.TRUST_PROXY_TLS === "true")
 
 /**
  * Cookie name.

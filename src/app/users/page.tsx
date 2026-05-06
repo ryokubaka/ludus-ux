@@ -38,6 +38,7 @@ import {
   Terminal,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { formatLudusUserDeleteError } from "@/lib/user-delete-errors"
 import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -270,6 +271,27 @@ export default function UsersPage() {
       }
     }
 
+    // Clear PocketBase deploy-log rows that reference this user (blocks Ludus user delete).
+    const purgeRes = await fetch("/api/users/purge-pocketbase-logs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    })
+    const purgeData = (await purgeRes.json().catch(() => ({}))) as { error?: string; deleted?: number }
+    if (!purgeRes.ok || purgeData.error) {
+      toast({
+        variant: "destructive",
+        title: "Error deleting user",
+        description: purgeData.error ?? `Purge failed HTTP ${purgeRes.status}`,
+      })
+      setDeletingUserId(null)
+      invalidateUsers()
+      return
+    }
+    if ((purgeData.deleted ?? 0) > 0) {
+      notes.push(`${purgeData.deleted} deploy log record(s) removed`)
+    }
+
     // DELETE /user/{userID}?deleteDefaultRange=true atomically:
     //   1. Removes the user's default range (VMs + Proxmox pool) when requested
     //   2. Removes the user from PocketBase
@@ -278,11 +300,11 @@ export default function UsersPage() {
     setDeletingUserId(null)
 
     if (userResult.error) {
-      // Surface the actual deletion error rather than silently ignoring it
+      const hint = formatLudusUserDeleteError(userResult.error, userId)
       toast({
         variant: "destructive",
-        title: "Error deleting user",
-        description: `${userId}: ${userResult.error}${notes.length ? ` (${notes.join("; ")})` : ""}`,
+        title: hint.title,
+        description: [hint.description, notes.length ? `Also: ${notes.join("; ")}` : ""].filter(Boolean).join(" "),
       })
       invalidateUsers()
       return

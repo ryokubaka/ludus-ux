@@ -26,12 +26,12 @@ ssh/id_*
 ssh/*.p12
 !ssh/.gitkeep
 
-# TLS certificates (keep the directory but not the cert files)
-certificates/*.pem
-certificates/*.key
-certificates/*.crt
-certificates/*.p12
-!certificates/.gitkeep
+# TLS certificates for nginx edge (keep the directory but not the cert files)
+docker/nginx/certificates/*.pem
+docker/nginx/certificates/*.key
+docker/nginx/certificates/*.crt
+docker/nginx/certificates/*.p12
+!docker/nginx/certificates/.gitkeep
 
 # Persistent data (SQLite DB — volume-mounted at runtime, not committed to git)
 data/

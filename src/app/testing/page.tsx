@@ -30,6 +30,7 @@ import Link from "next/link"
 import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import type { RangeObject } from "@/lib/types"
 import type { RangeOp, RangeOpStatus } from "@/lib/range-op-store"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -672,7 +673,15 @@ export default function TestingPage() {
     const apiErrors = data?.errors?.filter(e => e.reason !== "already allowed")
 
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      if (
+        !tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+        })
+      ) {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else if (apiErrors?.length) {
       toast({
         variant: "destructive",
@@ -734,7 +743,15 @@ export default function TestingPage() {
     const apiErrors = data?.errors
 
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      if (
+        !tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+        })
+      ) {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else if (apiErrors?.length) {
       toast({
         variant: "destructive",

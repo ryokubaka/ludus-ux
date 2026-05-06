@@ -4,6 +4,14 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.9.9] — 2026-05-07
+
+**LUX**
+- [Fix] **Snapshots page** — Create, revert, and delete now match what Ludus expects and stay tied to the range you selected, so bulk actions actually run instead of looking like they did nothing.
+- [Fix] **Snapshots and the range router** — Those actions only target lab VMs; the small Debian “router” VM used for firewall and testing rules is left alone, same idea as turning testing mode on or off.
+- [Improve] **Slow Ludus responses** — The app waits longer for heavy work (snapshots, deploys, powering VMs, template builds, testing allow/deny, and similar). If the wait times out but the job might still be running, messaging is clearer and many pages refresh their view instead of only showing a scary error.
+- [Add] Optional **`npm run test:unit`** (Vitest) for a few Ludus snapshot and proxy-timeout helpers.
+
 ## [0.9.8] — 2026-05-06
 
 **LUX**

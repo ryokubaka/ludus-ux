@@ -64,6 +64,7 @@ import { useElapsed } from "@/hooks/use-elapsed"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { queryKeys } from "@/lib/query-keys"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import {
@@ -561,6 +562,20 @@ export function DashboardPageClient() {
     setDeploying(true)
     const result = await ludusApi.deployRange(undefined, undefined, selectedRangeId ?? undefined)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            setDeploying(false)
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+            void refreshRanges()
+          },
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
       setDeploying(false)
       return
@@ -598,6 +613,19 @@ export function DashboardPageClient() {
     try {
       const result = await ludusApi.deleteRange(rangeId)
       if (result.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: result.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void refreshRanges()
+              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
+            },
+          })
+        ) {
+          return
+        }
         toast({ variant: "destructive", title: "Delete failed", description: result.error })
         return
       }
@@ -668,6 +696,20 @@ export function DashboardPageClient() {
     try {
       const result = await ludusApi.deleteRangeVMs(rangeId)
       if (result.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: result.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+              void queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId) })
+              void refreshRanges()
+            },
+          })
+        ) {
+          return
+        }
         toast({ variant: "destructive", title: "Destroy VMs failed", description: result.error })
         void postVmOperationAudit({
           kind: "destroy_vm",
@@ -738,6 +780,18 @@ export function DashboardPageClient() {
       ? await ludusApi.powerOn(vmNames, selectedRangeId ?? undefined)
       : await ludusApi.powerOff(vmNames, selectedRangeId ?? undefined)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            setTimeout(invalidateRangeStatus, 3000)
+          },
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: `Powering ${action} all VMs`, description: `${vmNames.length} VMs targeted` })

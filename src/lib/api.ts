@@ -3,6 +3,12 @@
  * Paths match Ludus Server v2.x API (the proxy adds the /api/v2 prefix server-side).
  */
 
+import {
+  ludusSnapshotByNameBody,
+  ludusSnapshotCreateBody,
+  snapshotsRangeQuery,
+} from "./ludus-snapshot-payload"
+
 /**
  * Read active impersonation state from sessionStorage (browser only).
  * Returns BOTH headers needed for full server-side impersonation support:
@@ -402,18 +408,36 @@ export const ludusApi = {
   denyIP: (ip: string, rangeId?: string) =>
     post(rangeId ? `/testing/deny?rangeID=${rangeId}` : "/testing/deny", { ips: [ip] }),
 
-  // Snapshots — v2 paths (rangeID matches other range-scoped GETs; Ludus resolves range from context if omitted)
+  // Snapshots — v2 ([docs](https://api-docs.ludus.cloud/)); rangeID matches GET /snapshots/list.
   listSnapshots: (rangeId?: string) => {
     const id = rangeId?.trim()
     const q = id ? `?rangeID=${encodeURIComponent(id)}` : ""
     return get<import("./types").SnapshotListResponse>(`/snapshots/list${q}`)
   },
-  createSnapshot: (payload: import("./types").SnapshotCreatePayload) =>
-    post("/snapshots/create", payload),
-  revertSnapshot: (payload: import("./types").SnapshotCreatePayload) =>
-    post("/snapshots/rollback", payload),
-  deleteSnapshot: (payload: import("./types").SnapshotCreatePayload) =>
-    post("/snapshots/remove", payload),
+  createSnapshot: (
+    payload: import("./types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("./types").LudusSnapshotMutationResult>(
+      `/snapshots/create${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotCreateBody(payload),
+    ),
+  revertSnapshot: (
+    payload: import("./types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("./types").LudusSnapshotMutationResult>(
+      `/snapshots/rollback${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotByNameBody(payload),
+    ),
+  deleteSnapshot: (
+    payload: import("./types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("./types").LudusSnapshotMutationResult>(
+      `/snapshots/remove${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotByNameBody(payload),
+    ),
 
   // Blueprints — v2 paths
   listBlueprints: () => get<import("./types").BlueprintListItem[]>("/blueprints"),

@@ -56,6 +56,7 @@ import { useToast } from "@/hooks/use-toast"
 import { cn, formatDate } from "@/lib/utils"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 
 /** Ludus sometimes returns `{ result: [...] }`, a single row, or a bare array. */
 function asObjectArray<T>(data: unknown): T[] {
@@ -466,6 +467,19 @@ export default function BlueprintsPage() {
     setApplySubmitting("current")
     const result = await ludusApi.applyBlueprint(applyDialogBpId, selectedRangeId)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+          },
+        })
+      ) {
+        setApplySubmitting(null)
+        return
+      }
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Blueprint applied", description: "Don't forget to deploy your range" })

@@ -38,6 +38,7 @@ import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { cn, extractArray } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
@@ -515,6 +516,17 @@ export default function NewRangePage() {
           .filter((ip): ip is string => typeof ip === "string" && ip.trim() !== "")
         const delRes = await ludusApi.deleteRangeVMs(selectedExistingRange)
         if (delRes.error) {
+          if (
+            tryToastLudusSlowHttpError({
+              toast,
+              error: delRes.error,
+              slowTitle: "Slow response from Ludus",
+              onSlow: () => void refreshRanges(),
+            })
+          ) {
+            setDeploying(false); setDeletingVMs(false); setDeployStatus("")
+            return
+          }
           toast({ title: "VM deletion failed", description: delRes.error, variant: "destructive" })
           setDeploying(false); setDeletingVMs(false); setDeployStatus("")
           return
@@ -544,6 +556,21 @@ export default function NewRangePage() {
       const tags = configMethod === "wizard" && selectedTags.length > 0 ? selectedTags : undefined
       const deployRes = await ludusApi.deployRange(tags, undefined, effectiveRangeId || undefined)
       if (deployRes.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: deployRes.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void refreshRanges()
+              if (effectiveRangeId) {
+                void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, effectiveRangeId) })
+              }
+            },
+          })
+        ) {
+          setDeployResult("error"); setDeploying(false); setDeployStatus(""); return
+        }
         toast({ title: "Deploy failed", description: deployRes.error, variant: "destructive" })
         setDeployResult("error"); setDeploying(false); setDeployStatus(""); return
       }

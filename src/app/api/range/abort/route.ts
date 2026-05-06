@@ -63,7 +63,7 @@ async function tryAbort(
   try {
     const result = await ludusRequest(
       `/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
-      { method: "POST", apiKey, useAdminEndpoint: useAdmin },
+      { method: "POST", apiKey, useAdminEndpoint: useAdmin, timeout: 120_000 },
     )
     return result.status >= 200 && result.status < 300
   } catch {

@@ -11,7 +11,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
-import { getLudusUndiciDispatcher } from "@/lib/ludus-dispatcher"
 import { sshExec } from "@/lib/proxmox-ssh"
 import {
   describePrivateKeyPermissionIssue,
@@ -171,7 +170,6 @@ export async function POST(request: NextRequest) {
         },
         cache: "no-store",
         signal: controller.signal,
-        dispatcher: getLudusUndiciDispatcher(),
       })
       clearTimeout(t)
       const text = await res.text().catch(() => "")

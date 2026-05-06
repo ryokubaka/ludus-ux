@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
-import { getLudusUndiciDispatcher } from "@/lib/ludus-dispatcher"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -48,7 +47,6 @@ export async function GET(request: NextRequest) {
         "Content-Type": "application/json",
       },
       cache: "no-store",
-      dispatcher: getLudusUndiciDispatcher(),
     })
     const data = await res.json().catch(() => null)
     if (!res.ok) {
@@ -95,7 +93,6 @@ export async function PUT(request: NextRequest) {
       },
       body: formData,
       cache: "no-store",
-      dispatcher: getLudusUndiciDispatcher(),
     })
     const data = await res.json().catch(() => null)
     if (!res.ok) {

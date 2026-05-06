@@ -7,9 +7,8 @@
  */
 
 import { getSettings } from "./settings-store"
-import { getLudusUndiciDispatcher } from "./ludus-dispatcher"
 
-/** Walk Error.cause (Node/undici) so logs/UI show ECONNREFUSED etc., not only "fetch failed". */
+/** Walk Error.cause (Node fetch) so logs/UI show ECONNREFUSED etc., not only "fetch failed". */
 function describeFetchFailure(err: unknown): string {
   if (!(err instanceof Error)) return String(err)
   const parts: string[] = [err.message]
@@ -88,7 +87,6 @@ export async function ludusRequest<T = unknown>(
       headers,
       cache: "no-store",
       signal: controller.signal,
-      dispatcher: getLudusUndiciDispatcher(),
     }
 
     if (body !== undefined) {

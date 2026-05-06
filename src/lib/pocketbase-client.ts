@@ -12,21 +12,16 @@
  * The auth token is cached in process-memory and refreshed after 23 hours (well
  * within the default 30-day PocketBase admin token lifetime).
  *
- * TLS: same host as Ludus — use `ludusHttpsFetch` (undici Agent, rejectUnauthorized false)
- * instead of mutating global NODE_TLS (see `ludus-dispatcher.ts`).
+ * TLS: same host as Ludus — server sets NODE_TLS_REJECT_UNAUTHORIZED (instrumentation + ws-server).
  */
 
 import { getSettings } from "./settings-store"
-import { getLudusUndiciDispatcher } from "./ludus-dispatcher"
 import type { RangeObject, UserObject, RangeState } from "./types"
 
 const PB_EMAIL = "root@ludus.internal"
 
 function ludusHttpsFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  return fetch(input, {
-    ...init,
-    dispatcher: getLudusUndiciDispatcher(),
-  })
+  return fetch(input, init)
 }
 
 /**

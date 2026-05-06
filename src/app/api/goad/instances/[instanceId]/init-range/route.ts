@@ -22,7 +22,6 @@ import { getSettings } from "@/lib/settings-store"
 import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
-import { getLudusUndiciDispatcher } from "@/lib/ludus-dispatcher"
 import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
@@ -91,7 +90,6 @@ export async function POST(
         userID: [effectiveUsername],
       }),
       cache: "no-store",
-      dispatcher: getLudusUndiciDispatcher(),
     })
     // 200/201 = created; 409 = already exists (race or re-run)
     createOk = res.ok || res.status === 409

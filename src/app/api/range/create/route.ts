@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { ludusRequest } from "@/lib/ludus-client"
-import { getLudusUndiciDispatcher } from "@/lib/ludus-dispatcher"
 import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
@@ -56,7 +55,6 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({ ...body, userID }),
       cache: "no-store",
-      dispatcher: getLudusUndiciDispatcher(),
     })
 
     const data = await res.json().catch(() => null)

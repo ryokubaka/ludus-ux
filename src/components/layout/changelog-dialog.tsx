@@ -37,6 +37,8 @@ const sectionColors: Record<string, string> = {
   Fixed: "text-blue-400",
   Changed: "text-yellow-400",
   Security: "text-red-400",
+  LUX: "text-primary",
+  GOAD: "text-orange-400",
 }
 
 interface ChangelogDialogProps {
@@ -170,6 +172,13 @@ function parseChangelog(md: string): ParsedVersion[] {
     // ### Added / ### Fixed / etc.
     if (line.startsWith("### ") && current) {
       currentSection = { heading: line.replace(/^### /, "").trim(), items: [] }
+      current.sections.push(currentSection)
+      continue
+    }
+    // **LUX** / **GOAD** — subgroup headings used instead of ### (current CHANGELOG style)
+    const luxGoad = /^\*\*(LUX|GOAD)\*\*$/.exec(line.trim())
+    if (luxGoad && current) {
+      currentSection = { heading: luxGoad[1], items: [] }
       current.sections.push(currentSection)
       continue
     }

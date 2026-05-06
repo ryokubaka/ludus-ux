@@ -33,6 +33,7 @@ import {
   Minus,
   ArrowRightLeft,
   ShieldAlert,
+  OctagonAlert,
   Zap,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
@@ -74,8 +75,11 @@ const TAG_META: Record<string, TagMeta> = {
   fix:      { label: "Fix",      Icon: Bug,            className: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
   change:   { label: "Change",   Icon: ArrowRightLeft, className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
   improve:  { label: "Enhance",  Icon: Zap,            className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+  perf:     { label: "Perf",     Icon: Zap,            className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30" },
   security: { label: "Security", Icon: ShieldAlert,    className: "bg-red-500/15 text-red-400 border-red-500/30" },
   remove:   { label: "Remove",   Icon: Minus,          className: "bg-orange-500/15 text-orange-400 border-orange-500/30" },
+  breaking: { label: "Breaking", Icon: OctagonAlert,  className: "bg-rose-600/20 text-rose-300 border-rose-500/40" },
+  docs:     { label: "Docs",     Icon: BookOpen,       className: "bg-slate-500/15 text-slate-300 border-slate-500/30" },
 }
 
 interface ParsedEntry {
@@ -117,8 +121,8 @@ function parseChangelog(md: string): ParsedVersion[] {
       current.groups.push(currentGroup)
       continue
     }
-    // - [Tag] Description
-    const m = line.match(/^-\s+\[(\w+)\]\s+(.+)$/)
+    // - [Tag] Description  OR  - **[Tag]** description (markdown-bold tag)
+    const m = line.match(/^-\s+\*{0,2}\[([^\]]+)\]\*{0,2}\s+(.+)$/)
     if (m) {
       if (!currentGroup) {
         currentGroup = { name: null, entries: [] }

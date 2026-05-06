@@ -98,7 +98,7 @@ jobs:
           ok=0
           i=0
           while [ "$i" -lt 90 ]; do
-            if curl -sfS http://127.0.0.1:3000/api/health >/dev/null; then
+            if curl -kfsS https://127.0.0.1/api/health >/dev/null; then
               ok=1
               break
             fi
@@ -110,7 +110,7 @@ jobs:
             docker compose logs --no-color --tail=200 || true
             exit 1
           fi
-          curl -sfS http://127.0.0.1:3000/api/health | head -c 500
+          curl -kfsS https://127.0.0.1/api/health | head -c 500
       - name: Tear down
         if: always()
         run: docker compose down -v --remove-orphans

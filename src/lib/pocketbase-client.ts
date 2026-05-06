@@ -12,14 +12,22 @@
  * The auth token is cached in process-memory and refreshed after 23 hours (well
  * within the default 30-day PocketBase admin token lifetime).
  *
- * TLS verification follows the same NODE_TLS_REJECT_UNAUTHORIZED flag that the
- * rest of the app uses (controlled by LUDUS_VERIFY_TLS / settings.verifyTls).
+ * TLS: same host as Ludus — use `ludusHttpsFetch` (undici Agent, rejectUnauthorized false)
+ * instead of mutating global NODE_TLS (see `ludus-dispatcher.ts`).
  */
 
 import { getSettings } from "./settings-store"
+import { getLudusUndiciDispatcher } from "./ludus-dispatcher"
 import type { RangeObject, UserObject, RangeState } from "./types"
 
 const PB_EMAIL = "root@ludus.internal"
+
+function ludusHttpsFetch(input: string | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, {
+    ...init,
+    dispatcher: getLudusUndiciDispatcher(),
+  })
+}
 
 /**
  * Escape a value for PocketBase filter string literals, e.g. field = "VALUE".
@@ -54,7 +62,7 @@ async function authenticate(): Promise<string | null> {
 
   for (const endpoint of AUTH_ENDPOINTS) {
     try {
-      const res = await fetch(`${base}${endpoint}`, {
+      const res = await ludusHttpsFetch(`${base}${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identity: PB_EMAIL, password }),
@@ -123,7 +131,7 @@ async function fetchAll<T>(
       for (const [k, v] of Object.entries(extra)) url.searchParams.set(k, v)
     }
 
-    const res = await fetch(url.toString(), {
+    const res = await ludusHttpsFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -238,7 +246,7 @@ export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject |
     url.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId.trim())}"`)
     url.searchParams.set("perPage", "1")
 
-    const res = await fetch(url.toString(), {
+    const res = await ludusHttpsFetch(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -369,7 +377,7 @@ export async function setPbUserAdmin(
     searchUrl.searchParams.set("filter", `userID = "${escapePbFilterLiteral(targetUserID)}"`)
     searchUrl.searchParams.set("perPage", "1")
 
-    const searchRes = await fetch(searchUrl.toString(), {
+    const searchRes = await ludusHttpsFetch(searchUrl.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -383,7 +391,7 @@ export async function setPbUserAdmin(
     if (!record?.id) return `User "${targetUserID}" not found in PocketBase`
 
     // Patch the isAdmin field
-    const patchRes = await fetch(`${base}/api/collections/users/records/${record.id}`, {
+    const patchRes = await ludusHttpsFetch(`${base}/api/collections/users/records/${record.id}`, {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -429,7 +437,7 @@ export async function setPbRangeOwner(
     searchUrl.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId)}"`)
     searchUrl.searchParams.set("perPage", "1")
 
-    const searchRes = await fetch(searchUrl.toString(), {
+    const searchRes = await ludusHttpsFetch(searchUrl.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -443,7 +451,7 @@ export async function setPbRangeOwner(
     if (!record?.id) return `Range "${rangeId}" not found in PocketBase`
 
     // PATCH the userID field to transfer ownership
-    const patchRes = await fetch(`${base}/api/collections/ranges/records/${record.id}`, {
+    const patchRes = await ludusHttpsFetch(`${base}/api/collections/ranges/records/${record.id}`, {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -492,7 +500,7 @@ export async function setPbRangeState(
     searchUrl.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId)}"`)
     searchUrl.searchParams.set("perPage", "1")
 
-    const searchRes = await fetch(searchUrl.toString(), {
+    const searchRes = await ludusHttpsFetch(searchUrl.toString(), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -505,7 +513,7 @@ export async function setPbRangeState(
     const record = searchBody.items?.[0]
     if (!record?.id) return `Range "${rangeId}" not found in PocketBase`
 
-    const patchRes = await fetch(`${base}/api/collections/ranges/records/${record.id}`, {
+    const patchRes = await ludusHttpsFetch(`${base}/api/collections/ranges/records/${record.id}`, {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -524,6 +532,106 @@ export async function setPbRangeState(
     return null // success
   } catch (err) {
     return `PocketBase error: ${(err as Error).message}`
+  }
+}
+
+/** Whether a `logs` row points at this Ludus user (relation id or userID string). */
+function logRowReferencesUser(row: Row, pbUserRecordId: string, ludusUserID: string): boolean {
+  const rel = row.user ?? row.owner
+  if (typeof rel === "string") return rel === pbUserRecordId
+  if (rel && typeof rel === "object" && "id" in rel)
+    return String((rel as { id: unknown }).id) === pbUserRecordId
+  if (str(row, "userID") === ludusUserID) return true
+  return false
+}
+
+async function fetchPbUserRecordId(token: string, ludusUserID: string): Promise<string | null> {
+  const settings = getSettings()
+  const base = settings.ludusUrl.replace(/\/$/, "")
+  const searchUrl = new URL(`${base}/api/collections/users/records`)
+  searchUrl.searchParams.set("filter", `userID = "${escapePbFilterLiteral(ludusUserID)}"`)
+  searchUrl.searchParams.set("perPage", "1")
+  const searchRes = await ludusHttpsFetch(searchUrl.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  })
+  if (!searchRes.ok) return null
+  const searchBody = await searchRes.json() as { items?: Array<{ id: string }> }
+  return searchBody.items?.[0]?.id ?? null
+}
+
+export interface DeletePbLogsResult {
+  deleted: number
+  /** Set when purge failed badly — caller should abort user deletion. */
+  error: string | null
+}
+
+/**
+ * Deletes PocketBase `logs` rows that reference this Ludus user so Ludus can delete
+ * the `users` record (Deploy / range log history introduced a required relation).
+ *
+ * Best-effort when LUDUS_ROOT_API_KEY is unset or the `logs` collection is missing.
+ */
+export async function deletePbLogsForLudusUser(ludusUserID: string): Promise<DeletePbLogsResult> {
+  const uid = ludusUserID.trim()
+  if (!uid) return { deleted: 0, error: null }
+
+  try {
+    const token = await getToken()
+    if (!token) return { deleted: 0, error: null }
+
+    const pbUserId = await fetchPbUserRecordId(token, uid)
+    if (!pbUserId) return { deleted: 0, error: null }
+
+    const settings = getSettings()
+    const base = settings.ludusUrl.replace(/\/$/, "")
+
+    let rows: Row[] = []
+    try {
+      rows = await fetchAll<Row>("logs", token, {
+        filter: `user = "${escapePbFilterLiteral(pbUserId)}"`,
+      })
+    } catch {
+      rows = []
+    }
+
+    if (rows.length === 0) {
+      try {
+        const all = await fetchAll<Row>("logs", token)
+        rows = all.filter((row) => logRowReferencesUser(row, pbUserId, uid))
+      } catch (err) {
+        const msg = (err as Error).message
+        if (/HTTP 404/.test(msg)) return { deleted: 0, error: null }
+        console.warn("[pocketbase] deletePbLogsForLudusUser list failed:", msg)
+        return { deleted: 0, error: null }
+      }
+    }
+
+    let deleted = 0
+    for (const row of rows) {
+      const id = row.id != null ? String(row.id) : ""
+      if (!id) continue
+      const res = await ludusHttpsFetch(`${base}/api/collections/logs/records/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      })
+      if (res.ok || res.status === 404) {
+        deleted++
+        continue
+      }
+      if (res.status === 401) bustPbTokenCache()
+      const errBody = await res.json().catch(() => ({})) as { message?: string }
+      return {
+        deleted,
+        error: `Failed to delete logs/${id}: HTTP ${res.status} ${errBody.message ?? ""}`,
+      }
+    }
+
+    return { deleted, error: null }
+  } catch (err) {
+    console.warn("[pocketbase] deletePbLogsForLudusUser:", (err as Error).message)
+    return { deleted: 0, error: (err as Error).message }
   }
 }
 

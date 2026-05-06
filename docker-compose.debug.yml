@@ -1,0 +1,6 @@
+# Optional: direct HTTP to the app on localhost (bypass nginx).
+#   docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d
+services:
+  ludus-ux:
+    ports:
+      - "127.0.0.1:3000:3000"

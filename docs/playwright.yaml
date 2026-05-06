@@ -25,7 +25,7 @@ export PATH="$HOME/.local/node-v22.14.0-linux-x64/bin:$PATH"   # or your nvm/fnm
 SRC=/mnt/e/gitlab/ludus-ux
 DST="$HOME/ludus-ux-wsl"
 rsync -a --delete --exclude node_modules --exclude .next --exclude test-results --exclude playwright-report \
-  --exclude 'certificates/*.pem' --exclude 'ssh/id_rsa' "$SRC/" "$DST/"
+  --exclude='docker/nginx/certificates/*.pem' --exclude 'ssh/id_rsa' "$SRC/" "$DST/"
 cd "$DST" && npm install
 npx playwright install chromium
 npx playwright install-deps chromium   # sudo; pulls libnspr4/libnss3 etc. for headless shell

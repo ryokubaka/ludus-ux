@@ -12,7 +12,8 @@ const PUBLIC_PREFIXES = [
 ]
 
 const IS_HTTPS =
-  process.env.NODE_ENV === "production" && process.env.DISABLE_HTTPS !== "true"
+  process.env.NODE_ENV === "production" &&
+  (process.env.DISABLE_HTTPS !== "true" || process.env.TRUST_PROXY_TLS === "true")
 
 /**
  * Apply security response headers to every response from our app.

@@ -45,7 +45,6 @@ import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 interface Settings {
   ludusUrl: string
   ludusAdminUrl: string
-  verifyTls: boolean
   sshHost: string
   sshPort: number
   goadPath: string
@@ -691,13 +690,6 @@ function SettingsContent() {
                   Required for user/group management. Found at{" "}
                   <code className="text-primary">/opt/ludus/install/root-api-key</code> on the server.
                 </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <Switch checked={draft?.verifyTls ?? false} onCheckedChange={(v) => setDraft((d) => d ? { ...d, verifyTls: v } : d)} disabled={!session?.isAdmin} />
-                <div>
-                  <Label>Verify TLS Certificate</Label>
-                  <p className="text-xs text-muted-foreground">Disable for self-signed certs (typical Ludus installation)</p>
-                </div>
               </div>
             </CardContent>
           </Card>

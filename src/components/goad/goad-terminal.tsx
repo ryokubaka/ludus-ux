@@ -4,7 +4,12 @@ import { useEffect, useRef, useCallback, useState } from "react"
 import type { ReactNode } from "react"
 import { ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
+import {
+  isRecapStatsLine,
+  parseRecapStats,
+  getAnsibleLineClass,
+  type AnsibleLogTheme,
+} from "@/lib/ansible-colors"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
 import {
@@ -27,10 +32,10 @@ function stripAnsi(s: string): string {
 }
 
 // Render a PLAY RECAP stats line with per-stat colouring using shared utility
-function renderRecapStats(line: string): ReactNode {
+function renderRecapStats(line: string, logTheme: AnsibleLogTheme): ReactNode {
   return (
     <>
-      {parseRecapStats(line).map((seg, i) => (
+      {parseRecapStats(line, logTheme).map((seg, i) => (
         <span key={i} className={seg.cls}>{seg.text}</span>
       ))}
     </>
@@ -38,9 +43,9 @@ function renderRecapStats(line: string): ReactNode {
 }
 
 // Colour class for all other lines (delegates to shared Ansible colour logic)
-function getLineClass(line: string): string {
+function getLineClass(line: string, logTheme: AnsibleLogTheme): string {
   if (line.startsWith("[TASKID]")) return "hidden"
-  return getAnsibleLineClass(line)
+  return getAnsibleLineClass(line, logTheme)
 }
 
 interface GoadTerminalProps {
@@ -62,7 +67,7 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
   // ── Toolbar state ─────────────────────────────────────────────────────────
   const [localAutoScroll, setLocalAutoScroll] = useState(true)
   const [fontSize, setFontSize] = useState<LogFontSize>(DEFAULT_FONT_SIZE)
-  const [wrap, setWrap]         = useState(false)
+  const [wrap, setWrap]         = useState(true)
   const [theme, setTheme]       = useState<LogDockTheme>("dark")
 
   // ── Pause ─────────────────────────────────────────────────────────────────
@@ -148,7 +153,7 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
           Paused · {frozenAt} / {lines.length}
         </span>
       ) : (
-        <span className={cn("text-xs font-mono ml-1", dark ? "text-gray-400" : "text-gray-600")}>
+        <span className={cn("text-xs font-mono ml-1", dark ? "text-gray-400" : "text-black")}>
           {label ?? "GOAD terminal"}
         </span>
       )}
@@ -203,19 +208,26 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
           ref={containerRef}
           onScroll={handleScroll}
           className={cn(
-            "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1",
+            "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1 min-w-0 w-full",
             dark ? "border-gray-700" : "border-gray-200",
-            dark ? "bg-gray-950 text-gray-200" : "bg-gray-50 text-gray-800",
+            dark ? "bg-gray-950 text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           )}
           style={{ fontSize: `${fontSize}px`, lineHeight: "1.5" }}
         >
           {displayLines.length === 0 ? (
-            <p className={cn("italic", dark ? "text-gray-600" : "text-gray-400")}>
+            <p className="italic text-gray-600">
               Waiting for output…
             </p>
           ) : (
-            <pre className="m-0 font-mono leading-relaxed" style={{ fontSize: "inherit" }}>
+            <div
+              className={cn(
+                "m-0 font-mono leading-relaxed min-w-0",
+                // `<pre>` UA stylesheet uses white-space:pre and blocked parent pre-wrap; use a div so wrap matches LogViewer.
+                wrap ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere]" : "whitespace-pre",
+              )}
+              style={{ fontSize: "inherit" }}
+            >
               {displayLines.map((line, i) => {
                 const clean = stripAnsi(line)
                 if (!clean.trim()) return null
@@ -232,18 +244,18 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
 
                 if (isRecapStatsLine(clean)) {
                   return (
-                    <div key={i} ref={refCallback} className={highlightCls}>
-                      {renderRecapStats(clean)}
+                    <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0")}>
+                      {renderRecapStats(clean, theme)}
                     </div>
                   )
                 }
                 return (
-                  <div key={i} ref={refCallback} className={cn(getLineClass(clean), highlightCls)}>
+                  <div key={i} ref={refCallback} className={cn(getLineClass(clean, theme), highlightCls, wrap && "min-w-0 break-words")}>
                     {clean}
                   </div>
                 )
               })}
-            </pre>
+            </div>
           )}
         </div>
 

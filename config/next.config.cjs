@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
-  serverExternalPackages: ["ssh2", "better-sqlite3"],
+  serverExternalPackages: ["ssh2", "better-sqlite3", "undici"],
   eslint: {
     // ESLint runs separately in CI; don't fail the Docker build over warnings
     ignoreDuringBuilds: true,
@@ -18,7 +18,7 @@ const nextConfig = {
         config.externals = [config.externals]
       }
       config.externals.push("ssh2")
-      config.externals.push("better-sqlite3")
+      config.externals.push("undici")
     }
     return config
   },

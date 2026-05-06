@@ -138,7 +138,7 @@ export function LogViewer({
       </span>
     </span>
   ) : (
-    <span className={cn("text-xs font-mono", dark ? "text-gray-400" : "text-gray-500")}>
+    <span className={cn("text-xs font-mono", dark ? "text-gray-400" : "text-black")}>
       {lines.length} lines
     </span>
   )
@@ -186,13 +186,13 @@ export function LogViewer({
           onScroll={handleScroll}
           className={cn(
             "p-4 overflow-y-auto font-mono leading-relaxed",
-            dark ? "bg-black/80 text-gray-200" : "bg-gray-50 text-gray-800",
+            dark ? "bg-black/80 text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           )}
           style={{ maxHeight, fontSize: `${fontSize}px` }}
         >
           {displayLines.length === 0 ? (
-            <p className={cn("italic", dark ? "text-gray-600" : "text-gray-400")}>No logs yet…</p>
+            <p className="italic text-gray-600">No logs yet…</p>
           ) : (
             displayLines.map((line, i) => {
               const ludusMatch = line.match(/^\[LUDUS\] (.*)$/)
@@ -230,12 +230,12 @@ export function LogViewer({
                   )}
                   {isRecapStatsLine(rest) ? (
                     <span>
-                      {parseRecapStats(rest).map((seg, j) => (
+                      {parseRecapStats(rest, theme).map((seg, j) => (
                         <span key={j} className={seg.cls}>{seg.text}</span>
                       ))}
                     </span>
                   ) : (
-                    <span className={getAnsibleLineClass(rest)}>{rest}</span>
+                    <span className={getAnsibleLineClass(rest, theme)}>{rest}</span>
                   )}
                 </div>
               )

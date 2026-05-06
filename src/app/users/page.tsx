@@ -38,6 +38,7 @@ import {
   Terminal,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { formatLudusUserDeleteError } from "@/lib/user-delete-errors"
 import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -299,11 +300,11 @@ export default function UsersPage() {
     setDeletingUserId(null)
 
     if (userResult.error) {
-      // Surface the actual deletion error rather than silently ignoring it
+      const hint = formatLudusUserDeleteError(userResult.error, userId)
       toast({
         variant: "destructive",
-        title: "Error deleting user",
-        description: `${userId}: ${userResult.error}${notes.length ? ` (${notes.join("; ")})` : ""}`,
+        title: hint.title,
+        description: [hint.description, notes.length ? `Also: ${notes.join("; ")}` : ""].filter(Boolean).join(" "),
       })
       invalidateUsers()
       return

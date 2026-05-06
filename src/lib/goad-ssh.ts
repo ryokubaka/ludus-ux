@@ -26,6 +26,13 @@ const LUDUS_WRAPPER_SH = [
   '#!/bin/sh',
   '_R="REAL_LUDUS_PATH"',
   '',
+  '# Do not scope `ludus user …` — GOAD checks global users (lab-user IDs vs',
+  '# `user list all`).  With --range, the catalog can omit entries and GOAD',
+  '# wrongly runs `ludus user add` for the synthetic lab user.',
+  'if [ "$1" = "user" ]; then',
+  '  exec "$_R" "$@"',
+  'fi',
+  '',
   '# Firewall preservation: detect `range config set` anywhere in argv (GOAD',
   '# prepends `--user <id>` when impersonating — see goad/command/linux.py).',
   '_has_rcs=0',
@@ -73,6 +80,90 @@ const LUDUS_WRAPPER_SH = [
   'exec "$_R" --range "$LUDUS_RANGE_ID" "$@"',
 ].join('\n')
 const LUDUS_WRAPPER_B64 = Buffer.from(LUDUS_WRAPPER_SH).toString("base64")
+
+/**
+ * When ~/.goad/goad.ini is missing, write the same template GOAD's Config.create_config_file()
+ * would produce (goad/config.py) with [ludus] use_impersonation=no. GOAD only creates the file
+ * if absent — it does not overwrite an existing path — so this pre-seed is not clobbered at startup.
+ */
+const GOAD_FIRST_RUN_INI_SEED_B64 = Buffer.from(
+  [
+    "import configparser, os, sys",
+    'ini = os.path.expanduser("~/.goad/goad.ini")',
+    "if os.path.isfile(ini):",
+    "    sys.exit(0)",
+    'cdir = os.path.expanduser("~/.goad")',
+    "os.makedirs(cdir, mode=0o750, exist_ok=True)",
+    "cfg = configparser.ConfigParser(allow_no_value=True)",
+    "cfg.add_section('default')",
+    "cfg.set('default', '; lab: GOAD / GOAD-Light / MINILAB / NHA / SCCM')",
+    "cfg.set('default', 'lab', 'GOAD')",
+    "cfg.set('default', '; provider : virtualbox / vmware / vmware_esxi / aws / azure / proxmox')",
+    "cfg.set('default', 'provider', 'vmware')",
+    "cfg.set('default', '; provisioner method : local / remote')",
+    "cfg.set('default', 'provisioner', 'local')",
+    "cfg.set('default', '; ip_range (3 first ip digits)')",
+    "cfg.set('default', 'ip_range', '192.168.56')",
+    "cfg.add_section('aws')",
+    "cfg.set('aws', 'aws_region', 'eu-west-3')",
+    "cfg.set('aws', 'aws_zone', 'eu-west-3c')",
+    "cfg.add_section('azure')",
+    "cfg.set('azure', 'az_location', 'westeurope')",
+    "cfg.add_section('proxmox')",
+    "cfg.set('proxmox', 'pm_api_url', 'https://192.168.1.1:8006/api2/json')",
+    "cfg.set('proxmox', 'pm_user', 'infra_as_code@pve')",
+    "cfg.set('proxmox', 'pm_node', 'GOAD')",
+    "cfg.set('proxmox', 'pm_pool', 'GOAD')",
+    "cfg.set('proxmox', 'pm_full_clone', 'false')",
+    "cfg.set('proxmox', 'pm_storage', 'local')",
+    "cfg.set('proxmox', 'pm_vlan', '10')",
+    "cfg.set('proxmox', 'pm_network_bridge', 'vmbr3')",
+    "cfg.set('proxmox', 'pm_network_model', 'e1000')",
+    "cfg.add_section('proxmox_templates_id')",
+    "cfg.set('proxmox_templates_id', 'WinServer2019_x64', '201900')",
+    "cfg.set('proxmox_templates_id', 'WinServer2016_x64', '201600')",
+    "cfg.set('proxmox_templates_id', 'WinServer2022_x64', '202201')",
+    "cfg.set('proxmox_templates_id', 'WinServer2025_x64', '202501')",
+    "cfg.set('proxmox_templates_id', 'WinServer2019_x64_utd', '201901')",
+    "cfg.set('proxmox_templates_id', 'Windows10_22h2_x64', '102221')",
+    "cfg.set('proxmox_templates_id', 'Windows11_23h2_x64', '112321')",
+    "cfg.set('proxmox_templates_id', 'Windows11_24h2_x64', '112421')",
+    "cfg.set('proxmox_templates_id', 'Windows11_25h2_x64', '112521')",
+    "cfg.set('proxmox_templates_id', 'Ubuntu_2204_x64', '922040')",
+    "cfg.set('proxmox_templates_id', 'Ubuntu_2404_x64', '924040')",
+    "cfg.add_section('ludus')",
+    "cfg.set('ludus', '; api key must not have % if you have a % in it, change it by a %%')",
+    "cfg.set('ludus', 'ludus_api_key', 'change_me')",
+    "cfg.set('ludus', 'use_impersonation', 'no')",
+    "cfg.add_section('vmware_esxi')",
+    "cfg.set('vmware_esxi', 'esxi_hostname', '10.10.10.10')",
+    "cfg.set('vmware_esxi', 'esxi_username', 'root')",
+    "cfg.set('vmware_esxi', 'esxi_password', 'password')",
+    "cfg.set('vmware_esxi', 'esxi_net_nat', 'VM Network')",
+    "cfg.set('vmware_esxi', 'esxi_net_domain', 'GOAD-LAN')",
+    "cfg.set('vmware_esxi', 'esxi_datastore', 'datastore1')",
+    "with open(ini, 'w') as f:",
+    "    cfg.write(f)",
+  ].join("\n")
+).toString("base64")
+
+const goadIniSeedCmd = `echo '${GOAD_FIRST_RUN_INI_SEED_B64}' | base64 -d | python3`
+
+/** Patch ~/.goad/goad.ini — when file already exists (or after goad.sh) set use_impersonation=no. */
+const GOAD_INI_DISABLE_IMPERSONATION_B64 = Buffer.from(
+  [
+    "import configparser, os",
+    'p = os.path.expanduser("~/.goad/goad.ini")',
+    "if os.path.isfile(p):",
+    "    cfg = configparser.ConfigParser()",
+    "    cfg.read(p)",
+    '    if not cfg.has_section("ludus"):',
+    '        cfg.add_section("ludus")',
+    '    cfg.set("ludus", "use_impersonation", "no")',
+    '    with open(p, "w") as f:',
+    "        cfg.write(f)",
+  ].join("\n")
+).toString("base64")
 
 /**
  * Strip ANSI/VT100 escape sequences from terminal output so raw text
@@ -318,6 +409,13 @@ export async function streamGoadCommand(
       ` fi; fi`
     : "";
 
+  // Dedicated-range deploys: force [ludus] use_impersonation=no (see GOAD_LUDUS_* comment above).
+  const goadIniPatchCmd = safeRangeId
+    ? `echo '${GOAD_INI_DISABLE_IMPERSONATION_B64}' | base64 -d | python3`
+    : ""
+  // Run again after goad.sh — catches configs written without seed or with use_impersonation=yes.
+  const goadIniPatchPostfix = goadIniPatchCmd ? `; ${goadIniPatchCmd}` : ""
+
   // ── Per-command preamble (runs in the user's SSH context) ────────────────────
   //
   // 1. Idempotent bashrc check — ensures LUDUS_VERSION=2 is set for interactive
@@ -330,7 +428,12 @@ export async function streamGoadCommand(
   //    actual command runs (e.g. so the ludus wrapper step can find the right
   //    python3 / ansible on PATH).  Silently skipped on first run — goad.sh
   //    will create the venv as part of the main command.
-  // 4. ludus wrapper — prepends a range-scoping shim to $PATH (only when
+  // 4. First-run ~/.goad/goad.ini — if missing, seed full GOAD-compatible template
+  //    with use_impersonation=no before goad.py starts (GOAD skips create_config_file
+  //    when the file exists and does not overwrite it).
+  // 5. When LUX passes a dedicated rangeId — patch existing goad.ini to enforce
+  //    use_impersonation=no; runs again after goad.sh for edge cases.
+  // 6. ludus wrapper — prepends a range-scoping shim to $PATH (only when
   //    a dedicated rangeId is known for this operation).
   const pythonEnvSetup =
     `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
@@ -339,6 +442,8 @@ export async function streamGoadCommand(
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
     `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
     pythonEnvSetup,
+    goadIniSeedCmd,
+    ...(goadIniPatchCmd ? [goadIniPatchCmd] : []),
     ...(ludusWrapSetup ? [ludusWrapSetup] : []),
   ].join("; ");
 
@@ -383,9 +488,9 @@ export async function streamGoadCommand(
       pyEnvExports,
       `cd ${goadPath}`,
       `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
-    ].join("; ");
+    ].join("; ") + goadIniPatchPostfix
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`;
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}`;
   }
 
   if (impersonateAs) {

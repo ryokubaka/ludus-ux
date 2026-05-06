@@ -43,7 +43,6 @@ export async function POST(request: NextRequest) {
   const patch: Partial<RuntimeSettings> = {}
   if (typeof body.ludusUrl === "string") patch.ludusUrl = body.ludusUrl.trim()
   if (typeof body.ludusAdminUrl === "string") patch.ludusAdminUrl = body.ludusAdminUrl.trim()
-  if (typeof body.verifyTls === "boolean") patch.verifyTls = body.verifyTls
   if (typeof body.sshHost === "string") patch.sshHost = body.sshHost.trim()
   if (typeof body.sshPort === "number") patch.sshPort = body.sshPort
   if (typeof body.goadPath === "string") patch.goadPath = body.goadPath.trim()

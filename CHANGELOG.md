@@ -4,6 +4,23 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.9.8] — 2026-05-06
+
+**LUX**
+- **[Breaking] Docker / TLS layout** — Compose includes an **nginx** edge container (`ludus-ux-web`) for HTTPS on host **:443**; Defaults **`DISABLE_HTTPS=true`** + **`TRUST_PROXY_TLS=true`** so session cookies stay correct behind TLS termination. 
+  - **TLS PEMs** for nginx moved from repo-root **`certificates/`** to **`docker/nginx/certificates/`** (`cert.pem`, `key.pem`) — **migrate files** before or after pull; nginx generates self-signed certs on first boot if missing.
+- [Fix] Admin delete user — purge PocketBase `logs` rows that reference the user (`POST /api/users/purge-pocketbase-logs`) before Ludus `DELETE /user`; fixes referential integrity errors when deploy-run history exists
+- [Fix] GOAD terminal word wrap — inner `<pre>` replaced with `<div>` (`white-space: pre` blocked wrapping); wrap on by default; scroll pane `min-w-0` for flex shrink
+- [Change] Light log theme — black body text on GOAD terminal and shared `LogViewer`; Ansible / PLAY RECAP line colours for light backgrounds via `ansibleClassForTheme`
+
+**GOAD**
+- [Fix] `provide` stuck on **deployment in progress (DEPLOYING)** after Ansible **PLAY RECAP** succeeds — LUX watches streamed GOAD logs; when Ludus never flips PocketBase `rangeState` off DEPLOYING/WAITING, writes **SUCCESS** via PB (same escape hatch as abort; requires configured Ludus root API key and root SSH to read `.goad_range_id`)
+- [Fix] Dedicated-range deploy uses the logged-in API user — seed missing `~/.goad/goad.ini` with GOAD’s stock sections plus `[ludus] use_impersonation=no` before `goad.sh` (GOAD does not overwrite an existing file)
+- [Fix] Ludus CLI shim omits `--range` for `ludus user …` so `user list` / `user list all` match GOAD expectations
+- [Fix] When `LUDUS_RANGE_ID` is set, patch `use_impersonation=no` before and after `goad.sh` so stale configs cannot re-enable synthetic-user mode mid-session
+
+---
+
 ## [0.9.7] — 2026-05-04
 
 **LUX**

@@ -1,0 +1,1 @@
+# PEM files here are gitignored; nginx generates cert.pem/key.pem on first boot if missing.

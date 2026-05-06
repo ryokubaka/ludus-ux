@@ -46,10 +46,10 @@ fi
 # TLS certificate auto-generation
 #
 # If the user hasn't placed their own cert+key at the configured paths
-# (defaults: /app/certificates/cert.pem and /app/certificates/key.pem),
-# generate a self-signed certificate so the app always serves HTTPS.
-# The certificates/ directory is volume-mounted, so generated certs persist
-# across container restarts.
+# (defaults: /app/certificates/cert.pem and /app/certificates/key.pem; only when
+# Node serves HTTPS — not used with bundled nginx, which uses docker/nginx/certificates/ on the host),
+# generate a self-signed certificate so the app serves HTTPS.
+# The /app/certificates path may be volume-mounted when running TLS in the app container.
 #
 # Set DISABLE_HTTPS=true to skip TLS entirely and run on plain HTTP.
 # This is useful for local/localhost testing where browser self-signed cert

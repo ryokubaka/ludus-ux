@@ -124,7 +124,7 @@ docker_compose_smoke:
       ok=0
       i=0
       while [ "$i" -lt 90 ]; do
-        if curl -sfS http://127.0.0.1:3000/api/health >/dev/null; then
+        if curl -kfsS https://127.0.0.1/api/health >/dev/null; then
           ok=1
           break
         fi
@@ -137,7 +137,7 @@ docker_compose_smoke:
         exit 1
       fi
       echo "Health OK"
-      curl -sfS http://127.0.0.1:3000/api/health | head -c 500 || true
+      curl -kfsS https://127.0.0.1/api/health | head -c 500 || true
     - docker compose down -v --remove-orphans
   after_script:
     - docker compose down -v --remove-orphans || true

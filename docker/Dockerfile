@@ -82,7 +82,7 @@ RUN mkdir -p /app/ssh && chown nextjs:nodejs /app/ssh
 # Create persistent data directory (SQLite DB lives here; volume-mounted at runtime)
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
-# Create certificates directory (volume-mounted; entrypoint auto-generates cert if empty)
+# Optional directory when Node terminates TLS (DISABLE_HTTPS=false); unused with bundled nginx + DISABLE_HTTPS=true
 RUN mkdir -p /app/certificates && chown nextjs:nodejs /app/certificates
 
 # Copy and enable the entrypoint script.

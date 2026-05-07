@@ -147,27 +147,11 @@ export interface SnapshotListResponse {
   snapshots: SnapshotInfo[]
 }
 
-/** Ludus `POST /snapshots/{create,rollback,remove}` — per-vm outcomes ([API docs](https://api-docs.ludus.cloud/)). */
-export interface LudusSnapshotMutationError {
-  vmid?: number
-  vmname?: string
-  error: string
-}
-
-export interface LudusSnapshotMutationResult {
-  success?: number[]
-  errors?: LudusSnapshotMutationError[]
-}
-
-/**
- * App-facing snapshot mutation input. Client maps `snapshotName` → Ludus JSON `name`;
- * omit `vmids` or leave empty to target all VMs in the range (Ludus v2).
- */
 export interface SnapshotCreatePayload {
+  vmNames?: string[]
   snapshotName: string
   description?: string
   includeRAM?: boolean
-  vmids?: number[]
 }
 
 // ── Blueprints ────────────────────────────────────────────────────────────────

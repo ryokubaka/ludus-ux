@@ -42,7 +42,7 @@ function getEffective(
 
 /**
  * How long we wait for a testing op to complete before declaring it stalled.
- * Proxmox snapshot/revert is typically fast (< 5 min) but can take longer on
+ * Proxmox snapshot/revert is typically fast but can take a significant time on
  * large VMs or slow storage.  20 min is generous while still giving timely
  * feedback instead of silently expiring via the 30-min TTL.
  */

@@ -10,7 +10,7 @@
  *
  * Slow path  — Ludus API (used when PocketBase is unavailable / misconfigured):
  *   GET /range/all  +  GET /user/all  +  up to 30× GET /range?rangeID=X
- *   for ownership resolution.  Can take 5–10 s with many ranges.
+ *   for ownership resolution.  Can take a significant time with many ranges.
  *
  * Ownership resolution priority (highest → lowest):
  *   1. SQLite range_ownership table  (admin-confirmed, survives restarts)

@@ -35,6 +35,11 @@ export interface GoadTask {
   command: string
   instanceId?: string
   username?: string
+  /**
+   * Ludus API key used for this GOAD run (session or impersonation). In-memory only
+   * — not stored in SQLite — so reconcile can call Ludus as the same user as GOAD.
+   */
+  ludusApiKey?: string
   /** In-memory line buffer for running tasks; loaded lazily from file for completed ones. */
   lines: string[]
   /** Always accurate line count — read from DB for completed tasks, tracked in-memory for running. */
@@ -254,7 +259,12 @@ function evictOldestIfNeeded(): void {
 
 // ── Task lifecycle ────────────────────────────────────────────────────────────
 
-export function createTask(command: string, instanceId?: string, username?: string): string {
+export function createTask(
+  command: string,
+  instanceId?: string,
+  username?: string,
+  ludusApiKey?: string,
+): string {
   const id = `goad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const now = Date.now()
   const task: GoadTask = {
@@ -262,6 +272,7 @@ export function createTask(command: string, instanceId?: string, username?: stri
     command,
     instanceId,
     username,
+    ludusApiKey: ludusApiKey?.trim() || undefined,
     lines: [],
     lineCount: 0,
     status: "running",
@@ -330,6 +341,7 @@ export function appendLine(taskId: string, line: string): string | undefined {
       instanceId: entry.task.instanceId,
       status: entry.task.status,
       logText: entry.task.lines.join("\n"),
+      ludusApiKey: entry.task.ludusApiKey,
     }
     void import("./goad-ludus-reconcile")
       .then((m) => m.tryReconcileStuckDeploySnapshot(snap))

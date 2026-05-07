@@ -708,7 +708,7 @@ export default function TestingPage() {
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
 
     // Show the log panel immediately so the user sees activity while Ludus
-    // resolves the domain IP and applies the firewall rule (can take 1-2 min).
+    // resolves the domain IP and applies the firewall rule.
     // snapshotStart=true skips pre-existing deployment logs so the panel only
     // shows output written after this allow operation begins.
     setShowLogs(true)

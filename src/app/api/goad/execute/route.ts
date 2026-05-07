@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
 
   // Task is attributed to the impersonated user so it appears in their history
   const taskOwner = effectiveImpersonate?.username ?? session?.username
-  const taskId = createTask(args, instanceId, taskOwner)
+  const taskId = createTask(args, instanceId, taskOwner, apiKey ?? undefined)
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({

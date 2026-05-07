@@ -1129,12 +1129,12 @@ export default function NewGoadInstancePage() {
                   <p>
                     Instance <code className="font-mono">{existingInstanceInSelectedRange}</code> will be <strong>re-deployed</strong> in-place —
                     its lab configuration and inventory files will be overwritten with the new selection.
-                    The instance ID is preserved. This cannot be undone. Deployment can take 30–90 minutes.
+                    The instance ID is preserved. This cannot be undone.
                   </p>
                 ) : (
                   <p>
                     A new GOAD instance will be created in range <code className="font-mono">{selectedExistingRange}</code>.
-                    The range itself is not deleted. This cannot be undone. Deployment can take 30–90 minutes.
+                    The range itself is not deleted. This cannot be undone.
                   </p>
                 )}
               </AlertDescription>
@@ -1145,7 +1145,7 @@ export default function NewGoadInstancePage() {
               <AlertDescription className="text-xs">
                 This will create a new Ludus range and deploy {labInfo?.vmCount ?? "multiple"} VMs
                 to <code className="font-mono">{autoRangeId}</code>.
-                Deployment can take 30–90 minutes depending on the lab and extensions selected.
+                Deployment can take a significant time depending on the lab and extensions selected.
               </AlertDescription>
             </Alert>
           )}

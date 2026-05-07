@@ -1285,7 +1285,7 @@ function GoadInstancePage() {
       await runAction("provide", `--repl "use ${instanceId};provide"`)
     })
   const handleProvisionLab = () =>
-    confirm("Run full Ansible provisioning? This can take 30–90 minutes.", () =>
+    confirm("Run full Ansible provisioning?", () =>
       runAction("provision-lab", `--repl "use ${instanceId};provision_lab"`)
     )
 
@@ -1358,7 +1358,7 @@ function GoadInstancePage() {
 
   const handleInstallExtension = (name: string) =>
     confirm(
-      `Install "${name}"? Deploys new VMs and runs Ansible — can take 30–90 min.`,
+      `Install "${name}"? Deploys new VMs and runs Ansible.`,
       () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
       `ext-install:${name}`,
     )

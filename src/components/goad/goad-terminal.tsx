@@ -10,6 +10,7 @@ import {
   getAnsibleLineClass,
   type AnsibleLogTheme,
 } from "@/lib/ansible-colors"
+import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
 import {
@@ -51,13 +52,16 @@ function getLineClass(line: string, logTheme: AnsibleLogTheme): string {
 interface GoadTerminalProps {
   lines: string[]
   onClear?: () => void
+  /** Reconnect range / deploy log SSE (shown in toolbar when set). */
+  onRefresh?: () => void
+  refreshLoading?: boolean
   className?: string
   label?: string
 }
 
 const BOTTOM_THRESHOLD = 80
 
-export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalProps) {
+export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, className, label }: GoadTerminalProps) {
   const containerRef        = useRef<HTMLDivElement>(null)
   const userScrolledUpRef   = useRef(false)
   const prevScrollTopRef    = useRef(0)
@@ -165,7 +169,7 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
       {/* Terminal header chrome */}
       <div className={cn(
         "border rounded-t-lg border-b-0 flex-shrink-0",
-        dark ? "bg-gray-900 border-gray-700" : "bg-gray-100 border-gray-200",
+        dark ? "bg-black border-zinc-800" : "bg-gray-100 border-gray-200",
       )}>
         <LogDockToolbar
           lines={lines}
@@ -184,6 +188,8 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
           searchOpen={searchOpen}
           onSearchToggle={toggleSearch}
           onClear={onClear ? () => { resume(); onClear() } : undefined}
+          onRefresh={onRefresh}
+          refreshLoading={refreshLoading}
           leftSlot={leftSlot}
           className="border-b-0 rounded-t-lg"
         />
@@ -209,8 +215,8 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
           onScroll={handleScroll}
           className={cn(
             "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1 min-w-0 w-full",
-            dark ? "border-gray-700" : "border-gray-200",
-            dark ? "bg-gray-950 text-gray-200" : "bg-gray-50 text-black",
+            dark ? "border-zinc-800 border-t-0" : "border-gray-200",
+            dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           )}
           style={{ fontSize: `${fontSize}px`, lineHeight: "1.5" }}
@@ -242,16 +248,35 @@ export function GoadTerminal({ lines, onClear, className, label }: GoadTerminalP
                     }
                   : undefined
 
+                const isErrorRole = /^\[ERROR\]\s/.test(clean)
                 if (isRecapStatsLine(clean)) {
+                  const normalized = stripStreamRolePrefix(clean)
+                  const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
+                  const recapLine = isRecapStatsLine(body) ? body : normalized
                   return (
                     <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0")}>
-                      {renderRecapStats(clean, theme)}
+                      {wallTs ? (
+                        <>
+                          <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
+                          <span> </span>
+                        </>
+                      ) : null}
+                      {renderRecapStats(recapLine, theme)}
                     </div>
                   )
                 }
+                const normalized = stripStreamRolePrefix(clean)
+                const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
+                const bodyCls = isErrorRole ? "text-red-400" : getLineClass(body, theme)
                 return (
-                  <div key={i} ref={refCallback} className={cn(getLineClass(clean, theme), highlightCls, wrap && "min-w-0 break-words")}>
-                    {clean}
+                  <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0 break-words")}>
+                    {wallTs ? (
+                      <>
+                        <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
+                        <span> </span>
+                      </>
+                    ) : null}
+                    <span className={cn(bodyCls, "min-w-0")}>{body}</span>
                   </div>
                 )
               })}

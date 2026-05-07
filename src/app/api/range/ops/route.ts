@@ -12,6 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { fetchPbRangeStatus } from "@/lib/pocketbase-client"
@@ -32,17 +33,10 @@ function getEffective(
   request: NextRequest,
   session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
 ) {
-  // Prefer session-cookie impersonation (survives page refresh) then fall back
-  // to the request header (set by client-side sessionStorage during same session).
-  const impersonateApiKey = session.isAdmin
-    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
-    : null
-  const impersonateAs = session.isAdmin
-    ? (session.impersonationUserId || request.headers.get("X-Impersonate-As") || null)
-    : null
+  const imp = resolveAdminImpersonationFromRequest(session, request)
   return {
-    effectiveApiKey:   impersonateApiKey || session.apiKey,
-    effectiveUsername: impersonateAs     || session.username,
+    effectiveApiKey:   imp.apiKey || session.apiKey,
+    effectiveUsername: imp.userId || session.username,
   }
 }
 
@@ -54,6 +48,14 @@ function getEffective(
  */
 const TESTING_OP_MAX_AGE_MS = 20 * 60_000
 
+/** Fire a second Ludus `PUT /testing/stop` once if the first run never flips `testingEnabled`. */
+const TESTING_STOP_AUTO_RETRY_MS = 4 * 60_000
+const testingStopRetriedOpIds = new Set<string>()
+
+function forgetTestingStopRetry(opId: string) {
+  testingStopRetriedOpIds.delete(opId)
+}
+
 /**
  * Check whether the active op has completed by inspecting the current Ludus
  * range state.  Updates the DB if completed.  Returns the (possibly updated) op.
@@ -62,8 +64,9 @@ const TESTING_OP_MAX_AGE_MS = 20 * 60_000
  * It fires Proxmox snapshot/revert jobs directly and rangeState stays "SUCCESS"
  * throughout.  The ONLY reliable completion signal is testingEnabled flipping
  * to the expected value (which Ludus sets only after all VM jobs finish).
- * We therefore never use rangeState to declare an op "done" unless the range
- * itself has entered an ERROR or ABORTED state, or the op exceeds TESTING_OP_MAX_AGE_MS.
+ * We therefore rely on testingEnabled for success, ERROR/ABORTED for immediate
+ * failure (even if DEPLOYING is still true), max-age timeout, and an optional
+ * automatic retry of `testing/stop`.
  */
 async function checkCompletion(
   op: ReturnType<typeof getActiveRangeOp> & object,
@@ -78,6 +81,7 @@ async function checkCompletion(
   // drop it from the active query.  This surfaces an explicit "error" state in
   // the UI so the user can retry without manual PocketBase intervention.
   if (op.status === "running" && Date.now() - op.startedAt > TESTING_OP_MAX_AGE_MS) {
+    forgetTestingStopRetry(op.id)
     completeRangeOp(op.id, false)
     return { ...op, status: "error" as const }
   }
@@ -108,8 +112,6 @@ async function checkCompletion(
       testingEnabled = result.data.testingEnabled
     }
 
-    const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
-
     // Ensure the op is marked running (it should already be from POST, but
     // handle the edge case where a page refresh catches a very new op).
     if (op.status === "pending") {
@@ -122,15 +124,38 @@ async function checkCompletion(
     // We check this even while DEPLOYING so we don't miss a fast transition.
     const expectedBool = op.expectedTestingEnabled === 1
     if (testingEnabled === expectedBool) {
+      forgetTestingStopRetry(op.id)
       completeRangeOp(op.id, true)
       return { ...op, status: "completed" as const }
     }
 
     // ── Hard failure ───────────────────────────────────────────────────────
-    // Ludus entered an error state — nothing more we can do.
-    if (!isDeploying && (rangeState === "ERROR" || rangeState === "ABORTED")) {
+    // Treat ERROR/ABORTED as terminal even while DEPLOYING — testing-mode Ansible
+    // can fail mid-play (e.g. Proxmox "New-style module did not handle its own exit")
+    // and Ludus may still report DEPLOYING briefly; waiting would leave the UI on
+    // "Stopping…" forever with testingEnabled stuck true.
+    if (rangeState === "ERROR" || rangeState === "ABORTED") {
+      forgetTestingStopRetry(op.id)
       completeRangeOp(op.id, false)
       return { ...op, status: "error" as const }
+    }
+
+    // One automatic retry of testing/stop — covers flaky Ludus/Proxmox where the
+    // first PUT returned 200 but jobs never completed.
+    if (
+      op.opType === "testing_stop" &&
+      op.status === "running" &&
+      testingEnabled === true &&
+      Date.now() - op.startedAt >= TESTING_STOP_AUTO_RETRY_MS &&
+      Date.now() - op.startedAt < TESTING_OP_MAX_AGE_MS &&
+      !testingStopRetriedOpIds.has(op.id)
+    ) {
+      testingStopRetriedOpIds.add(op.id)
+      void ludusRequest(`/testing/stop?rangeID=${encodeURIComponent(rangeId)}`, {
+        method: "PUT",
+        apiKey: effectiveApiKey,
+        timeout: 5 * 60_000,
+      }).catch(() => {})
     }
 
     // Still waiting — op remains running.  The poller will retry every 3 s.
@@ -174,22 +199,36 @@ export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
-  let body: { rangeId?: string; opType?: string }
+  let body: { rangeId?: string; opType?: string; dismissStuckOp?: boolean }
   try { body = await request.json() } catch { body = {} }
 
-  const { rangeId, opType } = body
+  const { rangeId, opType, dismissStuckOp } = body
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
+
+  const { effectiveApiKey, effectiveUsername } = getEffective(request, session)
+
+  /** Clear a stuck DB op when Ludus never reported completion (user can retry or fix VMs). */
+  if (dismissStuckOp === true) {
+    const stuck = getActiveRangeOp(rangeId, effectiveUsername)
+    if (stuck) {
+      forgetTestingStopRetry(stuck.id)
+      completeRangeOp(stuck.id, false)
+    }
+    return NextResponse.json({ op: null, dismissed: Boolean(stuck) })
+  }
+
   if (opType !== "testing_start" && opType !== "testing_stop") {
     return NextResponse.json({ error: "opType must be testing_start or testing_stop" }, { status: 400 })
   }
-
-  const { effectiveApiKey, effectiveUsername } = getEffective(request, session)
 
   // Cancel any stale running op for this range before creating the new one.
   // This handles the case where an old op got stuck (e.g. from a bad deploy
   // or a container restart while it was in "running" state).
   const staleOp = getActiveRangeOp(rangeId, effectiveUsername)
-  if (staleOp) completeRangeOp(staleOp.id, false)
+  if (staleOp) {
+    forgetTestingStopRetry(staleOp.id)
+    completeRangeOp(staleOp.id, false)
+  }
 
   // Create the DB record before calling Ludus so a page refresh immediately
   // after triggering sees the pending state.
@@ -216,6 +255,7 @@ export async function POST(request: NextRequest) {
 
   if (!ludusTimedOut && result.error && result.status !== 200 && result.status !== 204) {
     // Ludus explicitly rejected the call (4xx / 5xx) — fail immediately.
+    forgetTestingStopRetry(op.id)
     completeRangeOp(op.id, false)
     return NextResponse.json(
       { error: result.error || `Ludus returned HTTP ${result.status}` },

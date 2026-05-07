@@ -118,7 +118,14 @@ export async function ludusRequest<T = unknown>(
   } catch (err) {
     if (timeoutId) clearTimeout(timeoutId)
     if (err instanceof Error && err.name === "AbortError") {
-      return { error: "Connection timed out after 30 s — is the Ludus server reachable?", status: 0 }
+      const sec = timeout > 0 ? Math.round(timeout / 1000) : 0
+      return {
+        error:
+          sec > 0
+            ? `Connection timed out after ${sec} s — the Ludus server did not finish responding. Long jobs (e.g. snapshots on many VMs) may still be running; wait and refresh, or check Proxmox.`
+            : "Request was aborted before Ludus responded.",
+        status: 0,
+      }
     }
     const detail = describeFetchFailure(err)
     console.warn("[ludusRequest]", method, url, detail)

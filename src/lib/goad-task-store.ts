@@ -26,6 +26,7 @@
 import fs from "fs"
 import path from "path"
 import { getDb, taskLogPath, legacyTaskLogPath, TASKS_LOG_DIR } from "./db"
+import { prefixGoadTaskLogLineWithTimestamp } from "./log-line-timestamp"
 
 export type TaskStatus = "running" | "completed" | "error" | "aborted"
 
@@ -289,11 +290,12 @@ export function createTask(command: string, instanceId?: string, username?: stri
   return id
 }
 
-export function appendLine(taskId: string, line: string): void {
+export function appendLine(taskId: string, line: string): string | undefined {
   const entry = taskMap.get(taskId)
-  if (!entry) return
+  if (!entry) return undefined
 
-  entry.task.lines.push(line)
+  const stored = prefixGoadTaskLogLineWithTimestamp(line)
+  entry.task.lines.push(stored)
   entry.task.lineCount++
 
   // Append to log file — O(1), no SQL overhead.
@@ -301,7 +303,7 @@ export function appendLine(taskId: string, line: string): void {
   try {
     const logFile = taskLogPath(taskId, entry.task.instanceId)
     fs.mkdirSync(path.dirname(logFile), { recursive: true })
-    fs.appendFileSync(logFile, line + "\n", "utf8")
+    fs.appendFileSync(logFile, stored + "\n", "utf8")
   } catch (err) {
     console.error("[task-store] appendLine file write failed:", err)
   }
@@ -316,13 +318,13 @@ export function appendLine(taskId: string, line: string): void {
   }
 
   for (const sub of entry.lineSubscribers) {
-    try { sub(line) } catch {}
+    try { sub(stored) } catch {}
   }
 
   // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
   // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
   // runs every N lines (see goad-ludus-reconcile.ts).
-  if (entry.task.lineCount % 25 === 0 && entry.task.status === "running") {
+  if (entry.task.lineCount % 12 === 0 && entry.task.status === "running") {
     const snap = {
       taskId,
       instanceId: entry.task.instanceId,
@@ -333,6 +335,8 @@ export function appendLine(taskId: string, line: string): void {
       .then((m) => m.tryReconcileStuckDeploySnapshot(snap))
       .catch(() => {})
   }
+
+  return stored
 }
 
 export function completeTask(

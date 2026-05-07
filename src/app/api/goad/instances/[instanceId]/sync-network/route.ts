@@ -32,7 +32,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { sshExec, isGoadConfigured } from "@/lib/goad-ssh"
+import { sshExec, isGoadConfigured, workspaceSshExecPlan } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 
@@ -130,8 +130,7 @@ export async function POST(
   // Same ownership check as remove-extension: non-admins can only touch
   // instances whose id is prefixed with their own (or impersonated) username.
   if (!session.isAdmin) {
-    const impersonateAs = request.headers.get("X-Impersonate-As")
-    const effectiveUser = impersonateAs || session.username
+    const effectiveUser = session.username
     if (!instanceId.toLowerCase().startsWith(effectiveUser.toLowerCase() + "-")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
@@ -156,20 +155,18 @@ export async function POST(
     session.sshPassword && session.username
       ? { username: session.username, password: session.sshPassword }
       : undefined
-  const creds = rootCreds ?? userCreds
-  if (!creds) {
-    return NextResponse.json(
-      { error: "No SSH credentials available (set root SSH password or log in with SSH password)." },
-      { status: 503 },
-    )
-  }
 
   const encoded = Buffer.from(SYNC_NETWORK_PY, "utf-8").toString("base64")
   const networkArg = network === null ? "" : JSON.stringify(network)
   const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(instanceId)}' '${b64(networkArg)}'`
 
+  const plan = workspaceSshExecPlan(request, session, cmd, rootCreds, userCreds)
+  if (!plan.ok) {
+    return NextResponse.json({ error: plan.error }, { status: plan.status })
+  }
+
   try {
-    const { stdout, stderr, code } = await sshExec(cmd, creds)
+    const { stdout, stderr, code } = await sshExec(plan.command, plan.creds)
     if (code !== 0) {
       return NextResponse.json(
         { error: `SSH script failed (exit ${code}): ${(stderr || stdout).slice(0, 500)}` },

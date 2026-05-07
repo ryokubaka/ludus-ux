@@ -10,7 +10,7 @@ import { defineConfig, devices } from "@playwright/test"
  *   E2E_IMPERSONATE_USER — /users row to impersonate (default testuser)
  *   E2E_LUDUS_API_KEY    — if login stops at "set-api key", paste Ludus key once
  *
- * Specs: health + auth-gate + login-ui (unauthenticated); navigation + logout + impersonation (authenticated).
+ * Specs: health + auth-gate + login-ui (unauthenticated); navigation + logout + impersonation (authenticated); perf-refresh (metrics JSON).
  */
 export default defineConfig({
   testDir: "../e2e",

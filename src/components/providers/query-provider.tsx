@@ -43,11 +43,12 @@ import { QueryClientProvider, dehydrate, useQueryClient } from "@tanstack/react-
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { makeQueryClient } from "@/lib/query-client"
 import { queryKeys } from "@/lib/query-keys"
-import { LEGACY_LUX_QUERY_CACHE_KEY } from "@/lib/effective-scope"
+import { LEGACY_LUX_QUERY_CACHE_KEY, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
 import {
   EffectiveScopeProvider,
   useEffectiveScopeTag,
 } from "@/lib/effective-scope-context"
+import { ShellSessionProvider, type ShellSessionSnapshot } from "@/components/providers/shell-session-provider"
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 h
 
@@ -63,10 +64,11 @@ interface PersistedClient {
 
 function QueryPersistenceLayer() {
   const scopeTag = useEffectiveScopeTag()
+  const persistenceScopeTag = readClientEffectiveScopeTagSync()
   const queryClient = useQueryClient()
 
   useEffect(() => {
-    const CACHE_KEY = `lux_query_cache_v2:${encodeURIComponent(scopeTag)}`
+    const CACHE_KEY = `lux_query_cache_v2:${encodeURIComponent(persistenceScopeTag)}`
 
     try {
       localStorage.removeItem(LEGACY_LUX_QUERY_CACHE_KEY)
@@ -95,14 +97,14 @@ function QueryPersistenceLayer() {
       /* malformed JSON or private-browsing quota */
     }
 
-    void queryClient.invalidateQueries({
-      queryKey: queryKeys.accessibleRangesList(scopeTag),
-      exact: false,
-    })
-    void queryClient.invalidateQueries({
-      queryKey: queryKeys.blueprints(scopeTag),
-      exact: false,
-    })
+    const rangesKey = queryKeys.accessibleRangesList(persistenceScopeTag)
+    if (queryClient.getQueryData(rangesKey) === undefined) {
+      void queryClient.invalidateQueries({ queryKey: rangesKey, exact: true })
+    }
+    const blueprintsKey = queryKeys.blueprints(persistenceScopeTag)
+    if (queryClient.getQueryData(blueprintsKey) === undefined) {
+      void queryClient.invalidateQueries({ queryKey: blueprintsKey, exact: true })
+    }
 
     let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -129,7 +131,7 @@ function QueryPersistenceLayer() {
       if (saveTimer) clearTimeout(saveTimer)
       unsubscribe()
     }
-  }, [queryClient, scopeTag])
+  }, [queryClient, scopeTag, persistenceScopeTag])
 
   return null
 }
@@ -137,17 +139,21 @@ function QueryPersistenceLayer() {
 export function QueryProvider({
   children,
   initialScopeTag,
+  shellSession,
 }: {
   children: React.ReactNode
   initialScopeTag: string
+  shellSession: ShellSessionSnapshot | null
 }) {
   const [queryClient] = useState(makeQueryClient)
 
   return (
     <QueryClientProvider client={queryClient}>
       <EffectiveScopeProvider initialScopeTag={initialScopeTag}>
-        <QueryPersistenceLayer />
-        {children}
+        <ShellSessionProvider value={shellSession}>
+          <QueryPersistenceLayer />
+          {children}
+        </ShellSessionProvider>
         <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
       </EffectiveScopeProvider>
     </QueryClientProvider>

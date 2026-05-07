@@ -4,6 +4,8 @@ import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
+import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
 
 export const dynamic = "force-dynamic"
 
@@ -56,15 +58,13 @@ export async function GET(request: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      // HH:MM:SS wall-clock — close enough to when the Ansible task ran (within 2 s poll)
-      const nowHMS = () => new Date().toISOString().slice(11, 19)
-
-      const send = (prefix: string, data: string) => {
+      const send = (prefix: string, data: string, stamp: string) => {
         try {
           // Prepend a timestamp to human-readable log lines; leave control
           // messages (STATE / DONE / ERROR) unmodified so the client can parse them.
+          // Stamp is Ludus-host local time when SSH `date` succeeded this poll.
           const payload = (prefix === "LUDUS" || prefix === "GOAD")
-            ? `[${prefix}] [${nowHMS()}] ${data}`
+            ? `[${prefix}] [${stamp}] ${data}`
             : `[${prefix}] ${data}`
           controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
         } catch {
@@ -104,6 +104,9 @@ export async function GET(request: NextRequest) {
         while (maxPolls-- > 0) {
           if (request.signal.aborted) break
 
+          await refreshLudusWallClockFromSsh()
+          const pollStamp = getCachedLudusWallHmsOrUtc()
+
           // ── Ludus range logs ───────────────────────────────────────────────
           const logPath = `/range/logs${rangeId ? `?rangeID=${rangeId}` : userId ? `?userID=${userId}` : ""}`
           const result = await ludusGet<{ cursor: number; result: string }>(
@@ -124,12 +127,12 @@ export async function GET(request: NextRequest) {
             } else {
               firstPoll = false
               for (const line of newLines) {
-                send("LUDUS", line)
+                send("LUDUS", line, pollStamp)
               }
               if (newLines.length > 0) lastActivityAt = Date.now()
             }
           } else if (result.error) {
-            send("ERROR", result.error)
+            send("ERROR", result.error, pollStamp)
             break
           }
 
@@ -146,7 +149,7 @@ export async function GET(request: NextRequest) {
 
           // ── Emit state changes so the client doesn't need a separate poll ──
           if (state && state !== lastEmittedState) {
-            send("STATE", state)
+            send("STATE", state, pollStamp)
             lastEmittedState = state
           }
 
@@ -155,7 +158,7 @@ export async function GET(request: NextRequest) {
             const goadResult = await readGoadLog(settings, rangeId, lastGoadCount)
             lastGoadCount = goadResult.newCount
             for (const line of goadResult.lines) {
-              send("GOAD", line)
+              send("GOAD", line, pollStamp)
             }
             if (goadResult.lines.length > 0) lastActivityAt = Date.now()
           }
@@ -182,14 +185,14 @@ export async function GET(request: NextRequest) {
                   )
                 }
               } catch { /* best-effort */ }
-              send("DONE", state)
+              send("DONE", state, pollStamp)
               break
             }
           } else if (state) {
             // Not deploying — decide whether to keep waiting or exit
             if (wasDeploying) {
               // We saw DEPLOYING earlier and it has now finished — done
-              send("DONE", state)
+              send("DONE", state, pollStamp)
               break
             }
             // During warmup we intentionally do NOT exit immediately on ERROR/ABORTED.
@@ -207,13 +210,13 @@ export async function GET(request: NextRequest) {
             const idleMs = Date.now() - lastActivityAt
             const elapsed = (WARMUP_POLLS - warmupRemaining) * 2000
             if (elapsed > 10_000 && idleMs > 3 * 60_000) {
-              send("DONE", state)
+              send("DONE", state, pollStamp)
               break
             }
             warmupRemaining--
             if (warmupRemaining <= 0) {
               // Gave up waiting for the operation to begin
-              send("DONE", state)
+              send("DONE", state, pollStamp)
               break
             }
           }
@@ -221,7 +224,7 @@ export async function GET(request: NextRequest) {
           await new Promise((r) => setTimeout(r, 2000))
         }
       } catch (err) {
-        send("ERROR", `Stream error: ${(err as Error).message}`)
+        send("ERROR", `Stream error: ${(err as Error).message}`, getCachedLudusWallHmsOrUtc())
       } finally {
         try { controller.close() } catch { /* already closed */ }
       }

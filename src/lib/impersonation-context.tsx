@@ -38,13 +38,16 @@ function readStorage(): ImpersonationData | null {
 /** Write impersonation to both sessionStorage and the session cookie. */
 export async function saveImpersonation(data: ImpersonationData): Promise<void> {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
-  // Persist to cookie so server-side prefetch uses the correct identity on refresh
+  // Cookie must be updated before invalidating queries: proxy previously preferred
+  // session.impersonationApiKey over X-Impersonate-Apikey, so an early dispatch
+  // refetched with the *previous* user's cookie while headers already pointed at
+  // the new user (empty ranges / wrong range list until cookie caught up).
   await fetch("/api/auth/impersonate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: data.username, apiKey: data.apiKey }),
   }).catch(() => { /* non-fatal — client-side state is already updated */ })
+  window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
 }
 
 export function ImpersonationProvider({ children }: { children: React.ReactNode }) {
@@ -124,7 +127,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     fetch("/api/auth/impersonate", { method: "DELETE" })
       .catch(() => { })
       .finally(() => {
-        // Cookie is clear — now safe to invalidate queries and re-fetch as admin.
+        // Cookie is clear — safe to invalidate; proxy prefers X-Impersonate-* when sent.
         window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
       })
   }, [])

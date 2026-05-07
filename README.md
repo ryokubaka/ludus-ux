@@ -490,7 +490,10 @@ With the stack up and HTTPS (e.g. `docker compose up`, `https://localhost`), ins
 # Optional: PLAYWRIGHT_BASE_URL=https://localhost
 # If login stops at Ludus API key: E2E_LUDUS_API_KEY='...'
 npm run test:e2e
+npm run test:perf
 ```
+
+`test:perf` runs [`e2e/perf-refresh.spec.ts`](e2e/perf-refresh.spec.ts) and attaches `perf-metrics.json` for branch-to-branch comparison (`node e2e/scripts/compare-perf.mjs before.json after.json`).
 
 Config file: [`config/playwright.config.ts`](config/playwright.config.ts).
 

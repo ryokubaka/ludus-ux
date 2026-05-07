@@ -9,10 +9,13 @@
  * root credentials from the settings store are used as fallback.
  */
 
+import type { NextRequest } from "next/server"
 import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
 import type { GoadInstance, GoadCatalog } from "./types"
+import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-request"
+import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
-import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
+import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -301,6 +304,60 @@ export async function sshExec(
 
     conn.connect(buildConnectConfig(creds));
   });
+}
+
+/**
+ * Plan a one-shot `sshExec` for workspace mutations (`workspace/<instanceId>/…`).
+ *
+ * Files there are owned by the Ludus/GOAD Linux user. When an admin impersonates
+ * another user, we must SSH as **root** (from settings) and run the script as that
+ * user via `sudo -H -u …` — matching {@link streamGoadCommand}. Using the admin's
+ * own SSH user hits permission denied on the target workspace.
+ */
+export function workspaceSshExecPlan(
+  request: NextRequest,
+  session: Pick<SessionData, "isAdmin" | "username" | "sshPassword">,
+  innerCommand: string,
+  rootCreds: SSHCreds | undefined,
+  userCreds: SSHCreds | undefined,
+):
+  | { ok: true; command: string; creds: SSHCreds | undefined }
+  | { ok: false; status: number; error: string } {
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const impersonateAs =
+    session.isAdmin && imp.userId && imp.apiKey ? { username: imp.userId } : null
+
+  if (impersonateAs) {
+    const settings = getSettings()
+    if (!isRootProxmoxSshConfigured(settings)) {
+      return {
+        ok: false,
+        status: 503,
+        error:
+          "Admin impersonation requires root SSH to the GOAD host: set PROXMOX_SSH_PASSWORD, GOAD_SSH_PASSWORD, or mount a readable root private key (same as Settings → Root SSH test).",
+      }
+    }
+    const safeUser = impersonateAs.username.replace(/'/g, "")
+    const safeInner = innerCommand.replace(/'/g, "'\\''")
+    // Omit creds so sshExec uses buildConnectConfig(undefined) — root via settings/env
+    // password OR mounted key (rootPasswordCredsIfSet is password-only and would falsely
+    // fail key-only setups).
+    return {
+      ok: true,
+      command: `sudo -H -u '${safeUser}' bash -c '${safeInner}'`,
+      creds: undefined,
+    }
+  }
+
+  const creds = rootCreds ?? userCreds
+  if (!creds) {
+    return {
+      ok: false,
+      status: 503,
+      error: "No SSH credentials available (set root SSH password or log in with SSH password).",
+    }
+  }
+  return { ok: true, command: innerCommand, creds }
 }
 
 /**

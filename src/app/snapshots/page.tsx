@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -35,7 +35,13 @@ import {
   AlertTriangle,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
-import type { SnapshotInfo } from "@/lib/types"
+import { snapshotTargetProxmoxIdsExcludingRouter } from "@/lib/ludus-range-router-vm"
+import type { LudusSnapshotMutationResult, SnapshotInfo } from "@/lib/types"
+import {
+  classifySnapshotMutation,
+  firstSnapshotMutationErrorMessage,
+} from "@/lib/ludus-snapshot-payload"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -178,48 +184,221 @@ export default function SnapshotsPage() {
     else setExpanded(new Set())
   }
 
+  const snapshotRangeId = selectedRangeId ?? undefined
+
+  type SnapshotVmidsResolution =
+    | { ok: true; vmids: number[] }
+    | { ok: false; toast: { title: string; description: string } }
+
+  const resolveSnapshotVmids = useCallback(async (): Promise<SnapshotVmidsResolution> => {
+    const rid = selectedRangeId?.trim()
+    if (!rid) {
+      return {
+        ok: false,
+        toast: { title: "No range selected", description: "Pick a range in the sidebar first." },
+      }
+    }
+    const res = await ludusApi.getRangeStatus(rid)
+    if (res.error || !res.data) {
+      return {
+        ok: false,
+        toast: {
+          title: "Could not load VMs",
+          description: res.error ?? "Ludus did not return range details.",
+        },
+      }
+    }
+    const vms = res.data.VMs ?? res.data.vms ?? []
+    const vmids = snapshotTargetProxmoxIdsExcludingRouter(vms)
+    if (vmids.length === 0) {
+      return {
+        ok: false,
+        toast: {
+          title: "No target VMs",
+          description:
+            vms.length === 0
+              ? "This range has no deployed VMs yet."
+              : "Only the range router VM was found; snapshots apply to lab VMs (the router is skipped, same as testing mode).",
+        },
+      }
+    }
+    return { ok: true, vmids }
+  }, [selectedRangeId])
+
+  const applySnapshotMutationToasts = (
+    data: LudusSnapshotMutationResult | undefined,
+    labels: {
+      ok: { title: string; description: string }
+      failTitle: string
+      partialTitle: string
+    },
+    onNonFailure?: () => void,
+  ) => {
+    const kind = classifySnapshotMutation(data)
+    if (kind === "fail") {
+      toast({
+        variant: "destructive",
+        title: labels.failTitle,
+        description: firstSnapshotMutationErrorMessage(data) ?? "All targets reported an error.",
+      })
+      return
+    }
+    if (kind === "partial") {
+      const nOk = data?.success?.length ?? 0
+      const nErr = data?.errors?.length ?? 0
+      toast({
+        title: labels.partialTitle,
+        description:
+          firstSnapshotMutationErrorMessage(data) ?? `${nOk} VM(s) succeeded, ${nErr} failed.`,
+      })
+      onNonFailure?.()
+      return
+    }
+    toast({ title: labels.ok.title, description: labels.ok.description })
+    onNonFailure?.()
+  }
+
   const handleCreate = async () => {
     if (!newSnapshotName.trim()) return
     setCreating(true)
-    const result = await ludusApi.createSnapshot({
-      snapshotName: newSnapshotName.trim(),
-      description: newSnapshotDesc || undefined,
-      includeRAM,
-    })
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
-    } else {
-      toast({ title: "Snapshot queued", description: `"${newSnapshotName}" will be created on all VMs` })
-      setCreateDialog(false)
-      setNewSnapshotName("")
-      setNewSnapshotDesc("")
-      queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+    const nameTrim = newSnapshotName.trim()
+    const resolved = await resolveSnapshotVmids()
+    if (!resolved.ok) {
+      toast({ variant: "destructive", title: resolved.toast.title, description: resolved.toast.description })
+      setCreating(false)
+      return
     }
+    const result = await ludusApi.createSnapshot(
+      {
+        snapshotName: nameTrim,
+        description: newSnapshotDesc || undefined,
+        includeRAM,
+        vmids: resolved.vmids,
+      },
+      snapshotRangeId,
+    )
+    if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            setCreateDialog(false)
+            setNewSnapshotName("")
+            setNewSnapshotDesc("")
+            queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+          },
+        })
+      ) {
+        setCreating(false)
+        return
+      }
+      toast({ variant: "destructive", title: "Error", description: result.error })
+      setCreating(false)
+      return
+    }
+    applySnapshotMutationToasts(
+      result.data,
+      {
+        ok: {
+          title: "Snapshot queued",
+          description: `"${nameTrim}" will be created on ${resolved.vmids.length} lab VM(s) (range router excluded)`,
+        },
+        failTitle: "Snapshot failed",
+        partialTitle: "Snapshot partially completed",
+      },
+      () => {
+        setCreateDialog(false)
+        setNewSnapshotName("")
+        setNewSnapshotDesc("")
+        queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+      },
+    )
     setCreating(false)
   }
 
   const doRevert = async (snapshotName: string) => {
-    const result = await ludusApi.revertSnapshot({ snapshotName })
-    if (result.error) {
-      toast({ variant: "destructive", title: "Revert failed", description: result.error })
-    } else {
-      toast({ title: "Reverting…", description: `Rolling back to "${snapshotName}"` })
+    const resolved = await resolveSnapshotVmids()
+    if (!resolved.ok) {
+      toast({ variant: "destructive", title: resolved.toast.title, description: resolved.toast.description })
+      return
     }
+    const result = await ludusApi.revertSnapshot({ snapshotName, vmids: resolved.vmids }, snapshotRangeId)
+    if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+          },
+        })
+      ) {
+        return
+      }
+      toast({ variant: "destructive", title: "Revert failed", description: result.error })
+      return
+    }
+    applySnapshotMutationToasts(
+      result.data,
+      {
+        ok: { title: "Reverting…", description: `Rolling back to "${snapshotName}"` },
+        failTitle: "Revert failed",
+        partialTitle: "Revert partially completed",
+      },
+      () => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+      },
+    )
   }
-  const handleRevert = (snapshotName: string, context: string) =>
-    confirm(`Revert all VMs to snapshot "${snapshotName}"? ${context} This cannot be undone.`, () => doRevert(snapshotName))
+  const handleRevert = (snapshotName: string) =>
+    confirm(
+      `Revert all lab VMs to snapshot "${snapshotName}"? The range router VM is not reverted (same as testing mode). This cannot be undone.`,
+      () => doRevert(snapshotName),
+    )
 
   const doDelete = async (snapshotName: string) => {
-    const result = await ludusApi.deleteSnapshot({ snapshotName })
-    if (result.error) {
-      toast({ variant: "destructive", title: "Delete failed", description: result.error })
-    } else {
-      toast({ title: "Snapshot deleted" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+    const resolved = await resolveSnapshotVmids()
+    if (!resolved.ok) {
+      toast({ variant: "destructive", title: resolved.toast.title, description: resolved.toast.description })
+      return
     }
+    const result = await ludusApi.deleteSnapshot({ snapshotName, vmids: resolved.vmids }, snapshotRangeId)
+    if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+          },
+        })
+      ) {
+        return
+      }
+      toast({ variant: "destructive", title: "Delete failed", description: result.error })
+      return
+    }
+    applySnapshotMutationToasts(
+      result.data,
+      {
+        ok: { title: "Snapshot deleted", description: `Removed "${snapshotName}" from all targeted VMs` },
+        failTitle: "Delete failed",
+        partialTitle: "Snapshot partially deleted",
+      },
+      () => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.snapshotsRoot(scopeTag) })
+      },
+    )
   }
-  const handleDelete = (snapshotName: string, vmCount: number) =>
-    confirm(`Delete snapshot "${snapshotName}" from all ${vmCount} VM(s)?`, () => doDelete(snapshotName))
+  const handleDelete = (snapshotName: string, _vmCount: number) =>
+    confirm(
+      `Delete snapshot "${snapshotName}" from all lab VMs? The range router VM is skipped (same as testing mode).`,
+      () => doDelete(snapshotName),
+    )
 
   const totalVMs = vmGroups.length
   const totalSnaps = snapGroups.length
@@ -306,7 +485,8 @@ export default function SnapshotsPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
-              A snapshot with this name will be created on <strong>all VMs</strong> in your range simultaneously.
+              A snapshot with this name will be created on every <strong>lab VM</strong> in your range at once.
+              The <code className="text-xs font-mono">*-router-debian*</code> infrastructure VM is skipped — same as testing mode on/off.
             </p>
             <div className="space-y-1.5">
               <Label>Snapshot Name <span className="text-red-400">*</span></Label>
@@ -362,7 +542,7 @@ function VMView({
   vmGroups: VMGroup[]
   expanded: Set<string>
   toggle: (k: string) => void
-  onRevert: (name: string, ctx: string) => void
+  onRevert: (name: string) => void
   onDelete: (name: string, count: number) => void
   hasMore: boolean
   onLoadMore: () => void
@@ -449,8 +629,8 @@ function VMView({
                                 size="sm"
                                 variant="outline"
                                 className="h-7 px-2 text-xs gap-1"
-                                onClick={() => onRevert(snap.name, `All VMs will be reverted to "${snap.name}"`)}
-                                title="Revert all VMs to this snapshot"
+                                onClick={() => onRevert(snap.name)}
+                                title="Revert all lab VMs to this snapshot (router excluded)"
                               >
                                 <RotateCcw className="h-3 w-3 text-yellow-400" />
                                 Revert
@@ -459,7 +639,7 @@ function VMView({
                                 size="icon-sm"
                                 variant="ghost"
                                 onClick={() => onDelete(snap.name, 1)}
-                                title="Delete snapshot from all VMs"
+                                title="Delete snapshot from all lab VMs (router excluded)"
                               >
                                 <Trash2 className="h-3.5 w-3.5 text-red-400" />
                               </Button>
@@ -500,7 +680,7 @@ function SnapshotView({
   snapGroups: SnapshotGroup[]
   expanded: Set<string>
   toggle: (k: string) => void
-  onRevert: (name: string, ctx: string) => void
+  onRevert: (name: string) => void
   onDelete: (name: string, count: number) => void
   hasMore: boolean
   onLoadMore: () => void
@@ -551,7 +731,8 @@ function SnapshotView({
                   size="sm"
                   variant="outline"
                   className="h-7 px-2 text-xs gap-1"
-                  onClick={() => onRevert(group.name, `All ${group.vms.length} VMs will be reverted to "${group.name}"`)}
+                  onClick={() => onRevert(group.name)}
+                  title="Revert all lab VMs (router excluded)"
                 >
                   <RotateCcw className="h-3 w-3 text-yellow-400" />
                   Revert All
@@ -560,7 +741,7 @@ function SnapshotView({
                   size="icon-sm"
                   variant="ghost"
                   onClick={() => onDelete(group.name, group.vms.length)}
-                  title="Delete from all VMs"
+                  title="Delete snapshot from all lab VMs (router excluded)"
                 >
                   <Trash2 className="h-3.5 w-3.5 text-red-400" />
                 </Button>

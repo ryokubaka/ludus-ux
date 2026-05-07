@@ -100,9 +100,9 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         setLines((prev) => [...prev, raw])
         stopStreaming()
       } else if (raw.startsWith("[LUDUS] ")) {
-        setLines((prev) => [...prev, raw.slice(8)])
+        setLines((prev) => [...prev, raw])
       } else if (raw.startsWith("[GOAD] ")) {
-        setLines((prev) => [...prev, raw.slice(7)])
+        setLines((prev) => [...prev, raw])
       }
       // Unknown prefix: silently ignore to stay forward-compatible
     }

@@ -21,6 +21,7 @@ import {
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
+import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
 import type { LogHistoryEntry } from "@/lib/types"
 
 export default function LogsPage() {
@@ -110,7 +111,10 @@ export default function LogsPage() {
       const result = await ludusApi.getRangeLogHistoryById(id, selectedRangeId ?? undefined)
       if (result.data?.result) {
         if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
-        lines.push(...result.data.result.split("\n").filter((l) => l.trim()))
+        const raw = result.data.result.split("\n").filter((l) => l.trim())
+        lines.push(
+          ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
+        )
       } else if (result.error && deployIds.length === 1) {
         toast({ variant: "destructive", title: "Failed to load log", description: result.error })
       }

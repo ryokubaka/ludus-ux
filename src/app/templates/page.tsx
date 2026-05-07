@@ -39,6 +39,7 @@ import { LogHistoryList } from "@/components/range/log-history-list"
 import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
 import { cn, extractArray } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 
@@ -545,6 +546,20 @@ export default function TemplatesPage() {
     setBuilding(true)
     const result = await ludusApi.buildTemplates(names)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            setBuilding(false)
+            void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+            void queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
+          },
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Build failed", description: result.error })
       setBuilding(false)
     } else {

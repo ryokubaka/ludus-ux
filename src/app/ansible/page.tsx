@@ -29,6 +29,7 @@ import {
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { AnsibleItem } from "@/lib/types"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 
@@ -76,7 +77,20 @@ export default function AnsiblePage() {
         setNewRoleVersion("")
         invalidateAnsible()
       } else {
-        toast({ variant: "destructive", title: "Error", description: result.error })
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: result.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => invalidateAnsible(),
+          })
+        ) {
+          setAddRoleDialog(false)
+          setNewRoleName("")
+          setNewRoleVersion("")
+        } else {
+          toast({ variant: "destructive", title: "Error", description: result.error })
+        }
       }
     } else {
       toast({ title: "Role added", description: newRoleName })
@@ -92,6 +106,16 @@ export default function AnsiblePage() {
     if (!confirm(`Remove role "${name}"?`)) return
     const result = await ludusApi.removeRole(name)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => invalidateAnsible(),
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Role removed" })
@@ -110,14 +134,27 @@ export default function AnsiblePage() {
       setNewCollVersion("")
       invalidateAnsible()
     } else if (result.error) {
-      const isPreRelease = /pre-release|pre_release|--pre/i.test(result.error)
-      toast({
-        variant: "destructive",
-        title: "Error installing collection",
-        description: isPreRelease
-          ? `${newCollName} is only available as a pre-release. Specify a concrete version number (e.g. 0.1.0) in the Version field and try again.`
-          : result.error,
-      })
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => invalidateAnsible(),
+        })
+      ) {
+        setAddCollDialog(false)
+        setNewCollName("")
+        setNewCollVersion("")
+      } else {
+        const isPreRelease = /pre-release|pre_release|--pre/i.test(result.error)
+        toast({
+          variant: "destructive",
+          title: "Error installing collection",
+          description: isPreRelease
+            ? `${newCollName} is only available as a pre-release. Specify a concrete version number (e.g. 0.1.0) in the Version field and try again.`
+            : result.error,
+        })
+      }
     } else {
       toast({ title: "Collection added", description: newCollName })
       setAddCollDialog(false)

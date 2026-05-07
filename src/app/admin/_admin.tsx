@@ -41,6 +41,7 @@ import {
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { saveImpersonation } from "@/lib/impersonation-context"
 
@@ -309,6 +310,16 @@ export function AdminPageClient() {
       statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
     const res = await ludusApi.deleteRange(rangeID)
     if (res.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: res.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => invalidateAdminData(),
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Delete failed", description: res.error })
       return
     }

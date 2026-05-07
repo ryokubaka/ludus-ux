@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -35,6 +35,7 @@ import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
 import { Shield } from "lucide-react"
@@ -133,6 +134,7 @@ export default function NewGoadInstancePage() {
   const router = useRouter()
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
   const { impersonation, impersonationHeaders } = useImpersonation()
+  const shell = useShellSession()
   const [step, setStep] = useState(0)
   const [selectedLab, setSelectedLab] = useState<string | null>(null)
   const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set())
@@ -191,11 +193,15 @@ export default function NewGoadInstancePage() {
       setCurrentUsername(impersonation.username)
       return
     }
+    if (shell?.username) {
+      setCurrentUsername(shell.username)
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => { if (d.username) setCurrentUsername(d.username) })
       .catch(() => {})
-  }, [impersonation?.username]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [impersonation?.username, shell]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch installed templates (once on mount — not affected by impersonation)
   useEffect(() => {
@@ -218,10 +224,36 @@ export default function NewGoadInstancePage() {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
     rangeState,
+    activeRangeId,
     startStreaming: startRangeStreaming,
     stopStreaming: stopRangeStreaming,
     clearLogs: clearRangeLogs,
+    refreshRangeStateFromServer,
   } = useDeployLogContext()
+
+  const rangeLogRefreshLock = useRef(false)
+  const [rangeLogRefreshBusy, setRangeLogRefreshBusy] = useState(false)
+  const handleRefreshRangeLogs = useCallback(() => {
+    const rid = (dedicatedRangeId ?? activeRangeId)?.trim()
+    if (!rid || rangeLogRefreshLock.current) return
+    rangeLogRefreshLock.current = true
+    setRangeLogRefreshBusy(true)
+    stopRangeStreaming()
+    requestAnimationFrame(() => {
+      startRangeStreaming(rid, { snapshotStart: false })
+      void refreshRangeStateFromServer(rid)
+    })
+    window.setTimeout(() => {
+      rangeLogRefreshLock.current = false
+      setRangeLogRefreshBusy(false)
+    }, 750)
+  }, [
+    dedicatedRangeId,
+    activeRangeId,
+    stopRangeStreaming,
+    startRangeStreaming,
+    refreshRangeStateFromServer,
+  ])
 
   // Catalog state
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
@@ -1206,6 +1238,8 @@ export default function NewGoadInstancePage() {
             <GoadTerminal
               lines={rangeLogLines}
               onClear={clearRangeLogs}
+              onRefresh={(dedicatedRangeId ?? activeRangeId) ? handleRefreshRangeLogs : undefined}
+              refreshLoading={rangeLogRefreshBusy}
               label={`Range Logs — Ludus VM Deploy${isRangeStreaming ? " (live)" : rangeState ? ` · ${rangeState}` : ""}`}
               className="flex flex-col min-h-0 h-full"
             />

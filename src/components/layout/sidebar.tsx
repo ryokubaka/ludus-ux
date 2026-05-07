@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/tooltip"
 import { useRange } from "@/lib/range-context"
 import { useSidebar } from "@/lib/sidebar-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 
 interface NavItem {
@@ -101,17 +102,28 @@ const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
 export function Sidebar() {
   const pathname = usePathname()
   const { collapsed, toggle } = useSidebar()
+  const shell = useShellSession()
 
   // Initialise from sessionStorage so cached values apply on the very first
   // render after a page reload — eliminating the "admin items pop in later" flash.
-  // The API calls below run in the background to verify and refresh the cache.
-  const [isAdmin, setIsAdmin] = useState(false)
+  // Prefer server shell snapshot (no /api/auth/session); fall back to fetch if absent.
+  const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   const [goadEnabled, setGoadEnabled] = useState(true)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
-  // On mount: apply cached values instantly, then verify in background
+
   useEffect(() => {
+    if (shell) {
+      setIsAdmin(shell.isAdmin)
+      try {
+        sessionStorage.setItem(ADMIN_CACHE_KEY, String(shell.isAdmin))
+      } catch { /* ignore */ }
+    }
+  }, [shell])
+
+  useEffect(() => {
+    if (shell) return
     const cachedAdmin = sessionStorage.getItem(ADMIN_CACHE_KEY)
     if (cachedAdmin === "true") setIsAdmin(true)
 
@@ -123,7 +135,7 @@ export function Sidebar() {
         sessionStorage.setItem(ADMIN_CACHE_KEY, String(admin))
       })
       .catch(() => {})
-  }, [])
+  }, [shell])
 
   useEffect(() => {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
@@ -164,6 +176,7 @@ export function Sidebar() {
         <Tooltip>
           <TooltipTrigger asChild>
             <Link
+              prefetch={false}
               href="/"
               className={cn(
                 "flex items-center gap-3 hover:opacity-80 transition-opacity flex-shrink-0",
@@ -285,6 +298,7 @@ export function Sidebar() {
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Link
+                                prefetch={false}
                                 href={item.href}
                                 className={cn(
                                   "flex items-center justify-center rounded-md p-2 transition-colors",
@@ -314,6 +328,7 @@ export function Sidebar() {
                     return (
                       <li key={item.href} className="flex items-center gap-0.5">
                         <Link
+                          prefetch={false}
                           href={item.href}
                           className={cn(
                             "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors group",
@@ -370,7 +385,7 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <Link href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
+            <Link prefetch={false} href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
               <p className="text-xs font-semibold text-muted-foreground">v{APP_VERSION} <span className="font-normal text-muted-foreground/60">{APP_VERSION_LABEL}</span></p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
             </Link>
@@ -378,7 +393,7 @@ export function Sidebar() {
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Link href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
+                <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
               </TooltipTrigger>
               <TooltipContent side="right">v{APP_VERSION} {APP_VERSION_LABEL} — Open Source · Apache 2.0</TooltipContent>
             </Tooltip>

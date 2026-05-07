@@ -12,7 +12,8 @@ import {
 /**
  * Read active impersonation state from sessionStorage (browser only).
  * Returns BOTH headers needed for full server-side impersonation support:
- *   X-Impersonate-Apikey  – used by the proxy to call Ludus as the target user
+ *   X-Impersonate-Apikey  – preferred by /api/proxy over the cookie when both
+ *                          X-Impersonate-* are set (cookie can lag on fast user switches)
  *   X-Impersonate-As      – used by custom routes to know the effective username
  */
 export function getImpersonationHeaders(): Record<string, string> {

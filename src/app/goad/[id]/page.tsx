@@ -40,6 +40,7 @@ import {
   X,
   Activity,
   MapPin,
+  HardDriveDownload,
   Check,
   CircleAlert,
   PackageX,
@@ -60,6 +61,7 @@ import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn, extractArray, timeAgo } from "@/lib/utils"
+import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -83,6 +85,7 @@ import { useAbortRange } from "@/lib/use-abort-range"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -183,7 +186,7 @@ function formatDuration(startedAt: number, endedAt?: number): string {
 }
 
 /** Tab classification for Ludus range deploy vs GOAD-terminal-only actions. */
-const DEPLOY_TAB_ACTIONS = new Set(["provide", "install-extension", "provision-lab"])
+const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
 const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
 
 const GOAD_INSTANCE_TAB_IDS = new Set([
@@ -229,6 +232,7 @@ function GoadInstancePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
+  const shell = useShellSession()
   const queryClient = useQueryClient()
   const instanceId = decodeURIComponent(params.id as string)
   /**
@@ -265,6 +269,7 @@ function GoadInstancePage() {
    */
   const RANGE_YAML_TOUCHING_ACTIONS = new Set([
     "provide",
+    "install",
     "install-extension",
     "provision-lab",
     "provision-extension",
@@ -302,6 +307,29 @@ function GoadInstancePage() {
 
   const isRangeStreamingRef = useRef(isRangeStreaming)
   isRangeStreamingRef.current = isRangeStreaming
+
+  const rangeLogRefreshLock = useRef(false)
+  const [rangeLogRefreshBusy, setRangeLogRefreshBusy] = useState(false)
+  const handleRefreshRangeLogs = useCallback(() => {
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid || rangeLogRefreshLock.current) return
+    rangeLogRefreshLock.current = true
+    setRangeLogRefreshBusy(true)
+    stopRangeStreaming()
+    requestAnimationFrame(() => {
+      startRangeStreaming(rid, { snapshotStart: false })
+      void refreshRangeStateFromServer(rid)
+    })
+    window.setTimeout(() => {
+      rangeLogRefreshLock.current = false
+      setRangeLogRefreshBusy(false)
+    }, 750)
+  }, [
+    instance?.ludusRangeId,
+    stopRangeStreaming,
+    startRangeStreaming,
+    refreshRangeStateFromServer,
+  ])
 
   // Track when the GOAD process started so we can show a live elapsed timer.
   const [goadStreamStartedAt, setGoadStreamStartedAt] = useState<number | null>(null)
@@ -641,19 +669,20 @@ function GoadInstancePage() {
   const [selectedInventoryName, setSelectedInventoryName] = useState<string | null>(null)
 
   // ── Admin state ───────────────────────────────────────────────────────────
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   useEffect(() => {
-    // Prefer sessionStorage (cached on login/sidebar check) for instant display,
-    // then confirm with the session API so the button always shows for admins
-    // even on a hard-nav to this page before the sidebar has populated the cache.
+    if (shell) {
+      setIsAdmin(shell.isAdmin)
+      return
+    }
     try {
-      if (sessionStorage.getItem("isAdmin") === "true") { setIsAdmin(true); return }
-    } catch { /* SSR guard */ }
+      if (sessionStorage.getItem("ludus-sidebar-is-admin") === "true") { setIsAdmin(true); return }
+    } catch { /* ignore */ }
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => { if (d?.isAdmin) setIsAdmin(true) })
       .catch(() => {})
-  }, [])
+  }, [shell])
 
   // ── Reassign dialog ───────────────────────────────────────────────────────
   const [showReassign, setShowReassign] = useState(false)
@@ -827,7 +856,8 @@ function GoadInstancePage() {
             const result = await ludusApi.getRangeLogHistoryById(d.id, instance.ludusRangeId)
             if (result.data?.result) {
               if (deploys.length > 1) lines.push(`--- Ludus range deploy ${d.id} ---`)
-              lines.push(...result.data.result.split("\n").filter((l) => l.trim()))
+              const raw = result.data.result.split("\n").filter((l) => l.trim())
+              lines.push(...augmentLudusDeployHistoryLines(raw, d.start, d.end))
             }
           }
           setHistoryDeployLines(lines)
@@ -1258,6 +1288,29 @@ function GoadInstancePage() {
     confirm("Run full Ansible provisioning? This can take 30–90 minutes.", () =>
       runAction("provision-lab", `--repl "use ${instanceId};provision_lab"`)
     )
+
+  /** One REPL session: Ludus infra (provide) then full lab Ansible (provision_lab) — same as wizard `goad -t install` split for Ludus. */
+  const handleInstallProvideProvision = () =>
+    confirm(
+      [
+        "Install — Provide + Provision lab?",
+        "",
+        "This runs two GOAD steps in one session:",
+        "  1. Provide — create/update Ludus VMs and range infrastructure (no full lab Ansible yet).",
+        "  2. Provision lab — run all Ansible playbooks for this lab (often 30–90 minutes).",
+        "",
+        "Use this for a full install when you would otherwise click Provide and then Provision Lab separately.",
+      ].join("\n"),
+      async () => {
+        const rangeId = await ensureRangeIsolation()
+        if (!rangeId) return
+        await runAction(
+          "install",
+          `--repl "use ${instanceId};provide;provision_lab"`,
+        )
+      },
+    )
+
   const handleStatus = () => runAction("status", `-i ${instanceId} -t status`)
 
   // ── Sync Range IPs ──────────────────────────────────────────────────────────
@@ -1719,6 +1772,21 @@ function GoadInstancePage() {
           <div className="flex flex-wrap gap-2 items-center">
             <div className="flex flex-wrap gap-2">
               <Button
+                size="sm"
+                variant="default"
+                className="bg-emerald-700 hover:bg-emerald-600 text-white"
+                onClick={handleInstallProvideProvision}
+                disabled={isRunning || initializingRange || !!pendingAction}
+                title="Provide then Provision lab in one GOAD session (full install)"
+              >
+                {(isRunning && currentAction === "install") || initializingRange ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <HardDriveDownload className="h-3.5 w-3.5" />
+                )}
+                {initializingRange ? "Creating range..." : "Install"}
+              </Button>
+              <Button
                 size="sm" variant="outline"
                 onClick={handleProvide} disabled={isRunning || initializingRange || !!pendingAction}
                 title="Deploy/update Ludus infrastructure (no Ansible). Creates a dedicated range if needed."
@@ -1727,6 +1795,16 @@ function GoadInstancePage() {
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   : <Server className="h-3.5 w-3.5" />}
                 {initializingRange ? "Creating range..." : "Provide"}
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                onClick={handleProvisionLab} disabled={isRunning || !!pendingAction}
+                title="Run all Ansible playbooks to configure the lab"
+              >
+                {isRunning && currentAction === "provision-lab"
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Wrench className="h-3.5 w-3.5" />}
+                Provision Lab
               </Button>
               <Button
                 size="sm" variant="outline"
@@ -1741,16 +1819,6 @@ function GoadInstancePage() {
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   : <MapPin className="h-3.5 w-3.5" />}
                 Sync IPs
-              </Button>
-              <Button
-                size="sm" variant="success"
-                onClick={handleProvisionLab} disabled={isRunning || !!pendingAction}
-                title="Run all Ansible playbooks to configure the lab"
-              >
-                {isRunning && currentAction === "provision-lab"
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Wrench className="h-3.5 w-3.5" />}
-                Provision Lab
               </Button>
               <Button
                 size="sm" variant="outline"
@@ -1965,6 +2033,8 @@ function GoadInstancePage() {
             <GoadTerminal
               lines={rangeLogLines}
               onClear={clearRangeLogs}
+              onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
+              refreshLoading={rangeLogRefreshBusy}
               label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
               className="flex flex-col min-h-0 h-full"
             />

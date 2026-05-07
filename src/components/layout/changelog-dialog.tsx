@@ -156,7 +156,8 @@ interface ParsedVersion {
 }
 
 function parseChangelog(md: string): ParsedVersion[] {
-  const lines = md.split("\n")
+  const text = md.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const lines = text.split("\n")
   const versions: ParsedVersion[] = []
   let current: ParsedVersion | null = null
   let currentSection: ParsedSection | null = null

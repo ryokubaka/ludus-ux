@@ -1,7 +1,7 @@
 "use client"
 
 import type { ReactNode, RefObject, KeyboardEvent } from "react"
-import { Pause, Play, ChevronsDown, WrapText, Sun, Moon, Search, Copy, Download, Trash2, ChevronUp, ChevronDown, X } from "lucide-react"
+import { Pause, Play, ChevronsDown, WrapText, Sun, Moon, Search, Copy, Download, Trash2, ChevronUp, ChevronDown, X, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -31,6 +31,9 @@ export interface LogDockToolbarProps {
   searchOpen: boolean
   onSearchToggle: () => void
   onClear?: () => void
+  /** When set, show a toolbar control to reconnect / refetch the log stream (e.g. Ludus range SSE). */
+  onRefresh?: () => void
+  refreshLoading?: boolean
   /** Content rendered on the left side (line count, live badge, mac dots, …). */
   leftSlot?: ReactNode
   className?: string
@@ -123,6 +126,8 @@ export function LogDockToolbar({
   searchOpen,
   onSearchToggle,
   onClear,
+  onRefresh,
+  refreshLoading,
   leftSlot,
   className,
 }: LogDockToolbarProps) {
@@ -174,6 +179,19 @@ export function LogDockToolbar({
         >
           {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
         </Button>
+
+        {onRefresh && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onRefresh}
+            disabled={refreshLoading}
+            title="Reconnect stream — reload output from server"
+            className={iconCls}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshLoading && "animate-spin")} />
+          </Button>
+        )}
 
         {/* Auto-scroll */}
         {showAutoScroll && (

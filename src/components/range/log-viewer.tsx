@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
+import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
 import { usePauseAwareLines } from "./use-pause-aware-lines"
 import { useLogSearch } from "./use-log-search"
 import {
@@ -144,7 +145,7 @@ export function LogViewer({
   )
 
   return (
-    <div className={cn("rounded-lg border overflow-hidden", dark ? "border-gray-700" : "border-gray-200", className)}>
+    <div className={cn("rounded-lg border overflow-hidden", dark ? "border-zinc-800" : "border-gray-200", className)}>
       <LogDockToolbar
         lines={lines}
         downloadFilename={downloadFilename}
@@ -186,7 +187,7 @@ export function LogViewer({
           onScroll={handleScroll}
           className={cn(
             "p-4 overflow-y-auto font-mono leading-relaxed",
-            dark ? "bg-black/80 text-gray-200" : "bg-gray-50 text-black",
+            dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           )}
           style={{ maxHeight, fontSize: `${fontSize}px` }}
@@ -195,10 +196,9 @@ export function LogViewer({
             <p className="italic text-gray-600">No logs yet…</p>
           ) : (
             displayLines.map((line, i) => {
-              const ludusMatch = line.match(/^\[LUDUS\] (.*)$/)
-              const goadMatch  = line.match(/^\[GOAD\] (.*)$/)
-              const errorMatch = line.match(/^\[ERROR\] (.*)$/)
-              const rest = ludusMatch?.[1] ?? goadMatch?.[1] ?? errorMatch?.[1] ?? line
+              const isErrorRole = /^\[ERROR\]\s/.test(line)
+              const normalized = stripStreamRolePrefix(line)
+              const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
 
               const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
               const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
@@ -210,32 +210,28 @@ export function LogViewer({
                   }
                 : undefined
 
+              const bodyCls = isErrorRole ? "text-red-400" : getAnsibleLineClass(body, theme)
+
               return (
                 <div
                   key={i}
                   ref={refCallback}
-                  className={cn("log-line flex gap-1.5", highlightCls)}
+                  className={cn("log-line", highlightCls)}
                 >
-                  {ludusMatch && (
-                    <span className="flex-shrink-0 text-primary/70 font-bold text-[10px] leading-4 mt-[1px]">[L]</span>
-                  )}
-                  {goadMatch && (
-                    <span className="flex-shrink-0 text-cyan-400/70 font-bold text-[10px] leading-4 mt-[1px]">[G]</span>
-                  )}
-                  {errorMatch && (
-                    <span className="flex-shrink-0 text-red-400/70 font-bold text-[10px] leading-4 mt-[1px]">[E]</span>
-                  )}
-                  {!ludusMatch && !goadMatch && !errorMatch && (
-                    <span className="flex-shrink-0 w-[18px]" />
-                  )}
-                  {isRecapStatsLine(rest) ? (
-                    <span>
-                      {parseRecapStats(rest, theme).map((seg, j) => (
+                  {wallTs ? (
+                    <>
+                      <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
+                      <span> </span>
+                    </>
+                  ) : null}
+                  {isRecapStatsLine(body) ? (
+                    <span className="min-w-0">
+                      {parseRecapStats(body, theme).map((seg, j) => (
                         <span key={j} className={seg.cls}>{seg.text}</span>
                       ))}
                     </span>
                   ) : (
-                    <span className={getAnsibleLineClass(rest, theme)}>{rest}</span>
+                    <span className={cn("min-w-0", bodyCls)}>{body}</span>
                   )}
                 </div>
               )

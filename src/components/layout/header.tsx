@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { User, Shield, LogOut, ChevronDown, Settings } from "lucide-react"
 import { useSidebar } from "@/lib/sidebar-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { cn } from "@/lib/utils"
 
 const pageTitles: Record<string, { title: string; description: string }> = {
@@ -42,12 +43,19 @@ interface SessionInfo {
 export function Header() {
   const pathname = usePathname()
   const router = useRouter()
-  const [session, setSession] = useState<SessionInfo | null>(null)
+  const shell = useShellSession()
+  const [session, setSession] = useState<SessionInfo | null>(() =>
+    shell ? { username: shell.username, isAdmin: shell.isAdmin } : null,
+  )
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [avatarVersion, setAvatarVersion] = useState(0)
   const { collapsed } = useSidebar()
 
   useEffect(() => {
+    if (shell) {
+      setSession({ username: shell.username, isAdmin: shell.isAdmin })
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
@@ -56,7 +64,7 @@ export function Header() {
         }
       })
       .catch(() => {})
-  }, [])
+  }, [shell])
 
   // Probe for avatar once session is known, and whenever avatarVersion bumps
   useEffect(() => {

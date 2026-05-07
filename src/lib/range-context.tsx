@@ -7,7 +7,6 @@ import { queryKeys } from "./query-keys"
 import { STALE } from "./query-client"
 import { extractArray } from "./utils"
 import { readClientEffectiveScopeTagSync } from "./effective-scope"
-import { useEffectiveScopeTag } from "./effective-scope-context"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -31,70 +30,89 @@ const RangeContext = createContext<RangeContextValue>({
 
 const STORAGE_KEY = "lux_selected_range"
 
-async function fetchAccessibleRanges(impersonationHeaders: Record<string, string> = {}): Promise<RangeAccessEntry[]> {
-  const res = await fetch("/api/proxy/ranges/accessible", { headers: impersonationHeaders })
+/** Same headers as ImpersonationProvider / ludusApi — read each fetch so CRLF-style races with React state never desync from sessionStorage. */
+function readImpersonationHeadersForFetch(): Record<string, string> {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = sessionStorage.getItem("goad_impersonation")
+    if (!raw) return {}
+    const { apiKey, username } = JSON.parse(raw) as { apiKey?: string; username?: string }
+    const headers: Record<string, string> = {}
+    if (apiKey) headers["X-Impersonate-Apikey"] = apiKey
+    if (username) headers["X-Impersonate-As"] = username
+    return headers
+  } catch {
+    return {}
+  }
+}
+
+async function fetchAccessibleRanges(): Promise<RangeAccessEntry[]> {
+  const res = await fetch("/api/proxy/ranges/accessible", { headers: readImpersonationHeadersForFetch() })
   if (!res.ok) return []
   const data = await res.json()
   const list = extractArray<RangeAccessEntry>(data)
   return [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))
 }
 
+function accessibleRangesPredicate(q: { queryKey: unknown }): boolean {
+  const k = q.queryKey
+  return (
+    Array.isArray(k) &&
+    k.length >= 4 &&
+    k[0] === "@sc" &&
+    k[2] === "ranges" &&
+    k[3] === "accessible"
+  )
+}
+
 export function RangeProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient()
-  const scopeTag = useEffectiveScopeTag()
+  /** Storage + login mirror — query key must not lag `useEffectiveScopeTag` after impersonation. */
+  const rangesScopeTag = readClientEffectiveScopeTagSync()
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
-  const [impersonationHeaders, setImpersonationHeaders] = useState<Record<string, string>>({})
 
-  // Read impersonation headers from sessionStorage (updated by admin page)
-  const readImpersonationHeaders = useCallback((): Record<string, string> => {
-    if (typeof window === "undefined") return {}
-    try {
-      const raw = sessionStorage.getItem("goad_impersonation")
-      if (!raw) return {}
-      const { apiKey, username } = JSON.parse(raw)
-      const headers: Record<string, string> = {}
-      if (apiKey) headers["X-Impersonate-Apikey"] = apiKey
-      if (username) headers["X-Impersonate-As"] = username
-      return headers
-    } catch {
-      return {}
-    }
-  }, [])
-
-  // The accessible ranges list — powered by TanStack Query (+ persistence in
-  // QueryProvider). Stale window + refetchInterval cover ACL changes from
-  // group membership without requiring a full reload.
-  const { data: ranges = [], isLoading, isFetching: rangesFetching } = useQuery({
-    queryKey: queryKeys.accessibleRangesList(scopeTag),
-    queryFn: () => fetchAccessibleRanges(impersonationHeaders),
-    // Group/range ACL changes are made by other users/admins — no client-side
-    // invalidation for recipients. Short stale + interval keeps the sidebar honest.
+  const { data: ranges = [], isLoading, isFetching: rangesFetching, status } = useQuery({
+    queryKey: queryKeys.accessibleRangesList(rangesScopeTag),
+    queryFn: fetchAccessibleRanges,
     staleTime: STALE.acl,
     refetchInterval: 45_000,
     refetchIntervalInBackground: false,
   })
 
-  // Align query key + fetch headers with sessionStorage on first paint (impersonation may already be set).
-  useEffect(() => {
-    setImpersonationHeaders(readImpersonationHeaders())
-  }, [readImpersonationHeaders])
-
-  // Sync selectedRangeId whenever the ranges list changes
+  // Keep sidebar/dashboard range across navigation and range-list refetches.
+  // Only fall back to the first range when there is no valid in-memory or
+  // persisted choice.  Do not clear sessionStorage on transient [] (errors,
+  // cache clears, key churn) — that used to snap users back to the default
+  // range after e.g. leaving GOAD for the dashboard.  Impersonation enter/exit
+  // still clears selection via `impersonation-changed` before this runs.
   useEffect(() => {
     if (isLoading) return
+
     if (ranges.length === 0) {
-      setSelectedRangeId(null)
-      sessionStorage.removeItem(STORAGE_KEY)
+      if (status === "success") {
+        setSelectedRangeId(null)
+        sessionStorage.removeItem(STORAGE_KEY)
+      }
       return
     }
+
     const saved = sessionStorage.getItem(STORAGE_KEY)
+
+    if (selectedRangeId && ranges.some((r) => r.rangeID === selectedRangeId)) {
+      if (saved !== selectedRangeId) {
+        sessionStorage.setItem(STORAGE_KEY, selectedRangeId)
+      }
+      return
+    }
+
     if (saved && ranges.some((r) => r.rangeID === saved)) {
       setSelectedRangeId(saved)
-    } else {
-      setSelectedRangeId(ranges[0].rangeID)
-      sessionStorage.setItem(STORAGE_KEY, ranges[0].rangeID)
+      return
     }
-  }, [ranges, isLoading])
+
+    setSelectedRangeId(ranges[0].rangeID)
+    sessionStorage.setItem(STORAGE_KEY, ranges[0].rangeID)
+  }, [ranges, isLoading, status, selectedRangeId])
 
   const selectRange = useCallback((rangeId: string) => {
     setSelectedRangeId(rangeId)
@@ -103,28 +121,21 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refreshRanges = useCallback(async () => {
-    // refetchQueries (not invalidateQueries) — we need to AWAIT the actual
-    // network round-trip so callers (e.g. deploy flow in range/new/page.tsx)
-    // are guaranteed the fresh list includes any newly created range before
-    // they call selectRange() and navigate away.
-    await queryClient.refetchQueries({ queryKey: queryKeys.accessibleRangesList(scopeTag) })
-  }, [queryClient, scopeTag])
+    await queryClient.refetchQueries({
+      queryKey: queryKeys.accessibleRangesList(readClientEffectiveScopeTagSync()),
+      exact: true,
+    })
+  }, [queryClient])
 
-  // When impersonation changes, clear stale range selection and re-fetch
   useEffect(() => {
     const handler = () => {
-      const headers = readImpersonationHeaders()
-      setImpersonationHeaders(headers)
       setSelectedRangeId(null)
       sessionStorage.removeItem(STORAGE_KEY)
-      // Invalidate so the query re-runs with new headers
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.accessibleRangesList(readClientEffectiveScopeTagSync()),
-      })
+      void queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
     }
     window.addEventListener("impersonation-changed", handler)
     return () => window.removeEventListener("impersonation-changed", handler)
-  }, [queryClient, readImpersonationHeaders])
+  }, [queryClient])
 
   return (
     <RangeContext.Provider

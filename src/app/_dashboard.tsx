@@ -67,6 +67,7 @@ import { queryKeys } from "@/lib/query-keys"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
+import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
 import {
   clearRangeAborting,
   isRangeAborting,
@@ -97,11 +98,33 @@ function dedupeVMs(vms: VMObject[]): VMObject[] {
   })
 }
 
-function mergeVmUnionPreferNext(prev: VMObject[], next: VMObject[]): VMObject[] {
+/**
+ * Union merge for partial Ludus VM lists. When `stalePowerPessimistic`, VMs that
+ * exist only in `prev` (omitted from this poll's `next`) get poweredOff so the
+ * dashboard "Running" count and badges do not show ghost online state.
+ */
+function mergeVmUnionPreferNext(
+  prev: VMObject[],
+  next: VMObject[],
+  stalePowerPessimistic: boolean,
+): VMObject[] {
+  const nextKeys = new Set(next.map(vmIdentityKey))
   const m = new Map<string, VMObject>()
-  for (const vm of prev) m.set(vmIdentityKey(vm), vm)
+  for (const vm of prev) {
+    const k = vmIdentityKey(vm)
+    let row = vm
+    if (stalePowerPessimistic && !nextKeys.has(k)) {
+      row = { ...vm, poweredOn: false, powerState: "stopped" }
+    }
+    m.set(k, row)
+  }
   for (const vm of next) m.set(vmIdentityKey(vm), vm)
   return dedupeVMs(Array.from(m.values()))
+}
+
+/** Match vm-table: explicit `poweredOn: false` wins over a stale `powerState`. */
+function vmIsRunning(vm: VMObject): boolean {
+  return vm.poweredOn ?? (vm.powerState === "running")
 }
 
 function nextVmKeysAreSubsetOfPrev(next: VMObject[], prev: VMObject[]): boolean {
@@ -155,7 +178,7 @@ function resolveVmListForRangeQuery(args: {
   // Ludus reports more VMs than rows returned → merge so missing rows stay visible.
   if (expected !== undefined && newVMs.length < expected) {
     vmPartialListStreak.delete(streakKey)
-    return mergeVmUnionPreferNext(prevVMs, newVMs)
+    return mergeVmUnionPreferNext(prevVMs, newVMs, true)
   }
 
   // No numberOfVMs (or malformed): short partial list whose keys are all known from cache → union.
@@ -178,7 +201,7 @@ function resolveVmListForRangeQuery(args: {
       vmPartialListStreak.delete(streakKey)
       return newVMs
     }
-    return mergeVmUnionPreferNext(prevVMs, newVMs)
+    return mergeVmUnionPreferNext(prevVMs, newVMs, true)
   }
 
   vmPartialListStreak.delete(streakKey)
@@ -426,7 +449,10 @@ export function DashboardPageClient() {
         const result = await ludusApi.getRangeLogHistoryById(id, selectedRangeId ?? undefined)
         if (result.data?.result) {
           if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
-          lines.push(...result.data.result.split("\n").filter((l) => l.trim()))
+          const raw = result.data.result.split("\n").filter((l) => l.trim())
+          lines.push(
+            ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
+          )
         } else if (result.error && deployIds.length === 1) {
           toast({ variant: "destructive", title: "Failed to load log", description: result.error })
         }
@@ -954,7 +980,7 @@ export function DashboardPageClient() {
       setInventoryLoading(false)
     }
   }
-  const runningVMs = allVMs.filter((v) => v.poweredOn || v.powerState === "running").length
+  const runningVMs = allVMs.filter(vmIsRunning).length
   const rangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
   const error = rangeError ? (rangeError as Error).message : null
 
@@ -1093,7 +1119,7 @@ export function DashboardPageClient() {
         ranges.map((range, idx) => {
           const rangeKey = range.rangeID || range.name || `range-${idx}`
           const vms = range.VMs || (range as RangeObject & { vms?: VMObject[] }).vms || []
-          const running = vms.filter((v) => v.poweredOn || v.powerState === "running").length
+          const running = vms.filter(vmIsRunning).length
           const state = range.rangeState || "NEVER DEPLOYED"
 
           return (

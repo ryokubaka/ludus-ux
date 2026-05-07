@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 
@@ -72,11 +73,7 @@ export async function PUT(request: NextRequest) {
   const { config, rangeId, force } = body as { config: string; rangeId?: string; force?: boolean }
   const ludusPath = rangeId ? `/range/config?rangeID=${encodeURIComponent(rangeId)}` : "/range/config"
 
-  // Prefer the session-cookie impersonation key (survives page refresh) then fall back
-  // to the request header (set by client-side sessionStorage, present during the same session).
-  const impersonateApiKey = session.isAdmin
-    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
-    : null
+  const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const formData = new FormData()

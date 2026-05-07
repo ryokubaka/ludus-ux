@@ -37,6 +37,7 @@ import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { useToast } from "@/hooks/use-toast"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { cn, extractArray } from "@/lib/utils"
@@ -216,6 +217,7 @@ export default function NewRangePage() {
   const { toast } = useToast()
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
   const scopeTag = useEffectiveScopeTag()
+  const shell = useShellSession()
   const [step, setStep] = useState(0)
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
@@ -298,11 +300,18 @@ export default function NewRangePage() {
       })
       .catch(() => { /* timeout or network — keep client-side estimate from getRanges */ })
       .finally(() => clearTimeout(ipPlanTimeout))
+  }, [])
+
+  useEffect(() => {
+    if (shell?.username) {
+      setCurrentUserID(shell.username)
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.username) setCurrentUserID(data.username) })
       .catch(() => {})
-  }, [])
+  }, [shell])
 
   const usedVlans = useMemo(() => {
     const vlans = new Set<number>()

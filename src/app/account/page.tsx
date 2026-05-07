@@ -19,6 +19,7 @@ import {
   Upload,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { cn } from "@/lib/utils"
 
 interface SessionInfo {
@@ -28,9 +29,12 @@ interface SessionInfo {
 
 export default function AccountPage() {
   const { toast } = useToast()
+  const shell = useShellSession()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [session, setSession] = useState<SessionInfo | null>(null)
+  const [session, setSession] = useState<SessionInfo | null>(() =>
+    shell ? { username: shell.username, isAdmin: shell.isAdmin } : null,
+  )
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [avatarVersion, setAvatarVersion] = useState(0)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -47,11 +51,15 @@ export default function AccountPage() {
   const [pwSuccess, setPwSuccess] = useState(false)
 
   useEffect(() => {
+    if (shell) {
+      setSession({ username: shell.username, isAdmin: shell.isAdmin })
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (d?.authenticated) setSession({ username: d.username, isAdmin: d.isAdmin }) })
       .catch(() => {})
-  }, [])
+  }, [shell])
 
   // Probe for existing avatar whenever session or version changes
   const refreshAvatar = useCallback(() => {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
 import { getSessionFromRequest } from "@/lib/session"
@@ -32,13 +33,11 @@ async function handler(
     : undefined
 
   // When an admin is impersonating another user, use the impersonated user's
-  // API key so that Ludus API calls are scoped to the target user.
-  // The session cookie (set by /api/auth/impersonate) is the primary source;
-  // the X-Impersonate-Apikey request header is a fallback for any in-flight
-  // requests that were dispatched before the cookie was written.
-  const impersonateApiKey = session.isAdmin
-    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
-    : null
+  // API key so Ludus calls are scoped to that user. Prefer X-Impersonate-*
+  // headers when both are present — sessionStorage updates immediately on
+  // user switch while the cookie from POST /api/auth/impersonate can still
+  // hold the previous impersonated user for one round-trip.
+  const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
   // In Ludus v2, the ROOT API key is only for PocketBase internal operations.
   // All admin API calls (port 8081) use the logged-in admin's own API key.
   const effectiveApiKey = impersonateApiKey || session.apiKey

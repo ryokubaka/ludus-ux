@@ -56,8 +56,15 @@ function getSecret(): string {
   return process.env.APP_SECRET || "change-me-in-production-32-chars!!"
 }
 
-/** Derive an AES-256-GCM key from APP_SECRET using PBKDF2 */
-async function getDerivedKey(): Promise<CryptoKey> {
+/**
+ * PBKDF2 (100k iterations) is expensive. Middleware + every API route used to
+ * derive a fresh key per decrypt; memoize per process so only APP_SECRET
+ * changes (e.g. dev .env hot reload) trigger a new derivation.
+ */
+let derivedKeySecretFingerprint = ""
+let derivedKeyPromise: Promise<CryptoKey> | null = null
+
+async function deriveKeyFromSecret(): Promise<CryptoKey> {
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(getSecret()),
@@ -72,6 +79,16 @@ async function getDerivedKey(): Promise<CryptoKey> {
     false,
     ["encrypt", "decrypt"]
   )
+}
+
+/** Derive an AES-256-GCM key from APP_SECRET using PBKDF2 (cached). */
+async function getDerivedKey(): Promise<CryptoKey> {
+  const fp = getSecret()
+  if (!derivedKeyPromise || derivedKeySecretFingerprint !== fp) {
+    derivedKeySecretFingerprint = fp
+    derivedKeyPromise = deriveKeyFromSecret()
+  }
+  return derivedKeyPromise
 }
 
 export interface SessionData {

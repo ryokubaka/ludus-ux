@@ -35,6 +35,7 @@ import type { GoadInstance } from "@/lib/types"
 import { cn, timeAgo } from "@/lib/utils"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useRange } from "@/lib/range-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 import { useToast } from "@/hooks/use-toast"
 
 interface TaskSummary {
@@ -48,6 +49,7 @@ interface TaskSummary {
 }
 
 export default function GoadPage() {
+  const shell = useShellSession()
   const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null)
   const { lines: taskLines, resumeTask } = useGoadStream()
   const { impersonation, impersonationHeaders } = useImpersonation()
@@ -63,14 +65,16 @@ export default function GoadPage() {
   // already has correct values — preventing the flash where all instances
   // appear as "MY INSTANCES" before the admin status is confirmed.
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    if (shell?.isAdmin) return true
     try { return sessionStorage.getItem("ludus-sidebar-is-admin") === "true" } catch { return false }
   })
   const [currentUsername, setCurrentUsername] = useState<string>(() => {
+    if (shell?.username) return shell.username
     try { return sessionStorage.getItem("ludus-auth-username") || "" } catch { return "" }
   })
-  // True once /api/auth/session returns. Do not block rendering instance cards on
-  // this flag — repeat visitors can hydrate from sessionStorage below.
+  // True once server shell or /api/auth/session has populated admin/username.
   const [sessionConfirmed, setSessionConfirmed] = useState<boolean>(() => {
+    if (shell) return true
     try {
       return (
         sessionStorage.getItem("ludus-sidebar-is-admin") !== null
@@ -80,6 +84,16 @@ export default function GoadPage() {
   })
 
   useEffect(() => {
+    if (shell) {
+      setIsAdmin(shell.isAdmin)
+      setCurrentUsername(shell.username)
+      try {
+        sessionStorage.setItem("ludus-sidebar-is-admin", String(shell.isAdmin))
+        sessionStorage.setItem("ludus-auth-username", shell.username)
+      } catch { /* ignore */ }
+      setSessionConfirmed(true)
+      return
+    }
     fetch("/api/auth/session")
       .then((r) => r.json())
       .then((d) => {
@@ -93,7 +107,7 @@ export default function GoadPage() {
       })
       .catch(() => {})
       .finally(() => setSessionConfirmed(true))
-  }, [])
+  }, [shell])
 
   // Assign dialog state
   const [assignTarget, setAssignTarget] = useState<GoadInstance | null>(null)

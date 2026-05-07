@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -10,7 +10,8 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "test:unit": "vitest run -c config/vitest.config.ts",
-    "test:e2e": "playwright test -c config/playwright.config.ts"
+    "test:e2e": "playwright test -c config/playwright.config.ts",
+    "test:perf": "playwright test -c config/playwright.config.ts e2e/perf-refresh.spec.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.3.4",

@@ -25,11 +25,13 @@ import {
   ScrollText,
   Server,
   Clock,
+  Unlock,
 } from "lucide-react"
 import Link from "next/link"
 import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import type { RangeObject } from "@/lib/types"
 import type { RangeOp, RangeOpStatus } from "@/lib/range-op-store"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -104,6 +106,9 @@ async function fetchPbStatusForRange(rangeId: string): Promise<RangeObject | nul
   const list = normalizeRangeListFromApi(Array.isArray(data) ? data : [data])
   return findRangeByRangeId(list, rangeId) ?? list[0] ?? null
 }
+
+/** After this many seconds of a running testing op, offer UI unlock (clears server-side DB lock only). */
+const STUCK_TESTING_OP_UI_UNLOCK_SEC = 90
 
 // ── DB-backed pending allow/deny helpers ─────────────────────────────────────
 // Calls our Next.js API route at /api/range/pending-allows which persists
@@ -357,6 +362,7 @@ export default function TestingPage() {
   // Ref for tracking activeOp transitions — declared here, effect added below
   // (after fetchStatus is defined) to avoid "used before declaration" errors.
   const prevActiveOpRef = useRef(activeOp)
+  const lastOpErrorToastIdRef = useRef<string | null>(null)
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const rangeState   = status?.rangeState ?? ""
@@ -445,7 +451,20 @@ export default function TestingPage() {
       setOpInitialising(false)
       setActiveOp(op)
 
-      if (!op) return
+      if (!op) {
+        lastOpErrorToastIdRef.current = null
+        return
+      }
+
+      if (op.status === "error" && lastOpErrorToastIdRef.current !== op.id) {
+        lastOpErrorToastIdRef.current = op.id
+        toast({
+          variant: "destructive",
+          title: "Testing operation failed",
+          description:
+            "Ludus reported an error or the job timed out. Check Range Logs. If controls stay locked, use Unlock UI (shown after ~90s).",
+        })
+      }
 
       if (op.status === "completed" || op.status === "error") {
         // Op finished — refresh range status so button label / badge updates
@@ -464,7 +483,7 @@ export default function TestingPage() {
       setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
-  }, [fetchStatus, queryClient])
+  }, [fetchStatus, queryClient, toast])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
@@ -546,6 +565,7 @@ export default function TestingPage() {
     setIsStreaming(false)
     setServerAllowedDomains([])
     abortRef.current?.abort()
+    lastOpErrorToastIdRef.current = null
 
     fetchStatus(selectedRangeId)
     refreshAllowedDomains(selectedRangeId)
@@ -622,6 +642,47 @@ export default function TestingPage() {
       doToggle
     )
 
+  const handleDismissStuckTestingOp = () => {
+    const rangeId = selectedRangeIdRef.current ?? selectedRangeId
+    if (!rangeId) return
+    confirm(
+      "Clear the in-progress lock for this range? Ludus may still revert VMs in the background. Check Range Logs. You can try Stop Testing again afterward.",
+      async () => {
+        try {
+          const res = await fetch("/api/range/ops", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+            body: JSON.stringify({ rangeId, dismissStuckOp: true }),
+          })
+          const data = (await res.json().catch(() => ({}))) as { error?: string; dismissed?: boolean }
+          if (!res.ok) {
+            toast({
+              variant: "destructive",
+              title: "Could not clear op",
+              description: data.error ?? `HTTP ${res.status}`,
+            })
+            return
+          }
+          setActiveOp(null)
+          setToggling(false)
+          setOpInitialising(false)
+          lastOpErrorToastIdRef.current = null
+          await Promise.all([pollOp(rangeId), fetchStatus(rangeId)])
+          await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
+          toast({
+            title: "UI unlocked",
+            description:
+              data.dismissed === true
+                ? "Stale op cleared. If testing is still on in Ludus, use Stop Testing again or inspect Range Logs."
+                : "No active op was recorded.",
+          })
+        } catch {
+          toast({ variant: "destructive", title: "Network error", description: "Could not reach the server." })
+        }
+      },
+    )
+  }
+
   // ── Domain / IP helpers ───────────────────────────────────────────────────
   //
   // The Ludus API stores a single unified "allowedDomains" list in PocketBase.
@@ -647,7 +708,7 @@ export default function TestingPage() {
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
 
     // Show the log panel immediately so the user sees activity while Ludus
-    // resolves the domain IP and applies the firewall rule (can take 1-2 min).
+    // resolves the domain IP and applies the firewall rule.
     // snapshotStart=true skips pre-existing deployment logs so the panel only
     // shows output written after this allow operation begins.
     setShowLogs(true)
@@ -672,7 +733,15 @@ export default function TestingPage() {
     const apiErrors = data?.errors?.filter(e => e.reason !== "already allowed")
 
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      if (
+        !tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+        })
+      ) {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else if (apiErrors?.length) {
       toast({
         variant: "destructive",
@@ -734,7 +803,15 @@ export default function TestingPage() {
     const apiErrors = data?.errors
 
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      if (
+        !tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+        })
+      ) {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else if (apiErrors?.length) {
       toast({
         variant: "destructive",
@@ -932,11 +1009,24 @@ export default function TestingPage() {
               {opInProgress && (
                 <Alert className="mt-4 border-blue-500/20 bg-blue-500/5">
                   <Clock className="h-4 w-4 text-blue-300" />
-                  <AlertDescription className="text-xs">
-                    {(activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)) ? "Stop Testing" : "Start Testing"} is in progress.{" "}
-                    {isDeploying
-                      ? "Range is actively processing — logs are streaming below."
-                      : "Waiting for Ludus to begin processing. Logs will appear automatically."}
+                  <AlertDescription className="text-xs space-y-3">
+                    <p>
+                      {(activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)) ? "Stop Testing" : "Start Testing"} is in progress.{" "}
+                      {isDeploying
+                        ? "Range is actively processing — logs are streaming below."
+                        : "Waiting for Ludus to begin processing. Logs will appear automatically."}
+                    </p>
+                    {elapsedSec >= STUCK_TESTING_OP_UI_UNLOCK_SEC && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-blue-500/15">
+                        <Button type="button" size="sm" variant="outline" className="gap-1.5 h-8" onClick={handleDismissStuckTestingOp}>
+                          <Unlock className="h-3.5 w-3.5" />
+                          Unlock UI
+                        </Button>
+                        <span className="text-[10px] text-muted-foreground max-w-[min(100%,22rem)]">
+                          Clears only the app&apos;s stuck in-progress flag. Ludus may still be working — verify in Range Logs.
+                        </span>
+                      </div>
+                    )}
                   </AlertDescription>
                 </Alert>
               )}

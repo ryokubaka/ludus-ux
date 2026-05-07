@@ -30,6 +30,7 @@ import {
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { useRange } from "@/lib/range-context"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -206,6 +207,19 @@ export default function RangeConfigPage() {
       forceLudus,
     )
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            setDeploying(false)
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+          },
+        })
+      ) {
+        return
+      }
       toast({ variant: "destructive", title: "Deploy failed", description: result.error })
       setDeploying(false)
       return
@@ -222,7 +236,25 @@ export default function RangeConfigPage() {
     )
 
   const doAbort = async () => {
-    await ludusApi.abortDeploy(selectedRangeId ?? undefined)
+    const result = await ludusApi.abortDeploy(selectedRangeId ?? undefined)
+    if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            stopStreaming()
+            setDeploying(false)
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+          },
+        })
+      ) {
+        return
+      }
+      toast({ variant: "destructive", title: "Abort request failed", description: result.error })
+      return
+    }
     stopStreaming()
     setDeploying(false)
     toast({ title: "Deploy aborted" })

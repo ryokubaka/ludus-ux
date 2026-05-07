@@ -13,6 +13,7 @@ import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loa
 import type { VMObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 
 interface VMTableProps {
@@ -76,7 +77,18 @@ export function VMTable({
       ? await ludusApi.powerOn(names, rangeId)
       : await ludusApi.powerOff(names, rangeId)
     if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => onRefresh?.(),
+        })
+      ) {
+        // keep loading cleared below
+      } else {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+      }
     } else {
       toast({ title: `Power ${action}`, description: `${names.length} VM(s)` })
       onRefresh?.()
@@ -101,15 +113,26 @@ export function VMTable({
     setDestroyingProxmoxId(proxmoxId)
     const result = await ludusApi.destroyVm(proxmoxId, rangeId)
     if (result.error) {
-      toast({ variant: "destructive", title: "Destroy failed", description: result.error })
-      void postVmOperationAudit({
-        kind: "destroy_vm",
-        rangeId,
-        vmId: proxmoxId,
-        vmName: name,
-        status: "error",
-        detail: result.error,
-      })
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => onRefresh?.(),
+        })
+      ) {
+        /* destroy may still be queued */
+      } else {
+        toast({ variant: "destructive", title: "Destroy failed", description: result.error })
+        void postVmOperationAudit({
+          kind: "destroy_vm",
+          rangeId,
+          vmId: proxmoxId,
+          vmName: name,
+          status: "error",
+          detail: result.error,
+        })
+      }
     } else {
       toast({
         title: "VM destroyed",

@@ -40,6 +40,7 @@ export function taskMatchesIntegrationRepl(command: string): boolean {
  * Falls back to `"Running"` when we can't recognise the REPL shape.
  */
 export function goadTaskShortKind(command: string): string {
+  if (/;\s*provide\b[\s\S]*;\s*provision_lab\b/.test(command)) return "Install"
   const m = command.match(/--repl\s+"[^"]*;\s*(provide|install_extension|provision_lab|provision_extension)\b/)
   if (!m) return "Running"
   switch (m[1]) {
@@ -77,6 +78,9 @@ export function goadHistoryTitle(command: string): string {
   }
   const mProvExt = command.match(/provision_extension\s+([^\s;"]+)/)
   if (mProvExt) return `Re-provision extension: ${mProvExt[1]}`
+  if (/;\s*provide\b[\s\S]*;\s*provision_lab\b/.test(command)) {
+    return "Install (Provide + Provision lab)"
+  }
   if (/;\s*provision_lab\b/.test(command)) return "Provision lab"
   if (/;\s*provide\b/.test(command)) return "Provide"
   if (command.length > 72) return `${command.slice(0, 69)}…`

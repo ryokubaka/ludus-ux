@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useState,
 } from "react"
 import { fetchClientEffectiveScopeTag, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
@@ -20,19 +21,33 @@ export function EffectiveScopeProvider({
 }) {
   const [tag, setTag] = useState(initialScopeTag)
 
+  // Do not reset with `setTag(initialScopeTag)` on every layout prop change —
+  // that runs after this layout pass and would clobber sessionStorage-driven
+  // impersonation (SSR cookie often `…|self` while storage already has `…|user`).
+
+  // SessionStorage impersonation can differ from SSR cookie scope until
+  // /api/auth/impersonate finishes — apply the sync tag immediately so query
+  // keys and RangeProvider match the browser's effective identity.
+  useLayoutEffect(() => {
+    const sync = readClientEffectiveScopeTagSync()
+    if (sync !== initialScopeTag) setTag(sync)
+  }, [initialScopeTag])
+
   useEffect(() => {
-    setTag(initialScopeTag)
+    const sync = readClientEffectiveScopeTagSync()
+    setTag((prev) => (sync === initialScopeTag ? initialScopeTag : prev))
   }, [initialScopeTag])
 
   useEffect(() => {
     void fetchClientEffectiveScopeTag().then((next) => {
       setTag((prev) => (prev === next ? prev : next))
     })
-  }, [])
+  }, [initialScopeTag])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onImp = () => {
-      setTag(readClientEffectiveScopeTagSync())
+      const sync = readClientEffectiveScopeTagSync()
+      setTag(sync)
       void fetchClientEffectiveScopeTag().then(setTag)
     }
     const onStorage = (e: StorageEvent) => {

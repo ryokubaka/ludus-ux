@@ -1,10 +1,12 @@
 import { NextRequest } from "next/server"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { streamGoadCommand, isGoadConfigured, readGoadRangeId } from "@/lib/goad-ssh"
 import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
+import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 
 export const dynamic = "force-dynamic"
 
@@ -63,9 +65,10 @@ export async function POST(request: NextRequest) {
   // /api/auth/impersonate POST).  This mirrors how the proxy route works and
   // ensures that even if a caller forgets to thread impersonation through the
   // body, the execute route still runs under the correct identity.
+  const imp = resolveAdminImpersonationFromRequest(session, request)
   const sessionImpersonate =
-    session.isAdmin && session.impersonationApiKey && session.impersonationUserId
-      ? { username: session.impersonationUserId, apiKey: session.impersonationApiKey }
+    session.isAdmin && imp.apiKey && imp.userId
+      ? { username: imp.userId, apiKey: imp.apiKey }
       : null
   // Body-provided impersonation takes precedence over session-inferred.
   const effectiveImpersonate = impersonateAs ?? sessionImpersonate ?? null
@@ -103,14 +106,22 @@ export async function POST(request: NextRequest) {
 
   // Task is attributed to the impersonated user so it appears in their history
   const taskOwner = effectiveImpersonate?.username ?? session?.username
-  const taskId = createTask(args, instanceId, taskOwner)
+  const taskId = createTask(args, instanceId, taskOwner, apiKey ?? undefined)
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Prime Ludus-host wall clock cache so GOAD log line timestamps match Range Logs.
+      await refreshLudusWallClockFromSsh()
+
+      let lineSerial = 0
       const send = (line: string) => {
-        try { controller.enqueue(encoder.encode(`data: ${line}\n\n`)) } catch {}
-        appendLine(taskId, line)
+        lineSerial++
+        if (lineSerial % 32 === 0) void refreshLudusWallClockFromSsh()
+        const out = appendLine(taskId, line)
+        if (out != null) {
+          try { controller.enqueue(encoder.encode(`data: ${out}\n\n`)) } catch {}
+        }
       }
 
       // Emit task ID first so the client can resume after navigation

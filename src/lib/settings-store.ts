@@ -180,6 +180,10 @@ export function getSettings(): RuntimeSettings {
   if ((overrides.ludusAdminUrl ?? "").trim() === "") {
     delete overrides.ludusAdminUrl
   }
+  // Blank root key in SQLite must not shadow LUDUS_ROOT_API_KEY from env (same idea as ludusUrl).
+  if ((overrides.rootApiKey ?? "").trim() === "") {
+    delete overrides.rootApiKey
+  }
   const effective = { ...defaults(), ...overrides }
   effective.ludusUrl = effective.ludusUrl.trim()
   effective.ludusAdminUrl = effective.ludusAdminUrl.trim()

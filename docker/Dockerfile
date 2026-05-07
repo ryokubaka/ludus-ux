@@ -66,6 +66,9 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Release notes API (`GET /api/changelog`) reads `CHANGELOG.md` from cwd — not part of Next standalone trace.
+COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
+
 # Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS
 RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl
 

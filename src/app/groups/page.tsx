@@ -168,7 +168,7 @@ export default function GroupsPage() {
     async (opts?: { refreshAccessibleRanges?: boolean }) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.groups(scopeTag), exact: false })
       if (opts?.refreshAccessibleRanges) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRangesList(scopeTag) })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.accessibleRangesList(scopeTag), exact: false })
         await refreshRanges()
       }
     },

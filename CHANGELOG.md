@@ -4,6 +4,24 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [0.9.9] — 2026-05-07
+
+**LUX**
+- [Improve] **Slow Ludus responses** — The app waits longer for heavy work (snapshots, deploys, powering VMs, template builds, testing allow/deny, and similar). If the wait times out but the job might still be running, messaging is clearer and many pages refresh their view instead of only showing a scary error.
+- [Improve] **Log timestamps** — Live range/GOAD lines use the Ludus host’s clock when SSH is set up, so times read like the server you’re deploying to—not only the app container’s timezone.
+- [Perf] **Post-refresh load time** — PBKDF2 session key is derived once per process (middleware + RSC no longer repeat expensive crypto); TanStack no longer invalidates hydrated range/blueprint cache on every mount; sidebar nav links use `prefetch={false}` to cut RSC storms; server passes a small **shell session** snapshot so the header/sidebar skip redundant `/api/auth/session` calls; effective scope skips a network round-trip when it already matches the server.
+- [Add] **Settings → Ludus Performance** — Live charts (CPU, memory, load) for every Proxmox node returned by `pvesh`, polled over root SSH (same auth as SSH & GOAD).
+- [Fix] **Snapshots page** — Create, revert, and delete now match what Ludus expects and stay tied to the range you selected, so bulk actions actually run instead of looking like they did nothing.
+- [Fix] **Testing mode stop stuck** — Treat Ludus ERROR/ABORTED as terminal for testing ops (Ansible can fail mid-play while state still looks deploying). One automatic `testing/stop` retry after 4 min; POST body `dismissStuckOp` clears a stuck DB op; Testing page shows **Unlock UI** after 90s and toasts on server-reported op failure.
+- [Fix] **GOAD provide → provision (Ludus)** — `goad-ludus-reconcile` uses a **3 MB** Ludus log tail (was 200 KB), strips `[HH:MM:SS]` prefixes before PLAY RECAP parsing, throttled `[goad-ludus-reconcile]` diagnostics when root API key / `instanceId` / `.goad_range_id` / admin range state are missing or `/range/logs` fails, **8** deploy-poll lines when recap is only in Ludus logs (was 10), and reconcile runs every **12** GOAD log lines (was 18).
+
+**GOAD**
+- [Add] **GOAD lab — Range logs** — **Refresh** on the range log panel reconnects the live stream when new lines stop appearing (handy right after kicking off a deploy).
+- [Add] **GOAD lab — Install** — One action runs **Provide** then **Provision lab** with a plain-language confirmation. Action order is Install → Provide → Provision Lab → Sync IPs, then the rest; only **Install** stays highlighted in green.
+- [Fix] **Stuck “deploying” after Provide** — Same stuck-DEPLOYING class as above; companion changes in **goad-mod**
+
+---
+
 ## [0.9.8] — 2026-05-06
 
 **LUX**

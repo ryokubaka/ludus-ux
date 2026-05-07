@@ -56,6 +56,8 @@ import { useToast } from "@/hooks/use-toast"
 import { cn, formatDate } from "@/lib/utils"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { useShellSession } from "@/components/providers/shell-session-provider"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 
 /** Ludus sometimes returns `{ result: [...] }`, a single row, or a bare array. */
 function asObjectArray<T>(data: unknown): T[] {
@@ -156,6 +158,7 @@ export default function BlueprintsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
+  const shell = useShellSession()
   const { selectedRangeId, ranges: accessibleRanges, refreshRanges, selectRange } = useRange()
   const [createDialog, setCreateDialog] = useState(false)
   const [viewDialog, setViewDialog] = useState<{ id: string; yaml: string } | null>(null)
@@ -196,10 +199,19 @@ export default function BlueprintsPage() {
   })
 
   const { data: blueprintGate, isSuccess: blueprintGateReady } = useQuery({
-    queryKey: ["auth", "blueprint-list-gate"],
+    queryKey: ["auth", "blueprint-list-gate", scopeTag, shell?.username ?? "", !!shell?.isAdmin],
     queryFn: async (): Promise<BlueprintListGate> => {
-      const sRes = await fetch("/api/auth/session")
-      const session = sRes.ok ? ((await sRes.json()) as { isAdmin?: boolean; username?: string }) : null
+      let isAdmin = false
+      let sessionUsername: string | null = null
+      if (shell) {
+        isAdmin = shell.isAdmin
+        sessionUsername = shell.username
+      } else {
+        const sRes = await fetch("/api/auth/session")
+        const session = sRes.ok ? ((await sRes.json()) as { isAdmin?: boolean; username?: string }) : null
+        isAdmin = session?.isAdmin === true
+        sessionUsername = session?.username ? String(session.username) : null
+      }
       const wRes = await ludusApi.whoami()
       const wData = wRes.data
       const who = Array.isArray(wData) ? wData[0] : wData
@@ -208,8 +220,8 @@ export default function BlueprintsPage() {
           ? String((who as UserObject).userID)
           : null
       return {
-        isAdmin: session?.isAdmin === true,
-        sessionUsername: session?.username ? String(session.username) : null,
+        isAdmin,
+        sessionUsername,
         ludusUserId,
       }
     },
@@ -466,6 +478,19 @@ export default function BlueprintsPage() {
     setApplySubmitting("current")
     const result = await ludusApi.applyBlueprint(applyDialogBpId, selectedRangeId)
     if (result.error) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
+          },
+        })
+      ) {
+        setApplySubmitting(null)
+        return
+      }
       toast({ variant: "destructive", title: "Error", description: result.error })
     } else {
       toast({ title: "Blueprint applied", description: "Don't forget to deploy your range" })

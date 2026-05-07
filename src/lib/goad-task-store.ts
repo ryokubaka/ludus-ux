@@ -26,6 +26,7 @@
 import fs from "fs"
 import path from "path"
 import { getDb, taskLogPath, legacyTaskLogPath, TASKS_LOG_DIR } from "./db"
+import { prefixGoadTaskLogLineWithTimestamp } from "./log-line-timestamp"
 
 export type TaskStatus = "running" | "completed" | "error" | "aborted"
 
@@ -34,6 +35,11 @@ export interface GoadTask {
   command: string
   instanceId?: string
   username?: string
+  /**
+   * Ludus API key used for this GOAD run (session or impersonation). In-memory only
+   * — not stored in SQLite — so reconcile can call Ludus as the same user as GOAD.
+   */
+  ludusApiKey?: string
   /** In-memory line buffer for running tasks; loaded lazily from file for completed ones. */
   lines: string[]
   /** Always accurate line count — read from DB for completed tasks, tracked in-memory for running. */
@@ -253,7 +259,12 @@ function evictOldestIfNeeded(): void {
 
 // ── Task lifecycle ────────────────────────────────────────────────────────────
 
-export function createTask(command: string, instanceId?: string, username?: string): string {
+export function createTask(
+  command: string,
+  instanceId?: string,
+  username?: string,
+  ludusApiKey?: string,
+): string {
   const id = `goad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const now = Date.now()
   const task: GoadTask = {
@@ -261,6 +272,7 @@ export function createTask(command: string, instanceId?: string, username?: stri
     command,
     instanceId,
     username,
+    ludusApiKey: ludusApiKey?.trim() || undefined,
     lines: [],
     lineCount: 0,
     status: "running",
@@ -289,11 +301,12 @@ export function createTask(command: string, instanceId?: string, username?: stri
   return id
 }
 
-export function appendLine(taskId: string, line: string): void {
+export function appendLine(taskId: string, line: string): string | undefined {
   const entry = taskMap.get(taskId)
-  if (!entry) return
+  if (!entry) return undefined
 
-  entry.task.lines.push(line)
+  const stored = prefixGoadTaskLogLineWithTimestamp(line)
+  entry.task.lines.push(stored)
   entry.task.lineCount++
 
   // Append to log file — O(1), no SQL overhead.
@@ -301,7 +314,7 @@ export function appendLine(taskId: string, line: string): void {
   try {
     const logFile = taskLogPath(taskId, entry.task.instanceId)
     fs.mkdirSync(path.dirname(logFile), { recursive: true })
-    fs.appendFileSync(logFile, line + "\n", "utf8")
+    fs.appendFileSync(logFile, stored + "\n", "utf8")
   } catch (err) {
     console.error("[task-store] appendLine file write failed:", err)
   }
@@ -316,23 +329,26 @@ export function appendLine(taskId: string, line: string): void {
   }
 
   for (const sub of entry.lineSubscribers) {
-    try { sub(line) } catch {}
+    try { sub(stored) } catch {}
   }
 
   // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
   // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
   // runs every N lines (see goad-ludus-reconcile.ts).
-  if (entry.task.lineCount % 25 === 0 && entry.task.status === "running") {
+  if (entry.task.lineCount % 12 === 0 && entry.task.status === "running") {
     const snap = {
       taskId,
       instanceId: entry.task.instanceId,
       status: entry.task.status,
       logText: entry.task.lines.join("\n"),
+      ludusApiKey: entry.task.ludusApiKey,
     }
     void import("./goad-ludus-reconcile")
       .then((m) => m.tryReconcileStuckDeploySnapshot(snap))
       .catch(() => {})
   }
+
+  return stored
 }
 
 export function completeTask(

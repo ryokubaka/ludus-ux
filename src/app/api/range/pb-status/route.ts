@@ -14,6 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSessionFromRequest } from "@/lib/session"
 import {
   enrichRangesWithPbRecords,
@@ -45,12 +46,9 @@ function getEffectiveKeys(
   request: NextRequest,
   session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
 ) {
-  const impersonateApiKey = session.isAdmin
-    ? (session.impersonationApiKey || request.headers.get("X-Impersonate-Apikey") || null)
-    : null
-  const impersonateUserId = session.isAdmin
-    ? (session.impersonationUserId || request.headers.get("X-Impersonate-As") || null)
-    : null
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const impersonateApiKey = imp.apiKey
+  const impersonateUserId = imp.userId
   return {
     effectiveApiKey:  impersonateApiKey || session.apiKey,
     effectiveUserId:  impersonateUserId || session.username,

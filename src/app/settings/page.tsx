@@ -40,6 +40,8 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { LudusPerformanceTab } from "@/components/settings/ludus-performance-tab"
+import { useShellSession } from "@/components/providers/shell-session-provider"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -99,7 +101,10 @@ interface ParsedVersion {
 }
 
 function parseChangelog(md: string): ParsedVersion[] {
-  const lines = md.split("\n")
+  // Normalize newlines so `$`-anchored bullet regex matches (CRLF leaves `\r`
+  // on split lines; `.` does not match `\r`, so the match fails → 0 entries).
+  const text = md.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const lines = text.split("\n")
   const versions: ParsedVersion[] = []
   let current: ParsedVersion | null = null
   let currentGroup: ParsedGroup | null = null
@@ -432,12 +437,14 @@ function AboutTab() {
 function SettingsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const activeTab = searchParams.get("tab") ?? "general"
   const { toast } = useToast()
+  const shell = useShellSession()
+  const session: SessionInfo | null = shell
+    ? { username: shell.username, isAdmin: shell.isAdmin }
+    : null
 
   const [settings, setSettings] = useState<Settings | null>(null)
   const [draft, setDraft] = useState<Settings | null>(null)
-  const [session, setSession] = useState<SessionInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -471,15 +478,28 @@ function SettingsContent() {
   const [logoUploading, setLogoUploading] = useState(false)
   const [logoDeleting, setLogoDeleting] = useState(false)
 
+  const tabs = useMemo(
+    () => [
+      { value: "general", label: "General" },
+      { value: "ssh", label: "SSH & GOAD" },
+      { value: "ludus-performance", label: "Ludus Performance" },
+      ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
+      { value: "about", label: "About" },
+    ],
+    [session?.isAdmin],
+  )
+
+  const activeTabRaw = searchParams.get("tab") ?? "general"
+  const activeTab = tabs.some((t) => t.value === activeTabRaw) ? activeTabRaw : "general"
+
   useEffect(() => {
-    Promise.all([
-      fetch("/api/settings").then((r) => r.ok ? r.json() : null),
-      fetch("/api/auth/session").then((r) => r.ok ? r.json() : null),
-    ]).then(([s, sess]) => {
-      if (s) { setSettings(s); setDraft(s) }
-      if (sess?.authenticated) setSession({ username: sess.username, isAdmin: sess.isAdmin })
-      setLoading(false)
-    })
+    fetch("/api/settings")
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => {
+        if (s) { setSettings(s); setDraft(s) }
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
   }, [])
 
   useEffect(() => {
@@ -595,13 +615,6 @@ function SettingsContent() {
       </div>
     )
   }
-
-  const tabs = [
-    { value: "general", label: "General" },
-    { value: "ssh", label: "SSH & GOAD" },
-    ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
-    { value: "about", label: "About" },
-  ]
 
   return (
     <div className="space-y-6">
@@ -864,6 +877,11 @@ function SettingsContent() {
               </Button>
             </div>
           )}
+        </TabsContent>
+
+        {/* ── Ludus Performance (Proxmox nodes) ─────────────────────────── */}
+        <TabsContent value="ludus-performance" className="space-y-4 mt-0">
+          <LudusPerformanceTab />
         </TabsContent>
 
         {/* ── Branding ────────────────────────────────────────────────── */}

@@ -27,11 +27,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const session = await getSession()
   const dehydratedState = await prefetchGlobal(session)
   const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"
+  const shellSession = session
+    ? {
+        username: session.username,
+        isAdmin: session.isAdmin,
+        impersonationUserId: session.impersonationUserId ?? null,
+      }
+    : null
 
   return (
     <html lang="en" className="dark">
       <body className="font-sans antialiased">
-        <QueryProvider initialScopeTag={initialScopeTag}>
+        <QueryProvider initialScopeTag={initialScopeTag} shellSession={shellSession}>
           <HydrationBoundary state={dehydratedState}>
             <TooltipProvider>
               <AppShell>{children}</AppShell>

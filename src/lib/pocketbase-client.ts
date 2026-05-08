@@ -12,7 +12,7 @@
  * The auth token is cached in process-memory and refreshed after 23 hours (well
  * within the default 30-day PocketBase admin token lifetime).
  *
- * TLS: same host as Ludus — server sets NODE_TLS_REJECT_UNAUTHORIZED (instrumentation + ws-server).
+ * TLS: same host as Ludus — follows LUDUS_TLS_INSECURE / NODE_EXTRA_CA_CERTS (see tls-insecure-env).
  */
 
 import { getSettings } from "./settings-store"

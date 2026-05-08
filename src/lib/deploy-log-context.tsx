@@ -1,6 +1,7 @@
 "use client"
 
 import { createContext, useContext, useState, useRef, useCallback, useEffect } from "react"
+import { appendStreamLines } from "@/lib/log-buffer"
 
 export type StartRangeStreamOptions = {
   /**
@@ -97,12 +98,12 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         stopStreaming()
       } else if (raw.startsWith("[ERROR] ")) {
         // Server-side error — surface it as a log line and stop
-        setLines((prev) => [...prev, raw])
+        setLines((prev) => appendStreamLines(prev, raw))
         stopStreaming()
       } else if (raw.startsWith("[LUDUS] ")) {
-        setLines((prev) => [...prev, raw])
+        setLines((prev) => appendStreamLines(prev, raw))
       } else if (raw.startsWith("[GOAD] ")) {
-        setLines((prev) => [...prev, raw])
+        setLines((prev) => appendStreamLines(prev, raw))
       }
       // Unknown prefix: silently ignore to stay forward-compatible
     }

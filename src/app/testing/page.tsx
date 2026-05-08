@@ -629,7 +629,7 @@ export default function TestingPage() {
 
     toast({
       title: isEnabled ? "Reverting VMs…" : "Snapshotting VMs…",
-      description: "Proxmox is working. The UI will watch for completion automatically — this may take several minutes on slower hardware.",
+      description: "Proxmox is working. The UI will watch for completion automatically.",
     })
     // Stream is already running — no need to start it again here.
   }
@@ -708,7 +708,7 @@ export default function TestingPage() {
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
 
     // Show the log panel immediately so the user sees activity while Ludus
-    // resolves the domain IP and applies the firewall rule.
+    // resolves the domain IP and applies the firewall rule (can take 1-2 min).
     // snapshotStart=true skips pre-existing deployment logs so the panel only
     // shows output written after this allow operation begins.
     setShowLogs(true)
@@ -1201,7 +1201,7 @@ export default function TestingPage() {
                   Enter a domain name (e.g. <code>example.com</code>) or an exact IP address (e.g.{" "}
                   <code>8.8.8.8</code>). Wildcards and CIDR ranges are not supported by Ludus.
                   Domain entries also allow the associated CRL certificate domains automatically.
-                  Adding a domain may take 1-2 minutes while Ludus resolves its IP.
+                  Adding a domain may take a moment while Ludus resolves its IP.
                 </p>
               )}
 

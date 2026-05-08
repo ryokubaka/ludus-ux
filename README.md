@@ -3,7 +3,7 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Status: Beta](https://img.shields.io/badge/status-beta-blue)]()
+[![Version](https://img.shields.io/badge/version-1.0.0-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
@@ -205,7 +205,7 @@ Use this when you already have a **git clone** of the repo on the Docker host (s
 
 1. Quiet `git fetch` from your remote (`--prune --tags`) so your view matches the server without noisy deleted-ref lines.
 2. Lists **active branches** and **release tags** straight from the remote (`git ls-remote`) — only refs that still exist; stale deleted branches are not offered.
-3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v0.9.8`).
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v1.0.0`).
 4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
@@ -220,7 +220,7 @@ Non-interactive (examples):
 
 ```bash
 bash scripts/upgrade.sh main
-bash scripts/upgrade.sh v0.9.8
+bash scripts/upgrade.sh v1.0.0
 ```
 
 Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](./CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
@@ -351,8 +351,9 @@ All configuration is in `.env`. See [`.env.example`](.env.example) for the full 
 | `DISABLE_HTTPS` | When `true`, Node does not terminate TLS (normal with bundled nginx). |
 | `TRUST_PROXY_TLS` | When `true`, treat the deployment as HTTPS for cookies/HSTS while Node listens on HTTP (required behind nginx). |
 | `TLS_HOSTNAME` | Optional CN/SAN hint when nginx auto-generates the edge certificate |
+| `LUDUS_TLS_INSECURE` | When `true`, Node accepts invalid TLS certificates for outbound HTTPS/WSS to Ludus, PocketBase, and Proxmox (typical lab self-signed). **Unset or `false` in production** and use a proper CA or mount `NODE_EXTRA_CA_CERTS`. Compose defaults to `true` for convenience. |
 
-LUX calls the **Ludus** API over HTTPS **without** validating the Ludus server certificate (typical for Proxmox-issued or lab certs).
+**Production:** set a strong **`APP_SECRET`** (32+ random characters, not a placeholder). The app refuses to start in `NODE_ENV=production` if `APP_SECRET` is missing, too short, or matches documented example values.
 
 **Local `npm run dev`:** use **`http://localhost:3000`**; unset or override `DISABLE_HTTPS` / `TRUST_PROXY_TLS` as needed — see [Development](#development).
 
@@ -441,7 +442,7 @@ All persistent state lives in the `data/` directory (Docker volume):
 | Framework | Next.js 15 (App Router, React 18) |
 | UI | Tailwind CSS, Radix UI (shadcn-style), Lucide |
 | Code editor | Monaco (YAML) |
-| Terminal/console | noVNC (esbuild bundle), xterm.js |
+| Terminal/console | noVNC (esbuild bundle) |
 | SSH | `ssh2` (server-side only) |
 | Database | `better-sqlite3` |
 | WebSockets | nginx → Next.js `ws-server.ts` (VNC proxy); TLS at nginx edge |

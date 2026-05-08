@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
+import { bustAdminCache } from "@/lib/admin-data"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership } from "@/lib/range-ownership-store"
 
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest) {
     if (!assignRes.error || alreadyOwned) {
       // Persist to SQLite so Ranges Overview reflects it immediately
       setOwnership(body.rangeID, effectiveUsername, session.username)
+      bustAdminCache()
     }
 
     return NextResponse.json(data, { status: res.status })

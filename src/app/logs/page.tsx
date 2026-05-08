@@ -22,6 +22,7 @@ import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
 import type { LogHistoryEntry } from "@/lib/types"
 
 export default function LogsPage() {
@@ -158,7 +159,8 @@ export default function LogsPage() {
     ])
     if (logResult.data) {
       const text = logResult.data.result || ""
-      setLines(text.split("\n").filter((l) => l.trim()))
+      const all = text.split("\n").filter((l) => l.trim())
+      setLines(all.slice(-MAX_STREAM_LOG_LINES))
     } else if (logResult.error) {
       toast({ variant: "destructive", title: "Failed to load logs", description: logResult.error })
     }
@@ -197,7 +199,7 @@ export default function LogsPage() {
           const displayLines = newLines.filter(
             (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ")
           )
-          if (displayLines.length) setLines((prev) => [...prev, ...displayLines])
+          if (displayLines.length) setLines((prev) => appendStreamLines(prev, displayLines))
           const doneLine = newLines.find((l) => l.startsWith("[DONE] "))
           if (doneLine) {
             setRangeState(doneLine.slice(7).trim())

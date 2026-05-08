@@ -36,8 +36,8 @@ export interface GoadTask {
   instanceId?: string
   username?: string
   /**
-   * Ludus API key used for this GOAD run (session or impersonation). In-memory only
-   * — not stored in SQLite — so reconcile can call Ludus as the same user as GOAD.
+   * Ludus user API key from the session that started this GOAD task (same as log stream).
+   * Ephemeral — not persisted to SQLite; used by reconcile for GET /range/logs when root key is not a valid Ludus X-API-KEY.
    */
   ludusApiKey?: string
   /** In-memory line buffer for running tasks; loaded lazily from file for completed ones. */
@@ -334,8 +334,8 @@ export function appendLine(taskId: string, line: string): string | undefined {
 
   // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
   // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
-  // runs every N lines (see goad-ludus-reconcile.ts).
-  if (entry.task.lineCount % 12 === 0 && entry.task.status === "running") {
+  // runs every 6 log lines while running (was 12 — slower provide output + PB verify retries).
+  if (entry.task.lineCount % 6 === 0 && entry.task.status === "running") {
     const snap = {
       taskId,
       instanceId: entry.task.instanceId,

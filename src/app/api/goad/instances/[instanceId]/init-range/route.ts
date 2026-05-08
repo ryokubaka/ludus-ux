@@ -22,6 +22,7 @@ import { getSettings } from "@/lib/settings-store"
 import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
+import { bustAdminCache } from "@/lib/admin-data"
 import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
@@ -62,6 +63,10 @@ export async function POST(
   // ── 1. Idempotency check ──────────────────────────────────────────────────
   const existing = await readGoadRangeId(instanceId, rootCreds)
   if (existing) {
+    // Heal SQLite + bust admin cache — older flows wrote .goad_range_id without
+    // persisting ownership; Ranges Overview merges SQLite first.
+    setOwnership(existing, effectiveUsername, session.username)
+    bustAdminCache()
     return NextResponse.json({ rangeId: existing, created: false })
   }
 
@@ -119,6 +124,7 @@ export async function POST(
     assignRes.error.toLowerCase().includes("already has access")
   if (!assignRes.error || alreadyOwned) {
     setOwnership(rangeId, effectiveUsername, session.username)
+    bustAdminCache()
   }
 
   // ── 5. Write rangeID to workspace ─────────────────────────────────────────

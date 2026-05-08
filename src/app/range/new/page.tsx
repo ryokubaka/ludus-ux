@@ -44,6 +44,7 @@ import { cn, extractArray } from "@/lib/utils"
 import type { TemplateObject, RangeObject } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
+import { LUDUS_DEPLOY_TAGS as ALL_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS as TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
 
 // ── Step arrays ────────────────────────────────────────────────────────────────
 // The step indicator switches between these two arrays the moment the user picks
@@ -65,34 +66,6 @@ const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & 
 // YAML path:
 // step 2 : YAML Config
 // step 3 : Review & Deploy
-
-const ALL_TAGS = [
-  "vm-deploy", "network", "dns-rewrites", "assign-ip", "windows", "dcs",
-  "domain-join", "sysprep", "user-defined-roles", "custom-choco",
-  "linux-packages", "additional-tools", "install-office", "install-visual-studio",
-  "allow-share-access", "custom-groups", "share", "nexus",
-]
-
-const TAG_DESCRIPTIONS: Record<string, string> = {
-  "vm-deploy": "Create all VMs defined in config",
-  network: "Set up VLANs and firewall rules",
-  "dns-rewrites": "Configure DNS rewrites",
-  "assign-ip": "Set static IPs and hostnames",
-  windows: "Configure Windows VMs (RDP, WinRM, etc.)",
-  dcs: "Set up domain controllers",
-  "domain-join": "Join Windows VMs to domain",
-  sysprep: "Run sysprep on Windows VMs",
-  "user-defined-roles": "Apply Ansible roles",
-  "custom-choco": "Install chocolatey packages",
-  "linux-packages": "Install Linux packages",
-  "additional-tools": "Install Firefox, Chrome, Burp, etc.",
-  "install-office": "Install Microsoft Office",
-  "install-visual-studio": "Install Visual Studio",
-  "allow-share-access": "Enable anonymous SMB share access",
-  "custom-groups": "Set custom Ansible groups",
-  share: "Deploy Ludus Share VM",
-  nexus: "Deploy Nexus cache VM",
-}
 
 interface VMEntry {
   id: string
@@ -613,7 +586,7 @@ export default function NewRangePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="w-full max-w-7xl 2xl:max-w-[min(90rem,96vw)] mx-auto space-y-6 px-1 sm:px-0">
       {/* Page heading */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon-sm" asChild>
@@ -1247,9 +1220,9 @@ export default function NewRangePage() {
             <AlertDescription className="text-xs">
               {configMethod === "wizard"
                 ? <>This will upload the configuration and start deploying {vms.length} VMs to range{" "}
-                    <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes.</>
+                    <strong>{effectiveRangeId || "default"}</strong>.</>
                 : <>This will upload the YAML configuration and start deploying to range{" "}
-                    <strong>{effectiveRangeId || "default"}</strong>. Deployment may take 15–60+ minutes.</>}
+                    <strong>{effectiveRangeId || "default"}</strong>.</>}
             </AlertDescription>
           </Alert>
 

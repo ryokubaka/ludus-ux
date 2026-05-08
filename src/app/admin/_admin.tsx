@@ -65,6 +65,7 @@ export function AdminPageClient() {
   const {
     data: adminData,
     isLoading: loading,
+    isFetching: fetchingAdminData,
     error: adminDataError,
   } = useQuery({
     queryKey: queryKeys.adminRangesData(scopeTag),
@@ -122,6 +123,7 @@ export function AdminPageClient() {
   const {
     data: sharedVmsData,
     isLoading: loadingAdminVMs,
+    isFetching: fetchingSharedVms,
   } = useQuery({
     queryKey: queryKeys.adminSharedVms(scopeTag),
     queryFn: async () => {
@@ -135,8 +137,8 @@ export function AdminPageClient() {
   const adminPoolVMs = sharedVmsData?.vms ?? []
 
   const fetchAdminPoolVMs = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms(scopeTag) })
-  }, [queryClient])
+    void queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms(scopeTag) })
+  }, [queryClient, scopeTag])
 
   const nexusVMs = useMemo(() => adminPoolVMs.filter((v) => v.serviceType === "nexus"), [adminPoolVMs])
   const shareVMs = useMemo(() => adminPoolVMs.filter((v) => v.serviceType === "share"), [adminPoolVMs])
@@ -262,8 +264,12 @@ export function AdminPageClient() {
   }, [adminData, applyData])
 
   const invalidateAdminData = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
-  }, [queryClient])
+    void queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
+  }, [queryClient, scopeTag])
+
+  const refetchAdminData = useCallback(() => {
+    void queryClient.refetchQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
+  }, [queryClient, scopeTag])
 
   const toggleExpanded = (userID: string) =>
     setExpandedUsers((prev) => {
@@ -300,38 +306,44 @@ export function AdminPageClient() {
 
   const [deletingRange, setDeletingRange] = useState<string | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
+  /** Ludus delete + ownership cleanup in flight — drives row spinner until refetch completes */
+  const [rangeDeleteInFlight, setRangeDeleteInFlight] = useState<string | null>(null)
 
   const handleDeleteRange = async (rangeID: string) => {
+    setRangeDeleteInFlight(rangeID)
     setDeletingRange(null)
     setDeleteConfirmText("")
     _pinnedAssignments.delete(rangeID)
-    const statusRes = await ludusApi.getRangeStatus(rangeID)
-    const ipsForHosts =
-      statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
-    const res = await ludusApi.deleteRange(rangeID)
-    if (res.error) {
-      if (
-        tryToastLudusSlowHttpError({
-          toast,
-          error: res.error,
-          slowTitle: "Slow response from Ludus",
-          onSlow: () => invalidateAdminData(),
-        })
-      ) {
+    try {
+      const statusRes = await ludusApi.getRangeStatus(rangeID)
+      const ipsForHosts =
+        statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
+      const res = await ludusApi.deleteRange(rangeID)
+      if (res.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: res.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => invalidateAdminData(),
+          })
+        ) {
+          return
+        }
+        toast({ variant: "destructive", title: "Delete failed", description: res.error })
         return
       }
-      toast({ variant: "destructive", title: "Delete failed", description: res.error })
-      return
+      if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
+      await fetch("/api/admin/ranges-data", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rangeID }),
+      }).catch(() => {}) // non-fatal
+      toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
+      await refetchAdminData()
+    } finally {
+      setRangeDeleteInFlight(null)
     }
-    if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
-    // Remove ownership record from SQLite + bust server cache
-    await fetch("/api/admin/ranges-data", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rangeID }),
-    }).catch(() => {}) // non-fatal
-    toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
-    invalidateAdminData()
   }
 
   const handleAssign = async (rangeID: string, userID: string) => {
@@ -522,8 +534,14 @@ export function AdminPageClient() {
             </CardTitle>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground">Live in the admin Proxmox pool — accessible to all users</span>
-              <Button variant="ghost" size="icon" onClick={fetchAdminPoolVMs} disabled={loadingAdminVMs} title="Refresh">
-                <RefreshCw className={cn("h-3.5 w-3.5", loadingAdminVMs && "animate-spin")} />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={fetchAdminPoolVMs}
+                disabled={fetchingSharedVms}
+                title="Refresh shared-service VMs"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", fetchingSharedVms && "animate-spin")} />
               </Button>
             </div>
           </div>
@@ -672,8 +690,14 @@ export function AdminPageClient() {
               <Users className="h-4 w-4 text-primary" />
               Users &amp; Ranges
             </CardTitle>
-            <Button variant="ghost" size="icon" onClick={invalidateAdminData} disabled={loading}>
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => void refetchAdminData()}
+              disabled={fetchingAdminData}
+              title="Refresh ranges and users"
+            >
+              <RefreshCw className={cn("h-4 w-4", fetchingAdminData && "animate-spin")} />
             </Button>
           </div>
         </CardHeader>
@@ -723,10 +747,12 @@ export function AdminPageClient() {
                     const lastDeployStr = lastDeploy
                       ? new Date(lastDeploy).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
                       : "—"
-                    // Roll-up status from user's ranges
+                    // Roll-up status from user's ranges (must cover every RangeState or we mis-label, e.g. ABORTED → EMPTY).
                     const rolledState = userRanges.find((r) => r.rangeState === "DEPLOYING" || r.rangeState === "WAITING")?.rangeState
                       ?? userRanges.find((r) => r.rangeState === "ERROR")?.rangeState
+                      ?? userRanges.find((r) => r.rangeState === "ABORTED")?.rangeState
                       ?? userRanges.find((r) => r.rangeState === "SUCCESS")?.rangeState
+                      ?? userRanges.find((r) => r.rangeState === "NEVER DEPLOYED")?.rangeState
                       ?? (userRanges.length > 0 ? "NEVER DEPLOYED" : null)
 
                     return [
@@ -864,7 +890,15 @@ export function AdminPageClient() {
                               <td className="p-3 text-xs text-muted-foreground">{deployStr}</td>
                               {/* Delete range */}
                               <td className="p-2 text-right">
-                                {deletingRange === range.rangeID ? (
+                                {rangeDeleteInFlight === range.rangeID ? (
+                                  <span
+                                    className="inline-flex items-center gap-1 justify-end text-[10px] text-amber-400 tabular-nums"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                                    Deleting…
+                                  </span>
+                                ) : deletingRange === range.rangeID ? (
                                   <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                                     <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
                                     <Input
@@ -873,12 +907,13 @@ export function AdminPageClient() {
                                       className="h-6 w-28 text-xs font-mono border-red-500/50"
                                       placeholder={range.rangeID}
                                       autoFocus
+                                      disabled={!!rangeDeleteInFlight}
                                     />
                                     <Button
                                       size="icon-sm"
                                       variant="destructive"
                                       className="h-6 w-6"
-                                      disabled={deleteConfirmText !== range.rangeID}
+                                      disabled={deleteConfirmText !== range.rangeID || !!rangeDeleteInFlight}
                                       onClick={() => handleDeleteRange(range.rangeID)}
                                     >
                                       <Trash2 className="h-3 w-3" />
@@ -887,6 +922,7 @@ export function AdminPageClient() {
                                       size="icon-sm"
                                       variant="ghost"
                                       className="h-6 w-6 text-muted-foreground"
+                                      disabled={!!rangeDeleteInFlight}
                                       onClick={() => { setDeletingRange(null); setDeleteConfirmText("") }}
                                     >
                                       <X className="h-3 w-3" />
@@ -900,6 +936,7 @@ export function AdminPageClient() {
                                           size="icon-sm"
                                           variant="ghost"
                                           className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                          disabled={!!rangeDeleteInFlight}
                                           onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
                                         >
                                           <Trash2 className="h-3 w-3" />
@@ -1009,7 +1046,12 @@ export function AdminPageClient() {
                         <td className="p-3 text-xs text-muted-foreground">{deployStr}</td>
                         {/* Delete range */}
                         <td className="p-2 text-right">
-                          {deletingRange === range.rangeID ? (
+                          {rangeDeleteInFlight === range.rangeID ? (
+                            <span className="inline-flex items-center gap-1 justify-end text-[10px] text-amber-400">
+                              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                              Deleting…
+                            </span>
+                          ) : deletingRange === range.rangeID ? (
                             <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                               <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
                               <Input
@@ -1018,12 +1060,13 @@ export function AdminPageClient() {
                                 className="h-6 w-28 text-xs font-mono border-red-500/50"
                                 placeholder={range.rangeID}
                                 autoFocus
+                                disabled={!!rangeDeleteInFlight}
                               />
                               <Button
                                 size="icon-sm"
                                 variant="destructive"
                                 className="h-6 w-6"
-                                disabled={deleteConfirmText !== range.rangeID}
+                                disabled={deleteConfirmText !== range.rangeID || !!rangeDeleteInFlight}
                                 onClick={() => handleDeleteRange(range.rangeID)}
                               >
                                 <Trash2 className="h-3 w-3" />
@@ -1032,6 +1075,7 @@ export function AdminPageClient() {
                                 size="icon-sm"
                                 variant="ghost"
                                 className="h-6 w-6 text-muted-foreground"
+                                disabled={!!rangeDeleteInFlight}
                                 onClick={() => { setDeletingRange(null); setDeleteConfirmText("") }}
                               >
                                 <X className="h-3 w-3" />
@@ -1045,6 +1089,7 @@ export function AdminPageClient() {
                                     size="icon-sm"
                                     variant="ghost"
                                     className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                    disabled={!!rangeDeleteInFlight}
                                     onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
                                   >
                                     <Trash2 className="h-3 w-3" />

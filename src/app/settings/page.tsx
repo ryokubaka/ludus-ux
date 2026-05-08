@@ -40,8 +40,21 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
-import { LudusPerformanceTab } from "@/components/settings/ludus-performance-tab"
+import dynamic from "next/dynamic"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+
+const LudusPerformanceTab = dynamic(
+  () =>
+    import("@/components/settings/ludus-performance-tab").then((m) => ({
+      default: m.LudusPerformanceTab,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground text-sm py-8 text-center">Loading performance…</div>
+    ),
+  },
+)
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -353,7 +366,9 @@ function AboutTab() {
           <p className="text-sm text-muted-foreground">Cyber Range Manager</p>
           <div className="flex items-center justify-center gap-2 pt-1">
             <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
-            <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
+            {APP_VERSION_LABEL ? (
+              <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-4 text-xs text-muted-foreground/70">

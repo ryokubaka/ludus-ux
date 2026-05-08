@@ -7,6 +7,7 @@ import { getSettings } from "@/lib/settings-store"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
+import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 
 export const dynamic = "force-dynamic"
 
@@ -26,14 +27,20 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({ args: "", instanceId: undefined }))
-  const { args, instanceId, impersonateAs, rangeId: bodyRangeId } = body as {
+  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags } = body as {
     args?: string
     instanceId?: string
     impersonateAs?: { username: string; apiKey: string }
     /** Explicit rangeID to target — passed by the caller when a dedicated range
      *  is known up-front (e.g. new-instance flow where the range was pre-created). */
     rangeId?: string
+    ludusDeployTags?: unknown
   }
+
+  const ludusDeployTags =
+    Array.isArray(rawDeployTags) && rawDeployTags.every((x) => typeof x === "string")
+      ? filterLudusDeployTags(rawDeployTags as string[])
+      : []
 
   if (!args) {
     return new Response("data: [ERROR] No command args provided\n\n", {
@@ -150,7 +157,8 @@ export async function POST(request: NextRequest) {
           },
           creds,
           effectiveImpersonate ?? undefined,
-          effectiveRangeId
+          effectiveRangeId,
+          ludusDeployTags.length > 0 ? ludusDeployTags : undefined
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

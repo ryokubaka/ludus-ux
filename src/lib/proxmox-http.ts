@@ -4,8 +4,8 @@
  * Used for in-browser VNC — authenticates with a PAM password.
  * SSH key auth is not used here; SPICE / pvesh paths use SSH separately.
  *
- * TLS verification is disabled globally by `server/ws-server.ts` (NODE_TLS_REJECT_UNAUTHORIZED=0)
- * for Proxmox browser-facing calls.
+ * TLS: Node verifies certs by default. Set LUDUS_TLS_INSECURE=true (lab only) to allow
+ * Proxmox self-signed certificates, or use NODE_EXTRA_CA_CERTS with your CA bundle.
  */
 
 export interface ProxmoxAuth {

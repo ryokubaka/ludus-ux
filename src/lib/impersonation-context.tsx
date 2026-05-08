@@ -2,6 +2,13 @@
 
 import { createContext, useContext, useState, useEffect, useCallback } from "react"
 import { useQueryClient } from "@tanstack/react-query"
+import { impersonationHeadersFromData, IMPERSONATION_STORAGE_KEY } from "./impersonation-headers"
+
+export { IMPERSONATION_STORAGE_KEY }
+/** Dispatched on `window` in the same tab after writing to sessionStorage. */
+export const IMPERSONATION_CHANGED_EVENT = "impersonation-changed"
+
+const STORAGE_KEY = IMPERSONATION_STORAGE_KEY
 
 export interface ImpersonationData {
   username: string
@@ -20,11 +27,6 @@ const ImpersonationContext = createContext<ImpersonationContextValue>({
   exitImpersonation: () => { },
   impersonationHeaders: () => ({}),
 })
-
-export const IMPERSONATION_STORAGE_KEY = "goad_impersonation"
-const STORAGE_KEY = IMPERSONATION_STORAGE_KEY
-/** Dispatched on `window` in the same tab after writing to sessionStorage. */
-export const IMPERSONATION_CHANGED_EVENT = "impersonation-changed"
 
 function readStorage(): ImpersonationData | null {
   try {
@@ -133,11 +135,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
   }, [])
 
   const impersonationHeaders = useCallback((): Record<string, string> => {
-    if (!impersonation) return {}
-    return {
-      "X-Impersonate-As": impersonation.username,
-      "X-Impersonate-Apikey": impersonation.apiKey,
-    }
+    return impersonationHeadersFromData(impersonation)
   }, [impersonation])
 
   return (

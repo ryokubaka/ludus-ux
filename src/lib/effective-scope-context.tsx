@@ -9,6 +9,7 @@ import {
 } from "react"
 import { fetchClientEffectiveScopeTag, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
 import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
+import { IMPERSONATION_STORAGE_KEY } from "@/lib/impersonation-headers"
 
 const EffectiveScopeContext = createContext<string>("_guest|self")
 
@@ -51,7 +52,7 @@ export function EffectiveScopeProvider({
       void fetchClientEffectiveScopeTag().then(setTag)
     }
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "goad_impersonation" || e.key === "ludus-auth-username") {
+      if (e.key === IMPERSONATION_STORAGE_KEY || e.key === "ludus-auth-username") {
         setTag(readClientEffectiveScopeTagSync())
         void fetchClientEffectiveScopeTag().then(setTag)
       }

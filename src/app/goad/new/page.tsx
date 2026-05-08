@@ -12,6 +12,8 @@ import {
   Terminal,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
   Play,
   Puzzle,
   Check,
@@ -25,6 +27,8 @@ import {
   PackageCheck,
   PackageX,
   CircleAlert,
+  Tag,
+  Shield,
 } from "lucide-react"
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "@/lib/types"
@@ -38,7 +42,7 @@ import { useImpersonation } from "@/lib/impersonation-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
-import { Shield } from "lucide-react"
+import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS, filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -130,6 +134,38 @@ function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
+/**
+ * With extensions: after `set_extensions` + workspace (`create_empty` or `use`),
+ * run REPL `install` so GOAD does provide → provision_lab → install_extension per ext
+ * in one flow. Trades extra Ludus `range deploy` per extension for a single stdin
+ * session (no piped lines after long `ansible-playbook` that would never run).
+ */
+function ludusWizardInstallArgs(
+  selectedLab: string,
+  exts: string[],
+  mode: { kind: "fresh" } | { kind: "existing"; instanceId: string },
+): string {
+  if (exts.length === 0) {
+    return mode.kind === "existing"
+      ? `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(mode.instanceId)} -t install`
+      : `-l ${shellQuote(selectedLab)} -p ludus -m local -t install`
+  }
+  const extList = exts.join(" ")
+  if (mode.kind === "existing") {
+    // GOAD loads a default instance on startup; `use` / `set_*` fail until `unload`.
+    return `--repl "unload;use ${mode.instanceId};set_extensions ${extList};install"`
+  }
+  const setup = [
+    "unload",
+    `set_lab ${selectedLab}`,
+    "set_provider ludus",
+    "set_provisioning_method local",
+    `set_extensions ${extList}`,
+    "create_empty",
+  ].join(";")
+  return `--repl "${setup};install"`
+}
+
 export default function NewGoadInstancePage() {
   const router = useRouter()
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
@@ -145,6 +181,10 @@ export default function NewGoadInstancePage() {
 
   // Step 3: Network Rules
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+
+  // Optional Ludus deploy tags — set from Review & Deploy (advanced panel); forwarded to `ludus range deploy --tags`
+  const [selectedLudusDeployTags, setSelectedLudusDeployTags] = useState<string[]>([])
+  const [showLudusDeployTagsPanel, setShowLudusDeployTagsPanel] = useState(false)
 
   // Range selection (step 2)
   const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
@@ -220,6 +260,13 @@ export default function NewGoadInstancePage() {
   // a stale closure — same pattern as goad/[id]/page.tsx.
   const goadTaskIdRef = useRef<string | null>(null)
   goadTaskIdRef.current = goadTaskId
+
+  const toggleLudusDeployTag = useCallback((tag: string) => {
+    setSelectedLudusDeployTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    )
+  }, [])
+
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -362,6 +409,9 @@ export default function NewGoadInstancePage() {
   const handleDeploy = async () => {
     if (!selectedLab) return
 
+    const deployTagsForRun = filterLudusDeployTags(selectedLudusDeployTags)
+    const ludusDeployTagsOpt = deployTagsForRun.length > 0 ? deployTagsForRun : undefined
+
     // Snapshot full instance list so we can find any pre-existing instance in the
     // selected range (to reuse it) and diff for new instances when needed.
     // When impersonating, also snapshot the admin view so the fallback poll
@@ -426,7 +476,6 @@ export default function NewGoadInstancePage() {
     setDeployed(true)
 
     const exts = Array.from(selectedExtensions)
-    const extArgs = exts.map((e) => `-e ${shellQuote(e)}`).join(" ")
 
     // ── Determine whether we're reusing an existing instance ─────────────────
     // When the user picks "existing range", there may already be a GOAD instance
@@ -445,8 +494,6 @@ export default function NewGoadInstancePage() {
     if (existingInstance) {
       // ── Re-deploy path: reuse existing GOAD instance ────────────────────────
       // 1. Delete VMs for a clean Ludus slate (keep the workspace — GOAD updates it).
-      // 2. Run `goad -i <id> -t install -l <lab>` to overwrite the workspace config.
-      // 3. Transfer the task ID and redirect immediately — no polling needed.
       const targetRangeId: string = rangeId!
       setClearingRange(true)
       try {
@@ -467,8 +514,12 @@ export default function NewGoadInstancePage() {
         setClearingRange(false)
       }
 
-      const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(existingInstance.instanceId)} -t install${extArgs ? ` ${extArgs}` : ""}`
-      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined)
+      // 2. Run install: GOAD REPL `install` after set_extensions (+ use / create_empty).
+      const args = ludusWizardInstallArgs(selectedLab, exts, {
+        kind: "existing",
+        instanceId: existingInstance.instanceId,
+      })
+      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined, ludusDeployTagsOpt)
 
       // Wait for the [TASKID] line to arrive from the SSE stream so we can link
       // the task to the instance server-side. We poll the ref (not sessionStorage)
@@ -544,8 +595,8 @@ export default function NewGoadInstancePage() {
         }
       }
 
-      const args = `-l ${shellQuote(selectedLab)} -p ludus -m local -t install${extArgs ? ` ${extArgs}` : ""}`
-      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined)
+      const args = ludusWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
+      run(args, undefined, impersonation ?? undefined, rangeId ?? undefined, ludusDeployTagsOpt)
 
       // Poll until GOAD creates the new workspace directory, then redirect.
       // GOAD writes instance.json early in the install flow (within ~30-60 s).
@@ -650,8 +701,8 @@ export default function NewGoadInstancePage() {
   return (
     <div className={cn(
       showTerminal
-        ? "flex flex-col h-[calc(100vh-7rem)] gap-3 min-h-0 w-full"
-        : "max-w-3xl space-y-6"
+        ? "flex flex-col flex-1 min-h-0 gap-3 w-full"
+        : "w-full max-w-7xl 2xl:max-w-[min(90rem,96vw)] mx-auto space-y-6 px-1 sm:px-0",
     )}>
       <div className="flex items-center gap-3 flex-shrink-0">
         <Button variant="ghost" size="icon-sm" asChild>
@@ -666,7 +717,7 @@ export default function NewGoadInstancePage() {
       </div>
 
       {/* Step indicator */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {STEPS.map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div
@@ -1079,6 +1130,87 @@ export default function NewGoadInstancePage() {
                   </span>
                 </div>
               </div>
+              <Separator />
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                  <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="text-xs text-muted-foreground">Ludus deploy tags</span>
+                  {filterLudusDeployTags(selectedLudusDeployTags).length > 0 && (
+                    <div className="flex flex-wrap gap-1 min-w-0">
+                      {filterLudusDeployTags(selectedLudusDeployTags).map((t) => (
+                        <Badge key={t} variant="secondary" className="text-xs font-mono">
+                          {t}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto gap-1 h-7 text-xs shrink-0"
+                    onClick={() => setShowLudusDeployTagsPanel((v) => !v)}
+                  >
+                    {showLudusDeployTagsPanel ? (
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    )}
+                    {showLudusDeployTagsPanel ? "Hide tag options" : "Advanced tag options"}
+                  </Button>
+                </div>
+                {!showLudusDeployTagsPanel && filterLudusDeployTags(selectedLudusDeployTags).length === 0 && (
+                  <p className="text-[10px] text-muted-foreground pl-5">
+                    Full Ludus Ansible (no <code className="text-primary">--tags</code> filter). Expand to limit deploy steps — same tag list as the range configuration wizard.
+                  </p>
+                )}
+                {showLudusDeployTagsPanel && (
+                  <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      Optional: pass <code className="text-primary">--tags</code> to every{" "}
+                      <code className="text-primary">ludus range deploy</code> in this GOAD session. Tight sets can break domain or extension steps.
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
+                      {LUDUS_DEPLOY_TAGS.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className={cn(
+                            "flex items-center gap-2 p-2 rounded border text-left transition-colors",
+                            selectedLudusDeployTags.includes(tag)
+                              ? "border-primary bg-primary/10"
+                              : "border-border hover:border-primary/50",
+                          )}
+                          onClick={() => toggleLudusDeployTag(tag)}
+                        >
+                          <Checkbox
+                            checked={selectedLudusDeployTags.includes(tag)}
+                            onCheckedChange={() => toggleLudusDeployTag(tag)}
+                            className="shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <code className="text-xs font-mono text-primary">{tag}</code>
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              {LUDUS_DEPLOY_TAG_DESCRIPTIONS[tag] || ""}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    {selectedLudusDeployTags.length > 0 && (
+                      <div className="flex items-center justify-between pt-1 border-t border-border">
+                        <p className="text-xs text-muted-foreground">
+                          {selectedLudusDeployTags.length} tag{selectedLudusDeployTags.length !== 1 ? "s" : ""}{" "}
+                          selected
+                        </p>
+                        <Button size="sm" variant="ghost" onClick={() => setSelectedLudusDeployTags([])}>
+                          Clear all
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
 
@@ -1145,7 +1277,6 @@ export default function NewGoadInstancePage() {
               <AlertDescription className="text-xs">
                 This will create a new Ludus range and deploy {labInfo?.vmCount ?? "multiple"} VMs
                 to <code className="font-mono">{autoRangeId}</code>.
-                Deployment can take a significant time depending on the lab and extensions selected.
               </AlertDescription>
             </Alert>
           )}

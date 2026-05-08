@@ -1,0 +1,17 @@
+diff --git a/node_modules/@eslint/eslintrc/lib/config-array/override-tester.js b/node_modules/@eslint/eslintrc/lib/config-array/override-tester.js
+index 3a445b1..2aec9e0 100644
+--- a/node_modules/@eslint/eslintrc/lib/config-array/override-tester.js
++++ b/node_modules/@eslint/eslintrc/lib/config-array/override-tester.js
+@@ -20,9 +20,10 @@
+ import assert from "node:assert";
+ import path from "node:path";
+ import util from "node:util";
+-import minimatch from "minimatch";
++import { createRequire } from "node:module";
+ 
+-const { Minimatch } = minimatch;
++const require = createRequire(import.meta.url);
++const { Minimatch } = require("minimatch");
+ 
+ const minimatchOpts = { dot: true, matchBase: true };
+ 

@@ -4,6 +4,15 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [1.0.0] — 2026-05-07
+
+**LUX**
+- [Add] First stable release — out of beta!
+- [Add] **GOAD — Resizable log split** — Drag the center handle between **Ludus range logs** and **GOAD logs** on Deploy Status and Logs History; panel widths persist (browser localStorage).
+- [Fix] **GOAD / range logs** — Ansible line colouring ignores benign JSON `"failed": false`; GOAD instance/new pages fill the shell below the impersonation banner without hard-coded `100vh` offsets.
+
+---
+
 ## [0.9.9] — 2026-05-07
 
 **LUX**

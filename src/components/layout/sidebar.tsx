@@ -386,7 +386,12 @@ export function Sidebar() {
         )}>
           {!collapsed && (
             <Link prefetch={false} href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
-              <p className="text-xs font-semibold text-muted-foreground">v{APP_VERSION} <span className="font-normal text-muted-foreground/60">{APP_VERSION_LABEL}</span></p>
+              <p className="text-xs font-semibold text-muted-foreground">
+                v{APP_VERSION}
+                {APP_VERSION_LABEL ? (
+                  <span className="font-normal text-muted-foreground/60"> {APP_VERSION_LABEL}</span>
+                ) : null}
+              </p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
             </Link>
           )}
@@ -395,7 +400,10 @@ export function Sidebar() {
               <TooltipTrigger asChild>
                 <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
               </TooltipTrigger>
-              <TooltipContent side="right">v{APP_VERSION} {APP_VERSION_LABEL} — Open Source · Apache 2.0</TooltipContent>
+              <TooltipContent side="right">
+                v{APP_VERSION}
+                {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""} — Open Source · Apache 2.0
+              </TooltipContent>
             </Tooltip>
           )}
           <Tooltip>

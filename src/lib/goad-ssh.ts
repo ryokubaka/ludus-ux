@@ -16,6 +16,7 @@ import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-requ
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
+import { filterLudusDeployTags } from "./ludus-deploy-tags"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -75,6 +76,26 @@ const LUDUS_WRAPPER_SH = [
   '      fi',
   '      rm -f "$_LUX_ERR" 2>/dev/null',
   '    fi',
+  '  fi',
+  'fi',
+  '',
+  '# Optional: limit `ludus range deploy` (LUX GOAD / Range wizards — GOAD_LUDUS_DEPLOY_TAGS comma list).',
+  '_has_rd=0',
+  '_p1=""',
+  'for _a in "$@"; do',
+  '  if [ "$_p1" = "range" ] && [ "$_a" = "deploy" ]; then',
+  '    _has_rd=1',
+  '    break',
+  '  fi',
+  '  _p1="$_a"',
+  'done',
+  'if [ "$_has_rd" -eq 1 ] && [ -n "${GOAD_LUDUS_DEPLOY_TAGS:-}" ]; then',
+  '  _has_t=0',
+  '  for _a in "$@"; do',
+  '    case "$_a" in --tags|-t) _has_t=1;; esac',
+  '  done',
+  '  if [ "$_has_t" -eq 0 ]; then',
+  '    set -- "$@" --tags "$GOAD_LUDUS_DEPLOY_TAGS"',
   '  fi',
   'fi',
   '',
@@ -379,7 +400,10 @@ export async function streamGoadCommand(
   /** Dedicated Ludus rangeID for this GOAD instance. When set, LUDUS_RANGE_ID
    *  is injected into the GOAD environment so Ludus operations target only
    *  this range — leaving other ranges completely untouched. */
-  rangeId?: string
+  rangeId?: string,
+  /** When non-empty, Ludus wrapper appends `--tags` to every `ludus range deploy`
+   *  in this session (comma-joined allowlist from {@link filterLudusDeployTags}). */
+  ludusDeployTags?: string[]
 ): Promise<() => void> {
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
@@ -399,11 +423,16 @@ export async function streamGoadCommand(
   // instead of falling back to reading the key from ~/.config/ludus/config.yml
   // (which is set up correctly during `goad -t install`).
   const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
+  const safeDeployTags = filterLudusDeployTags(ludusDeployTags ?? [])
+  const deployTagsJoined = safeDeployTags.join(",")
   const pyEnvParts = [
     "PYTHONUNBUFFERED=1",
     "LUDUS_VERSION=2",
     ...(ludusApiKey ? [`LUDUS_API_KEY='${ludusApiKey.replace(/'/g, "'\\''")}'`] : []),
     ...(safeRangeId ? [`LUDUS_RANGE_ID='${safeRangeId}'`] : []),
+    ...(deployTagsJoined
+      ? [`GOAD_LUDUS_DEPLOY_TAGS='${deployTagsJoined.replace(/'/g, "'\\''")}'`]
+      : []),
   ]
   const pyEnv = pyEnvParts.join(" ")
 

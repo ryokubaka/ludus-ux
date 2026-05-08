@@ -30,6 +30,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { sshExec } from "@/lib/goad-ssh"
 import { getSessionFromRequest } from "@/lib/session"
+import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 
 export const dynamic = "force-dynamic"
 
@@ -120,9 +121,15 @@ async function fetchAllBlobs(apiBase: string, path: string, ref: string): Promis
 async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
 
+  const safe = assertSafeTemplateRepoUrl(apiBase)
+  if (!safe.ok) {
+    throw new Error(safe.error)
+  }
+  const safeApiBase = safe.apiBase
+
   // ── Step 1: Recursively list ALL files in the template directory ──────────
   // Using recursive=true ensures subdirs like iso/, ansible/, scripts/ are included.
-  const blobs = await fetchAllBlobs(apiBase, templatePath, ref)
+  const blobs = await fetchAllBlobs(safeApiBase, templatePath, ref)
 
   if (blobs.length === 0) {
     throw new Error(`No files found in ${templatePath}`)
@@ -137,7 +144,7 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     const relativePath = blob.path.startsWith(prefix)
       ? blob.path.slice(prefix.length)
       : blob.name
-    const rawUrl = `${apiBase}/files/${encodeURIComponent(blob.path)}/raw?ref=${ref}`
+    const rawUrl = `${safeApiBase}/files/${encodeURIComponent(blob.path)}/raw?ref=${ref}`
     const content = await fetchRaw(rawUrl)
     files.push({ relativePath, b64: Buffer.from(content).toString("base64") })
   }

@@ -73,7 +73,8 @@ export function ChangelogDialog({ open, onOpenChange }: ChangelogDialogProps) {
           <DialogTitle className="flex items-center gap-2">
             Changelog
             <Badge variant="outline" className="text-xs font-mono">
-              v{APP_VERSION} {APP_VERSION_LABEL}
+              v{APP_VERSION}
+              {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""}
             </Badge>
           </DialogTitle>
           <DialogDescription className="text-xs">
@@ -163,7 +164,7 @@ function parseChangelog(md: string): ParsedVersion[] {
   let currentSection: ParsedSection | null = null
 
   for (const line of lines) {
-    // ## [0.9.4] — Beta — 2026-04-15
+    // ## [1.0.0] — 2026-05-07
     if (line.startsWith("## ")) {
       if (current) versions.push(current)
       current = { title: line.replace(/^## /, "").trim(), sections: [] }

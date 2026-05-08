@@ -45,7 +45,7 @@ export function makeQueryClient() {
         },
         // Refetch when the window regains focus so navigating back to a tab
         // that has been idle refreshes data automatically.
-        refetchOnWindowFocus: true,
+        refetchOnWindowFocus: false,
       },
     },
   })

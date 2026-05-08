@@ -11,6 +11,7 @@ import {
   type AnsibleLogTheme,
 } from "@/lib/ansible-colors"
 import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { appendStreamLines } from "@/lib/log-buffer"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
 import {
@@ -368,7 +369,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           streamExit = Number.isNaN(code) ? null : code
           setExitCode(streamExit)
         }
-        setLines((prev) => [...prev, line])
+        setLines((prev) => appendStreamLines(prev, line))
       }
 
       while (true) {
@@ -400,7 +401,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        setLines((prev) => [...prev, `[ERROR] ${(err as Error).message}`])
+        setLines((prev) => appendStreamLines(prev, `[ERROR] ${(err as Error).message}`))
       }
     } finally {
       setIsRunning(false)
@@ -427,7 +428,9 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     impersonateAs?: { username: string; apiKey: string },
     /** Dedicated Ludus rangeID — injected as LUDUS_RANGE_ID so GOAD targets
      *  only this instance's range, leaving other ranges untouched. */
-    rangeId?: string
+    rangeId?: string,
+    /** Passed to Ludus wrapper as `--tags` on each `ludus range deploy` (allowlist server-side). */
+    ludusDeployTags?: string[]
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -439,7 +442,13 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ args, instanceId, impersonateAs, rangeId }),
+        body: JSON.stringify({
+          args,
+          instanceId,
+          impersonateAs,
+          rangeId,
+          ...(ludusDeployTags && ludusDeployTags.length > 0 ? { ludusDeployTags } : {}),
+        }),
         signal: controller.signal,
       },
       true

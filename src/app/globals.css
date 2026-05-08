@@ -38,6 +38,8 @@
 @layer base {
   * {
     @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--primary) / 0.45) hsl(var(--muted));
   }
 
   body {
@@ -54,12 +56,14 @@
     @apply bg-muted;
   }
 
+  /* Thumb uses primary tint so it reads clearly on dark log panels (was bg-border ≈ track). */
   ::-webkit-scrollbar-thumb {
-    @apply bg-border rounded-full;
+    @apply rounded-full;
+    background-color: hsl(var(--primary) / 0.45);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-muted-foreground;
+    background-color: hsl(var(--primary) / 0.7);
   }
 }
 
@@ -84,15 +88,6 @@
   .log-line {
     @apply font-mono leading-relaxed;
   }
-}
-
-/* Xterm.js override */
-.xterm {
-  padding: 8px;
-}
-
-.xterm-viewport {
-  overflow-y: auto !important;
 }
 
 /* Monaco Editor override */

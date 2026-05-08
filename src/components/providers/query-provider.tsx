@@ -1,48 +1,16 @@
 "use client"
 
 /**
- * QueryProvider
- *
- * Wraps the app with a single, stable QueryClientProvider.  Persistence is
- * handled manually via useEffect rather than PersistQueryClientProvider.
- *
- * WHY NOT PersistQueryClientProvider?
- * ─────────────────────────────────────
- * The original implementation deferred creating the persister into a useEffect
- * to avoid SSR hydration errors (#418/#422).  This caused a provider switch on
- * mount:  QueryClientProvider → PersistQueryClientProvider.  Because they are
- * different React component types, the entire subtree unmounts and remounts.
- * Critically, PersistQueryClientProvider sets queryClient.isRestoring = true
- * during the async localStorage restore.  While isRestoring is true TanStack
- * Query returns status "pending" / isLoading = true for every query — even
- * queries already populated by SSR's HydrationBoundary.  This produced the
- * visible "data appears → loading spinner → data appears again" flash.
- *
- * CURRENT APPROACH
- * ─────────────────
- * We always render the same QueryClientProvider (no switching, no isRestoring).
- * Persistence is wired up once in useEffect:
- *
- *  • RESTORE  – Reads localStorage and populates cache keys the SSR
- *               HydrationBoundary did NOT already fill in.  SSR data takes
- *               priority: if a key is already present we skip it.  This runs
- *               synchronously on the main thread so data is available before
- *               the browser paints (no async gap, no flash).
- *
- *  • PERSIST  – Subscribes to QueryClient cache changes and writes a
- *               throttled snapshot to localStorage (1 s debounce) so the
- *               next page-load can restore.
- *
- * localStorage keys are namespaced per effective user + impersonation view
- * (`lux_query_cache_v2:${scope}`) so one browser profile never restores
- * another identity's TanStack snapshot.
+ * QueryProvider: single QueryClientProvider + manual localStorage persistence (no
+ * PersistQueryClientProvider) to avoid the isRestoring flash on SSR-hydrated data.
+ * Restore fills only keys missing from HydrationBoundary; persist is 1s debounced.
+ * Cache key: `lux_query_cache_v2:${scope}` per effective user / impersonation view.
  */
 
 import { useState, useEffect } from "react"
 import { QueryClientProvider, dehydrate, useQueryClient } from "@tanstack/react-query"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { makeQueryClient } from "@/lib/query-client"
-import { queryKeys } from "@/lib/query-keys"
 import { LEGACY_LUX_QUERY_CACHE_KEY, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
 import {
   EffectiveScopeProvider,
@@ -97,15 +65,6 @@ function QueryPersistenceLayer() {
       /* malformed JSON or private-browsing quota */
     }
 
-    const rangesKey = queryKeys.accessibleRangesList(persistenceScopeTag)
-    if (queryClient.getQueryData(rangesKey) === undefined) {
-      void queryClient.invalidateQueries({ queryKey: rangesKey, exact: true })
-    }
-    const blueprintsKey = queryKeys.blueprints(persistenceScopeTag)
-    if (queryClient.getQueryData(blueprintsKey) === undefined) {
-      void queryClient.invalidateQueries({ queryKey: blueprintsKey, exact: true })
-    }
-
     let saveTimer: ReturnType<typeof setTimeout> | null = null
 
     const persist = () => {
@@ -154,7 +113,9 @@ export function QueryProvider({
           <QueryPersistenceLayer />
           {children}
         </ShellSessionProvider>
-        <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
+        {process.env.NODE_ENV === "development" ? (
+          <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-left" />
+        ) : null}
       </EffectiveScopeProvider>
     </QueryClientProvider>
   )

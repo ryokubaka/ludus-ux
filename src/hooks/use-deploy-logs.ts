@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react"
 import { ludusApi } from "@/lib/api"
+import { appendStreamLines } from "@/lib/log-buffer"
 
 const POLL_INTERVAL_MS = 5000
 
@@ -59,7 +60,7 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
             // Lines within the same poll window share the same timestamp, which
             // is within POLL_INTERVAL_MS of when they were actually written.
             const ts = new Date().toISOString().slice(11, 19)
-            setLines((prev) => [...prev, ...newLines.map((l) => `[${ts}] ${l}`)])
+            setLines((prev) => appendStreamLines(prev, newLines.map((l) => `[${ts}] ${l}`)))
           }
         }
 

@@ -8,27 +8,16 @@ import {
   ludusSnapshotCreateBody,
   snapshotsRangeQuery,
 } from "./ludus-snapshot-payload"
+import {
+  readImpersonationHeadersFromSessionStorage,
+} from "./impersonation-headers"
 
 /**
  * Read active impersonation state from sessionStorage (browser only).
- * Returns BOTH headers needed for full server-side impersonation support:
- *   X-Impersonate-Apikey  – preferred by /api/proxy over the cookie when both
- *                          X-Impersonate-* are set (cookie can lag on fast user switches)
- *   X-Impersonate-As      – used by custom routes to know the effective username
+ * Returns BOTH headers needed for full server-side impersonation support.
  */
 export function getImpersonationHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = sessionStorage.getItem("goad_impersonation")
-    if (raw) {
-      const { apiKey, username } = JSON.parse(raw)
-      const h: Record<string, string> = {}
-      if (apiKey) h["X-Impersonate-Apikey"] = apiKey
-      if (username) h["X-Impersonate-As"] = username
-      return h
-    }
-  } catch { }
-  return {}
+  return readImpersonationHeadersFromSessionStorage()
 }
 
 /** Convenience: just the API key (used in places that only need the key). */

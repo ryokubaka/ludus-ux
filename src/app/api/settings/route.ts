@@ -50,7 +50,6 @@ export async function POST(request: NextRequest) {
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
   if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
-  if (typeof body.rootApiKey === "string") patch.rootApiKey = body.rootApiKey.trim()
 
   const updated = updateSettings(patch)
   // Invalidate cached catalog if goadPath changed

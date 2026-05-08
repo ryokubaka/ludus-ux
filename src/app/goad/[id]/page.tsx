@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { GoadTerminal, useGoadStream } from "@/components/goad/goad-terminal"
+import { GoadLogSplitPane } from "@/components/goad/goad-log-split-pane"
 import {
   ArrowLeft,
   Terminal,
@@ -86,20 +87,18 @@ import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+import {
+  checkTemplates,
+  formatDuration,
+  formatTaskInstant,
+  normalizeGoadInstanceTab,
+  readInitialGoadTab,
+  isDeployActionCommand,
+  DEPLOY_TAB_ACTIONS,
+  TERMINAL_TAB_ACTIONS,
+} from "@/components/goad/goad-instance-tab-utils"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
-
-function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
-  const present: string[] = []
-  const missingUnbuilt: string[] = []
-  const missingAbsent: string[] = []
-  for (const t of required) {
-    if (builtNames.has(t)) present.push(t)
-    else if (allNames.has(t)) missingUnbuilt.push(t)
-    else missingAbsent.push(t)
-  }
-  return { present, missingUnbuilt, missingAbsent, ready: missingUnbuilt.length === 0 && missingAbsent.length === 0 }
-}
 
 function TemplateChips({
   required,
@@ -164,67 +163,6 @@ function TemplateChips({
       </div>
     </TooltipProvider>
   )
-}
-
-function formatTaskInstant(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  })
-}
-
-function formatDuration(startedAt: number, endedAt?: number): string {
-  const ms = (endedAt ?? Date.now()) - startedAt
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-/** Tab classification for Ludus range deploy vs GOAD-terminal-only actions. */
-const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
-const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
-
-const GOAD_INSTANCE_TAB_IDS = new Set([
-  "deploy",
-  "terminal",
-  "info",
-  "inventories",
-  "extensions",
-  "history",
-])
-
-/** Legacy / mistaken query values → a real `TabsTrigger` value (`logs` had no trigger). */
-function normalizeGoadInstanceTab(tab: string): string {
-  if (tab === "logs") return "deploy"
-  if (GOAD_INSTANCE_TAB_IDS.has(tab)) return tab
-  return "deploy"
-}
-
-/** First paint: URL ?tab= wins (normalized); otherwise default to "deploy". */
-function readInitialGoadTab(): string {
-  if (typeof window === "undefined") return "deploy"
-  try {
-    const raw = new URLSearchParams(window.location.search).get("tab")
-    if (raw) return normalizeGoadInstanceTab(raw)
-  } catch {
-    /* ignore */
-  }
-  return "deploy"
-}
-
-/**
- * True when a GOAD command string corresponds to a deploy-class action (one
- * that triggers a Ludus range deploy and should land on the Deploy Status tab).
- * Replaces the old sessionStorage `actionStorageKey` approach so that action
- * type is derived from the server-stored task command — no browser state needed.
- */
-function isDeployActionCommand(command: string): boolean {
-  return /;\s*(provide|install_extension|provision_lab)\b/.test(command)
 }
 
 function GoadInstancePage() {
@@ -421,13 +359,16 @@ function GoadInstancePage() {
     })
   }, [rangeState, isRunning]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Watchdog B: GOAD exited but the range is still stuck in DEPLOYING.
-  // Route through the unified abort hook so it goes through Ludus (user →
+  // Watchdog B: GOAD exited with failure (non-zero) but the range is still stuck
+  // in DEPLOYING. Route through the unified abort hook so it goes through Ludus (user →
   // admin) and falls back to PocketBase if the goroutine has already exited.
   // Skip if postProcessingRef is set: runAction intentionally launched a
   // network-tag deploy AFTER GOAD finished — that's the DEPLOYING we see.
   useEffect(() => {
     if (exitCode === null || !instance?.ludusRangeId) return
+    // Success: Ludus often stays DEPLOYING/WAITING briefly after GOAD exits 0
+    // (merge deploy still settling). Must not treat that as a stuck failure.
+    if (exitCode === 0) return
     if (rangeState !== "DEPLOYING" && rangeState !== "WAITING") return
     if (autoStoppedRef.current) return
     if (postProcessingRef.current) return
@@ -442,7 +383,8 @@ function GoadInstancePage() {
     toast({
       variant: "destructive",
       title: "Deployment failed",
-      description: "GOAD exited with an error while the range was still deploying. Resetting the range state automatically.",
+      description:
+        "GOAD finished with a non-zero exit code while the range was still deploying. Resetting the range state automatically.",
     })
   }, [exitCode, rangeState, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -640,6 +582,19 @@ function GoadInstancePage() {
           if (yaml && !networkSectionEqual(yaml, snapshot)) {
             const merged = applyNetworkSection(yaml, snapshot)
             await ludusApi.setRangeConfig(merged, rangeId)
+          }
+          // Match runAction / startNetworkTagDeploy: do not start a tag deploy while
+          // Ludus is still in DEPLOYING/WAITING from GOAD's internal range deploy.
+          {
+            const SETTLE_TIMEOUT_MS = 10 * 60 * 1000
+            const SETTLE_POLL_MS = 5_000
+            const settleStart = Date.now()
+            while (Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
+              const st = await ludusApi.getRangeStatus(rangeId)
+              const stateNow = st.data?.rangeState
+              if (stateNow !== "DEPLOYING" && stateNow !== "WAITING") break
+              await new Promise((r) => setTimeout(r, SETTLE_POLL_MS))
+            }
           }
           for (let attempt = 0; attempt < 3; attempt++) {
             const dep = await ludusApi.deployRange(["network"], undefined, rangeId)
@@ -1297,7 +1252,7 @@ function GoadInstancePage() {
         "",
         "This runs two GOAD steps in one session:",
         "  1. Provide — create/update Ludus VMs and range infrastructure (no full lab Ansible yet).",
-        "  2. Provision lab — run all Ansible playbooks for this lab (often 30–90 minutes).",
+        "  2. Provision lab — run all Ansible playbooks for this lab.",
         "",
         "Use this for a full install when you would otherwise click Provide and then Provision Lab separately.",
       ].join("\n"),
@@ -1358,7 +1313,7 @@ function GoadInstancePage() {
 
   const handleInstallExtension = (name: string) =>
     confirm(
-      `Install "${name}"? Deploys new VMs and runs Ansible.`,
+      `Install "${name}"? Deploys new VMs and runs Ansible — can take 30–90 min.`,
       () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
       `ext-install:${name}`,
     )
@@ -1657,7 +1612,7 @@ function GoadInstancePage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7rem)] gap-6 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 basis-0 gap-6 w-full overflow-hidden">
       {/* ── Re-assign dialog ─────────────────────────────────────────────── */}
       {showReassign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -1938,7 +1893,7 @@ function GoadInstancePage() {
         </TabsList>
 
         {/* Deploy Status — side-by-side Range Logs + GOAD terminal */}
-        <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1">
+        <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
           {/* Status bar */}
           <div className="flex items-center gap-3 mb-3 flex-shrink-0 flex-wrap">
             {isRunning && currentAction && (
@@ -2028,27 +1983,32 @@ function GoadInstancePage() {
             </Alert>
           )}
 
-          {/* Side-by-side panels */}
-          <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
-            <GoadTerminal
-              lines={rangeLogLines}
-              onClear={clearRangeLogs}
-              onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
-              refreshLoading={rangeLogRefreshBusy}
-              label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
-              className="flex flex-col min-h-0 h-full"
-            />
-            <GoadTerminal
-              lines={lines}
-              onClear={clear}
-              label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
-              className="flex flex-col min-h-0 h-full"
-            />
-          </div>
+          {/* Side-by-side panels (resizable on md+) */}
+          <GoadLogSplitPane
+            className="flex-1 min-h-0 gap-3"
+            left={
+              <GoadTerminal
+                lines={rangeLogLines}
+                onClear={clearRangeLogs}
+                onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
+                refreshLoading={rangeLogRefreshBusy}
+                label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
+                className="flex flex-col min-h-0 h-full"
+              />
+            }
+            right={
+              <GoadTerminal
+                lines={lines}
+                onClear={clear}
+                label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+                className="flex flex-col min-h-0 h-full"
+              />
+            }
+          />
         </TabsContent>
 
         {/* Terminal (GOAD output only — kept for backward compat / manual inspection) */}
-        <TabsContent value="terminal" className="mt-4 flex flex-col min-h-0 flex-1">
+        <TabsContent value="terminal" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
           {lines.length === 0 && !isRunning && (
             <p className="text-xs text-muted-foreground mb-3 flex-shrink-0">
               Use the action buttons above to run GOAD commands. Output will appear here and persist if you navigate away.
@@ -2597,26 +2557,31 @@ function GoadInstancePage() {
                       )}
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
-                    <GoadTerminal
-                      lines={historyDeployLines}
-                      label={`Range Logs — ${instance?.ludusRangeId ?? "no range"}${
-                        selectedHistoryEntry.deployEntry
-                          ? ` · ${
-                              selectedHistoryEntry.mergedBatchDeploys?.length
-                                ? aggregateDeployStatuses(selectedHistoryEntry.mergedBatchDeploys)
-                                : selectedHistoryEntry.deployEntry.status
-                            }`
-                          : ""
-                      }`}
-                      className="flex flex-col min-h-0 h-full"
-                    />
-                    <GoadTerminal
-                      lines={historyGoadLines}
-                      label={`GOAD Logs — ${instanceId}${selectedHistoryEntry.goadTask ? ` · ${selectedHistoryEntry.goadTask.command}` : ""}`}
-                      className="flex flex-col min-h-0 h-full"
-                    />
-                  </div>
+                  <GoadLogSplitPane
+                    className="gap-3 flex-1 min-h-0"
+                    left={
+                      <GoadTerminal
+                        lines={historyDeployLines}
+                        label={`Range Logs — ${instance?.ludusRangeId ?? "no range"}${
+                          selectedHistoryEntry.deployEntry
+                            ? ` · ${
+                                selectedHistoryEntry.mergedBatchDeploys?.length
+                                  ? aggregateDeployStatuses(selectedHistoryEntry.mergedBatchDeploys)
+                                  : selectedHistoryEntry.deployEntry.status
+                              }`
+                            : ""
+                        }`}
+                        className="flex flex-col min-h-0 h-full"
+                      />
+                    }
+                    right={
+                      <GoadTerminal
+                        lines={historyGoadLines}
+                        label={`GOAD Logs — ${instanceId}${selectedHistoryEntry.goadTask ? ` · ${selectedHistoryEntry.goadTask.command}` : ""}`}
+                        className="flex flex-col min-h-0 h-full"
+                      />
+                    }
+                  />
                 </>
               )}
             </div>

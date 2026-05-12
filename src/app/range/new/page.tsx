@@ -34,6 +34,7 @@ import {
   Shield,
 } from "lucide-react"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
@@ -536,7 +537,11 @@ export default function NewRangePage() {
 
       setDeployStatus("Starting deployment…")
       const tags = configMethod === "wizard" && selectedTags.length > 0 ? selectedTags : undefined
+      const tagRunAt = Date.now()
       const deployRes = await ludusApi.deployRange(tags, undefined, effectiveRangeId || undefined)
+      if (!deployRes.error && effectiveRangeId && tags && tags.length > 0) {
+        void registerLuxDeployTagRun(effectiveRangeId, tags, tagRunAt)
+      }
       if (deployRes.error) {
         if (
           tryToastLudusSlowHttpError({

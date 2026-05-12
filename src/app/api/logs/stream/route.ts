@@ -6,6 +6,8 @@ import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
+import { debugAgentLogServer } from "@/lib/debug-agent-log-server"
+import { createDeployLogDedupe } from "@/lib/deploy-log-sse-dedupe"
 
 export const dynamic = "force-dynamic"
 
@@ -62,7 +64,8 @@ export async function GET(request: NextRequest) {
         try {
           // Prepend a timestamp to human-readable log lines; leave control
           // messages (STATE / DONE / ERROR) unmodified so the client can parse them.
-          // Stamp is Ludus-host local time when SSH `date` succeeded this poll.
+          // Stamp uses Ludus-host POSIX instant when SSH `date +%s` succeeded this poll,
+          // formatted in `process.env.TZ` (default America/New_York).
           const payload = (prefix === "LUDUS" || prefix === "GOAD")
             ? `[${prefix}] [${stamp}] ${data}`
             : `[${prefix}] ${data}`
@@ -78,6 +81,8 @@ export async function GET(request: NextRequest) {
         let firstPoll = true
         let rangeId = rangeIdParam || ""
         let maxPolls = 900  // 30 min hard ceiling
+        let pollIdx = 0
+        let streamDone = false
 
         // Warmup: don't terminate just because the range isn't DEPLOYING yet on
         // the first few checks.  GOAD's install flow creates the workspace first
@@ -100,9 +105,45 @@ export async function GET(request: NextRequest) {
         // feedback when a deployment is genuinely stuck.
         const IDLE_TIMEOUT_MS = 10 * 60 * 1000
         let lastActivityAt = Date.now()
+        const deployDedupe = createDeployLogDedupe()
+
+        /** Client may abort SSE (new stream, navigation) before next poll sees SUCCESS. */
+        const tryEmitTerminalDone = async (reason: string) => {
+          if (streamDone || !wasDeploying || !rangeId) return
+          const rangeQuery = `?rangeID=${encodeURIComponent(rangeId)}`
+          const snapshot = getCachedLudusWallHmsOrUtc()
+          const fr = await ludusGet<{ rangeState: string }>(`/range${rangeQuery}`, { apiKey: effectiveApiKey })
+          const s = fr.data?.rangeState
+          if (s && s !== "DEPLOYING" && s !== "WAITING") {
+            send("DONE", s, snapshot)
+            streamDone = true
+            // #region agent log
+            debugAgentLogServer({
+              hypothesisId: "H1",
+              location: "logs/stream/route.ts:tryEmitTerminalDone",
+              message: "deploy sse reconciled terminal DONE",
+              data: { reason, state: s, rangeId },
+              runId: "post-fix",
+            })
+            // #endregion
+          }
+        }
 
         while (maxPolls-- > 0) {
-          if (request.signal.aborted) break
+          pollIdx++
+          if (request.signal.aborted) {
+            await tryEmitTerminalDone("request-aborted")
+            // #region agent log
+            debugAgentLogServer({
+              hypothesisId: "H4",
+              location: "logs/stream/route.ts:loop",
+              message: "deploy sse request.signal aborted (after reconcile)",
+              data: { rangeId: rangeId || null, pollIdx, lastEmittedState, streamDone },
+              runId: "post-fix",
+            })
+            // #endregion
+            break
+          }
 
           await refreshLudusWallClockFromSsh()
           const pollStamp = getCachedLudusWallHmsOrUtc()
@@ -128,10 +169,25 @@ export async function GET(request: NextRequest) {
               firstPoll = false
               for (const line of newLines) {
                 send("LUDUS", line, pollStamp)
+                deployDedupe.remember(line)
               }
               if (newLines.length > 0) lastActivityAt = Date.now()
             }
           } else if (result.error) {
+            // #region agent log
+            debugAgentLogServer({
+              hypothesisId: "H4",
+              location: "logs/stream/route.ts:ludusLogs",
+              message: "ludus /range/logs error break",
+              data: {
+                pollIdx,
+                errLen: result.error.length,
+                errHead: result.error.slice(0, 120),
+                rangeId: rangeId || null,
+              },
+              runId: "pre-fix",
+            })
+            // #endregion
             send("ERROR", result.error, pollStamp)
             break
           }
@@ -157,10 +213,37 @@ export async function GET(request: NextRequest) {
           if (rangeId) {
             const goadResult = await readGoadLog(settings, rangeId, lastGoadCount)
             lastGoadCount = goadResult.newCount
-            for (const line of goadResult.lines) {
-              send("GOAD", line, pollStamp)
+            const skipGoadBackfill = snapshotStart && pollIdx === 1
+            if (!skipGoadBackfill) {
+              for (const line of goadResult.lines) {
+                if (deployDedupe.isDuplicate(line)) continue
+                send("GOAD", line, pollStamp)
+                deployDedupe.remember(line)
+              }
             }
-            if (goadResult.lines.length > 0) lastActivityAt = Date.now()
+            if (!skipGoadBackfill && goadResult.lines.length > 0) lastActivityAt = Date.now()
+          }
+
+          if (pollIdx % 15 === 0) {
+            // #region agent log
+            debugAgentLogServer({
+              hypothesisId: "H2-H3",
+              location: "logs/stream/route.ts:pollSnapshot",
+              message: "deploy sse poll snapshot",
+              data: {
+                pollIdx,
+                state: state ?? null,
+                wasDeploying,
+                lastEmittedState,
+                rangeId: rangeId || null,
+                idleSec: Math.round((Date.now() - lastActivityAt) / 1000),
+                maxPollsRemaining: maxPolls,
+                lastLudusCount,
+                lastGoadCount,
+              },
+              runId: "pre-fix",
+            })
+            // #endregion
           }
 
           // ── Termination logic ──────────────────────────────────────────────
@@ -185,14 +268,40 @@ export async function GET(request: NextRequest) {
                   )
                 }
               } catch { /* best-effort */ }
+              // #region agent log
+              debugAgentLogServer({
+                hypothesisId: "H3",
+                location: "logs/stream/route.ts:idleTimeout",
+                message: "deploy sse DONE idle-timeout while deploying",
+                data: {
+                  state,
+                  wasDeploying,
+                  pollIdx,
+                  idleSec: Math.round((Date.now() - lastActivityAt) / 1000),
+                  rangeId: rangeId || null,
+                },
+                runId: "pre-fix",
+              })
+              // #endregion
               send("DONE", state, pollStamp)
+              streamDone = true
               break
             }
           } else if (state) {
             // Not deploying — decide whether to keep waiting or exit
             if (wasDeploying) {
               // We saw DEPLOYING earlier and it has now finished — done
+              // #region agent log
+              debugAgentLogServer({
+                hypothesisId: "H1-H2",
+                location: "logs/stream/route.ts:wasDeployingDone",
+                message: "deploy sse DONE after wasDeploying",
+                data: { state, pollIdx, rangeId: rangeId || null },
+                runId: "pre-fix",
+              })
+              // #endregion
               send("DONE", state, pollStamp)
+              streamDone = true
               break
             }
             // During warmup we intentionally do NOT exit immediately on ERROR/ABORTED.
@@ -210,19 +319,57 @@ export async function GET(request: NextRequest) {
             const idleMs = Date.now() - lastActivityAt
             const elapsed = (WARMUP_POLLS - warmupRemaining) * 2000
             if (elapsed > 10_000 && idleMs > 3 * 60_000) {
+              // #region agent log
+              debugAgentLogServer({
+                hypothesisId: "H1",
+                location: "logs/stream/route.ts:warmupIdleDone",
+                message: "deploy sse DONE testing-mode idle",
+                data: { state, pollIdx, elapsed, idleMs, rangeId: rangeId || null },
+                runId: "pre-fix",
+              })
+              // #endregion
               send("DONE", state, pollStamp)
+              streamDone = true
               break
             }
             warmupRemaining--
             if (warmupRemaining <= 0) {
               // Gave up waiting for the operation to begin
+              // #region agent log
+              debugAgentLogServer({
+                hypothesisId: "H1",
+                location: "logs/stream/route.ts:warmupExhausted",
+                message: "deploy sse DONE warmup exhausted",
+                data: { state, pollIdx, rangeId: rangeId || null },
+                runId: "pre-fix",
+              })
+              // #endregion
               send("DONE", state, pollStamp)
+              streamDone = true
               break
             }
           }
 
           await new Promise((r) => setTimeout(r, 2000))
         }
+        await tryEmitTerminalDone("after-loop")
+        // #region agent log
+        if (!streamDone) {
+          debugAgentLogServer({
+            hypothesisId: "H1",
+            location: "logs/stream/route.ts:afterLoop",
+            message: "deploy sse loop ended without DONE path",
+            data: {
+              pollIdx,
+              maxPollsRemaining: maxPolls,
+              lastEmittedState,
+              wasDeploying,
+              rangeId: rangeId || null,
+            },
+            runId: "post-fix",
+          })
+        }
+        // #endregion
       } catch (err) {
         send("ERROR", `Stream error: ${(err as Error).message}`, getCachedLudusWallHmsOrUtc())
       } finally {

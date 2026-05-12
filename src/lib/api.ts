@@ -111,6 +111,57 @@ export async function pruneKnownHosts(hosts: string[]): Promise<void> {
   }
 }
 
+/**
+ * After Ludus removes a range, delete the linked GOAD workspace folder on the GOAD
+ * SSH host (`<goadPath>/workspace/<instanceId>`) when this Ludus range was tied to a GOAD instance.
+ * Resolves instance via `/api/goad/by-range` (SQLite + SSH enrichment), then POST force-delete
+ * with `skipRangeDeletion` because Ludus already dropped the range.
+ */
+export async function cleanupGoadWorkspaceAfterRangeDelete(
+  rangeId: string,
+  options?: { adminGlobalInstances?: boolean },
+): Promise<void> {
+  const rid = rangeId?.trim()
+  if (!rid) return
+  const imp = getImpersonationHeaders()
+  const qs = new URLSearchParams({ rangeId: rid })
+  if (options?.adminGlobalInstances) qs.set("adminView", "1")
+  try {
+    let instanceId: string | null = null
+    const byRes = await fetch(`/api/goad/by-range?${qs}`, {
+      credentials: "include",
+      headers: imp,
+    })
+    if (byRes.ok) {
+      const data = (await byRes.json()) as { instanceId?: string | null }
+      if (data.instanceId && typeof data.instanceId === "string") {
+        instanceId = data.instanceId.trim() || null
+      }
+    }
+    if (!instanceId) {
+      const instUrl =
+        "/api/goad/instances" + (options?.adminGlobalInstances ? "?adminView=1" : "")
+      const instRes = await fetch(instUrl, { credentials: "include", headers: imp })
+      if (instRes.ok) {
+        const instData = (await instRes.json()) as {
+          instances?: { instanceId: string; ludusRangeId?: string }[]
+        }
+        instanceId =
+          instData.instances?.find((i) => i.ludusRangeId === rid)?.instanceId ?? null
+      }
+    }
+    if (!instanceId) return
+    await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...imp },
+      body: JSON.stringify({ ludusRangeId: rid, skipRangeDeletion: true }),
+    }).catch(() => {})
+  } catch {
+    /* non-fatal */
+  }
+}
+
 export async function apiRequest<T = unknown>(
   path: string,
   options: {
@@ -192,8 +243,10 @@ export const ludusApi = {
   // Range — GET /range?rangeID=…  (bare GET /range returns 404 on several Ludus v2 builds)
   getRangeStatus: (rangeId?: string): Promise<LudusEnvelope<import("./types").RangeObject>> => {
     const id = rangeId?.trim()
+    // Avoid synthetic HTTP 400 — callers during range transitions may race with empty id;
+    // treat as "no data" like a disabled query (dashboard already handles !result.data).
     if (!id) {
-      return Promise.resolve({ status: 400, error: "rangeID is required" })
+      return Promise.resolve({ status: 204, data: undefined })
     }
     return get<import("./types").RangeObject>(`/range?rangeID=${encodeURIComponent(id)}`)
   },

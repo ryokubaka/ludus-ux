@@ -38,7 +38,7 @@ import {
   Share2,
   Play,
 } from "lucide-react"
-import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -334,6 +334,7 @@ export function AdminPageClient() {
         return
       }
       if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
+      await cleanupGoadWorkspaceAfterRangeDelete(rangeID, { adminGlobalInstances: true })
       await fetch("/api/admin/ranges-data", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },

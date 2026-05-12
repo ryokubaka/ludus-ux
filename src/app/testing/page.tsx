@@ -26,10 +26,13 @@ import {
   Server,
   Clock,
   Unlock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import Link from "next/link"
 import { ludusApi, getImpersonationHeaders } from "@/lib/api"
 import type { RangeObject } from "@/lib/types"
+import type { LuxRangeTestingEvent, RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 import type { RangeOp, RangeOpStatus } from "@/lib/range-op-store"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
@@ -109,6 +112,9 @@ async function fetchPbStatusForRange(rangeId: string): Promise<RangeObject | nul
 
 /** After this many seconds of a running testing op, offer UI unlock (clears server-side DB lock only). */
 const STUCK_TESTING_OP_UI_UNLOCK_SEC = 90
+
+/** `useConfirm` scope: allow/remove domain prompts render inside the Allowed Domains card, not the Testing Mode card. */
+const CONFIRM_SCOPE_TESTING_ALLOWLIST = "testing-allowlist"
 
 // ── DB-backed pending allow/deny helpers ─────────────────────────────────────
 // Calls our Next.js API route at /api/range/pending-allows which persists
@@ -191,6 +197,131 @@ async function deletePendingAllows(
       body: JSON.stringify({ rangeId, entries, opType }),
     })
   } catch {}
+}
+
+async function postTestingAllowlistActivity(
+  rangeId: string,
+  opType: "testing_allow_add" | "testing_allow_remove",
+  detail: string,
+  success: boolean,
+  impHeaders: Record<string, string>,
+): Promise<void> {
+  const d = detail.trim().slice(0, 500)
+  if (!d) return
+  try {
+    await fetch("/api/range/testing-activity", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...impHeaders },
+      body: JSON.stringify({ rangeId, opType, detail: d, success }),
+    })
+  } catch {}
+}
+
+/** LUX-persisted testing on/off events (Ludus does not add matching deploy-history rows). */
+const TESTING_ACTIVITY_PAGE_SIZE = 5
+
+function TestingModeMarkersCard({ events }: { events: LuxRangeTestingEvent[] }) {
+  const [page, setPage] = useState(0)
+
+  const totalPages = events.length === 0 ? 0 : Math.ceil(events.length / TESTING_ACTIVITY_PAGE_SIZE)
+  const safePage = totalPages === 0 ? 0 : Math.min(page, totalPages - 1)
+  const sliceStart = safePage * TESTING_ACTIVITY_PAGE_SIZE
+  const pageEvents = events.slice(sliceStart, sliceStart + TESTING_ACTIVITY_PAGE_SIZE)
+
+  useEffect(() => {
+    if (events.length === 0) {
+      setPage(0)
+      return
+    }
+    const tp = Math.ceil(events.length / TESTING_ACTIVITY_PAGE_SIZE)
+    setPage((p) => Math.min(p, tp - 1))
+  }, [events.length])
+
+  return (
+    <Card className="border-muted">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ScrollText className="h-4 w-4 text-muted-foreground" />
+          Testing mode activity
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 pt-0">
+        {events.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No activity yet. Testing mode toggles and allowlist changes appear here with time and outcome.
+          </p>
+        ) : (
+          <>
+            <ul className="space-y-2 text-xs">
+              {pageEvents.map((e) => {
+                const when = new Date(e.completedAt).toLocaleString()
+                const verb =
+                  e.opType === "testing_start"
+                    ? "Turn on"
+                    : e.opType === "testing_stop"
+                      ? "Turn off"
+                      : e.opType === "testing_allow_add"
+                        ? "Allow"
+                        : e.opType === "testing_allow_remove"
+                          ? "Remove"
+                          : e.opType
+                return (
+                  <li key={e.id} className="rounded-md border border-border/60 bg-muted/20 p-2">
+                    <div className="flex flex-wrap items-center gap-2 justify-between">
+                      <span className="text-muted-foreground">{when}</span>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10px]">
+                          {verb}
+                        </Badge>
+                        <Badge variant={e.success ? "success" : "destructive"} className="text-[10px]">
+                          {e.success ? "ok" : "fail"}
+                        </Badge>
+                      </div>
+                    </div>
+                    {e.detail ? (
+                      <code className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">
+                        {e.detail}
+                      </code>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/50">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1"
+                  disabled={safePage <= 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Newer
+                </Button>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  Page {safePage + 1} of {totalPages}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1"
+                  disabled={safePage >= totalPages - 1}
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                >
+                  Older
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -385,6 +516,22 @@ export default function TestingPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opInProgress, activeOp?.startedAt])
 
+  const { data: logMarkerEnrichment } = useQuery({
+    queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId),
+    queryFn: async (): Promise<RangeLogMarkerEnrichment | null> => {
+      const rid = selectedRangeId!
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as RangeLogMarkerEnrichment
+    },
+    enabled: !!selectedRangeId,
+    staleTime: STALE.short,
+    refetchInterval: opInProgress || opInitialising ? 4500 : false,
+  })
+
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
 
@@ -430,8 +577,9 @@ export default function TestingPage() {
     prevActiveOpRef.current = activeOp
     if (prev && !activeOp && selectedRangeId) {
       fetchStatus(selectedRangeId)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
     }
-  }, [activeOp, selectedRangeId, fetchStatus])
+  }, [activeOp, selectedRangeId, fetchStatus, queryClient, scopeTag])
 
   /**
    * Poll the server for the current DB op for `rangeId`.
@@ -471,6 +619,7 @@ export default function TestingPage() {
         await fetchStatus(rangeId)
         // Refresh per-range dots (testingEnabled / DEPLOYING) for all ranges in the selector
         await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
       } else {
         // Op still in flight — ensure the log stream is running so the user
         // sees live output.  Use the ref to avoid circular useCallback deps.
@@ -483,7 +632,7 @@ export default function TestingPage() {
       setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
-  }, [fetchStatus, queryClient, toast])
+  }, [fetchStatus, queryClient, toast, scopeTag])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
@@ -731,6 +880,7 @@ export default function TestingPage() {
     type AllowResp = { allowed?: string[]; errors?: { item: string; reason: string }[] }
     const data = result.data as AllowResp | undefined
     const apiErrors = data?.errors?.filter(e => e.reason !== "already allowed")
+    const addOk = !result.error && !(apiErrors?.length)
 
     if (result.error) {
       if (
@@ -752,8 +902,16 @@ export default function TestingPage() {
       toast({ title: `${isIP ? "IP" : "Domain"} allowed` })
     }
     setAddingEntry(false)
-    // Refresh allowed domains and pending, then reconcile
     const impHeaders = getImpersonationHeaders()
+    // Persist activity + refetch list before domain/pending refresh — that refresh
+    // can throw or hang; logging after it meant add rows never appeared.
+    try {
+      await postTestingAllowlistActivity(rangeId, "testing_allow_add", val, addOk, impHeaders)
+    } catch {}
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
+    } catch {}
+
     const [freshDomains, freshPending] = await Promise.all([
       fetchAllowedDomains(rangeId, impHeaders),
       fetchPendingAllows(rangeId, impHeaders),
@@ -773,6 +931,7 @@ export default function TestingPage() {
     confirm(
       `Allow ${isIP ? "IP" : "domain"} "${val}"? This will add a firewall rule permitting outbound traffic.`,
       doAllow,
+      CONFIRM_SCOPE_TESTING_ALLOWLIST,
     )
   }
 
@@ -801,6 +960,7 @@ export default function TestingPage() {
     type DenyResp = { denied?: string[]; errors?: { item: string; reason: string }[] }
     const data = result.data as DenyResp | undefined
     const apiErrors = data?.errors
+    const removeOk = !result.error && !(apiErrors?.length)
 
     if (result.error) {
       if (
@@ -822,8 +982,20 @@ export default function TestingPage() {
       toast({ title: "Rule removed" })
     }
     setRemovingEntry(null)
-    // Refresh allowed domains and pending, then reconcile
     const impHeaders = getImpersonationHeaders()
+    try {
+      await postTestingAllowlistActivity(
+        rangeId,
+        "testing_allow_remove",
+        parseEntry(entry).display,
+        removeOk,
+        impHeaders,
+      )
+    } catch {}
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
+    } catch {}
+
     const [freshDomains, freshPending] = await Promise.all([
       fetchAllowedDomains(rangeId, impHeaders),
       fetchPendingAllows(rangeId, impHeaders),
@@ -837,7 +1009,11 @@ export default function TestingPage() {
   }
 
   const handleDenyEntry = (entry: string) =>
-    confirm(`Remove allow-rule for "${parseEntry(entry).raw}"?`, () => doDenyEntry(entry))
+    confirm(
+      `Remove allow-rule for "${parseEntry(entry).raw}"?`,
+      () => doDenyEntry(entry),
+      CONFIRM_SCOPE_TESTING_ALLOWLIST,
+    )
 
   // ── Derived UI labels ─────────────────────────────────────────────────────
 
@@ -860,9 +1036,7 @@ export default function TestingPage() {
   const opStatusLabel: RangeOpStatus | null = activeOp?.status ?? null
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
-
+    <div className="w-full max-w-7xl 2xl:max-w-[min(90rem,96vw)] mx-auto space-y-6 px-1 sm:px-0">
       {/* Range selector — shown when user has multiple ranges */}
       {rangesLoading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -974,7 +1148,14 @@ export default function TestingPage() {
               <div className="flex gap-3 mt-4">
                 <Button
                   onClick={handleToggle}
-                  disabled={isInProgress || statusLoading || !!pendingAction}
+                  disabled={
+                    isInProgress ||
+                    statusLoading ||
+                    !!pendingAction ||
+                    hasPendingOps ||
+                    addingEntry ||
+                    !!removingEntry
+                  }
                   variant={isEnabled ? "destructive" : "default"}
                   className="min-w-52"
                 >
@@ -995,6 +1176,13 @@ export default function TestingPage() {
                   <RefreshCw className={cn("h-4 w-4", statusLoading && "animate-spin")} />
                 </Button>
               </div>
+
+              <ConfirmBar
+                pending={pendingAction}
+                onConfirm={commitConfirm}
+                onCancel={cancelConfirm}
+                className="mt-4"
+              />
 
               {/* Contextual alerts */}
               {isDeploying && (
@@ -1154,6 +1342,12 @@ export default function TestingPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              <ConfirmBar
+                pending={pendingAction}
+                scope={CONFIRM_SCOPE_TESTING_ALLOWLIST}
+                onConfirm={commitConfirm}
+                onCancel={cancelConfirm}
+              />
               <div className="flex gap-2">
                 <Input
                   placeholder="example.com or 1.2.3.4  (no wildcards or CIDR)"
@@ -1258,6 +1452,10 @@ export default function TestingPage() {
               )}
             </CardContent>
           </Card>
+
+          {selectedRangeId && (
+            <TestingModeMarkersCard key={selectedRangeId ?? "none"} events={logMarkerEnrichment?.testingEvents ?? []} />
+          )}
         </>
       )}
     </div>

@@ -24,6 +24,7 @@ import { cn, extractArray } from "@/lib/utils"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
 import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
 import type { LogHistoryEntry } from "@/lib/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 
 export default function LogsPage() {
   const { toast } = useToast()
@@ -75,6 +76,21 @@ export default function LogsPage() {
       return all.filter((t) => t.instanceId === iid || t.command.includes(iid))
     },
     enabled: !!goadInstanceForRange,
+    staleTime: STALE.short,
+  })
+
+  const { data: logMarkerEnrichment = null } = useQuery({
+    queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId),
+    queryFn: async (): Promise<RangeLogMarkerEnrichment | null> => {
+      const rid = selectedRangeId!
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as RangeLogMarkerEnrichment
+    },
+    enabled: !!selectedRangeId,
     staleTime: STALE.short,
   })
 
@@ -348,6 +364,7 @@ export default function LogsPage() {
               loading={historyListLoading}
               onSelect={handleSelectLog}
               selectedId={selectedLogId}
+              enrichment={logMarkerEnrichment ?? undefined}
               goadInstanceId={goadInstanceForRange}
               goadTasks={
                 goadInstanceForRange
@@ -358,6 +375,7 @@ export default function LogsPage() {
               }
               onRefresh={() => {
                 void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
                 void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
               }}
               refreshing={historyRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}

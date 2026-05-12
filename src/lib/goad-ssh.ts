@@ -381,6 +381,65 @@ export function workspaceSshExecPlan(
   return { ok: true, command: innerCommand, creds }
 }
 
+/** GOAD prints this after create_empty / load_instance. */
+const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
+
+/**
+ * When a piped REPL runs `provision_lab` then `provision_extension …`, ansible-playbook
+ * may read the same stdin pipe as goad.py and consume remaining REPL lines (so only
+ * lab playbooks run). Split: phase1 through `provision_lab`, then a fresh goad.sh
+ * with `unload`, `use <id>`, then extension lines (each phase gets its own stdin pipe).
+ */
+function trySplitReplAfterProvisionLab(rawCmds: string): {
+  phase1Parts: string[]
+  extensionLines: string[]
+  allParts: string[]
+} | null {
+  const allParts = rawCmds
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+  let labIdx = -1
+  for (let i = 0; i < allParts.length; i++) {
+    const p = allParts[i] ?? ""
+    if (p === "provision_lab" || p.startsWith("provision_lab ")) {
+      labIdx = i
+      break
+    }
+  }
+  if (labIdx < 0) return null
+  const afterLab = allParts.slice(labIdx + 1)
+  const extensionLines = afterLab.filter((p) => p.startsWith("provision_extension "))
+  if (extensionLines.length === 0) return null
+  return { phase1Parts: allParts.slice(0, labIdx + 1), extensionLines, allParts }
+}
+
+function extractUseInstanceIdFromReplParts(parts: string[]): string | null {
+  for (const p of parts) {
+    const m = p.trim().match(/^use\s+(\S+)$/i)
+    if (m) return m[1]
+  }
+  return null
+}
+
+/** Prefer last `[+] Instance … loaded` — phase 1 often prints default first, then the new instance. */
+function extractInstanceIdFromGoadOutput(blob: string): string | null {
+  const re = new RegExp(GOAD_INSTANCE_LOADED_RE.source, "g")
+  let lastLoaded: string | null = null
+  let m: RegExpExecArray | null
+  while ((m = re.exec(blob)) !== null) {
+    if (m[1]) lastLoaded = m[1]
+  }
+  if (lastLoaded) return lastLoaded
+
+  const rowRe = /\|\s*>\s*([a-f0-9]+-[\w-]+-ludus)\s*\|/gi
+  let lastRow: string | null = null
+  for (const row of blob.matchAll(rowRe)) {
+    if (row[1]) lastRow = row[1]
+  }
+  return lastRow
+}
+
 /**
  * Stream a goad command over SSH, yielding lines as they appear.
  * @param apiKey  - the user's Ludus API key (injected as LUDUS_API_KEY env var)
@@ -412,7 +471,6 @@ export async function streamGoadCommand(
   const goadPath = getSettings().goadPath || "/opt/GOAD";
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
-  let command: string;
   // PYTHONUNBUFFERED=1 prevents Python from block-buffering stdout when stdin is a pipe,
   // ensuring ansible output is flushed to the SSH stream line-by-line in real time.
   // LUDUS_RANGE_ID is passed as an env var so the ludus wrapper (see below) can
@@ -551,6 +609,11 @@ export async function streamGoadCommand(
   // right-hand side of pipes.
   const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
 
+  const wrapInnerForSudo = (inner: string) =>
+    impersonateAs
+      ? `sudo -H -u '${impersonateAs.username}' bash -c '${inner.replace(/'/g, "'\\''")}'`
+      : inner
+
   // Build the inner goad command.
   //
   // Both paths go through goad.sh rather than invoking python3 goad.py directly.
@@ -564,94 +627,135 @@ export async function streamGoadCommand(
   // propagates stdin to child processes, so goad.sh → python3 goad.py all see
   // the piped input.  goad.py reads from stdin when no args are given, entering
   // interactive REPL mode where our commands are executed.
-  let innerCommand: string;
+  //
+  // When the REPL runs `provision_lab` followed by `provision_extension` lines,
+  // ansible-playbook may read the same stdin pipe and swallow the extension
+  // commands.  We split into two piped goad.sh invocations on one SSH connection
+  // (see trySplitReplAfterProvisionLab).
+  let replSplitTail: { extensionLines: string[]; allParts: string[] } | null = null
+  let innerCommand: string
   if (goadArgs.startsWith("--repl ")) {
-    const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "");
-    const stdinCmds = rawCmds.split(";").join("\n");
-    const escaped = stdinCmds.replace(/'/g, "'\\''");
-    innerCommand = [
-      setupPreamble,
-      pyEnvExports,
-      `cd ${goadPath}`,
-      `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
-    ].join("; ") + goadIniPatchPostfix
+    const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "")
+    const split = trySplitReplAfterProvisionLab(rawCmds)
+    if (split) {
+      const esc1 = [...split.phase1Parts, "exit"].join("\n").replace(/'/g, "'\\''")
+      innerCommand =
+        [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc1}\n' | bash '${goadPath}/goad.sh'`].join("; ") +
+        goadIniPatchPostfix
+      replSplitTail = { extensionLines: split.extensionLines, allParts: split.allParts }
+    } else {
+      const stdinCmds = rawCmds.split(";").join("\n")
+      const escaped = stdinCmds.replace(/'/g, "'\\''")
+      innerCommand = [
+        setupPreamble,
+        pyEnvExports,
+        `cd ${goadPath}`,
+        `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
+      ].join("; ") + goadIniPatchPostfix
+    }
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}`;
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}`
   }
 
-  if (impersonateAs) {
-    // Wrap with sudo so the command runs in the target user's context.
-    // -H  sets HOME to the target user's home directory.
-    // -u  specifies the target username.
-    // We single-quote the inner command and escape any embedded single-quotes.
-    const safeInner = innerCommand.replace(/'/g, "'\\''");
-    command = `sudo -H -u '${impersonateAs.username}' bash -c '${safeInner}'`;
-  } else {
-    command = innerCommand;
-  }
+  const command = wrapInnerForSudo(innerCommand)
 
   // Captured once the exec channel is open; used to send Ctrl+C on abort.
   let channelStream: ClientChannel | null = null
 
   conn.on("ready", () => {
-    // Use a wide PTY so goad.py's Rich library renders full-width tables
-    // without truncating cell content with '…' at 80 columns.
-    conn.exec(command, { pty: { term: "xterm-256color", rows: 50, cols: 220, width: 0, height: 0 } }, (err, stream) => {
-      if (err) {
-        conn.end();
-        onError(err);
-        return;
-      }
-      channelStream = stream;
+    const ptyOpts = { term: "xterm-256color" as const, rows: 50, cols: 220, width: 0, height: 0 }
 
-      // Accumulate partial lines across data chunks.
-      // SSH TCP segments don't align with newlines; without this, long ansible JSON
-      // lines (1 000+ chars) arrive as multiple fragments each emitted as a broken
-      // "line". We buffer until we see a newline, then flush complete lines.
-      // Empty lines are preserved — they are the task separators in ansible output.
-      let lineBuffer = "";
-
-      function flushBuffer(raw: string, isFinal = false) {
-        // Auto-answer interactive yes/no prompts (handles both "(y/N) " and "(y/N): " formats)
-        const trimmed = raw.trim();
-        if (/\([yY]\/[nN]\)[:\s]*$/.test(trimmed) || /\bDo you want to continue\?\s*$/i.test(trimmed)) {
-          try { stream.write("y\n"); } catch {}
+    const runPtySession = (
+      cmdStr: string,
+      opts: { captureStrippedLines?: string[] },
+      onSessionEnd: (exitCode: number) => void,
+    ) => {
+      conn.exec(cmdStr, { pty: ptyOpts }, (err, stream) => {
+        if (err) {
+          conn.end()
+          onError(err)
+          return
         }
-        const text = stripAnsi(lineBuffer + raw);
-        const parts = text.split(/\r?\n/);
-        if (isFinal) {
-          lineBuffer = "";
-          for (const line of parts) {
-            if (line.trim()) onData(line);
+        channelStream = stream
+
+        let lineBuffer = ""
+
+        function flushBuffer(raw: string) {
+          const trimmed = raw.trim()
+          if (/\([yY]\/[nN]\)[:\s]*$/.test(trimmed) || /\bDo you want to continue\?\s*$/i.test(trimmed)) {
+            try {
+              stream.write("y\n")
+            } catch {
+              /* ignore */
+            }
           }
-        } else {
-          // Keep the last (potentially incomplete) segment in the buffer
-          lineBuffer = parts.pop() ?? "";
+          const text = stripAnsi(lineBuffer + raw)
+          const parts = text.split(/\r?\n/)
+          lineBuffer = parts.pop() ?? ""
           for (const line of parts) {
-            // Emit complete lines; preserve blank lines (they separate ansible tasks)
-            onData(line);
+            opts.captureStrippedLines?.push(line)
+            onData(line)
           }
         }
-      }
 
-      stream.on("close", (code: number) => {
-        // Flush anything remaining in the buffer
-        if (lineBuffer.trim()) onData(lineBuffer);
-        lineBuffer = "";
-        conn.end();
-        onClose(code ?? 0);
-      });
+        stream.on("close", (code: number) => {
+          if (lineBuffer.trim()) {
+            opts.captureStrippedLines?.push(stripAnsi(lineBuffer))
+            onData(lineBuffer)
+          }
+          lineBuffer = ""
+          onSessionEnd(code ?? 0)
+        })
 
-      stream.on("data", (data: Buffer) => {
-        flushBuffer(data.toString());
-      });
+        stream.on("data", (data: Buffer) => {
+          flushBuffer(data.toString())
+        })
 
-      // stderr merges into the same terminal view (PTY combines them, but handle just in case)
-      stream.stderr.on("data", (data: Buffer) => {
-        flushBuffer(data.toString());
-      });
-    });
-  });
+        stream.stderr.on("data", (data: Buffer) => {
+          flushBuffer(data.toString())
+        })
+      })
+    }
+
+    if (replSplitTail) {
+      const captured: string[] = []
+      runPtySession(command, { captureStrippedLines: captured }, (code1) => {
+        if (code1 !== 0) {
+          conn.end()
+          onClose(code1)
+          return
+        }
+        const id =
+          extractUseInstanceIdFromReplParts(replSplitTail.allParts) ??
+          extractInstanceIdFromGoadOutput(captured.join("\n"))
+        if (!id) {
+          onData(
+            "[ERROR] LUX: could not resolve GOAD instance id after provision_lab; extension phase skipped.",
+          )
+          conn.end()
+          onClose(1)
+          return
+        }
+        const esc2 = ["unload", "use " + id, ...replSplitTail.extensionLines, "exit"]
+          .join("\n")
+          .replace(/'/g, "'\\''")
+        const inner2 =
+          [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc2}\n' | bash '${goadPath}/goad.sh'`].join(
+            "; ",
+          ) + goadIniPatchPostfix
+        const cmd2 = wrapInnerForSudo(inner2)
+        runPtySession(cmd2, {}, (code2) => {
+          conn.end()
+          onClose(code2)
+        })
+      })
+    } else {
+      runPtySession(command, {}, (code) => {
+        conn.end()
+        onClose(code)
+      })
+    }
+  })
 
   conn.on("error", (err) => {
     onError(new Error(`SSH connection error: ${err.message}`));
@@ -998,7 +1102,7 @@ def discover(goad_path):
                         if isinstance(hosts, dict):
                             machines = list(hosts.keys())
                     result["extensions"].append({
-                        "name": cfg.get("name", ext_name),
+                        "name": ext_name,
                         "description": cfg.get("description", ""),
                         "machines": machines,
                         "compatibility": cfg.get("compatibility", ["*"]),

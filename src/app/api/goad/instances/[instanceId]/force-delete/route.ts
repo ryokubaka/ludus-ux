@@ -6,9 +6,13 @@
  *   2. Removes the GOAD workspace directory via SSH
  *
  * The rangeID can be provided in the request body. If omitted, we try to read
- * it from the .goad_range_id file in the instance workspace.  When no rangeID
+ * it from the .goad_range_id file in the instance workspace. When no rangeID
  * is available the range deletion step is skipped (the caller must clean it up
  * manually via the Ranges Overview page).
+ *
+ * Body `skipRangeDeletion: true` removes only the GOAD workspace + SQLite link;
+ * the Ludus range and VMs are left intact (used for "delete instance, keep range"
+ * and for post–range-delete workspace cleanup).
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -70,14 +74,15 @@ export async function POST(
     try {
       ludusRangeId = await readGoadRangeId(instanceId, rootCreds)
     } catch {
-      results.errors.push("Could not read .goad_range_id from workspace — range deletion skipped")
+      if (!skipRangeDeletion) {
+        results.errors.push("Could not read .goad_range_id from workspace — range deletion skipped")
+      }
     }
   }
 
   // Step 1: Delete the dedicated Ludus range (force=true destroys its VMs)
-  // Skipped when skipRangeDeletion=true — e.g. re-deploying into an existing range.
+  // Skipped when skipRangeDeletion=true — instance-only delete or Ludus already removed the range.
   if (skipRangeDeletion) {
-    results.errors.push("Range deletion skipped (skipRangeDeletion=true)")
     results.rangeDeleted = false
   } else if (ludusRangeId) {
     try {

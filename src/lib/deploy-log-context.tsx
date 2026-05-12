@@ -29,7 +29,8 @@ interface DeployLogContextValue {
    * Status badge updates immediately after abort / external state changes — the
    * SSE stream alone does not push a new [STATE] after the connection closed.
    */
-  refreshRangeStateFromServer: (rangeId: string) => Promise<void>
+  /** Returns normalized PocketBase rangeState, or null if unavailable. */
+  refreshRangeStateFromServer: (rangeId: string) => Promise<string | null>
 }
 
 const DeployLogContext = createContext<DeployLogContextValue | null>(null)
@@ -44,6 +45,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const esRef = useRef<EventSource | null>(null)
   const isStreamingRef = useRef(false)
   const targetRangeRef = useRef<string | undefined>(undefined)
+  const debugLastStateRef = useRef<string | null>(null)
+  const debugLastLoggedStateRef = useRef<string | null>(null)
 
   const stopStreaming = useCallback(() => {
     if (esRef.current) {
@@ -54,6 +57,27 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     setIsStreaming(false)
   }, [])
 
+  const refreshRangeStateFromServer = useCallback(async (rangeId: string): Promise<string | null> => {
+    if (!rangeId?.trim()) return null
+    try {
+      const res = await fetch(
+        `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId.trim())}`,
+        { cache: "no-store" },
+      )
+      if (!res.ok) return null
+      const data = (await res.json()) as { rangeState?: string }
+      const rs = data.rangeState
+      if (typeof rs === "string" && rs.trim()) {
+        const upper = rs.trim().toUpperCase()
+        setRangeState(upper)
+        return upper
+      }
+    } catch {
+      /* ignore network errors */
+    }
+    return null
+  }, [])
+
   const startStreaming = useCallback((rangeId?: string, opts?: StartRangeStreamOptions) => {
     // Close any previous connection first
     if (esRef.current) {
@@ -62,9 +86,13 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     }
 
     const snapshotStart = opts?.snapshotStart ?? Boolean(rangeId)
+    /** Per-connection id — targetRangeRef updates before old EventSource onerror may run. */
+    const streamRangeId = rangeId?.trim() ?? ""
 
     targetRangeRef.current = rangeId
     isStreamingRef.current = true
+    debugLastLoggedStateRef.current = null
+    debugLastStateRef.current = null
     setActiveRangeId(rangeId ?? null)
     setIsStreaming(true)
     setRangeState(null)
@@ -91,10 +119,47 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
 
       if (raw.startsWith("[STATE] ")) {
         // Intermediate state update — update UI badge without stopping the stream
-        setRangeState(raw.slice(8).trim())
+        const s = raw.slice(8).trim()
+        debugLastStateRef.current = s
+        // #region agent log
+        if (debugLastLoggedStateRef.current !== s) {
+          debugLastLoggedStateRef.current = s
+          fetch("http://127.0.0.1:7431/ingest/3a0c99c1-e8d2-401b-aa16-3dfe66e19e42", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "76ce71" },
+            body: JSON.stringify({
+              sessionId: "76ce71",
+              hypothesisId: "H5",
+              location: "deploy-log-context.tsx:onmessage",
+              message: "STATE change",
+              data: { state: s.slice(0, 64) },
+              timestamp: Date.now(),
+              runId: "pre-fix",
+            }),
+          }).catch(() => {})
+        }
+        // #endregion
+        setRangeState(s)
       } else if (raw.startsWith("[DONE] ")) {
         // Server signals deploy finished (SUCCESS / ERROR / ABORTED / etc.)
-        setRangeState(raw.slice(7).trim())
+        const s = raw.slice(7).trim()
+        debugLastStateRef.current = s
+        // #region agent log
+        fetch("http://127.0.0.1:7431/ingest/3a0c99c1-e8d2-401b-aa16-3dfe66e19e42", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "76ce71" },
+          body: JSON.stringify({
+            sessionId: "76ce71",
+            hypothesisId: "H5",
+            location: "deploy-log-context.tsx:onmessage",
+            message: "DONE line",
+            data: { state: s.slice(0, 64) },
+            timestamp: Date.now(),
+            runId: "pre-fix",
+          }),
+        }).catch(() => {})
+        // #endregion
+        setRangeState(s)
         stopStreaming()
       } else if (raw.startsWith("[ERROR] ")) {
         // Server-side error — surface it as a log line and stop
@@ -109,6 +174,26 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     }
 
     es.onerror = () => {
+      if (streamRangeId) void refreshRangeStateFromServer(streamRangeId)
+      // #region agent log
+      fetch("http://127.0.0.1:7431/ingest/3a0c99c1-e8d2-401b-aa16-3dfe66e19e42", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "76ce71" },
+        body: JSON.stringify({
+          sessionId: "76ce71",
+          hypothesisId: "H5",
+          location: "deploy-log-context.tsx:onerror",
+          message: "EventSource onerror (close or network)",
+          data: {
+            lastParsedState: debugLastStateRef.current,
+            streamRangeId: streamRangeId || null,
+            pbRefreshScheduled: Boolean(streamRangeId),
+          },
+          timestamp: Date.now(),
+          runId: "post-fix",
+        }),
+      }).catch(() => {})
+      // #endregion
       // The server closed the connection (stream finished) or a network error
       // occurred.  Either way, mark streaming as done so the UI can react.
       if (esRef.current) {
@@ -118,31 +203,13 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
       isStreamingRef.current = false
       setIsStreaming(false)
     }
-  }, [stopStreaming])
+  }, [stopStreaming, refreshRangeStateFromServer])
 
   const clearLogs = useCallback(() => {
     setLines([])
     setRangeState(null)
     setActiveRangeId(null)
     setStreamStartedAt(null)
-  }, [])
-
-  const refreshRangeStateFromServer = useCallback(async (rangeId: string) => {
-    if (!rangeId?.trim()) return
-    try {
-      const res = await fetch(
-        `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId.trim())}`,
-        { cache: "no-store" },
-      )
-      if (!res.ok) return
-      const data = (await res.json()) as { rangeState?: string }
-      const rs = data.rangeState
-      if (typeof rs === "string" && rs.trim()) {
-        setRangeState(rs.trim().toUpperCase())
-      }
-    } catch {
-      /* ignore network errors */
-    }
   }, [])
 
   // Clean up on provider unmount

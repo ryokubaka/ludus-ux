@@ -251,6 +251,48 @@ function runMigrations(db: BetterSqlite3.Database): void {
         ALTER TABLE goad_tasks ADD COLUMN has_network_rules INTEGER NOT NULL DEFAULT 0;
       `)
     },
+
+    // v9 — Durable LUX markers for Ludus range log history (testing toggle + deploy tags).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lux_range_testing_events (
+          id            TEXT    PRIMARY KEY,
+          range_id      TEXT    NOT NULL,
+          username      TEXT    NOT NULL,
+          op_type       TEXT    NOT NULL,
+          range_op_id   TEXT,
+          requested_at  INTEGER NOT NULL,
+          completed_at  INTEGER NOT NULL,
+          success       INTEGER NOT NULL DEFAULT 0,
+          ludus_log_id  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_testing_range_user
+          ON lux_range_testing_events(range_id, username, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_lux_testing_ludus_id
+          ON lux_range_testing_events(ludus_log_id);
+
+        CREATE TABLE IF NOT EXISTS lux_range_deploy_tag_runs (
+          id            TEXT    PRIMARY KEY,
+          range_id      TEXT    NOT NULL,
+          username      TEXT    NOT NULL,
+          tags_csv      TEXT    NOT NULL,
+          requested_at  INTEGER NOT NULL,
+          ludus_log_id  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_deploy_tags_range_user
+          ON lux_range_deploy_tag_runs(range_id, username, requested_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_lux_deploy_tags_ludus_id
+          ON lux_range_deploy_tag_runs(ludus_log_id);
+      `)
+    },
+
+    // v10 — Optional detail on testing events (allowlist domain/IP add/remove).
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(lux_range_testing_events)").all() as { name: string }[]
+      if (!cols.some((c) => c.name === "detail")) {
+        db.exec(`ALTER TABLE lux_range_testing_events ADD COLUMN detail TEXT`)
+      }
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

@@ -38,6 +38,7 @@ import {
   FileText,
   Copy,
   Download,
+  Unlink,
   X,
   Activity,
   MapPin,
@@ -58,6 +59,9 @@ import type {
   LogHistoryEntry,
 } from "@/lib/types"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+import { goadChainDebug } from "@/lib/goad-chain-debug"
 import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
@@ -227,6 +231,7 @@ function GoadInstancePage() {
   const scopeTag = useEffectiveScopeTag()
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
+  const goadListQueryBucket = impersonation?.username ?? "self"
   const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
@@ -287,11 +292,32 @@ function GoadInstancePage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [deployHistory, setDeployHistory] = useState<LogHistoryEntry[]>([])
   const [deployHistoryLoading, setDeployHistoryLoading] = useState(false)
+  const [logMarkerEnrichment, setLogMarkerEnrichment] = useState<RangeLogMarkerEnrichment | null>(null)
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<CorrelatedHistoryEntry | null>(null)
   const [historyDeployLines, setHistoryDeployLines] = useState<string[]>([])
   const [historyGoadLines, setHistoryGoadLines] = useState<string[]>([])
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
   const [activeTab, setActiveTab] = useState(() => readInitialGoadTab())
+  // Deploy tab: poll PocketBase range state every 5s so a follow-on Ludus deploy
+  // (e.g. extension-triggered) is detected after the SSE stream closed on [DONE].
+  // When state is DEPLOYING/WAITING and no live stream, reconnect like manual refresh.
+  useEffect(() => {
+    if (activeTab !== "deploy") return
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid) return
+
+    const tick = async () => {
+      const rs = await refreshRangeStateFromServer(rid)
+      if ((rs === "DEPLOYING" || rs === "WAITING") && !isRangeStreamingRef.current) {
+        handleRefreshRangeLogs()
+      }
+    }
+    void tick()
+    const id = window.setInterval(() => {
+      void tick()
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [activeTab, instance?.ludusRangeId, refreshRangeStateFromServer, handleRefreshRangeLogs])
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
@@ -358,6 +384,20 @@ function GoadInstancePage() {
       description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
     })
   }, [rangeState, isRunning]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const prevRangeStateForChainDebug = useRef<string | null>(null)
+  useEffect(() => {
+    const prev = prevRangeStateForChainDebug.current
+    prevRangeStateForChainDebug.current = rangeState
+    const rid = instance?.ludusRangeId?.trim()
+    if (
+      rid &&
+      (prev === "DEPLOYING" || prev === "WAITING") &&
+      rangeState === "SUCCESS"
+    ) {
+      goadChainDebug("ludus_range_success", { rangeId: rid, instanceId })
+    }
+  }, [rangeState, instance?.ludusRangeId, instanceId])
 
   // Watchdog B: GOAD exited with failure (non-zero) but the range is still stuck
   // in DEPLOYING. Route through the unified abort hook so it goes through Ludus (user →
@@ -597,8 +637,12 @@ function GoadInstancePage() {
             }
           }
           for (let attempt = 0; attempt < 3; attempt++) {
+            const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeId)
-            if (!dep.error) break
+            if (!dep.error) {
+              void registerLuxDeployTagRun(rangeId, ["network"], tagRunAt)
+              break
+            }
             if (attempt < 2) await new Promise((r) => setTimeout(r, 2000))
           }
         } finally {
@@ -785,9 +829,27 @@ function GoadInstancePage() {
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
 
+  const fetchLogMarkerEnrichment = useCallback(async () => {
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid) {
+      setLogMarkerEnrichment(null)
+      return
+    }
+    try {
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...impersonationHeaders() },
+      })
+      if (!res.ok) setLogMarkerEnrichment(null)
+      else setLogMarkerEnrichment((await res.json()) as RangeLogMarkerEnrichment)
+    } catch {
+      setLogMarkerEnrichment(null)
+    }
+  }, [instance?.ludusRangeId, impersonationHeaders])
+
   const fetchAllHistory = useCallback(async () => {
-    await Promise.all([fetchTaskHistory(), fetchDeployHistory()])
-  }, [fetchTaskHistory, fetchDeployHistory])
+    await Promise.all([fetchTaskHistory(), fetchDeployHistory(), fetchLogMarkerEnrichment()])
+  }, [fetchTaskHistory, fetchDeployHistory, fetchLogMarkerEnrichment])
 
   const handleSelectHistoryEntry = useCallback(async (entry: CorrelatedHistoryEntry) => {
     setSelectedHistoryEntry(entry)
@@ -980,7 +1042,14 @@ function GoadInstancePage() {
     }
     const rulesPresent = hasNetworkRules(networkSnapshot)
 
+    goadChainDebug("goad_action_start", {
+      action,
+      rangeId: instance?.ludusRangeId ?? null,
+      instanceId,
+      goadArgsHead: goadArgs.slice(0, 240),
+    })
     const code = await run(goadArgs, instanceId, impersonation ?? undefined, instance?.ludusRangeId ?? undefined)
+    goadChainDebug("goad_action_exit", { action, exitCode: code, instanceId })
     setCurrentAction(null)
     // Capture task ID now — taskIdRef.current is kept in sync via render-time assignment
     const completedTaskId = taskIdRef.current
@@ -1031,8 +1100,10 @@ function GoadInstancePage() {
 
           let deployErr: string | null = null
           for (let attempt = 0; attempt < 3; attempt++) {
+            const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeIdForRestore)
             if (!dep.error) {
+              if (rangeIdForRestore) void registerLuxDeployTagRun(rangeIdForRestore, ["network"], tagRunAt)
               deployErr = null
               break
             }
@@ -1530,35 +1601,53 @@ function GoadInstancePage() {
         // Refresh the range list so the deleted range is dropped from context
         // and the UI automatically switches to the next available range.
         await refreshRanges()
+        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
         toast({ title: "Lab destroyed" })
         router.push("/goad")
       }
     )
   }
 
-  const handleForceDelete = () =>
+  /** Remove GOAD workspace + LUX DB link only; Ludus range and VMs stay. */
+  const handleDeleteInstanceOnly = () =>
     confirm(
-      `FORCE DELETE "${instanceId}"? This bypasses GOAD and directly destroys the Ludus range + workspace. Use only when normal destroy fails.`,
+      `Remove GOAD instance "${instanceId}" from the server? The Ludus range and its VMs will not be deleted. You can deploy a new GOAD instance into this range later. This cannot be undone.`,
       async () => {
         try {
           const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...impersonationHeaders() },
-            body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+            body: JSON.stringify({
+              ludusRangeId: instance?.ludusRangeId,
+              skipRangeDeletion: true,
+            }),
           })
           const result = await res.json()
-          // Refresh range list so the deleted range is dropped and UI auto-switches
           await refreshRanges()
+          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
+          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
           if (result.errors?.length) {
-            toast({ title: "Force delete partially succeeded", description: result.errors.join("; "), variant: "destructive" })
+            toast({
+              title: "Remove instance completed with issues",
+              description: result.errors.join("; "),
+              variant: "destructive",
+            })
           } else {
-            toast({ title: "Instance force-deleted" })
+            toast({
+              title: "GOAD instance removed",
+              description: "Workspace deleted; Ludus range was left intact.",
+            })
           }
           router.push("/goad")
         } catch (err) {
-          toast({ title: "Force delete failed", description: (err as Error).message, variant: "destructive" })
+          toast({
+            title: "Remove instance failed",
+            description: (err as Error).message,
+            variant: "destructive",
+          })
         }
-      }
+      },
     )
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === instance?.lab)
@@ -1838,20 +1927,20 @@ function GoadInstancePage() {
             )}
             <Button
               size="sm" variant="outline"
+              className="border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              onClick={handleDeleteInstanceOnly} disabled={isRunning || !!pendingAction}
+              title="Remove GOAD workspace on the server; Ludus range and VMs are not deleted"
+            >
+              <Unlink className="h-3.5 w-3.5" />
+              Delete Instance Only
+            </Button>
+            <Button
+              size="sm" variant="outline"
               className="border-red-500/30 text-red-400 hover:bg-red-500/10"
               onClick={handleDestroy} disabled={isRunning || !!pendingAction}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete Instance + Range
-            </Button>
-            <Button
-              size="sm" variant="outline"
-              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              onClick={handleForceDelete} disabled={isRunning || !!pendingAction}
-              title="Force-delete: bypass GOAD and directly remove the Ludus range + workspace"
-            >
-              <X className="h-3.5 w-3.5" />
-              Force Delete
             </Button>
           </div>
         </CardContent>
@@ -2622,6 +2711,7 @@ function GoadInstancePage() {
                         row={entry}
                         selectedId={null}
                         showTemplate
+                        enrichment={logMarkerEnrichment}
                         onSelectRow={(row) => void handleSelectHistoryEntry(row)}
                       />
                     ))}

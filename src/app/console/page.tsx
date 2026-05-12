@@ -16,6 +16,7 @@ import {
   Download,
   ExternalLink,
 } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 interface FlatVM extends VMObject {
   rangeID: string
@@ -50,6 +51,9 @@ function ConsolePageInner() {
 
   // Iframe src — changing it reloads the iframe
   const [iframeSrc, setIframeSrc] = useState<string>("")
+
+  /** Brief spin on reconnect so the toolbar icon visibly reacts. */
+  const [reconnectingConsole, setReconnectingConsole] = useState(false)
 
   // Whether the VM picker dropdown is open
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -171,6 +175,7 @@ function ConsolePageInner() {
 
   function reloadConsole() {
     if (!activeVm) return
+    setReconnectingConsole(true)
     // Force reload by briefly clearing then restoring src
     setIframeSrc("")
     setTimeout(() => {
@@ -178,6 +183,7 @@ function ConsolePageInner() {
       const name = encodeURIComponent(activeVm.name)
       setIframeSrc(`/novnc-console.html?vmId=${vmid}&vmName=${name}`)
     }, 50)
+    window.setTimeout(() => setReconnectingConsole(false), 600)
   }
 
   return (
@@ -308,7 +314,7 @@ function ConsolePageInner() {
             title="Reconnect console"
             className="ml-1 p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={cn("h-3.5 w-3.5", reconnectingConsole && "animate-spin")} />
           </button>
         )}
 

@@ -15,7 +15,7 @@ services:
       # that Docker cannot resolve (VPN-only DNS, Windows hosts file entries, etc.).
       # Set this in your .env and the container will add the mapping to /etc/hosts automatically.
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
-      # Session encryption secret (required in production: min 32 chars, not a placeholder — see README)
+      # Session encryption secret (required in production: min 32 chars, not a placeholder — see docs/environment.md)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}
       # Lab-only: accept self-signed TLS to Ludus/PocketBase/Proxmox. Omit or false in hardened production (use NODE_EXTRA_CA_CERTS).
       - LUDUS_TLS_INSECURE=${LUDUS_TLS_INSECURE:-true}

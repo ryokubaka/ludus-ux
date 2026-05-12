@@ -31,11 +31,12 @@ import {
   Shield,
 } from "lucide-react"
 import Link from "next/link"
-import type { GoadLabDef, GoadExtensionDef, GoadCatalog, TemplateObject } from "@/lib/types"
+import type { GoadLabDef, GoadExtensionDef, GoadCatalog, GoadInstance, TemplateObject } from "@/lib/types"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
+import { goadChainDebug } from "@/lib/goad-chain-debug"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
@@ -134,16 +135,29 @@ function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
+/** True when GOAD instance.json extensions match wizard selection (order-insensitive). */
+function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: string[]): boolean {
+  if (!instanceExtensions || instanceExtensions.length !== wizard.length) return false
+  const a = [...instanceExtensions].sort()
+  const b = [...wizard].sort()
+  return a.every((v, i) => v === b[i])
+}
+
 /**
- * With extensions: after `set_extensions` + workspace (`create_empty` or `use`),
- * run REPL `install` so GOAD does provide → provision_lab → install_extension per ext
- * in one flow. Trades extra Ludus `range deploy` per extension for a single stdin
- * session (no piped lines after long `ansible-playbook` that would never run).
+ * Single stdin `--repl` session: after `set_extensions` + workspace (`create_empty` or `use`),
+ * with extensions we run `provide` → `prepare_jumpbox` → `provision_lab` → one
+ * `provision_extension` per ext (one Ludus deploy). We avoid REPL `install`, which
+ * would call `install_extension` per ext and re-run `ludus range deploy` each time.
+ *
+ * Re-use path: same decomposed tail only if instance.json extensions already match
+ * the wizard (otherwise `install` so GOAD can `enable_extension` + deploy for new ext).
  */
 function ludusWizardInstallArgs(
   selectedLab: string,
   exts: string[],
-  mode: { kind: "fresh" } | { kind: "existing"; instanceId: string },
+  mode:
+    | { kind: "fresh" }
+    | { kind: "existing"; instanceId: string; useDecomposedExtensionProvisioning: boolean },
 ): string {
   if (exts.length === 0) {
     return mode.kind === "existing"
@@ -151,10 +165,19 @@ function ludusWizardInstallArgs(
       : `-l ${shellQuote(selectedLab)} -p ludus -m local -t install`
   }
   const extList = exts.join(" ")
+  const postWorkspaceInstall = [
+    "provide",
+    "prepare_jumpbox",
+    "provision_lab",
+    ...exts.map((e) => `provision_extension ${e}`),
+  ].join(";")
+
   if (mode.kind === "existing") {
-    // GOAD loads a default instance on startup; `use` / `set_*` fail until `unload`.
-    return `--repl "unload;use ${mode.instanceId};set_extensions ${extList};install"`
+    const head = `unload;use ${mode.instanceId};set_extensions ${extList}`
+    const tail = mode.useDecomposedExtensionProvisioning ? postWorkspaceInstall : "install"
+    return `--repl "${head};${tail}"`
   }
+
   const setup = [
     "unload",
     `set_lab ${selectedLab}`,
@@ -163,7 +186,7 @@ function ludusWizardInstallArgs(
     `set_extensions ${extList}`,
     "create_empty",
   ].join(";")
-  return `--repl "${setup};install"`
+  return `--repl "${setup};${postWorkspaceInstall}"`
 }
 
 export default function NewGoadInstancePage() {
@@ -416,7 +439,7 @@ export default function NewGoadInstancePage() {
     // selected range (to reuse it) and diff for new instances when needed.
     // When impersonating, also snapshot the admin view so the fallback poll
     // check doesn't falsely flag the admin's existing instances as new.
-    type InstanceSnapshot = { instanceId: string; ludusRangeId?: string }
+    type InstanceSnapshot = GoadInstance
     let instancesBefore: InstanceSnapshot[] = []
     try {
       const impHeaders = getImpersonationHeaders()
@@ -431,7 +454,7 @@ export default function NewGoadInstancePage() {
           const adminSnap = await fetch("/api/goad/instances")
           if (adminSnap.ok) {
             const adminData = await adminSnap.json()
-            const adminIds = (adminData.instances ?? []) as InstanceSnapshot[]
+            const adminIds = (adminData.instances ?? []) as GoadInstance[]
             for (const inst of adminIds) {
               if (!instancesBefore.some((i) => i.instanceId === inst.instanceId)) {
                 instancesBefore.push(inst)
@@ -514,10 +537,20 @@ export default function NewGoadInstancePage() {
         setClearingRange(false)
       }
 
-      // 2. Run install: GOAD REPL `install` after set_extensions (+ use / create_empty).
+      // 2. Run GOAD: one REPL session — decomposed `provide` + `provision_lab` +
+      // `provision_extension` per ext when instance extensions match wizard (else `install`).
+      const useDecomposed = extensionSetsEqual(existingInstance.extensions, exts)
       const args = ludusWizardInstallArgs(selectedLab, exts, {
         kind: "existing",
         instanceId: existingInstance.instanceId,
+        useDecomposedExtensionProvisioning: useDecomposed,
+      })
+      goadChainDebug("goad_install_issued", {
+        path: "reuse-instance",
+        rangeId: rangeId ?? null,
+        lab: selectedLab,
+        extensions: exts,
+        argsHead: args.slice(0, 240),
       })
       run(args, undefined, impersonation ?? undefined, rangeId ?? undefined, ludusDeployTagsOpt)
 
@@ -596,6 +629,13 @@ export default function NewGoadInstancePage() {
       }
 
       const args = ludusWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
+      goadChainDebug("goad_install_issued", {
+        path: "fresh-install",
+        rangeId: rangeId ?? null,
+        lab: selectedLab,
+        extensions: exts,
+        argsHead: args.slice(0, 240),
+      })
       run(args, undefined, impersonation ?? undefined, rangeId ?? undefined, ludusDeployTagsOpt)
 
       // Poll until GOAD creates the new workspace directory, then redirect.

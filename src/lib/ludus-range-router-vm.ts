@@ -11,6 +11,21 @@ export function isLudusRangeRouterVmName(vmName: string | undefined | null): boo
   return n.includes("-router-debian") || n.includes("_router_debian")
 }
 
+/** First VM that matches Ludus range-router naming (`…-router-debian…`). */
+export function findLudusRangeRouterVm(vms: VMObject[] | undefined | null): VMObject | null {
+  if (!vms?.length) return null
+  for (const vm of vms) {
+    const label = vm.name || vm.vmName || ""
+    if (isLudusRangeRouterVmName(label)) return vm
+  }
+  return null
+}
+
+/** Matches dashboard / VM table semantics for “running”. */
+export function isLudusVmRunning(vm: VMObject): boolean {
+  return vm.poweredOn === true || vm.powerState === "running"
+}
+
 function proxmoxIdForVm(vm: VMObject): number | null {
   const raw = vm.proxmoxID ?? vm.ID
   const id = typeof raw === "number" ? raw : Number(raw)

@@ -49,7 +49,7 @@ import {
   ExternalLink,
   ShieldAlert,
 } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
@@ -58,6 +58,7 @@ import {
 } from "@/lib/goad-deploy-history-correlation"
 import { useRange } from "@/lib/range-context"
 import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useElapsed } from "@/hooks/use-elapsed"
@@ -164,8 +165,8 @@ export function DashboardPageClient() {
     queryFn: async () => {
       const result = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
       if (result.error) {
-        // A 400 with no selectedRangeId just means no default range — not an error worth showing
-        if (result.status === 400 && !selectedRangeId) return null
+        // Legacy: synthetic 400 for missing rangeID (prefer empty-id guard in api.ts now).
+        if (result.status === 400 && !selectedRangeId?.trim()) return null
         throw new Error(typeof result.error === "string" ? result.error : "Failed to load range status")
       }
       if (!result.data) return null
@@ -240,7 +241,10 @@ export function DashboardPageClient() {
     queryKey: queryKeys.goadInstanceForRange(scopeTag, selectedRangeId ?? ""),
     queryFn: async () => {
       if (!selectedRangeId) return null
-      const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`)
+      const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
       if (!res.ok) return null
       const data = (await res.json()) as { instanceId?: string | null }
       return data.instanceId && typeof data.instanceId === "string" ? data.instanceId : null
@@ -271,6 +275,22 @@ export function DashboardPageClient() {
       const tasksRunning = (q.state.data ?? []).some((t) => t.status === "running")
       return tasksRunning || shouldPollGoadTasksAux ? 3000 : false
     },
+  })
+
+  const { data: logMarkerEnrichment = null } = useQuery({
+    queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId),
+    queryFn: async (): Promise<RangeLogMarkerEnrichment | null> => {
+      const rid = selectedRangeId!
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as RangeLogMarkerEnrichment
+    },
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
+    staleTime: STALE.short,
+    refetchInterval: shouldPollGoadTasksAux ? 5000 : false,
   })
 
   // ── VM operation audit log (destroy_vm / remove_extension) ───────────────
@@ -434,6 +454,7 @@ export function DashboardPageClient() {
       setDeploying(false)
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
       setTimeout(() => setShowLogs(false), 5000)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -536,26 +557,7 @@ export function DashboardPageClient() {
         void pruneKnownHosts(ipsForKnownHosts)
       }
 
-      // ── GOAD workspace cleanup ──────────────────────────────────────────────
-      try {
-        const instRes = await fetch("/api/goad/instances")
-        if (instRes.ok) {
-          const instData = await instRes.json()
-          const instances: { instanceId: string; ludusRangeId?: string }[] = instData.instances ?? []
-          const associated = instances.filter((i) => i.ludusRangeId === rangeId)
-          await Promise.all(
-            associated.map((inst) =>
-              fetch(`/api/goad/instances/${encodeURIComponent(inst.instanceId)}/force-delete`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ludusRangeId: rangeId, skipRangeDeletion: true }),
-              }).catch(() => {})
-            )
-          )
-        }
-      } catch {
-        // Non-fatal
-      }
+      await cleanupGoadWorkspaceAfterRangeDelete(rangeId)
 
       toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
 
@@ -899,6 +901,7 @@ export function DashboardPageClient() {
     if (prev && !curr) {
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
     }
     prevActiveTaskIdRef.current = curr
@@ -1360,6 +1363,7 @@ export function DashboardPageClient() {
                             loading={deployHistoryListLoading}
                             onSelect={handleSelectDeployHistory}
                             selectedId={deployHistorySelectedId}
+                            enrichment={logMarkerEnrichment ?? undefined}
                             goadInstanceId={goadInstanceForRange}
                             goadTasks={
                               goadInstanceForRange
@@ -1370,6 +1374,7 @@ export function DashboardPageClient() {
                             }
                             onRefresh={() => {
                               void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
                               void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
                             }}
                             refreshing={deployHistoryRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}
@@ -1493,13 +1498,15 @@ export function DashboardPageClient() {
               variant="outline"
               className="gap-1.5"
               disabled={inventoryLoading || !inventoryDialog?.text?.trim()}
-              onClick={() =>
-                inventoryDialog?.text &&
+              onClick={() => {
+                const dlg = inventoryDialog
+                const text = dlg?.text?.trim()
+                if (!dlg || !text) return
                 downloadText(
-                  inventoryDialog.text,
-                  `${inventoryDialog.rangeId.replace(/[^a-zA-Z0-9._-]/g, "_")}-inventory.txt`,
+                  text,
+                  `${dlg.rangeId.replace(/[^a-zA-Z0-9._-]/g, "_")}-inventory.txt`,
                 )
-              }
+              }}
             >
               <Download className="h-4 w-4" /> Download
             </Button>

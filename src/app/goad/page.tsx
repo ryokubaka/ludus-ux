@@ -172,6 +172,7 @@ export default function GoadPage() {
   const {
     data: instancesData,
     isLoading: loading,
+    isFetching: instancesFetching,
   } = useQuery({
     queryKey: queryKeys.goadInstancesList(scopeTag, impUser),
     queryFn: async () => {
@@ -186,7 +187,7 @@ export default function GoadPage() {
 
   // Admin global query: always fetches ALL instances regardless of impersonation.
   // Used for the admin management table so the admin can see and assign every instance.
-  const { data: adminInstancesData, isLoading: adminLoading } = useQuery({
+  const { data: adminInstancesData, isLoading: adminLoading, isFetching: adminFetching } = useQuery({
     queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global"),
     queryFn: async () => {
       const response = await fetch("/api/goad/instances?adminView=1")
@@ -217,7 +218,7 @@ export default function GoadPage() {
   const unscopedInstances = scopedInstances.filter((i) => !i.ludusRangeId)
 
   // Recent GOAD tasks — polls while any task is running
-  const { data: tasksData } = useQuery({
+  const { data: tasksData, isFetching: tasksFetching } = useQuery({
     queryKey: queryKeys.goadTasksForUser(scopeTag, impUser),
     queryFn: async () => {
       const res = await fetch("/api/goad/tasks", { headers: impersonationHeaders() })
@@ -232,6 +233,7 @@ export default function GoadPage() {
   })
 
   const recentTasks = tasksData ?? []
+  const goadRefreshSpin = instancesFetching || adminFetching || tasksFetching
 
   const invalidateGoad = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, impUser) })
@@ -328,7 +330,7 @@ export default function GoadPage() {
             <Link href="/goad/new"><Plus className="h-4 w-4" />New Instance</Link>
           </Button>
           <Button variant="ghost" size="icon" onClick={invalidateGoad} disabled={loading || adminLoading}>
-            <RefreshCw className={cn("h-4 w-4", (loading || adminLoading) && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", (loading || adminLoading || goadRefreshSpin) && "animate-spin")} />
           </Button>
         </div>
       </div>
@@ -556,8 +558,8 @@ export default function GoadPage() {
                 <History className="h-3.5 w-3.5" />
                 Recent Operations
               </p>
-              <Button variant="ghost" size="icon-sm" onClick={invalidateGoad}>
-                <RefreshCw className="h-3.5 w-3.5" />
+              <Button variant="ghost" size="icon-sm" onClick={invalidateGoad} disabled={loading || adminLoading}>
+                <RefreshCw className={cn("h-3.5 w-3.5", (loading || adminLoading || goadRefreshSpin) && "animate-spin")} />
               </Button>
             </div>
 

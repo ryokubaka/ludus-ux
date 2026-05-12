@@ -1973,11 +1973,14 @@ paths:
   /api/goad/instances/{instanceId}/force-delete:
     post:
       tags: [GOAD]
-      summary: Force-delete a GOAD instance
+      summary: Delete GOAD workspace (and optionally the Ludus range)
       description: |
-        Deletes the GOAD instance's Ludus range (with `force=true`), removes
-        the workspace directory via SSH, and cleans up the SQLite ownership
-        record.
+        By default: deletes the instance's dedicated Ludus range (`force=true`),
+        removes `<goadPath>/workspace/<instanceId>` via SSH, and deletes the
+        SQLite `goad_instance_ranges` row.
+
+        With `skipRangeDeletion: true`, only the workspace + SQLite row are removed;
+        the Ludus range and VMs are left intact.
       operationId: forceDeleteGoadInstance
       security:
         - sessionCookie: []
@@ -1999,6 +2002,7 @@ paths:
                 skipRangeDeletion:
                   type: boolean
                   default: false
+                  description: When true, do not call Ludus range DELETE (workspace + SQLite link only).
       responses:
         '200':
           description: Deletion result.

@@ -4,7 +4,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
-## [1.0.0] — 2026-05-07
+## [1.0.0] — 2026-05-12
 
 **LUX**
 - [Add] First stable release — out of beta!

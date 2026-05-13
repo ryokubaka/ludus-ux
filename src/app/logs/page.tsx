@@ -12,7 +12,7 @@ import { LogViewer } from "@/components/range/log-viewer"
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import { Activity, RefreshCw, Trash2, Download, History, ArrowLeft, ShieldAlert } from "lucide-react"
-import { ludusApi, getImpersonationApiKey, getImpersonationHeaders, getVmOperationLog } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog } from "@/lib/api"
 import {
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
@@ -193,14 +193,12 @@ export default function LogsPage() {
 
     ;(async () => {
       try {
-        const impKey = getImpersonationApiKey()
-        const headers: Record<string, string> = {}
-        if (impKey) headers["X-Impersonate-Apikey"] = impKey
-
+        // No X-Impersonate-Apikey — the server reads the apiKey from the
+        // session cookie via resolveAdminImpersonationFromRequest.
         const streamUrl = selectedRangeId
           ? `/api/logs/stream?rangeId=${selectedRangeId}`
           : "/api/logs/stream"
-        const res = await fetch(streamUrl, { signal: ctrl.signal, headers })
+        const res = await fetch(streamUrl, { signal: ctrl.signal })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const dec = new TextDecoder()

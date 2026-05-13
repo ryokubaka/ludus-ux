@@ -1,5 +1,10 @@
 "use client"
 
+/** Milliseconds without a new log line before the deploy stream is considered stalled
+ *  and will be reconnected.  15 s is aggressive enough to feel responsive without
+ *  causing spurious reconnects on Ludus' ~10 s log-flush intervals. */
+const DEPLOY_STREAM_STALL_MS = 15_000
+
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
@@ -329,7 +334,7 @@ function GoadInstancePage() {
         const edge = !prevPbDeployingRef.current
         const stalled =
           prevPbDeployingRef.current &&
-          now - lastDeployStreamReconnectRef.current > 45_000
+          now - lastDeployStreamReconnectRef.current > DEPLOY_STREAM_STALL_MS
         if (edge || stalled) {
           handleRefreshRangeLogs()
           lastDeployStreamReconnectRef.current = now
@@ -413,6 +418,8 @@ function GoadInstancePage() {
       title: "Range deployment failed",
       description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
     })
+  // Intentionally omits `stop` and `toast` — both are stable refs; adding them
+  // would cause unnecessary re-registrations without changing behavior.
   }, [rangeState, isRunning]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const prevRangeStateForChainDebug = useRef<string | null>(null)
@@ -456,12 +463,16 @@ function GoadInstancePage() {
       description:
         "GOAD finished with a non-zero exit code while the range was still deploying. Resetting the range state automatically.",
     })
+  // Intentionally omits `taskId`, `abortRangeUnified`, `stopRangeStreaming`, and `toast`
+  // — stable refs/callbacks that must not re-trigger the effect on every render.
   }, [exitCode, rangeState, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read ?tab=<value> from the URL on first mount (e.g. redirected from goad/new)
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab")
     if (tab) setActiveTab(normalizeGoadInstanceTab(tab))
+  // Run only once on mount — URL params don't change and we don't want to
+  // clobber a tab the user manually selected after initial load.
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start range log streaming and (conditionally) switch to Deploy Status
@@ -572,6 +583,9 @@ function GoadInstancePage() {
         cancelled = true
       }
     }
+  // Intentionally omits streaming callbacks and action-state vars — they are
+  // stable refs or change in response to the same triggers. Re-registering on
+  // every state change would cause double-starts of the range log stream.
   }, [isRunning, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // On page load / refresh OR when a new task starts: read the server-persisted
@@ -599,6 +613,8 @@ function GoadInstancePage() {
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
+  // Only re-run when taskId changes — the setter functions are stable and
+  // don't need to be in the dep list.
   }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Server-side resume: on mount, query /api/goad/tasks for any running task on
@@ -631,6 +647,8 @@ function GoadInstancePage() {
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
+  // Only re-run when instanceId changes — resumeTask and impersonationHeaders
+  // are stable and including them would cause spurious re-resume attempts.
   }, [instanceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wizard post-deploy effect: after a wizard-initiated GOAD task finishes,
@@ -852,6 +870,8 @@ function GoadInstancePage() {
       setInventories([])
     }
     setInventoriesLoading(false)
+  // Omits `selectedInventoryName` setter — stable; adding it would cause the
+  // callback to be recreated whenever selection changes, breaking memoization.
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copyInventoryToClipboard = (content: string, name: string) => {
@@ -882,6 +902,8 @@ function GoadInstancePage() {
       ))
     } catch {}
     setHistoryLoading(false)
+  // Omits setter functions — all stable; only re-create when the instance or
+  // impersonation scope changes.
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchDeployHistory = useCallback(async () => {
@@ -981,6 +1003,9 @@ function GoadInstancePage() {
         setTemplates(extractArray<TemplateObject>(d))
       })
       .catch(() => {})
+  // `fetchInstances` is a useCallback that already captures instanceId and
+  // impersonationHeaders — it is the right trigger for the whole block.
+  // The direct fetch calls inside are intentionally stable one-shots.
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

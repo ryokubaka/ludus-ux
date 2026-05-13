@@ -2,7 +2,7 @@
  * POST /api/settings/test-credentials
  *
  * Admin-only diagnostic: verifies root SSH (same path as admin tunnel / pvesh)
- * and reachability of the Ludus admin API URL using the current session API key.
+ * and Ludus admin API reachability with the **session** API key (GET /user/all).
  *
  * Optional JSON body fields override persisted settings for this request only
  * (use the Settings form draft without saving first).
@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
+import { resolveLudusAdminApiBase } from "@/lib/ludus-client"
 import {
   describePrivateKeyPermissionIssue,
   getResolvedPrivateKeyPath,
@@ -45,16 +46,6 @@ function mergeTestSettings(base: RuntimeSettings, body: Body): RuntimeSettings {
   return next
 }
 
-function resolveAdminBaseUrl(s: Pick<RuntimeSettings, "ludusUrl" | "ludusAdminUrl">): string {
-  let baseUrl = s.ludusUrl || ""
-  if ((s.ludusAdminUrl || "").trim()) {
-    baseUrl = s.ludusAdminUrl.trim()
-  } else if (baseUrl) {
-    baseUrl = baseUrl.replace(/:8080\b/, ":8081")
-  }
-  return baseUrl.replace(/\/$/, "")
-}
-
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)
   if (!session?.isAdmin) {
@@ -71,6 +62,7 @@ export async function POST(request: NextRequest) {
   const effective = mergeTestSettings(getSettings(), body)
   const apiKey = session.apiKey || ""
 
+  const adminBase = resolveLudusAdminApiBase(effective)
   const keyProbe = probeSshKeyMount(effective)
   const keyPath = getResolvedPrivateKeyPath(effective)
   const pw = (effective.proxmoxSshPassword || "").trim()
@@ -144,7 +136,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Admin API (same URL logic as ludus-client) ────────────────────────────
-  const adminBase = resolveAdminBaseUrl(effective)
   const adminApi: {
     ok: boolean
     baseUrl: string

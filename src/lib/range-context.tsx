@@ -108,10 +108,10 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refreshRanges = useCallback(async () => {
-    await queryClient.refetchQueries({
-      queryKey: queryKeys.accessibleRangesList(readClientEffectiveScopeTagSync()),
-      exact: true,
-    })
+    // Invalidate every scoped copy of the accessible-ranges query — a single
+    // exact refetch can miss the active observer's key after impersonation /
+    // scope hydration timing, leaving deleted ranges visible in the sidebar.
+    await queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
   }, [queryClient])
 
   useEffect(() => {

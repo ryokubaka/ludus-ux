@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { bustAdminCache } from "@/lib/admin-data"
-import { ludusRequest } from "@/lib/ludus-client"
+import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
+import { getSettings } from "@/lib/settings-store"
 import { setOwnership } from "@/lib/range-ownership-store"
 
 type CreateRangeBody = {
@@ -37,14 +39,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeID and name are required" }, { status: 400 })
   }
 
-  // Determine the effective username — use impersonated username when an admin
-  // is creating a range on behalf of another user.
-  const impersonateAs   = request.headers.get("X-Impersonate-As") || null
-  const impersonateKey  = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
-  const effectiveApiKey  = impersonateKey  || session.apiKey
-  const effectiveUsername = (session.isAdmin && impersonateAs) ? impersonateAs : session.username
+  // Effective user for assign; create uses same session key first, then optional ROOT (see ludus-client admin base).
+  const { apiKey: impersonateKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
+  const effectiveApiKey = impersonateKey || session.apiKey
+  const effectiveUsername = impersonateAs || session.username
+
+  const { rootApiKey } = getSettings()
+  const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, rootApiKey)
+  if (!createRangeApiKey) {
+    return NextResponse.json(
+      {
+        error:
+          "No Ludus API key for range creation — log in with your Ludus API key, or set ROOT in Settings / `LUDUS_ROOT_API_KEY` for headless use.",
+      },
+      { status: 500 },
+    )
+  }
 
   // Always assign the range to the effective user so it's visible in their
   // account immediately.  Merge with any userIDs the caller specified.
@@ -54,7 +64,7 @@ export async function POST(request: NextRequest) {
   try {
     const createRes = await ludusRequest<Record<string, unknown>>(`/ranges/create`, {
       method: "POST",
-      apiKey: effectiveApiKey,
+      apiKey: createRangeApiKey,
       useAdminEndpoint: true,
       body: { ...(body as CreateRangeBody), userID },
     })

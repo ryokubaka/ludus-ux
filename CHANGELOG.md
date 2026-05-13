@@ -13,7 +13,17 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Improve] **Range logs → History** — Saved deploy logs show clock times the same way as the live log, in order top to bottom, without confusing extra digits on the time.
 - [Improve] **Groups → remove a shared range** — Adding or removing a range from a group may need that range’s **router** machine turned on first. Dialog box now allows router power operations and ability to add/remove from the group.
 - [Improve] **Refresh feedback** — Groups, GOAD home (including recent activity), and the console **Reconnect** button show a brief spinner while things load again.
+- [Fix] **Range sidebar** — `refreshRanges()` now invalidates every scoped `ranges/accessible` query so deleted ranges disappear reliably after impersonation / cache timing quirks
 - [Fix] **Dashboard** — No more brief HTTP 400 error on the home dashboard while a range is deploying or live logs are connecting
+- [Fix] **GOAD → Deploy New Instance** — Abort deploy (with toast) when dedicated Ludus range creation fails instead of running GOAD with no `LUDUS_RANGE_ID`; re-select that range and refresh the accessible-range list before redirect so the shell sidebar matches the GOAD lab
+- [Fix] **Ludus admin & range creation** — Infer admin API URL when unset; `POST /ranges/create` (and GOAD init-range) use the session Ludus key first, with optional ROOT fallback.
+- [Fix] **Settings root API key** — Persists to SQLite, encrypted at rest, env overrides DB, trims BOM/quotes.
+- [Security] **Impersonation API key** removed from `sessionStorage` — key lives only in the encrypted `httpOnly` session cookie; all server routes derive it via `resolveAdminImpersonationFromRequest`
+- [Security] **Task stream IDOR** — non-admin access to `/api/goad/tasks/:id/stream` for an unknown task now returns 404
+- [Security] **Proxy error sanitisation** — internal exception details logged server-side only; client receives generic `"Internal proxy error"`
+- [Security] **Impersonation header merge** — both `X-Impersonate-*` headers required together; a single header falls back to the session cookie
+- [Perf] **GOAD wizard redirect** — instant redirect to instance page on first `[TASKID]` SSE event; 30-minute poll removed
+- [Perf] **TanStack `staleTime` audit** — admin ranges, GOAD instance lists, and task lists promoted to `STALE.medium`
 
 **GOAD**
 - [Add] **Resizable log split** — Drag the center handle between **Ludus range logs** and **GOAD logs** on Deploy Status and Logs History; panel widths persist (browser localStorage).
@@ -21,6 +31,12 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Improve] **GOAD terminal** — If the live stream ends without a clear “finished with exit code …” line, the UI still learns success or failure from the server once the task has stopped.
 - [Fix] **Range logs** — Ansible line colouring ignores benign JSON `"failed": false`; GOAD instance/new pages fill the shell below the impersonation banner without hard-coded `100vh` offsets.
 - [Fix] **Extension Installations** — Lab setup and each add-on now run one after another on the server so nothing gets skipped.
+
+**Docs**
+- [Add] `docs/workflows.md` — plain-English guide: Ludus ranges, GOAD instances, two-stage deploy, redeployment, network rules queue, and admin impersonation
+- [Add] `docs/architecture.md` — GOAD task flow diagram, SSE stream resume notes, updated design decisions
+- [Add] `docs/features.md` — dedicated Admin Impersonation and GOAD redeploy semantics sections
+- [Add] `docs/about.md` — GOAD ↔ Ludus relationship summary
 
 ---
 

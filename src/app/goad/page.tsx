@@ -182,7 +182,10 @@ export default function GoadPage() {
       if (data.configured === false) return { configured: false, instances: [] as GoadInstance[], error: null }
       return { configured: true, instances: (data.instances || []) as GoadInstance[], error: data.error ?? null }
     },
-    staleTime: STALE.short,
+    // GOAD instances change only when the user deploys a new lab or deletes one.
+    // medium stale avoids refetching on every window focus; manual invalidation
+    // on deploy/delete keeps the list fresh when it actually changes.
+    staleTime: STALE.medium,
   })
 
   // Admin global query: always fetches ALL instances regardless of impersonation.
@@ -195,7 +198,7 @@ export default function GoadPage() {
       if (!response.ok || data.configured === false) return [] as GoadInstance[]
       return (data.instances || []) as GoadInstance[]
     },
-    staleTime: STALE.short,
+    staleTime: STALE.medium,
     enabled: isAdmin,
   })
 
@@ -217,7 +220,10 @@ export default function GoadPage() {
   const rangeInstances = scopedInstances.filter((i) => !!i.ludusRangeId)
   const unscopedInstances = scopedInstances.filter((i) => !i.ludusRangeId)
 
-  // Recent GOAD tasks — polls while any task is running
+  // Recent GOAD tasks — invalidated by SSE events instead of polling.
+  // The task-events SSE endpoint emits [TASK_UPDATED] on every status change;
+  // the useEffect below subscribes and calls invalidateQueries. The refetchInterval
+  // is kept as a fallback for environments where SSE is blocked (e.g. some proxies).
   const { data: tasksData, isFetching: tasksFetching } = useQuery({
     queryKey: queryKeys.goadTasksForUser(scopeTag, impUser),
     queryFn: async () => {
@@ -225,12 +231,31 @@ export default function GoadPage() {
       const data = await res.json()
       return (data.tasks ?? []).slice(0, 8) as TaskSummary[]
     },
-    staleTime: STALE.short,
+    staleTime: STALE.medium,
+    // Fallback polling: only when a task is running AND the SSE hasn't fired yet.
     refetchInterval: (query) => {
       const tasks = query.state.data as TaskSummary[] | undefined
-      return tasks?.some((t) => t.status === "running") ? 3000 : false
+      return tasks?.some((t) => t.status === "running") ? 15_000 : false
     },
   })
+
+  // SSE-driven invalidation: subscribe to the task events stream so the task
+  // list refreshes immediately on status change without constant polling.
+  useEffect(() => {
+    const es = new EventSource("/api/goad/tasks/events")
+    es.onmessage = (event: MessageEvent<string>) => {
+      if (event.data.startsWith("[TASK_UPDATED]")) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.goadTasksForUser(scopeTag, impUser),
+        })
+      }
+    }
+    es.onerror = () => {
+      // Connection closed (server restart, network hiccup) — browser auto-reconnects.
+    }
+    return () => es.close()
+  // Re-subscribe when the effective scope changes (e.g. impersonation switch).
+  }, [queryClient, scopeTag, impUser]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const recentTasks = tasksData ?? []
   const goadRefreshSpin = instancesFetching || adminFetching || tasksFetching

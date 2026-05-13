@@ -4,12 +4,13 @@ Start with the [project README](../README.md) for a short overview, then use the
 
 | Topic | Description |
 |--------|----------------|
-| [About LUX](about.md) | Why use it, Ludus Pro vs LUX, future ideas |
+| [About LUX](about.md) | Why use it, Ludus Pro vs LUX, GOAD/Ludus relationship |
+| [Workflows](workflows.md) | **How it works** — Ludus ranges, GOAD instances, deploy steps, redeployment, firewall queue, impersonation (start here if you're new) |
 | [Getting started](getting-started.md) | Requirements, Docker, install (quickstart or manual), upgrade |
 | [SSH and authentication](ssh-and-auth.md) | Root vs session auth, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |
-| [Features](features.md) | What the UI covers (ranges, GOAD, admin, etc.) |
-| [Architecture](architecture.md) | Stack, request flow, design notes |
+| [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
+| [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |
 | [Persistent data](persistent-data.md) | What lives under `data/` and related paths |
 | [Development](development.md) | Local `npm run dev`, Playwright E2E |
 | [API](api.md) | OpenAPI spec and Swagger UI |

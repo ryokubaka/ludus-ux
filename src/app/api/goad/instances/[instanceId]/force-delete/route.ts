@@ -17,6 +17,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
@@ -54,9 +55,7 @@ export async function POST(
     skipRangeDeletion?: boolean
   }
 
-  const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
+  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const results: { rangeDeleted: boolean; workspaceRemoved: boolean; errors: string[] } = {

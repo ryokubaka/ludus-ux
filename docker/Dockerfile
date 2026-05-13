@@ -71,6 +71,10 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Native addon: Next standalone trace can omit `better_sqlite3.node`, which breaks
+# all SQLite-backed features (settings decrypt, GOAD tasks, etc.) at runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+
 # Release notes API (`GET /api/changelog`) reads `CHANGELOG.md` from cwd — not part of Next standalone trace.
 COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 

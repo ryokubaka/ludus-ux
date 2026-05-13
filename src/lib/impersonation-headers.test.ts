@@ -33,17 +33,27 @@ describe("impersonation-headers", () => {
     Reflect.deleteProperty(globalThis, "window")
   })
 
-  it("reads headers from sessionStorage", () => {
+  it("reads only X-Impersonate-As from sessionStorage (apiKey is not exposed)", () => {
+    // Storage may contain legacy {apiKey, username} — only username should be emitted.
     mem[IMPERSONATION_STORAGE_KEY] = JSON.stringify({ apiKey: "k1", username: "u1" })
     expect(readImpersonationHeadersFromSessionStorage()).toEqual({
-      "X-Impersonate-Apikey": "k1",
       "X-Impersonate-As": "u1",
     })
   })
 
-  it("builds headers from data object", () => {
-    expect(impersonationHeadersFromData({ apiKey: "a", username: "b" })).toEqual({
-      "X-Impersonate-Apikey": "a",
+  it("reads only username when stored without apiKey", () => {
+    mem[IMPERSONATION_STORAGE_KEY] = JSON.stringify({ username: "u2" })
+    expect(readImpersonationHeadersFromSessionStorage()).toEqual({
+      "X-Impersonate-As": "u2",
+    })
+  })
+
+  it("returns empty object when storage is empty", () => {
+    expect(readImpersonationHeadersFromSessionStorage()).toEqual({})
+  })
+
+  it("builds headers from data object with only X-Impersonate-As", () => {
+    expect(impersonationHeadersFromData({ username: "b" })).toEqual({
       "X-Impersonate-As": "b",
     })
     expect(impersonationHeadersFromData(null)).toEqual({})

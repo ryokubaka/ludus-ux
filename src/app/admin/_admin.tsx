@@ -81,7 +81,9 @@ export function AdminPageClient() {
         ownership: Record<string, string>
       }>
     },
-    staleTime: STALE.short,
+    // Users and ranges are modified by explicit admin actions; medium stale
+    // avoids redundant background refetches on window-focus events.
+    staleTime: STALE.medium,
   })
 
   const ranges = adminData?.ranges ?? []

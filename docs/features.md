@@ -44,6 +44,37 @@
 - **Ranges overview** — All ranges, ownership hints persisted in SQLite
 - **Shared services** — ADMIN pool VMs (Nexus, Ludus Share), deploy/start/stop/console/delete
 
+### Admin impersonation
+
+Admins can impersonate any user to see and manage their ranges and GOAD instances exactly as that user would.
+
+**How it works:**
+1. On the Users or Admin panel, click **Impersonate** next to the target user (you need their API key)
+2. LUX writes the impersonation state to the encrypted session cookie and shows a banner
+3. All subsequent API calls use the impersonated user's API key from the cookie — the key is never written to `sessionStorage` or sent in request headers
+4. Click **Stop Impersonating** in the banner to exit
+
+**What impersonation affects:**
+- GOAD instance listing and actions (scoped to the impersonated user)
+- Range creation, deploy, config edit, and abort (uses the impersonated user's Ludus API key)
+- GOAD deploys create ranges owned by the impersonated user (named `<their-username>-<lab>`)
+- All TanStack Query cache keys include the impersonated user's identity so data never leaks across identity switches
+
+**What impersonation does not affect:**
+- noVNC console — still uses each user's own PAM password; you cannot open another user's VM console without knowing their password
+- Your own admin session is preserved and you can exit impersonation at any time
+
+### GOAD redeploy semantics
+
+When you redeploy an existing GOAD instance (as opposed to creating a new one):
+
+1. **Workspace is preserved** — GOAD keeps the same instance ID, `instance.json`, and workspace directory
+2. **VMs are cleared** in the background before GOAD runs — this gives GOAD a clean Proxmox slate without deleting the range itself
+3. **The same rangeID is reused** — no new Ludus range is created; ownership and config history are retained
+4. **Firewall rules are re-applied** after GOAD finishes via the pending-network queue (same as a fresh deploy)
+
+This is the recommended way to recover from a broken install or update the lab after a GOAD version upgrade.
+
 ### Settings & branding
 
 - Runtime settings persisted in SQLite (URLs, SSH, GOAD path, secrets)

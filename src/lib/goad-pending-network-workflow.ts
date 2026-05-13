@@ -5,6 +5,7 @@
  */
 
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
+import { getHandoffByTaskId } from "@/lib/goad-deploy-handoff-store"
 import {
   setTaskHasNetworkRules,
   updateTaskPhase,
@@ -74,12 +75,33 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
   if (!instanceId) return
   if (!isDeployClassGoadCommand(command)) return
 
-  const key = ludusApiKey?.trim()
+  // Prefer in-memory apiKey, fall back to the persisted handoff record so
+  // the workflow survives a container restart between task start and completion.
+  let key = ludusApiKey?.trim()
+  let resolvedRangeId = getInstanceRangeLocal(instanceId)?.trim()
+
+  if (!key || !resolvedRangeId) {
+    const handoff = getHandoffByTaskId(taskId)
+    if (handoff) {
+      if (!key && handoff.networkRulesJson) {
+        // We don't store the API key in the handoff (it's in the session cookie),
+        // so if the in-memory key is gone we cannot proceed with Ludus calls.
+        // The pending-network file is already on disk from the handoff POST —
+        // it will be consumed whenever a valid key becomes available.
+      }
+      if (!resolvedRangeId) resolvedRangeId = handoff.rangeId?.trim()
+    }
+  }
+
   if (!key) return
+  if (!resolvedRangeId) return
+  const rangeId = resolvedRangeId
 
-  const rangeId = getInstanceRangeLocal(instanceId)?.trim()
-  if (!rangeId) return
-
+  // readUnlinkPendingNetworkSnapshot is a destructive read — it deletes the
+  // snapshot file after reading it. This is intentional: both this server
+  // workflow and the [id] page wizard effect can race to consume the same
+  // snapshot. The first caller wins; the second gets null and is a no-op.
+  // Never call putRangeConfigYaml with a snapshot that was already applied.
   const snapshot = readUnlinkPendingNetworkSnapshot(instanceId)
   if (!snapshot) return
 

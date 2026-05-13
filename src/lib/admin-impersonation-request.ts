@@ -6,10 +6,13 @@ type SessionImpersonationPick = Pick<SessionData, "isAdmin" | "impersonationApiK
 /**
  * Resolve admin impersonation credentials for a server request.
  *
- * Prefer `X-Impersonate-As` + `X-Impersonate-Apikey` when both are present: the
- * tab's sessionStorage updates immediately on user switch, while the session
- * cookie from `POST /api/auth/impersonate` can still hold the *previous*
- * impersonated user until that request finishes.
+ * Both X-Impersonate-As AND X-Impersonate-Apikey must be present to use the
+ * header path — a partial set falls back to the session cookie so a stale or
+ * missing header never silently pairs a new key with the wrong username (or
+ * vice versa). When both headers are present they take priority over the cookie
+ * because the tab's sessionStorage updates immediately on user switch while the
+ * cookie from POST /api/auth/impersonate can still hold the previous impersonated
+ * user for one round-trip.
  */
 export function resolveAdminImpersonationFromRequest(
   session: SessionImpersonationPick,
@@ -20,7 +23,7 @@ export function resolveAdminImpersonationFromRequest(
   const hAs = request.headers.get("X-Impersonate-As")
   const cKey = session.impersonationApiKey ?? null
   const cAs = session.impersonationUserId ?? null
+  // Require both headers together; fall back to cookie when only one is present.
   if (hKey && hAs) return { apiKey: hKey, userId: hAs }
-  if (hKey || hAs) return { apiKey: hKey || cKey, userId: hAs || cAs }
   return { apiKey: cKey, userId: cAs }
 }

@@ -14,6 +14,23 @@ export function pendingNetworkJsonPath(instanceId: string): string {
 }
 
 /**
+ * Write a pending-network snapshot to disk from the deploy handoff route.
+ * The file format matches what POST .../pending-network writes so that
+ * readUnlinkPendingNetworkSnapshot can consume it regardless of which path
+ * created it.
+ */
+export function writePendingNetworkSnapshot(instanceId: string, snapshotJson: string): void {
+  try {
+    fs.mkdirSync(PENDING_NETWORK_DIR, { recursive: true })
+    const filePath = pendingNetworkJsonPath(instanceId)
+    // Wrap in the same envelope the pending-network API route uses.
+    fs.writeFileSync(filePath, JSON.stringify({ snapshot: JSON.parse(snapshotJson) }), "utf8")
+  } catch {
+    // Non-fatal — caller will fall back to the inline snapshot path.
+  }
+}
+
+/**
  * Read wizard snapshot from disk and delete the file (single consumer).
  * @returns snapshot object, or null if missing / invalid / unreadable
  */

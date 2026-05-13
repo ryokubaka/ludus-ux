@@ -460,7 +460,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const run = useCallback(async (
     args: string,
     instanceId?: string,
-    impersonateAs?: { username: string; apiKey: string },
+    /** apiKey is optional: when absent, the server uses the session cookie's impersonation key. */
+    impersonateAs?: { username: string; apiKey?: string },
     /** Dedicated Ludus rangeID — injected as LUDUS_RANGE_ID so GOAD targets
      *  only this instance's range, leaving other ranges untouched. */
     rangeId?: string,

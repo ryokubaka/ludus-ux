@@ -6,7 +6,36 @@
  * Ludus v2 uses /api/v2 as the base path for all API endpoints.
  */
 
-import { getSettings } from "./settings-store"
+import { getSettings, type RuntimeSettings } from "./settings-store"
+
+/** When `ludusAdminUrl` is blank, derive admin base from main Ludus URL (`:8080`→`:8081`, or default port→8081). */
+function inferAdminBaseFromLudusUrl(mainUrl: string): string {
+  const t = mainUrl.trim().replace(/\/$/, "")
+  if (!t) return t
+  if (/:8080\b/.test(t)) return t.replace(/:8080\b/, ":8081")
+  try {
+    const u = new URL(t)
+    if (u.port === "") {
+      u.port = "8081"
+      return u.href.replace(/\/$/, "")
+    }
+  } catch {
+    /* ignore */
+  }
+  return t
+}
+
+/** Resolved admin API base URL (no trailing slash) for outbound Ludus admin calls. */
+export function resolveLudusAdminApiBase(settings: Pick<RuntimeSettings, "ludusUrl" | "ludusAdminUrl">): string {
+  const admin = settings.ludusAdminUrl?.trim()
+  if (admin) return admin.replace(/\/$/, "")
+  return inferAdminBaseFromLudusUrl(settings.ludusUrl).replace(/\/$/, "")
+}
+
+/** Session or impersonation Ludus API key first; optional ROOT for headless/automation. */
+export function ludusRangeCreateApiKey(sessionKey: string | undefined, rootApiKey: string | undefined): string {
+  return (sessionKey || "").trim() || (rootApiKey || "").trim() || ""
+}
 
 /** Walk Error.cause (Node fetch) so logs/UI show ECONNREFUSED etc., not only "fetch failed". */
 function describeFetchFailure(err: unknown): string {
@@ -46,12 +75,7 @@ export async function ludusRequest<T = unknown>(
   const settings = getSettings()
   let baseUrl = settings.ludusUrl.trim()
   if (useAdminEndpoint) {
-    const admin = settings.ludusAdminUrl?.trim()
-    if (admin) {
-      baseUrl = admin
-    } else {
-      baseUrl = settings.ludusUrl.replace(/:8080\b/, ":8081").trim()
-    }
+    baseUrl = resolveLudusAdminApiBase(settings)
   }
 
   // Build URL — prepend /api/v2 for Ludus v2 API.
@@ -105,7 +129,11 @@ export async function ludusRequest<T = unknown>(
     if (contentType.includes("application/json")) {
       const data = await response.json()
       if (!response.ok) {
-        return { error: data?.error || `HTTP ${status}`, status }
+        let errMsg = data?.error || `HTTP ${status}`
+        if (status === 401 && useAdminEndpoint) {
+          errMsg = `${String(errMsg)} — confirm **Admin API URL** reaches Ludus admin (port 8081 / ludus-admin) and the API key is valid for that listener.`
+        }
+        return { error: errMsg, status }
       }
       return { data: data as T, status }
     } else {

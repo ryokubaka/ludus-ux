@@ -10,9 +10,9 @@ export const IMPERSONATION_CHANGED_EVENT = "impersonation-changed"
 
 const STORAGE_KEY = IMPERSONATION_STORAGE_KEY
 
+/** In-memory impersonation state (username only — apiKey lives in the cookie). */
 export interface ImpersonationData {
   username: string
-  apiKey: string
 }
 
 interface ImpersonationContextValue {
@@ -31,24 +31,33 @@ const ImpersonationContext = createContext<ImpersonationContextValue>({
 function readStorage(): ImpersonationData | null {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : null
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { username?: string }
+    return parsed.username ? { username: parsed.username } : null
   } catch {
     return null
   }
 }
 
-/** Write impersonation to both sessionStorage and the session cookie. */
-export async function saveImpersonation(data: ImpersonationData): Promise<void> {
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  // Cookie must be updated before invalidating queries: proxy previously preferred
-  // session.impersonationApiKey over X-Impersonate-Apikey, so an early dispatch
-  // refetched with the *previous* user's cookie while headers already pointed at
-  // the new user (empty ranges / wrong range list until cookie caught up).
+/**
+ * Start impersonating a user.
+ *
+ * The apiKey is POSTed to the session cookie (httpOnly, encrypted) and then
+ * discarded from JS memory — it is never written to sessionStorage.
+ * Only the username is persisted locally so the UI can show who is being
+ * impersonated. All server-side routes read the apiKey from the cookie via
+ * resolveAdminImpersonationFromRequest.
+ */
+export async function saveImpersonation(data: { username: string; apiKey: string }): Promise<void> {
+  // Store only the username — never the apiKey — in sessionStorage.
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ username: data.username }))
+  // Cookie update must complete before dispatching the changed event so that
+  // queries refetching on the event use the new user's API key from the cookie.
   await fetch("/api/auth/impersonate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username: data.username, apiKey: data.apiKey }),
-  }).catch(() => { /* non-fatal — client-side state is already updated */ })
+  }).catch(() => { /* non-fatal — cookie update is best-effort */ })
   window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
 }
 
@@ -61,29 +70,22 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     const stored = readStorage()
     setImpersonation(stored)
 
-    // Verify against the session cookie and sync if they differ.
-    // This handles the case where a new tab is opened (sessionStorage is empty
-    // but the cookie still has impersonation state) or a stale sessionStorage
-    // value remains after the cookie was cleared (e.g. manual cookie deletion).
+    // Sync sessionStorage against the session cookie. The cookie is authoritative.
     fetch("/api/auth/impersonate")
       .then((r) => r.ok ? r.json() : null)
       .then((data: { impersonating: boolean; username: string | null } | null) => {
         if (!data) return
         if (data.impersonating && data.username) {
-          // Cookie says impersonating — make sure sessionStorage matches.
-          // We don't have the apiKey from GET /api/auth/impersonate (it's not
-          // exposed), so only fix the "sessionStorage is empty" case here.
-          // If sessionStorage already has data, trust it (it has the apiKey).
           if (!stored) {
-            // Cookie has impersonation but sessionStorage doesn't — this can
-            // happen in a new tab.  We can't reconstruct the full data without
-            // the apiKey, so clear the cookie to keep things consistent.
-            fetch("/api/auth/impersonate", { method: "DELETE" }).catch(() => { })
+            // New tab: cookie has impersonation but sessionStorage is empty.
+            // Restore the username from the cookie response — the apiKey stays
+            // in the cookie and does not need to be in sessionStorage.
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ username: data.username }))
+            setImpersonation({ username: data.username })
           }
         } else if (!data.impersonating && stored) {
-          // Cookie says NOT impersonating but sessionStorage has data — clear
-          // sessionStorage to match (cookie is authoritative after a logout
-          // or explicit cookie deletion).
+          // Cookie says NOT impersonating but sessionStorage has stale data —
+          // clear it (cookie is authoritative after logout or explicit deletion).
           sessionStorage.removeItem(STORAGE_KEY)
           setImpersonation(null)
           queryClient.clear()

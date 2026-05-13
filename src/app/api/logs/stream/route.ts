@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
@@ -55,10 +56,9 @@ export async function GET(request: NextRequest) {
   const snapshotStart = searchParams.get("snapshotStart") === "true"
   const settings = getSettings()
 
-  // Support admin impersonation: use the impersonated user's API key
-  const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
+  // Use the impersonated user's API key when an admin is impersonating; falls
+  // back to the session's own key. Both apiKey and userId from cookie.
+  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const stream = new ReadableStream({

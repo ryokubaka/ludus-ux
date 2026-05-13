@@ -1,6 +1,14 @@
 /**
  * Client-side API helper — calls Next.js proxy routes at /api/proxy/[...path].
  * Paths match Ludus Server v2.x API (the proxy adds the /api/v2 prefix server-side).
+ *
+ * sessionStorage notes: this module reads impersonation state from sessionStorage
+ * (browser only). On the server the sessionStorage branches degrade to no-ops;
+ * only the non-storage helpers are safe to call server-side.
+ *
+ * Security: only X-Impersonate-As (username) is sent as a header. The impersonation
+ * API key stays in the encrypted httpOnly session cookie and is never exposed to JS.
+ * Server routes read it via resolveAdminImpersonationFromRequest.
  */
 
 import {
@@ -14,15 +22,11 @@ import {
 
 /**
  * Read active impersonation state from sessionStorage (browser only).
- * Returns BOTH headers needed for full server-side impersonation support.
+ * Returns X-Impersonate-As when impersonating; empty object otherwise.
+ * The API key is NOT included — it lives in the httpOnly session cookie.
  */
 export function getImpersonationHeaders(): Record<string, string> {
   return readImpersonationHeadersFromSessionStorage()
-}
-
-/** Convenience: just the API key (used in places that only need the key). */
-export function getImpersonationApiKey(): string | null {
-  return getImpersonationHeaders()["X-Impersonate-Apikey"] ?? null
 }
 
 export interface VmOperationLogEntry {

@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 
@@ -29,14 +30,10 @@ interface RangeData {
 
 function getEffective(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean },
+  session: Parameters<typeof resolveAdminImpersonationFromRequest>[0] & { apiKey: string },
 ) {
-  const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
-  return {
-    effectiveApiKey: impersonateApiKey || session.apiKey,
-  }
+  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  return { effectiveApiKey: impersonateApiKey || session.apiKey }
 }
 
 /**

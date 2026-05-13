@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server"
 import { listGoadInstances, isGoadConfigured } from "@/lib/goad-ssh"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusGet } from "@/lib/ludus-client"
 import type { GoadInstance, RangeObject } from "@/lib/types"
 import { getAllInstanceRangesLocal } from "@/lib/goad-instance-range-store"
@@ -25,12 +26,9 @@ export async function fetchGoadInstancesForRequest(
     }
   }
 
-  const impersonateAs = session?.isAdmin
-    ? request.headers.get("X-Impersonate-As") || null
-    : null
-  const impersonateApiKey = session?.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
+  const { apiKey: impersonateApiKey, userId: impersonateAs } = session
+    ? resolveAdminImpersonationFromRequest(session, request)
+    : { apiKey: null, userId: null }
 
   const creds = (!impersonateAs && session?.sshPassword)
     ? { username: session.username, password: session.sshPassword }

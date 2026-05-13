@@ -4,11 +4,20 @@ import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
 import { getSessionFromRequest } from "@/lib/session"
 
+/** Parse the request body for mutating methods; returns undefined for GET/HEAD. */
+async function parseRequestBody(request: NextRequest): Promise<unknown> {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) return undefined
+  const contentType = request.headers.get("content-type") || ""
+  if (contentType.includes("application/json")) {
+    return request.json().catch(() => undefined)
+  }
+  return request.text().catch(() => undefined)
+}
+
 async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path?: string[] }> }
 ) {
-  try {
   const session = await getSessionFromRequest(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -19,8 +28,7 @@ async function handler(
   const segments = pathSegments || []
   const path = segments.length > 0 ? "/" + segments.join("/") : "/"
 
-  const searchParams = request.nextUrl.searchParams
-  const queryString = searchParams.toString()
+  const queryString = request.nextUrl.searchParams.toString()
   const fullPath = queryString ? `${path}?${queryString}` : path
 
   const useAdmin = request.headers.get("X-Ludus-Admin") === "true"
@@ -33,50 +41,41 @@ async function handler(
     : undefined
 
   // When an admin is impersonating another user, use the impersonated user's
-  // API key so Ludus calls are scoped to that user. Prefer X-Impersonate-*
-  // headers when both are present — sessionStorage updates immediately on
-  // user switch while the cookie from POST /api/auth/impersonate can still
-  // hold the previous impersonated user for one round-trip.
+  // API key so Ludus calls are scoped to that user. Both X-Impersonate-* headers
+  // must be present to use the header path — see resolveAdminImpersonationFromRequest.
   const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
   // In Ludus v2, the ROOT API key is only for PocketBase internal operations.
   // All admin API calls (port 8081) use the logged-in admin's own API key.
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
-  let body: unknown
-  const contentType = request.headers.get("content-type") || ""
-  if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
-    if (contentType.includes("application/json")) {
-      body = await request.json().catch(() => undefined)
-    } else {
-      body = await request.text().catch(() => undefined)
+  try {
+    const body = await parseRequestBody(request)
+
+    const result = await ludusRequest(fullPath, {
+      method: request.method,
+      body,
+      apiKey: effectiveApiKey,
+      useAdminEndpoint: useAdmin,
+      userOverride,
+      timeout: getProxyLudusTimeoutMs(path, request.method),
+    })
+
+    if (result.error) {
+      // Annotate connection failures on the admin endpoint with an actionable hint so the
+      // user knows why it failed rather than seeing a raw ECONNREFUSED message.
+      const isConnectionError = result.status === 0
+      const errorMessage =
+        useAdmin && isConnectionError
+          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
+          : result.error
+      return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
     }
-  }
 
-  const result = await ludusRequest(fullPath, {
-    method: request.method,
-    body,
-    apiKey: effectiveApiKey,
-    useAdminEndpoint: useAdmin,
-    userOverride,
-    timeout: getProxyLudusTimeoutMs(path, request.method),
-  })
-
-  if (result.error) {
-    // Annotate connection failures on the admin endpoint with an actionable hint so the
-    // user knows why it failed rather than seeing a raw ECONNREFUSED message.
-    const isConnectionError = result.status === 0
-    const errorMessage =
-      useAdmin && isConnectionError
-        ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
-        : result.error
-    return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
-  }
-
-  return NextResponse.json(result.data, { status: result.status || 200 })
+    return NextResponse.json(result.data, { status: result.status || 200 })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error("[proxy] Unexpected error:", message)
-    return NextResponse.json({ error: `Internal proxy error: ${message}` }, { status: 500 })
+    // Log full details server-side only; don't leak exception messages to the client.
+    console.error("[proxy] Unexpected error:", err instanceof Error ? err.message : String(err))
+    return NextResponse.json({ error: "Internal proxy error" }, { status: 500 })
   }
 }
 

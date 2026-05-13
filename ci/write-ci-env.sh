@@ -14,5 +14,6 @@ APP_SECRET=ci-smoke-test-secret-min-32-chars-ok
 LUDUS_ROOT_API_KEY=
 PROXMOX_SSH_PASSWORD=
 ENABLE_GOAD=false
+LUDUS_TLS_INSECURE=true
 EOF
 echo "Wrote $ROOT/.env for CI"

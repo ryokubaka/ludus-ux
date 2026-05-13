@@ -5,6 +5,7 @@
  */
 
 import type { SessionData } from "@/lib/session"
+import { IMPERSONATION_STORAGE_KEY } from "@/lib/impersonation-headers"
 
 export const LEGACY_LUX_QUERY_CACHE_KEY = "lux_query_cache"
 
@@ -25,7 +26,7 @@ export function readLoginUsernameSync(): string {
 export function readImpersonationUsernameSync(): string | null {
   if (typeof window === "undefined") return null
   try {
-    const raw = sessionStorage.getItem("goad_impersonation")
+    const raw = sessionStorage.getItem(IMPERSONATION_STORAGE_KEY)
     if (!raw) return null
     const u = JSON.parse(raw) as { username?: string }
     return u.username ? String(u.username) : null

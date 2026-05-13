@@ -35,6 +35,13 @@ export async function GET(
         headers: { "Content-Type": "text/event-stream" },
       })
     }
+  } else if (!session.isAdmin) {
+    // Task not in memory (e.g. server restarted) — non-admin users must not be
+    // able to subscribe to arbitrary task IDs without an ownership check.
+    return new Response("data: [ERROR] Not found\n\n", {
+      status: 404,
+      headers: { "Content-Type": "text/event-stream" },
+    })
   }
 
   const encoder = new TextEncoder()

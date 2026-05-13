@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 
 export const dynamic = "force-dynamic"
 
@@ -123,7 +124,11 @@ export async function GET(request: NextRequest) {
     templatesPath  = "templates"
     ref            = BADSL_REF
   } else if (repoUrl) {
-    apiBase        = repoUrl.replace(/\/$/, "")
+    const safe = assertSafeTemplateRepoUrl(repoUrl)
+    if (!safe.ok) {
+      return NextResponse.json({ error: safe.error }, { status: 400 })
+    }
+    apiBase = safe.apiBase
     templatesPath  = searchParams.get("path") || "templates"
     ref            = searchParams.get("ref")  || "main"
   } else {

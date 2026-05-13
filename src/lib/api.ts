@@ -1,6 +1,14 @@
 /**
  * Client-side API helper — calls Next.js proxy routes at /api/proxy/[...path].
  * Paths match Ludus Server v2.x API (the proxy adds the /api/v2 prefix server-side).
+ *
+ * sessionStorage notes: this module reads impersonation state from sessionStorage
+ * (browser only). On the server the sessionStorage branches degrade to no-ops;
+ * only the non-storage helpers are safe to call server-side.
+ *
+ * Security: only X-Impersonate-As (username) is sent as a header. The impersonation
+ * API key stays in the encrypted httpOnly session cookie and is never exposed to JS.
+ * Server routes read it via resolveAdminImpersonationFromRequest.
  */
 
 import {
@@ -8,32 +16,17 @@ import {
   ludusSnapshotCreateBody,
   snapshotsRangeQuery,
 } from "./ludus-snapshot-payload"
+import {
+  readImpersonationHeadersFromSessionStorage,
+} from "./impersonation-headers"
 
 /**
  * Read active impersonation state from sessionStorage (browser only).
- * Returns BOTH headers needed for full server-side impersonation support:
- *   X-Impersonate-Apikey  – preferred by /api/proxy over the cookie when both
- *                          X-Impersonate-* are set (cookie can lag on fast user switches)
- *   X-Impersonate-As      – used by custom routes to know the effective username
+ * Returns X-Impersonate-As when impersonating; empty object otherwise.
+ * The API key is NOT included — it lives in the httpOnly session cookie.
  */
 export function getImpersonationHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = sessionStorage.getItem("goad_impersonation")
-    if (raw) {
-      const { apiKey, username } = JSON.parse(raw)
-      const h: Record<string, string> = {}
-      if (apiKey) h["X-Impersonate-Apikey"] = apiKey
-      if (username) h["X-Impersonate-As"] = username
-      return h
-    }
-  } catch { }
-  return {}
-}
-
-/** Convenience: just the API key (used in places that only need the key). */
-export function getImpersonationApiKey(): string | null {
-  return getImpersonationHeaders()["X-Impersonate-Apikey"] ?? null
+  return readImpersonationHeadersFromSessionStorage()
 }
 
 export interface VmOperationLogEntry {
@@ -122,6 +115,57 @@ export async function pruneKnownHosts(hosts: string[]): Promise<void> {
   }
 }
 
+/**
+ * After Ludus removes a range, delete the linked GOAD workspace folder on the GOAD
+ * SSH host (`<goadPath>/workspace/<instanceId>`) when this Ludus range was tied to a GOAD instance.
+ * Resolves instance via `/api/goad/by-range` (SQLite + SSH enrichment), then POST force-delete
+ * with `skipRangeDeletion` because Ludus already dropped the range.
+ */
+export async function cleanupGoadWorkspaceAfterRangeDelete(
+  rangeId: string,
+  options?: { adminGlobalInstances?: boolean },
+): Promise<void> {
+  const rid = rangeId?.trim()
+  if (!rid) return
+  const imp = getImpersonationHeaders()
+  const qs = new URLSearchParams({ rangeId: rid })
+  if (options?.adminGlobalInstances) qs.set("adminView", "1")
+  try {
+    let instanceId: string | null = null
+    const byRes = await fetch(`/api/goad/by-range?${qs}`, {
+      credentials: "include",
+      headers: imp,
+    })
+    if (byRes.ok) {
+      const data = (await byRes.json()) as { instanceId?: string | null }
+      if (data.instanceId && typeof data.instanceId === "string") {
+        instanceId = data.instanceId.trim() || null
+      }
+    }
+    if (!instanceId) {
+      const instUrl =
+        "/api/goad/instances" + (options?.adminGlobalInstances ? "?adminView=1" : "")
+      const instRes = await fetch(instUrl, { credentials: "include", headers: imp })
+      if (instRes.ok) {
+        const instData = (await instRes.json()) as {
+          instances?: { instanceId: string; ludusRangeId?: string }[]
+        }
+        instanceId =
+          instData.instances?.find((i) => i.ludusRangeId === rid)?.instanceId ?? null
+      }
+    }
+    if (!instanceId) return
+    await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...imp },
+      body: JSON.stringify({ ludusRangeId: rid, skipRangeDeletion: true }),
+    }).catch(() => {})
+  } catch {
+    /* non-fatal */
+  }
+}
+
 export async function apiRequest<T = unknown>(
   path: string,
   options: {
@@ -203,8 +247,10 @@ export const ludusApi = {
   // Range — GET /range?rangeID=…  (bare GET /range returns 404 on several Ludus v2 builds)
   getRangeStatus: (rangeId?: string): Promise<LudusEnvelope<import("./types").RangeObject>> => {
     const id = rangeId?.trim()
+    // Avoid synthetic HTTP 400 — callers during range transitions may race with empty id;
+    // treat as "no data" like a disabled query (dashboard already handles !result.data).
     if (!id) {
-      return Promise.resolve({ status: 400, error: "rangeID is required" })
+      return Promise.resolve({ status: 204, data: undefined })
     }
     return get<import("./types").RangeObject>(`/range?rangeID=${encodeURIComponent(id)}`)
   },

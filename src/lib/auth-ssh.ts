@@ -116,13 +116,18 @@ export async function saveApiKeyToBashrc(
     return { success: false, message: "LUDUS_SSH_HOST is not configured." }
   }
 
-  // Shell command: remove any existing LUDUS_API_KEY / LUDUS_VERSION lines then
-  // append fresh exports for both. LUDUS_VERSION=2 is required for Ludus v2.
+  // Remove old lines, then append exports via base64 decode so apiKey cannot break
+  // shell quoting or inject remote commands.
+  const snippet = `export LUDUS_API_KEY=${apiKey}\nexport LUDUS_VERSION=2\n`
+  const b64 = Buffer.from(snippet, "utf8").toString("base64")
+  if (b64.length > 32_000) {
+    return { success: false, message: "API key value is too large." }
+  }
+
   const command = [
     `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ~/.bashrc`,
     `sed -i '/\\(export \\)\\?LUDUS_VERSION=/d' ~/.bashrc`,
-    `echo 'export LUDUS_API_KEY=${apiKey}' >> ~/.bashrc`,
-    `echo 'export LUDUS_VERSION=2' >> ~/.bashrc`,
+    `printf '%s' '${b64}' | base64 -d >> ~/.bashrc`,
   ].join(" && ")
 
   return new Promise((resolve) => {

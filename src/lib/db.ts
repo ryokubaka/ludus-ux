@@ -37,13 +37,67 @@ const DB_PATH = path.join(DATA_DIR, "ludus-ux.db")
 
 let _db: BetterSqlite3.Database | null = null
 
+/**
+ * Next standalone can load better-sqlite3 JS from node_modules while `bindings`
+ * resolves the addon relative to the wrong directory (/app/...). Loading the
+ * .node by absolute path avoids that.
+ */
+function getNodeRequire(): NodeRequire {
+  const nw = (globalThis as Record<string, unknown>)["__non_webpack_require__"]
+  return typeof nw === "function" ? (nw as NodeRequire) : require
+}
+
+/**
+ * Next standalone can load better-sqlite3 JS from node_modules while `bindings`
+ * resolves the addon relative to the wrong directory (/app/...). Loading the
+ * .node by absolute path avoids that.
+ */
+function resolveBetterSqlite3NativePath(): string | undefined {
+  const req = getNodeRequire()
+  let pkgDir: string
+  try {
+    pkgDir = path.dirname(req.resolve("better-sqlite3/package.json"))
+  } catch {
+    return undefined
+  }
+  const direct = [
+    path.join(pkgDir, "build", "Release", "better_sqlite3.node"),
+    path.join(pkgDir, "build", "Debug", "better_sqlite3.node"),
+  ]
+  for (const p of direct) {
+    if (fs.existsSync(p)) return p
+  }
+  const bindingRoot = path.join(pkgDir, "lib", "binding")
+  const walk = (dir: string, depth: number): string | undefined => {
+    if (depth > 8) return undefined
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return undefined
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isFile() && e.name === "better_sqlite3.node") return full
+      if (e.isDirectory()) {
+        const hit = walk(full, depth + 1)
+        if (hit) return hit
+      }
+    }
+    return undefined
+  }
+  if (fs.existsSync(bindingRoot)) return walk(bindingRoot, 0)
+  return undefined
+}
+
 export function getDb(): BetterSqlite3.Database {
   if (_db) return _db
   fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.mkdirSync(TASKS_LOG_DIR, { recursive: true })
   // better-sqlite3 is native; require() avoids ESM/CJS edge cases in Next server bundles
   const Sqlite = require("better-sqlite3") as typeof BetterSqlite3
-  _db = new Sqlite(DB_PATH)
+  const nativePath = resolveBetterSqlite3NativePath()
+  _db = new Sqlite(DB_PATH, nativePath ? { nativeBinding: nativePath } : {})
   _db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes
   _db.pragma("foreign_keys = ON")
   _db.pragma("synchronous = NORMAL")  // safe with WAL, faster than FULL
@@ -249,6 +303,84 @@ function runMigrations(db: BetterSqlite3.Database): void {
       db.exec(`
         ALTER TABLE goad_tasks ADD COLUMN phase TEXT;
         ALTER TABLE goad_tasks ADD COLUMN has_network_rules INTEGER NOT NULL DEFAULT 0;
+      `)
+    },
+
+    // v9 — Durable LUX markers for Ludus range log history (testing toggle + deploy tags).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lux_range_testing_events (
+          id            TEXT    PRIMARY KEY,
+          range_id      TEXT    NOT NULL,
+          username      TEXT    NOT NULL,
+          op_type       TEXT    NOT NULL,
+          range_op_id   TEXT,
+          requested_at  INTEGER NOT NULL,
+          completed_at  INTEGER NOT NULL,
+          success       INTEGER NOT NULL DEFAULT 0,
+          ludus_log_id  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_testing_range_user
+          ON lux_range_testing_events(range_id, username, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_lux_testing_ludus_id
+          ON lux_range_testing_events(ludus_log_id);
+
+        CREATE TABLE IF NOT EXISTS lux_range_deploy_tag_runs (
+          id            TEXT    PRIMARY KEY,
+          range_id      TEXT    NOT NULL,
+          username      TEXT    NOT NULL,
+          tags_csv      TEXT    NOT NULL,
+          requested_at  INTEGER NOT NULL,
+          ludus_log_id  TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_deploy_tags_range_user
+          ON lux_range_deploy_tag_runs(range_id, username, requested_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_lux_deploy_tags_ludus_id
+          ON lux_range_deploy_tag_runs(ludus_log_id);
+      `)
+    },
+
+    // v10 — Optional detail on testing events (allowlist domain/IP add/remove).
+    (db) => {
+      const cols = db.prepare("PRAGMA table_info(lux_range_testing_events)").all() as { name: string }[]
+      if (!cols.some((c) => c.name === "detail")) {
+        db.exec(`ALTER TABLE lux_range_testing_events ADD COLUMN detail TEXT`)
+      }
+    },
+
+    // v11 — Durable deploy handoff state.
+    //
+    // Two changes:
+    //   a) goad_tasks.ludus_api_key — persists the user's Ludus API key so the
+    //      server-side pending-network workflow can make Ludus calls after a
+    //      container restart (previously in-memory only, lost on restart).
+    //      Stored in the same local SQLite DB that already holds task metadata;
+    //      security boundary is equivalent to the DATA_DIR volume mount.
+    //
+    //   b) deploy_handoffs — captures wizard intent (rangeId, instanceId, pending
+    //      network rules) before the GOAD execute call so the server can complete
+    //      post-deploy linkage even if the user navigates away during deployment.
+    //      Each handoff is linked to a task after execute returns the taskId.
+    (db) => {
+      const taskCols = db.prepare("PRAGMA table_info(goad_tasks)").all() as { name: string }[]
+      if (!taskCols.some((c) => c.name === "ludus_api_key")) {
+        db.exec(`ALTER TABLE goad_tasks ADD COLUMN ludus_api_key TEXT`)
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS deploy_handoffs (
+          id                  TEXT    PRIMARY KEY,
+          task_id             TEXT,
+          instance_id         TEXT,
+          range_id            TEXT    NOT NULL,
+          username            TEXT    NOT NULL,
+          network_rules_json  TEXT,
+          created_at          INTEGER NOT NULL,
+          linked_at           INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_deploy_handoffs_task
+          ON deploy_handoffs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_deploy_handoffs_instance
+          ON deploy_handoffs(instance_id);
       `)
     },
   ]

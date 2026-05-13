@@ -49,7 +49,7 @@ import {
   ExternalLink,
   ShieldAlert,
 } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
@@ -58,6 +58,7 @@ import {
 } from "@/lib/goad-deploy-history-correlation"
 import { useRange } from "@/lib/range-context"
 import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useElapsed } from "@/hooks/use-elapsed"
@@ -68,145 +69,22 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import {
   clearRangeAborting,
   isRangeAborting,
 } from "@/lib/range-aborting"
 import { useAbortRange } from "@/lib/use-abort-range"
 import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
+import {
+  clearVmPartialListStreak,
+  dedupeVMs,
+  resolveVmListForRangeQuery,
+  vmIsRunning,
+} from "@/lib/dashboard-vm-merge"
 
 /** Re-open inventory for the same range without waiting on Ludus again. */
 const INVENTORY_CACHE_MS = 3 * 60 * 1000
-
-/** Stable row identity for merge/dedupe (Proxmox ID preferred, then Ludus VM ID, then name). */
-function vmIdentityKey(vm: VMObject): string {
-  const p = vm.proxmoxID
-  if (p != null && Number(p) !== 0) return `p:${Number(p)}`
-  const id = vm.ID
-  if (id != null && Number(id) !== 0) return `i:${Number(id)}`
-  const n = (vm.name || vm.vmName || "").toString().trim().toLowerCase()
-  return n ? `n:${n}` : `z:${JSON.stringify([vm.ID, vm.proxmoxID, vm.name])}`
-}
-
-function dedupeVMs(vms: VMObject[]): VMObject[] {
-  const seen = new Set<string>()
-  return vms.filter((vm) => {
-    const key = vmIdentityKey(vm)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-/**
- * Union merge for partial Ludus VM lists. When `stalePowerPessimistic`, VMs that
- * exist only in `prev` (omitted from this poll's `next`) get poweredOff so the
- * dashboard "Running" count and badges do not show ghost online state.
- */
-function mergeVmUnionPreferNext(
-  prev: VMObject[],
-  next: VMObject[],
-  stalePowerPessimistic: boolean,
-): VMObject[] {
-  const nextKeys = new Set(next.map(vmIdentityKey))
-  const m = new Map<string, VMObject>()
-  for (const vm of prev) {
-    const k = vmIdentityKey(vm)
-    let row = vm
-    if (stalePowerPessimistic && !nextKeys.has(k)) {
-      row = { ...vm, poweredOn: false, powerState: "stopped" }
-    }
-    m.set(k, row)
-  }
-  for (const vm of next) m.set(vmIdentityKey(vm), vm)
-  return dedupeVMs(Array.from(m.values()))
-}
-
-/** Match vm-table: explicit `poweredOn: false` wins over a stale `powerState`. */
-function vmIsRunning(vm: VMObject): boolean {
-  return vm.poweredOn ?? (vm.powerState === "running")
-}
-
-function nextVmKeysAreSubsetOfPrev(next: VMObject[], prev: VMObject[]): boolean {
-  if (next.length === 0 || prev.length === 0) return false
-  const prevKeys = new Set(prev.map(vmIdentityKey))
-  return next.every((vm) => prevKeys.has(vmIdentityKey(vm)))
-}
-
-/**
- * When GET /range returns fewer VM rows than we already had (or than numberOfVMs says exist),
- * Ludus/Proxmox sometimes omits rows on a single poll. Merge with cache so refresh does not
- * hide VMs. When numberOfVMs matches the new list length, treat the list as authoritative.
- * When numberOfVMs is absent but the same short list repeats twice, trust the shrink.
- */
-const vmPartialListStreak = new Map<string, { signature: string; streak: number }>()
-
-function vmPartialStreakKey(scopeTag: string, rangeId: string) {
-  return `${scopeTag}::${rangeId}`
-}
-
-function resolveVmListForRangeQuery(args: {
-  data: RangeObject
-  newVMs: VMObject[]
-  prevVMs: VMObject[]
-  stateUpper: string
-  scopeTag: string
-  rangeId: string
-}): VMObject[] {
-  const { data, newVMs, prevVMs, stateUpper, scopeTag, rangeId } = args
-  const transientVmGap = stateUpper === "DEPLOYING" || stateUpper === "WAITING"
-  const streakKey = vmPartialStreakKey(scopeTag, rangeId)
-
-  const expected =
-    typeof data.numberOfVMs === "number" && Number.isFinite(data.numberOfVMs) && data.numberOfVMs >= 0
-      ? data.numberOfVMs
-      : undefined
-
-  // Empty payload: keep prior VMs only during deploy/wait hiccups; otherwise trust empty.
-  if (newVMs.length === 0) {
-    vmPartialListStreak.delete(streakKey)
-    if (prevVMs.length > 0 && transientVmGap) return prevVMs
-    return []
-  }
-
-  // Ludus says this many VMs exist and the array length matches → full snapshot, use as-is.
-  if (expected !== undefined && expected === newVMs.length) {
-    vmPartialListStreak.delete(streakKey)
-    return newVMs
-  }
-
-  // Ludus reports more VMs than rows returned → merge so missing rows stay visible.
-  if (expected !== undefined && newVMs.length < expected) {
-    vmPartialListStreak.delete(streakKey)
-    return mergeVmUnionPreferNext(prevVMs, newVMs, true)
-  }
-
-  // No numberOfVMs (or malformed): short partial list whose keys are all known from cache → union.
-  // Repeat the exact same short list twice in a row → treat as a real shrink (e.g. destroy) and
-  // drop cached-only rows so we do not ghost VMs forever.
-  if (
-    prevVMs.length > 0 &&
-    newVMs.length < prevVMs.length &&
-    nextVmKeysAreSubsetOfPrev(newVMs, prevVMs)
-  ) {
-    const signature = newVMs
-      .map(vmIdentityKey)
-      .sort()
-      .join("|")
-    const row = vmPartialListStreak.get(streakKey)
-    if (row && row.signature === signature) row.streak += 1
-    else vmPartialListStreak.set(streakKey, { signature, streak: 1 })
-    const streak = vmPartialListStreak.get(streakKey)!.streak
-    if (streak >= 2) {
-      vmPartialListStreak.delete(streakKey)
-      return newVMs
-    }
-    return mergeVmUnionPreferNext(prevVMs, newVMs, true)
-  }
-
-  vmPartialListStreak.delete(streakKey)
-  return newVMs
-}
 
 export function DashboardPageClient() {
   const { toast } = useToast()
@@ -224,7 +102,7 @@ export function DashboardPageClient() {
   const scopeTag = useEffectiveScopeTag()
 
   useEffect(() => {
-    vmPartialListStreak.clear()
+    clearVmPartialListStreak()
   }, [selectedRangeId, scopeTag])
 
   const { abortRange } = useAbortRange(scopeTag)
@@ -268,7 +146,42 @@ export function DashboardPageClient() {
   const [deployHistoryDetailLoading, setDeployHistoryDetailLoading] = useState(false)
 
   // ── Deploy log stream ───────────────────────────────────────────────────────
-  const { lines: logLines, isStreaming, rangeState: streamRangeState, activeRangeId: streamingRangeId, streamStartedAt, startStreaming, stopStreaming, clearLogs } = useDeployLogContext()
+  const {
+    lines: logLines,
+    isStreaming,
+    rangeState: streamRangeState,
+    activeRangeId: streamingRangeId,
+    streamStartedAt,
+    startStreaming,
+    stopStreaming,
+    clearLogs,
+    refreshRangeStateFromServer,
+  } = useDeployLogContext()
+
+  const deployLogRefreshLock = useRef(false)
+  const [deployLogRefreshBusy, setDeployLogRefreshBusy] = useState(false)
+  const handleRefreshDeployLogs = useCallback(() => {
+    const rid = selectedRangeId?.trim()
+    if (!rid || deployLogRefreshLock.current) return
+    deployLogRefreshLock.current = true
+    setDeployLogRefreshBusy(true)
+    stopStreaming()
+    void (async () => {
+      try {
+        const anchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+        startStreaming(rid, {
+          snapshotStart: false,
+          ...(anchor != null ? { deployElapsedAnchorMs: anchor } : {}),
+        })
+        void refreshRangeStateFromServer(rid)
+      } finally {
+        window.setTimeout(() => {
+          deployLogRefreshLock.current = false
+          setDeployLogRefreshBusy(false)
+        }, 750)
+      }
+    })()
+  }, [selectedRangeId, stopStreaming, startStreaming, refreshRangeStateFromServer])
 
   // ── Range status query ──────────────────────────────────────────────────────
   // Replaces fetchRanges + silentRefresh + setInterval(silentRefresh, 15000).
@@ -286,10 +199,17 @@ export function DashboardPageClient() {
   } = useQuery({
     queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId),
     queryFn: async () => {
-      const result = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
+      const rid = selectedRangeId?.trim()
+      if (!rid) return null
+      const result = await ludusApi.getRangeStatus(rid)
       if (result.error) {
-        // A 400 with no selectedRangeId just means no default range — not an error worth showing
-        if (result.status === 400 && !selectedRangeId) return null
+        // Ludus sometimes returns HTTP 400 for GET /range during deploy / log-stream
+        // startup while GET /range/logs/history still succeeds (see access logs). Treat
+        // as transient: keep last good snapshot or empty state instead of throwing.
+        if (result.status === 400) {
+          const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(scopeTag, selectedRangeId))
+          return prev ?? null
+        }
         throw new Error(typeof result.error === "string" ? result.error : "Failed to load range status")
       }
       if (!result.data) return null
@@ -308,12 +228,12 @@ export function DashboardPageClient() {
         prevVMs,
         stateUpper: state,
         scopeTag,
-        rangeId: selectedRangeId ?? "",
+        rangeId: rid,
       })
 
       return { ...data, VMs: vms }
     },
-    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId?.trim(),
     staleTime: STALE.realtime,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
@@ -364,7 +284,10 @@ export function DashboardPageClient() {
     queryKey: queryKeys.goadInstanceForRange(scopeTag, selectedRangeId ?? ""),
     queryFn: async () => {
       if (!selectedRangeId) return null
-      const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`)
+      const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
       if (!res.ok) return null
       const data = (await res.json()) as { instanceId?: string | null }
       return data.instanceId && typeof data.instanceId === "string" ? data.instanceId : null
@@ -395,6 +318,22 @@ export function DashboardPageClient() {
       const tasksRunning = (q.state.data ?? []).some((t) => t.status === "running")
       return tasksRunning || shouldPollGoadTasksAux ? 3000 : false
     },
+  })
+
+  const { data: logMarkerEnrichment = null } = useQuery({
+    queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId),
+    queryFn: async (): Promise<RangeLogMarkerEnrichment | null> => {
+      const rid = selectedRangeId!
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as RangeLogMarkerEnrichment
+    },
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
+    staleTime: STALE.short,
+    refetchInterval: shouldPollGoadTasksAux ? 5000 : false,
   })
 
   // ── VM operation audit log (destroy_vm / remove_extension) ───────────────
@@ -513,7 +452,20 @@ export function DashboardPageClient() {
     if (deployingLike && !isRangeAborting(selectedRangeId)) {
       setDeploying(true)
       setShowLogs(true)
-      if (!streamIsForThisRange) startStreaming(selectedRangeId ?? undefined)
+      if (!streamIsForThisRange) {
+        const rid = selectedRangeId?.trim()
+        if (rid) {
+          void (async () => {
+            const anchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+            startStreaming(rid, {
+              snapshotStart: false,
+              ...(anchor != null ? { deployElapsedAnchorMs: anchor } : {}),
+            })
+          })()
+        } else {
+          startStreaming(undefined, { snapshotStart: false })
+        }
+      }
     } else if (!deployingLike) {
       // Ludus GET confirms a terminal state (ERROR / SUCCESS / ABORTED / etc.).
       // Clear deploying unconditionally — this covers the case where the SSE
@@ -558,6 +510,7 @@ export function DashboardPageClient() {
       setDeploying(false)
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
       setTimeout(() => setShowLogs(false), 5000)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -607,7 +560,7 @@ export function DashboardPageClient() {
       return
     }
     toast({ title: "Deploy started" })
-    startStreaming(selectedRangeId ?? undefined)
+    startStreaming(selectedRangeId ?? undefined, { snapshotStart: true })
   }
   const handleDeploy = () => confirm("Start range deployment?", doDeploy)
 
@@ -660,26 +613,7 @@ export function DashboardPageClient() {
         void pruneKnownHosts(ipsForKnownHosts)
       }
 
-      // ── GOAD workspace cleanup ──────────────────────────────────────────────
-      try {
-        const instRes = await fetch("/api/goad/instances")
-        if (instRes.ok) {
-          const instData = await instRes.json()
-          const instances: { instanceId: string; ludusRangeId?: string }[] = instData.instances ?? []
-          const associated = instances.filter((i) => i.ludusRangeId === rangeId)
-          await Promise.all(
-            associated.map((inst) =>
-              fetch(`/api/goad/instances/${encodeURIComponent(inst.instanceId)}/force-delete`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ludusRangeId: rangeId, skipRangeDeletion: true }),
-              }).catch(() => {})
-            )
-          )
-        }
-      } catch {
-        // Non-fatal
-      }
+      await cleanupGoadWorkspaceAfterRangeDelete(rangeId)
 
       toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
 
@@ -1023,6 +957,7 @@ export function DashboardPageClient() {
     if (prev && !curr) {
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
       queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
     }
     prevActiveTaskIdRef.current = curr
@@ -1406,11 +1341,20 @@ export function DashboardPageClient() {
                             </span>
                           )}
                         </h4>
-                        <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setShowLogs(false)}>
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <LogViewer lines={logLines} onClear={clearLogs} maxHeight="300px" />
+                      <LogViewer
+                        lines={logLines}
+                        onClear={clearLogs}
+                        maxHeight="300px"
+                        live={isStreaming}
+                        liveLabel="Deploy logs"
+                        onRefresh={selectedRangeId?.trim() ? handleRefreshDeployLogs : undefined}
+                        refreshLoading={deployLogRefreshBusy}
+                        downloadFilename={`ludus-deploy-${(selectedRangeId ?? "range").replace(/[^a-zA-Z0-9_-]+/g, "_")}`}
+                      />
                     </div>
                   )}
 
@@ -1484,6 +1428,7 @@ export function DashboardPageClient() {
                             loading={deployHistoryListLoading}
                             onSelect={handleSelectDeployHistory}
                             selectedId={deployHistorySelectedId}
+                            enrichment={logMarkerEnrichment ?? undefined}
                             goadInstanceId={goadInstanceForRange}
                             goadTasks={
                               goadInstanceForRange
@@ -1494,6 +1439,7 @@ export function DashboardPageClient() {
                             }
                             onRefresh={() => {
                               void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
                               void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
                             }}
                             refreshing={deployHistoryRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}
@@ -1601,7 +1547,7 @@ export function DashboardPageClient() {
               <Loader2 className="h-10 w-10 animate-spin text-primary" />
               <p>Fetching inventory from Ludus…</p>
               <p className="text-xs max-w-sm">
-                Generating inventory on the server is often slow. Re-opening the same range within a few minutes uses a
+                Generating inventory on the server is often slow. Re-opening the same range within a moment uses a
                 local cache so it appears instantly.
               </p>
             </div>
@@ -1617,13 +1563,15 @@ export function DashboardPageClient() {
               variant="outline"
               className="gap-1.5"
               disabled={inventoryLoading || !inventoryDialog?.text?.trim()}
-              onClick={() =>
-                inventoryDialog?.text &&
+              onClick={() => {
+                const dlg = inventoryDialog
+                const text = dlg?.text?.trim()
+                if (!dlg || !text) return
                 downloadText(
-                  inventoryDialog.text,
-                  `${inventoryDialog.rangeId.replace(/[^a-zA-Z0-9._-]/g, "_")}-inventory.txt`,
+                  text,
+                  `${dlg.rangeId.replace(/[^a-zA-Z0-9._-]/g, "_")}-inventory.txt`,
                 )
-              }
+              }}
             >
               <Download className="h-4 w-4" /> Download
             </Button>

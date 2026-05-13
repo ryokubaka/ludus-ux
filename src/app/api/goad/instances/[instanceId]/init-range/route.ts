@@ -10,18 +10,22 @@
  * Flow:
  *  1. Check if .goad_range_id already exists in the workspace — idempotent.
  *  2. Derive a short rangeID from the instanceId (alphanumeric, ≤20 chars).
- *  3. Create the Ludus range via POST /api/v2/ranges/create (admin port,
- *     authenticated with the caller's own API key so it belongs to them).
- *  4. Write the rangeID as a plain string to <workspace>/<instanceId>/.goad_range_id.
- *  5. Return { rangeId, created: true }.
+ *  3. Create the Ludus range via POST /api/v2/ranges/create on the **admin** API
+ *     using the session (or impersonation) Ludus API key, same as `/api/range/create`;
+ *     optional ROOT key in settings is a fallback only.
+ *  4. Assign the range to the user on the main Ludus API (session / impersonation key).
+ *  5. Write the rangeID as a plain string to <workspace>/<instanceId>/.goad_range_id.
+ *  6. Return { rangeId, created: true }.
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
 import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
-import { ludusRequest } from "@/lib/ludus-client"
+import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
+import { bustAdminCache } from "@/lib/admin-data"
 import { setOwnership } from "@/lib/range-ownership-store"
 
 export const dynamic = "force-dynamic"
@@ -50,18 +54,17 @@ export async function POST(
 
   const rootCreds = rootPasswordCredsIfSet(settings)
 
-  const impersonateApiKey  = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
-  const impersonateAs      = session.isAdmin
-    ? request.headers.get("X-Impersonate-As") || null
-    : null
-  const effectiveApiKey    = impersonateApiKey  || session.apiKey
-  const effectiveUsername  = (session.isAdmin && impersonateAs) ? impersonateAs : session.username
+  const { apiKey: impersonateApiKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
+  const effectiveApiKey   = impersonateApiKey || session.apiKey
+  const effectiveUsername = impersonateAs || session.username
 
   // ── 1. Idempotency check ──────────────────────────────────────────────────
   const existing = await readGoadRangeId(instanceId, rootCreds)
   if (existing) {
+    // Heal SQLite + bust admin cache — older flows wrote .goad_range_id without
+    // persisting ownership; Ranges Overview merges SQLite first.
+    setOwnership(existing, effectiveUsername, session.username)
+    bustAdminCache()
     return NextResponse.json({ rangeId: existing, created: false })
   }
 
@@ -69,42 +72,40 @@ export async function POST(
   // Naming: GOAD-<user>-<workspaceDirectoryName> (instanceId IS the workspace dir)
   const { rangeId, name: rangeName } = deriveRangeInfo(instanceId, effectiveUsername)
 
-  // ── 3. Create the Ludus range (admin port, user's own API key) ─────────────
-  const adminBase = (settings.ludusAdminUrl || settings.ludusUrl.replace(/:8080\b/, ":8081")).replace(/\/$/, "")
-  const createUrl = `${adminBase}/api/v2/ranges/create`
-
-  let createOk = false
-  let createError = ""
-  try {
-    const res = await fetch(createUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": effectiveApiKey,
+  // ── 3. Create the Ludus range (admin API; key = session Ludus API key, ROOT fallback) ─
+  const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, settings.rootApiKey)
+  if (!createRangeApiKey) {
+    return NextResponse.json(
+      {
+        error: "No Ludus API key for range creation — log in, or set ROOT in Settings / `LUDUS_ROOT_API_KEY`.",
       },
-      body: JSON.stringify({
-        rangeID: rangeId,
-        name: rangeName,
-        description: `Dedicated range for GOAD instance ${instanceId}`,
-        // Assign to the effective user so the range appears in their account immediately
-        userID: [effectiveUsername],
-      }),
-      cache: "no-store",
-    })
-    // 200/201 = created; 409 = already exists (race or re-run)
-    createOk = res.ok || res.status === 409
-    if (!createOk) {
-      const data = await res.json().catch(() => null)
-      createError = data?.error || data?.result || `HTTP ${res.status}`
-    }
-  } catch (err) {
-    createError = (err as Error).message
+      { status: 500 },
+    )
   }
 
+  const createRes = await ludusRequest<Record<string, unknown>>(`/ranges/create`, {
+    method: "POST",
+    apiKey: createRangeApiKey,
+    useAdminEndpoint: true,
+    body: {
+      rangeID: rangeId,
+      name: rangeName,
+      description: `Dedicated range for GOAD instance ${instanceId}`,
+      userID: [effectiveUsername],
+    },
+  })
+
+  const createOk =
+    createRes.status === 409 ||
+    (!createRes.error && (createRes.status === 200 || createRes.status === 201))
+  const createError = createRes.error || (createOk ? "" : `HTTP ${createRes.status || 0}`)
+
   if (!createOk) {
+    const errStatus =
+      createRes.status === 401 || createRes.status === 403 ? createRes.status : 500
     return NextResponse.json(
-      { error: `Failed to create Ludus range: ${createError}` },
-      { status: 500 }
+      { error: `Failed to create Ludus range: ${createError || "unknown error"}` },
+      { status: errStatus },
     )
   }
 
@@ -119,6 +120,7 @@ export async function POST(
     assignRes.error.toLowerCase().includes("already has access")
   if (!assignRes.error || alreadyOwned) {
     setOwnership(rangeId, effectiveUsername, session.username)
+    bustAdminCache()
   }
 
   // ── 5. Write rangeID to workspace ─────────────────────────────────────────

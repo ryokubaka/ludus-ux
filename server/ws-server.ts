@@ -15,8 +15,15 @@
 // Must be imported first — monkey-patches console to add ISO timestamps.
 import "./logger"
 
-// Disable TLS verification for the Proxmox self-signed cert
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+import { applyNodeTlsFromLudusEnv, isLudusTlsInsecure } from "../src/lib/tls-insecure-env"
+import { getProductionAppSecretFailureMessage } from "../src/lib/app-secret-policy"
+
+applyNodeTlsFromLudusEnv()
+const _secretFail = getProductionAppSecretFailureMessage()
+if (_secretFail) {
+  console.error("[ludus-ux]", _secretFail)
+  process.exit(1)
+}
 
 import http from "http"
 import https from "https"
@@ -196,7 +203,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     console.log(`[VNC upstream] connecting → ${targetSession.pveHost}:8006${targetSession.wsPath} (attempt ${retryCount + 1}/${MAX_UPSTREAM_RETRIES + 1})`)
     const ws = new WebSocket(upstreamUrl, {
       headers: { Cookie: `PVEAuthCookie=${targetSession.pveAuthCookie}` },
-      rejectUnauthorized: false,
+      rejectUnauthorized: !isLudusTlsInsecure(),
     })
     upstreamWs = ws
 

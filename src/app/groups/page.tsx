@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
   ChevronRight,
   ChevronDown,
   User,
+  Power,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type { GroupObject, UserObject, RangeObject } from "@/lib/types"
@@ -35,6 +37,8 @@ import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { findLudusRangeRouterVm, isLudusVmRunning } from "@/lib/ludus-range-router-vm"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 
 /** GET /groups only returns counts — members/ranges come from sub-resources ([Ludus API](https://api-docs.ludus.cloud/list-all-groups-24252024e0)). */
 type GroupDetail = { members: string[]; ranges: string[] }
@@ -59,17 +63,52 @@ function userIdsFromMemberPayload(data: unknown): string[] {
   return (data as UserObject[]).map((u) => u.userID).filter(Boolean)
 }
 
-function bulkGroupErrors(data: unknown): { item: string; reason: string }[] {
-  if (!data || typeof data !== "object") return []
-  const errors = (data as { errors?: unknown }).errors
+function bulkGroupErrorsFromArray(errors: unknown): { item: string; reason: string }[] {
   if (!Array.isArray(errors)) return []
   return errors.filter(
     (e): e is { item: string; reason: string } =>
       !!e &&
       typeof e === "object" &&
       typeof (e as { item?: string }).item === "string" &&
-      typeof (e as { reason?: string }).reason === "string"
+      typeof (e as { reason?: string }).reason === "string",
   )
+}
+
+/** Ludus may return `{ success, errors }` or wrap in `{ result: { … } }`. */
+function ludusUnwrappedBulkGroupOp(data: unknown): {
+  success: string[]
+  errors: { item: string; reason: string }[]
+} | null {
+  if (data == null || typeof data !== "object") return null
+  const o = data as Record<string, unknown>
+  let p: Record<string, unknown> = o
+  const topHas = Array.isArray(o.success) || Array.isArray(o.errors)
+  if (
+    !topHas &&
+    o.result != null &&
+    typeof o.result === "object" &&
+    !Array.isArray(o.result)
+  ) {
+    p = o.result as Record<string, unknown>
+  }
+  const has = Array.isArray(p.success) || Array.isArray(p.errors)
+  if (!has) return null
+  const success = Array.isArray(p.success) ? p.success.map(String) : []
+  const errors = bulkGroupErrorsFromArray(p.errors)
+  return { success, errors }
+}
+
+function bulkGroupErrors(data: unknown): { item: string; reason: string }[] {
+  return ludusUnwrappedBulkGroupOp(data)?.errors ?? []
+}
+
+/** When Ludus returns a structured bulk response, require `rangeId` in `success`. */
+function bulkGroupRemovalAcknowledgesRange(data: unknown, rangeId: string): boolean {
+  const u = ludusUnwrappedBulkGroupOp(data)
+  if (!u) return true
+  if (u.errors.length > 0) return true
+  if (u.success.length === 0) return true
+  return u.success.includes(rangeId)
 }
 
 async function fetchGroupDetail(groupName: string): Promise<GroupDetail> {
@@ -132,6 +171,15 @@ function asUserObjectArray(data: unknown): UserObject[] {
   return []
 }
 
+/** Poll until router VM shows running (same cadence as remove-range-from-group dialog). */
+function pollRangeStatusWhileRouterOff(q: { state: { data: unknown } }): number | false {
+  const d = q.state.data as RangeObject | undefined
+  if (!d?.VMs?.length) return false
+  const router = findLudusRangeRouterVm(d.VMs)
+  if (!router) return false
+  return isLudusVmRunning(router) ? false : 2500
+}
+
 export default function GroupsPage() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
@@ -152,8 +200,29 @@ export default function GroupsPage() {
   /** Row-level pending state so remove actions show a spinner instead of feeling stuck. */
   const [removingMember, setRemovingMember] = useState<{ group: string; userId: string } | null>(null)
   const [removingRange, setRemovingRange] = useState<{ group: string; rangeId: string } | null>(null)
+  const [removeRangeFromGroupDialog, setRemoveRangeFromGroupDialog] = useState<{
+    group: string
+    rangeId: string
+  } | null>(null)
+  const [poweringOnRouterForGroupRemove, setPoweringOnRouterForGroupRemove] = useState(false)
+  const [poweringOnRouterForGroupAddRangeId, setPoweringOnRouterForGroupAddRangeId] = useState<string | null>(null)
 
-  const { data: groupsRaw, isLoading: loading } = useQuery({
+  const removeRangeDialogRangeId = removeRangeFromGroupDialog?.rangeId
+
+  const removeRangeStatusQuery = useQuery({
+    queryKey: queryKeys.rangeStatus(scopeTag, removeRangeDialogRangeId ?? ""),
+    queryFn: async () => {
+      const id = removeRangeDialogRangeId!
+      const r = await ludusApi.getRangeStatus(id)
+      if (r.error || !r.data) throw new Error(r.error || "Could not load range status")
+      return r.data
+    },
+    enabled: !!removeRangeDialogRangeId,
+    staleTime: 0,
+    refetchInterval: pollRangeStatusWhileRouterOff,
+  })
+
+  const { data: groupsRaw, isLoading: loading, isFetching: groupsFetching } = useQuery({
     queryKey: queryKeys.groups(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listGroups()
@@ -252,6 +321,55 @@ export default function GroupsPage() {
         (a.name || a.rangeID).localeCompare(b.name || b.rangeID, undefined, { sensitivity: "base" })
       )
   }, [pickerRanges, addRangeDialogDetail, addRangeSearch])
+
+  /** Status for every visible picker row plus any checked row that scrolled out of the filter. */
+  const addRangeStatusQueryIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of filteredPickerRanges) s.add(r.rangeID)
+    for (const id of selectedRangeIds) s.add(id)
+    return Array.from(s).sort()
+  }, [filteredPickerRanges, selectedRangeIds])
+
+  const addRangePickerStatusQueries = useQueries({
+    queries: addRangeStatusQueryIds.map((rangeId) => ({
+      queryKey: queryKeys.rangeStatus(scopeTag, rangeId),
+      queryFn: async () => {
+        const r = await ludusApi.getRangeStatus(rangeId)
+        if (r.error || !r.data) throw new Error(r.error || "Could not load range status")
+        return r.data
+      },
+      enabled: !!addRangeDialog && addRangeStatusQueryIds.length > 0,
+      staleTime: 0,
+      refetchInterval: pollRangeStatusWhileRouterOff,
+    })),
+  })
+
+  const addRangeStatusById = useMemo(() => {
+    const m = new Map<string, (typeof addRangePickerStatusQueries)[number]>()
+    addRangeStatusQueryIds.forEach((id, i) => {
+      const q = addRangePickerStatusQueries[i]
+      if (q) m.set(id, q)
+    })
+    return m
+  }, [addRangeStatusQueryIds, addRangePickerStatusQueries])
+
+  const addRangesSubmitEnabled = useMemo(() => {
+    if (selectedRangeIds.size === 0) return false
+    for (const id of selectedRangeIds) {
+      const q = addRangeStatusById.get(id)
+      if (!q || q.isPending || q.isError) return false
+      const data = q.data as RangeObject | undefined
+      if (!data) return false
+      const router = findLudusRangeRouterVm(data.VMs ?? [])
+      if (router && !isLudusVmRunning(router)) return false
+    }
+    return true
+  }, [selectedRangeIds, addRangeStatusById])
+
+  const selectedRangesHiddenByFilter = useMemo(() => {
+    const visible = new Set(filteredPickerRanges.map((r) => r.rangeID))
+    return Array.from(selectedRangeIds).filter((id) => !visible.has(id))
+  }, [selectedRangeIds, filteredPickerRanges])
 
   const toggleUserPicker = (userId: string) => {
     setSelectedUserIds((prev) => {
@@ -358,6 +476,7 @@ export default function GroupsPage() {
       return
     } else {
       toast({ title: "Ranges added" })
+      setPoweringOnRouterForGroupAddRangeId(null)
       setAddRangeDialog(null)
       setAddRangeSearch("")
       setSelectedRangeIds(new Set())
@@ -388,28 +507,146 @@ export default function GroupsPage() {
     }
   }
 
-  const handleRemoveRange = async (groupName: string, rangeId: string) => {
-    if (!confirm(`Remove range "${rangeId}" from group "${groupName}"? Members will lose access via this group.`)) return
-    setRemovingRange({ group: groupName, rangeId })
+  const handlePowerOnRouterForGroupRemove = async () => {
+    const dlg = removeRangeFromGroupDialog
+    const data = removeRangeStatusQuery.data
+    if (!dlg || !data?.VMs?.length) return
+    const router = findLudusRangeRouterVm(data.VMs)
+    if (!router) return
+    const name = (router.name || router.vmName || "").trim()
+    if (!name) return
+    setPoweringOnRouterForGroupRemove(true)
     try {
+      const res = await ludusApi.powerOn([name], dlg.rangeId)
+      if (res.error) {
+        if (
+          !tryToastLudusSlowHttpError({
+            toast,
+            error: res.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void removeRangeStatusQuery.refetch()
+            },
+          })
+        ) {
+          toast({ variant: "destructive", title: "Power on failed", description: res.error })
+        }
+      } else {
+        toast({ title: "Powering on router", description: name })
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.rangeStatus(scopeTag, dlg.rangeId),
+        })
+      }
+    } finally {
+      setPoweringOnRouterForGroupRemove(false)
+    }
+  }
+
+  const handlePowerOnRouterForGroupAdd = async (rangeId: string, data: RangeObject | undefined) => {
+    if (!addRangeDialog || !data?.VMs?.length) return
+    const router = findLudusRangeRouterVm(data.VMs)
+    if (!router) return
+    const name = (router.name || router.vmName || "").trim()
+    if (!name) return
+    setPoweringOnRouterForGroupAddRangeId(rangeId)
+    try {
+      const res = await ludusApi.powerOn([name], rangeId)
+      if (res.error) {
+        if (
+          !tryToastLudusSlowHttpError({
+            toast,
+            error: res.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
+            },
+          })
+        ) {
+          toast({ variant: "destructive", title: "Power on failed", description: res.error })
+        }
+      } else {
+        toast({ title: "Powering on router", description: name })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
+      }
+    } finally {
+      setPoweringOnRouterForGroupAddRangeId(null)
+    }
+  }
+
+  const executeRemoveRangeFromGroup = async () => {
+    const dlg = removeRangeFromGroupDialog
+    if (!dlg) return
+    const data = removeRangeStatusQuery.data
+    const router = findLudusRangeRouterVm(data?.VMs ?? [])
+    if (router && !isLudusVmRunning(router)) {
+      toast({
+        variant: "destructive",
+        title: "Router is still off",
+        description: "Power on the range router VM first, then try again.",
+      })
+      return
+    }
+    setRemovingRange({ group: dlg.group, rangeId: dlg.rangeId })
+    try {
+      const groupName = dlg.group
+      const rangeId = dlg.rangeId
       const result = await ludusApi.removeRangesFromGroup(groupName, [rangeId])
       const bulkErrs = bulkGroupErrors(result.data)
       if (result.error) {
         toast({ variant: "destructive", title: "Error", description: result.error })
-      } else if (bulkErrs.length > 0) {
+        return
+      }
+      if (bulkErrs.length > 0) {
         toast({
           variant: "destructive",
           title: "Remove failed",
           description: bulkErrs.map((e) => `${e.item}: ${e.reason}`).join("; "),
         })
-      } else {
-        toast({ title: "Range removed from group", description: rangeId })
+        await invalidateGroups()
+        return
       }
-      if (!result.error) await invalidateGroups({ refreshAccessibleRanges: true })
+      if (!bulkGroupRemovalAcknowledgesRange(result.data, rangeId)) {
+        toast({
+          variant: "destructive",
+          title: "Removal not confirmed",
+          description:
+            "Ludus did not list this range in the success payload — nothing may have changed. If the range stays in the group, check Ludus server/proxy DELETE body support.",
+        })
+        await invalidateGroups()
+        return
+      }
+      await invalidateGroups({ refreshAccessibleRanges: true })
+      const fresh = await fetchGroupDetail(groupName)
+      if (fresh.ranges.includes(rangeId)) {
+        toast({
+          variant: "destructive",
+          title: "Range still in group",
+          description:
+            "The API returned success but this range is still attached. If the router was off, power it on and try again.",
+        })
+        return
+      }
+      setRemoveRangeFromGroupDialog(null)
+      toast({ title: "Range removed from group", description: rangeId })
     } finally {
       setRemovingRange(null)
     }
   }
+
+  const rrDlg = removeRangeFromGroupDialog
+  const rrRangeData = removeRangeStatusQuery.data
+  const rrStatusPending = removeRangeStatusQuery.isPending
+  const rrStatusError = removeRangeStatusQuery.isError
+  const rrStatusFetching = removeRangeStatusQuery.isFetching
+  const rrRouter = findLudusRangeRouterVm(rrRangeData?.VMs ?? [])
+  const rrRouterOn = rrRouter ? isLudusVmRunning(rrRouter) : true
+  const rrRouterLabel = rrRouter ? (rrRouter.name || rrRouter.vmName || "").trim() : ""
+  const rrRemoveEnabled =
+    !!rrDlg &&
+    !removingRange &&
+    !rrStatusPending &&
+    !rrStatusError &&
+    (!rrRouter || rrRouterOn)
 
   return (
     <div className="space-y-6">
@@ -422,8 +659,13 @@ export default function GroupsPage() {
             <Plus className="h-4 w-4" />
             New Group
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => void invalidateGroups()} disabled={loading}>
-            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void invalidateGroups()}
+            disabled={loading || groupsFetching}
+          >
+            <RefreshCw className={cn("h-4 w-4", (loading || groupsFetching) && "animate-spin")} />
           </Button>
         </div>
       </div>
@@ -609,7 +851,7 @@ export default function GroupsPage() {
                                   variant="ghost"
                                   disabled={!!removingRange}
                                   title="Remove range from group"
-                                  onClick={() => void handleRemoveRange(gName, r)}
+                                  onClick={() => setRemoveRangeFromGroupDialog({ group: gName, rangeId: r })}
                                 >
                                   {rangeBusy ? (
                                     <Loader2 className="h-2.5 w-2.5 animate-spin text-muted-foreground" />
@@ -631,6 +873,142 @@ export default function GroupsPage() {
           })}
         </div>
       )}
+
+      {/* Remove range from group — Ludus may require range router VM powered on */}
+      <Dialog
+        open={!!rrDlg}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRemoveRangeFromGroupDialog(null)
+            setPoweringOnRouterForGroupRemove(false)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove range from group</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1 text-sm">
+            {rrDlg && (
+              <p className="text-muted-foreground">
+                Remove <code className="text-xs font-mono text-foreground">{rrDlg.rangeId}</code> from group{" "}
+                <span className="font-medium text-foreground">{rrDlg.group}</span>? Members lose access via this
+                group.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Ludus only completes this operation when the range&apos;s router VM is running. If it is off, power it
+              on below and wait until status shows running — then remove.
+            </p>
+
+            {rrStatusPending && (
+              <div className="flex items-center gap-2 text-muted-foreground py-2">
+                <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                Loading range status…
+              </div>
+            )}
+
+            {rrStatusError && (
+              <Alert variant="destructive">
+                <AlertDescription className="text-xs">
+                  Could not load this range (permission or network). Fix access or try again; removal stays disabled
+                  until status loads.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {!rrStatusPending && !rrStatusError && rrRangeData && (
+              <>
+                {rrRouter && !rrRouterOn && (
+                  <Alert variant="warning">
+                    <AlertDescription className="text-xs space-y-2">
+                      <p>
+                        Router VM is <strong>off</strong>. Power it on before removing this range from the group.
+                      </p>
+                      {rrRouterLabel ? (
+                        <p className="font-mono text-[11px] break-all opacity-90">{rrRouterLabel}</p>
+                      ) : null}
+                      {rrStatusFetching && (
+                        <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Rechecking power state…
+                        </p>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {!rrRouter && (rrRangeData.VMs?.length ?? 0) > 0 && (
+                  <Alert>
+                    <AlertDescription className="text-xs">
+                      No VM matching the Ludus router pattern (<code className="font-mono">*-router-debian*</code>) was
+                      found. You may still try remove; if Ludus errors, deploy or verify the range first.
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {rrRouter && rrRouterOn && (
+                  <Alert variant="success">
+                    <AlertDescription className="text-xs">
+                      Router VM is running. You can remove this range from the group.
+                      {rrStatusFetching ? (
+                        <span className="inline-flex items-center gap-1 ml-2">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        </span>
+                      ) : null}
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </>
+            )}
+          </div>
+          <DialogFooter className="gap-2 flex-col sm:flex-row sm:justify-end">
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto sm:mr-auto">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={
+                  !rrDlg ||
+                  !rrRouter ||
+                  rrRouterOn ||
+                  rrStatusPending ||
+                  rrStatusError ||
+                  poweringOnRouterForGroupRemove ||
+                  removingRange != null
+                }
+                onClick={() => void handlePowerOnRouterForGroupRemove()}
+              >
+                {poweringOnRouterForGroupRemove ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Power className="h-3.5 w-3.5" />
+                )}
+                Power on router
+              </Button>
+            </div>
+            <div className="flex gap-2 w-full sm:w-auto justify-end">
+              <Button type="button" variant="ghost" onClick={() => setRemoveRangeFromGroupDialog(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={!rrRemoveEnabled}
+                className="gap-2"
+                onClick={() => void executeRemoveRangeFromGroup()}
+              >
+                {removingRange &&
+                rrDlg &&
+                removingRange.group === rrDlg.group &&
+                removingRange.rangeId === rrDlg.rangeId ? (
+                  <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                ) : null}
+                Remove from group
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Create Group Dialog */}
       <Dialog open={createDialog} onOpenChange={setCreateDialog}>
@@ -719,7 +1097,10 @@ export default function GroupsPage() {
       <Dialog
         open={!!addRangeDialog}
         onOpenChange={(open) => {
-          if (!open) setAddRangeDialog(null)
+          if (!open) {
+            setAddRangeDialog(null)
+            setPoweringOnRouterForGroupAddRangeId(null)
+          }
         }}
       >
         <DialogContent className="max-w-lg">
@@ -727,6 +1108,11 @@ export default function GroupsPage() {
             <DialogTitle>Add Ranges to {addRangeDialog}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              Ludus only completes this when each range&apos;s router VM is running. If a row shows the router off, use{" "}
+              <strong>Power on router</strong> and wait until it shows running — then you can add checked ranges to the
+              group.
+            </p>
             <div className="space-y-1.5">
               <Label>Search ranges</Label>
               <Input
@@ -735,7 +1121,7 @@ export default function GroupsPage() {
                 onChange={(e) => setAddRangeSearch(e.target.value)}
               />
             </div>
-            <ScrollArea className="h-[240px] rounded-md border border-border p-2">
+            <ScrollArea className="h-[280px] rounded-md border border-border p-2">
               {loadingPickerRanges || loadingAddRangeDetail ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -744,28 +1130,119 @@ export default function GroupsPage() {
                 <p className="text-xs text-muted-foreground py-4 text-center">No ranges to add</p>
               ) : (
                 <ul className="space-y-1">
-                  {filteredPickerRanges.map((r) => (
-                    <li key={r.rangeID}>
-                      <label className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50 cursor-pointer">
+                  {filteredPickerRanges.map((r) => {
+                    const st = addRangeStatusById.get(r.rangeID)
+                    const rangeData = st?.data as RangeObject | undefined
+                    const router = findLudusRangeRouterVm(rangeData?.VMs ?? [])
+                    const routerOn = router ? isLudusVmRunning(router) : true
+                    const routerLabel = router ? (router.name || router.vmName || "").trim() : ""
+                    const pending = st?.isPending
+                    const err = st?.isError
+                    const fetching = st?.isFetching
+                    const powerBusy = poweringOnRouterForGroupAddRangeId === r.rangeID
+                    const powerDisabled =
+                      !router ||
+                      routerOn ||
+                      pending ||
+                      err ||
+                      powerBusy ||
+                      addingRanges
+                    return (
+                      <li
+                        key={r.rangeID}
+                        className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50 min-w-0"
+                      >
                         <Checkbox
                           checked={selectedRangeIds.has(r.rangeID)}
                           onCheckedChange={() => toggleRangePicker(r.rangeID)}
+                          className="shrink-0"
                         />
-                        <span className="font-mono text-xs">{r.rangeID}</span>
-                        {r.name && (
-                          <span className="text-xs text-muted-foreground truncate">{r.name}</span>
-                        )}
-                      </label>
-                    </li>
-                  ))}
+                        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-mono text-xs shrink-0">{r.rangeID}</span>
+                            {r.name ? (
+                              <span className="text-xs text-muted-foreground truncate">{r.name}</span>
+                            ) : null}
+                          </div>
+                          {pending ? (
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                              <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                              Loading range status…
+                            </span>
+                          ) : err ? (
+                            <span className="text-[10px] text-destructive">Could not load status for this range.</span>
+                          ) : router && !routerOn ? (
+                            <span className="text-[10px] text-yellow-600 dark:text-yellow-400/90">
+                              Router off{routerLabel ? ` — ${routerLabel}` : ""}
+                              {fetching ? (
+                                <span className="inline-flex items-center gap-1 ml-1">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : router && routerOn ? (
+                            <span className="text-[10px] text-green-600 dark:text-green-400/90">
+                              Router running
+                              {fetching ? (
+                                <span className="inline-flex items-center gap-1 ml-1">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : rangeData && (rangeData.VMs?.length ?? 0) > 0 ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              No router VM matched (<code className="font-mono text-[9px]">*-router-debian*</code>).
+                              You can still try add.
+                            </span>
+                          ) : null}
+                        </div>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="outline"
+                          className="shrink-0"
+                          title="Power on this range’s router VM (needed for group membership changes)"
+                          disabled={powerDisabled}
+                          onClick={() => void handlePowerOnRouterForGroupAdd(r.rangeID, rangeData)}
+                        >
+                          {powerBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Power className="h-3.5 w-3.5" />}
+                        </Button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </ScrollArea>
             <p className="text-xs text-muted-foreground">{selectedRangeIds.size} selected</p>
+            {selectedRangesHiddenByFilter.length > 0 ? (
+              <p className="text-xs text-amber-700 dark:text-amber-300/90">
+                {selectedRangesHiddenByFilter.length} checked range(s) aren&apos;t in the list (search filter). Clear or
+                widen search to use <strong>Power on router</strong> for those IDs.
+              </p>
+            ) : null}
+            {selectedRangeIds.size > 0 && !addRangesSubmitEnabled && !addingRanges ? (
+              <Alert variant="warning">
+                <AlertDescription className="text-xs">
+                  <strong>Add Ranges</strong> stays off until every checked range has loaded status and its router VM is
+                  running (or Ludus has no matching router VM to check).
+                </AlertDescription>
+              </Alert>
+            ) : null}
           </div>
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setAddRangeDialog(null)}>Cancel</Button>
-            <Button onClick={() => void handleAddRange()} disabled={addingRanges || selectedRangeIds.size === 0}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPoweringOnRouterForGroupAddRangeId(null)
+                setAddRangeDialog(null)
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleAddRange()}
+              disabled={addingRanges || selectedRangeIds.size === 0 || !addRangesSubmitEnabled}
+            >
               {addingRanges ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Add Ranges
             </Button>

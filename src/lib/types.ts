@@ -263,11 +263,15 @@ export type PowerAction = "on" | "off"
 /** Entry from GET /range/logs/history or /templates/logs/history */
 export interface LogHistoryEntry {
   id: string
+  /** Comma-separated Ludus deploy tags, or empty when a full deploy ran. */
   template: string
   status: string
   start: string
   end: string
   created: string
+  /** Ludus may expose operation kind for history rows (e.g. testing start/stop). */
+  opType?: string
+  kind?: string
 }
 
 /** Detail from GET /range/logs/history/{id} or /templates/logs/history/{id} */

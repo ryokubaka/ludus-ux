@@ -35,7 +35,7 @@ variables:
 
 lint:
   stage: verify
-  image: node:20-alpine
+  image: node:24-alpine
   before_script:
     - apk add --no-cache python3 make g++
     - 'test -f package-lock.json || (echo "ERROR: package-lock.json is missing. Run npm install --legacy-peer-deps && git add package-lock.json" && exit 1)'
@@ -51,7 +51,7 @@ lint:
 
 npm_audit:
   stage: security
-  image: node:20-alpine
+  image: node:24-alpine
   before_script:
     - apk add --no-cache python3 make g++
     - 'test -f package-lock.json || (echo "ERROR: package-lock.json is missing. Run npm install --legacy-peer-deps && git add package-lock.json" && exit 1)'

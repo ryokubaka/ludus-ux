@@ -18,6 +18,9 @@ export const queryKeys = {
   rangeLogHistory: (scopeTag: string, rangeId?: string | null) =>
     sc(scopeTag, ["range", "logs", "history", rangeId ?? "default"]),
 
+  rangeLogEnrichment: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["range", "logs", "enrichment", rangeId ?? "default"]),
+
   // ── Range lists ───────────────────────────────────────────────────────────
   /** Prefix only — prefer `accessibleRangesList` for full keys. */
   accessibleRanges: () => ["ranges", "accessible"] as const,

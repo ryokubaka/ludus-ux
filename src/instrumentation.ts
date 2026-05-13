@@ -1,9 +1,16 @@
+import { applyNodeTlsFromLudusEnv } from "@/lib/tls-insecure-env"
+import { getProductionAppSecretFailureMessage } from "@/lib/app-secret-policy"
+
 /**
  * Server TLS: same policy as `server/ws-server.ts` (Docker runs `node ws-server.js`).
- * Node `fetch` uses the TLS stack; Ludus/PocketBase are often self-signed / cluster CA.
+ * See `LUDUS_TLS_INSECURE` in `.env.example`.
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    applyNodeTlsFromLudusEnv()
+    const secretErr = getProductionAppSecretFailureMessage()
+    if (secretErr) {
+      throw new Error(`[ludus-ux] ${secretErr}`)
+    }
   }
 }

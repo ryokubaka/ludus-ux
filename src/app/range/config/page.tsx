@@ -29,6 +29,7 @@ import {
   Shield,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { useRange } from "@/lib/range-context"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
@@ -166,15 +167,17 @@ export default function RangeConfigPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRangeId])
 
-  const handleSave = async (): Promise<boolean> => {
+  const persistRangeConfig = async (yaml: string): Promise<boolean> => {
     setSaving(true)
     try {
-      const result = await ludusApi.setRangeConfig(config, selectedRangeId ?? undefined, forceLudus)
+      const result = await ludusApi.setRangeConfig(yaml, selectedRangeId ?? undefined, forceLudus)
       if (result.error) {
         toast({ variant: "destructive", title: "Save failed", description: result.error })
         return false
       }
-      setOriginalConfig(config)
+      setConfig(yaml)
+      setOriginalConfig(yaml)
+      setNetworkRules(extractNetworkRules(yaml))
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
       const msg = result.data?.result ?? ""
@@ -183,16 +186,21 @@ export default function RangeConfigPage() {
       } else {
         toast({ title: "Config saved" })
       }
-      queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), config)
+      queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), yaml)
       return true
     } finally {
       setSaving(false)
     }
   }
 
-  const doDeploy = async () => {
-    if (config !== originalConfig) {
-      const saved = await handleSave()
+  const handleSave = () => persistRangeConfig(config)
+
+  const executeDeploy = async (
+    tagsForLudus: string[] | undefined,
+    options?: { skipDirtySave?: boolean },
+  ) => {
+    if (!options?.skipDirtySave && config !== originalConfig) {
+      const saved = await persistRangeConfig(config)
       if (!saved) return
     }
     clearLogs()
@@ -200,12 +208,17 @@ export default function RangeConfigPage() {
     setDeploying(true)
     // Scroll to the logs panel after React renders it
     setTimeout(() => logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
+    const tagRunAt = Date.now()
+    const tagList = tagsForLudus && tagsForLudus.length > 0 ? tagsForLudus : undefined
     const result = await ludusApi.deployRange(
-      selectedTags.length > 0 ? selectedTags : undefined,
+      tagList,
       limitVM || undefined,
       selectedRangeId ?? undefined,
       forceLudus,
     )
+    if (!result.error && selectedRangeId && tagList && tagList.length > 0) {
+      void registerLuxDeployTagRun(selectedRangeId, tagList, tagRunAt)
+    }
     if (result.error) {
       if (
         tryToastLudusSlowHttpError({
@@ -224,8 +237,13 @@ export default function RangeConfigPage() {
       setDeploying(false)
       return
     }
-    toast({ title: "Deployment started", description: selectedTags.length > 0 ? `Tags: ${selectedTags.join(", ")}` : "Full deployment" })
+    const tagDesc = tagList?.length ? `Tags: ${tagList.join(", ")}` : "Full deployment"
+    toast({ title: "Deployment started", description: tagDesc })
     startStreaming(selectedRangeId ?? undefined)
+  }
+
+  const doDeploy = async () => {
+    await executeDeploy(selectedTags.length > 0 ? selectedTags : undefined)
   }
   const handleDeploy = () =>
     confirm(
@@ -234,6 +252,21 @@ export default function RangeConfigPage() {
         : "Start full range deployment?",
       doDeploy
     )
+
+  const doDeployFirewallRules = async () => {
+    const merged = injectNetworkRules(config, networkRules)
+    const saved = await persistRangeConfig(merged)
+    if (!saved) return
+    await executeDeploy(["network"], { skipDirtySave: true })
+  }
+
+  const confirmDeployFirewallRules = () =>
+    confirm(
+      "Merge firewall rules into the YAML, save to Ludus, then deploy with the **network** tag only?",
+      doDeployFirewallRules,
+    )
+
+  const firewallRulesForceId = "force-range-ludus-testing-firewall"
 
   const doAbort = async () => {
     const result = await ludusApi.abortDeploy(selectedRangeId ?? undefined)
@@ -489,6 +522,45 @@ export default function RangeConfigPage() {
                 setConfig(updated)
                 toast({ title: "Firewall rules applied", description: "Review the YAML below, then save." })
               }}
+              actionSlot={
+                <>
+                  <Button
+                    type="button"
+                    variant={isDirty ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => void persistRangeConfig(config)}
+                    disabled={saving || !isDirty || !!pendingAction}
+                  >
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    {saving ? "Saving…" : "Save Config"}
+                  </Button>
+                  <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1">
+                    <Checkbox
+                      id={firewallRulesForceId}
+                      checked={forceLudus}
+                      onCheckedChange={(v) => setForceLudus(v === true)}
+                      disabled={!!pendingAction || saving}
+                    />
+                    <Label
+                      htmlFor={firewallRulesForceId}
+                      className="text-xs text-muted-foreground font-normal cursor-pointer leading-snug"
+                      title="Same as toolbar: allow save/deploy while Ludus range is in testing mode (--force)"
+                    >
+                      Force
+                    </Label>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => confirmDeployFirewallRules()}
+                    disabled={deploying || !!pendingAction || saving}
+                  >
+                    <Play className="h-4 w-4" />
+                    Deploy Firewall Rules
+                  </Button>
+                </>
+              }
             />
           </CardContent>
         )}

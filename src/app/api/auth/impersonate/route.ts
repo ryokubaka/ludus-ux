@@ -50,9 +50,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const { impersonationApiKey, impersonationUserId, ...clean } = session
-  void impersonationApiKey
-  void impersonationUserId
+  const { impersonationApiKey: _k, impersonationUserId: _u, ...clean } = session
   const response = NextResponse.json({ ok: true })
   await setSessionCookie(response, clean)
   return response

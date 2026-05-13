@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { bustAdminCache } from "@/lib/admin-data"
+import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
-import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership } from "@/lib/range-ownership-store"
+
+type CreateRangeBody = {
+  rangeID: string
+  name: string
+  description?: string
+  purpose?: string
+  userID?: string[]
+  [key: string]: unknown
+}
 
 export const dynamic = "force-dynamic"
 
@@ -28,42 +39,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeID and name are required" }, { status: 400 })
   }
 
-  // Determine the effective username — use impersonated username when an admin
-  // is creating a range on behalf of another user.
-  const impersonateAs   = request.headers.get("X-Impersonate-As") || null
-  const impersonateKey  = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
-  const effectiveApiKey  = impersonateKey  || session.apiKey
-  const effectiveUsername = (session.isAdmin && impersonateAs) ? impersonateAs : session.username
+  // Effective user for assign; create uses same session key first, then optional ROOT (see ludus-client admin base).
+  const { apiKey: impersonateKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
+  const effectiveApiKey = impersonateKey || session.apiKey
+  const effectiveUsername = impersonateAs || session.username
+
+  const { rootApiKey } = getSettings()
+  const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, rootApiKey)
+  if (!createRangeApiKey) {
+    return NextResponse.json(
+      {
+        error:
+          "No Ludus API key for range creation — log in with your Ludus API key, or set ROOT in Settings / `LUDUS_ROOT_API_KEY` for headless use.",
+      },
+      { status: 500 },
+    )
+  }
 
   // Always assign the range to the effective user so it's visible in their
   // account immediately.  Merge with any userIDs the caller specified.
   const callerUserIds: string[] = Array.isArray(body.userID) ? body.userID : []
   const userID = Array.from(new Set([effectiveUsername, ...callerUserIds]))
 
-  const settings  = getSettings()
-  const adminBase = (settings.ludusAdminUrl || settings.ludusUrl.replace(/:8080\b/, ":8081")).replace(/\/$/, "")
-  const url       = `${adminBase}/api/v2/ranges/create`
-
   try {
-    const res = await fetch(url, {
+    const createRes = await ludusRequest<Record<string, unknown>>(`/ranges/create`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": effectiveApiKey,
-      },
-      body: JSON.stringify({ ...body, userID }),
-      cache: "no-store",
+      apiKey: createRangeApiKey,
+      useAdminEndpoint: true,
+      body: { ...(body as CreateRangeBody), userID },
     })
 
-    const data = await res.json().catch(() => null)
-    if (!res.ok) {
+    if (createRes.error) {
       return NextResponse.json(
-        { error: data?.error || data?.result || `HTTP ${res.status}` },
-        { status: res.status }
+        { error: createRes.error },
+        { status: createRes.status > 0 ? createRes.status : 500 },
       )
     }
+
+    const data = createRes.data
 
     // ── Assign the range to the effective user ────────────────────────────────
     // Ludus ignores the `userID` field in the create body; assignment requires
@@ -79,9 +92,10 @@ export async function POST(request: NextRequest) {
     if (!assignRes.error || alreadyOwned) {
       // Persist to SQLite so Ranges Overview reflects it immediately
       setOwnership(body.rangeID, effectiveUsername, session.username)
+      bustAdminCache()
     }
 
-    return NextResponse.json(data, { status: res.status })
+    return NextResponse.json(data ?? {}, { status: createRes.status || 200 })
   } catch (err) {
     return NextResponse.json(
       { error: `Connection failed: ${(err as Error).message}` },

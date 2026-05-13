@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { hasSshExecAuth } from "@/lib/root-ssh-auth"
+import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -95,17 +95,20 @@ export async function GET(req: NextRequest) {
   }
 
   const settings = getSettings()
-  if (!hasSshExecAuth(settings, session.sshPassword)) {
+  // Root `pvesh` over SSH — use only settings/env root password or mounted key.
+  // Do not use `session.sshPassword` (LUX login password); it is not root@Proxmox
+  // and would force password auth and skip the key, breaking key-only setups.
+  if (!isRootProxmoxSshConfigured(settings)) {
     return NextResponse.json(
       {
         error:
-          "No Proxmox SSH auth: configure root SSH password or key under SSH & GOAD, or log in with a user SSH password.",
+          "No Proxmox root SSH auth in SSH & GOAD: set root SSH password or private key (path or mount).",
       },
       { status: 503 },
     )
   }
 
-  const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
+  const sshPass = (settings.proxmoxSshPassword || "").trim()
   const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
 
   try {

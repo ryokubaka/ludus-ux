@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from "react"
 import { ludusApi } from "@/lib/api"
+import { appendStreamLines } from "@/lib/log-buffer"
+import { formatStreamWallHms } from "@/lib/log-line-timestamp"
 
 const POLL_INTERVAL_MS = 5000
 
@@ -42,11 +44,13 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
       // Skip fetches when the tab is not visible
       if (typeof document !== "undefined" && document.hidden) return
       if (!isStreamingRef.current) return
+      const rid = rangeId?.trim()
+      if (!rid) return
 
       try {
         const [logsResult, rangeResult] = await Promise.all([
-          ludusApi.getRangeLogs(rangeId),
-          ludusApi.getRangeStatus(rangeId),
+          ludusApi.getRangeLogs(rid),
+          ludusApi.getRangeStatus(rid),
         ])
 
         if (logsResult.data) {
@@ -58,8 +62,8 @@ export function useDeployLogs(options: UseDeployLogsOptions = {}) {
             // Prepend a wall-clock timestamp to each newly-received line.
             // Lines within the same poll window share the same timestamp, which
             // is within POLL_INTERVAL_MS of when they were actually written.
-            const ts = new Date().toISOString().slice(11, 19)
-            setLines((prev) => [...prev, ...newLines.map((l) => `[${ts}] ${l}`)])
+            const ts = formatStreamWallHms()
+            setLines((prev) => appendStreamLines(prev, newLines.map((l) => `[${ts}] ${l}`)))
           }
         }
 

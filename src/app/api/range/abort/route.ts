@@ -34,6 +34,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
@@ -114,11 +115,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeId required" }, { status: 400 })
   }
 
-  // Resolve effective API key (supports admin-as-user impersonation headers,
-  // matching the old force-state behavior).
-  const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
+  // Resolve effective API key — cookie-backed impersonation takes precedence
+  // over the explicit bodyApiKey so admin impersonation is always respected.
+  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = bodyApiKey || impersonateApiKey || session.apiKey
 
   // ── 1. Kill any in-flight GOAD task for this range ────────────────────────

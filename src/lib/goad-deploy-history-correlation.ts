@@ -31,7 +31,9 @@ export interface CorrelatedHistoryEntry {
 
 /** REPL flows that pair with a Ludus deploy on the same instance (overlap can be 0 while "Running"). */
 export function taskMatchesIntegrationRepl(command: string): boolean {
-  return /--repl\s+"[^"]*;\s*(provide|install_extension|provision_lab|provision_extension)\b/.test(command)
+  return /--repl\s+"[^"]*;\s*(provide|install|install_extension|provision_lab|provision_extension)\b/.test(
+    command,
+  )
 }
 
 /**
@@ -41,11 +43,16 @@ export function taskMatchesIntegrationRepl(command: string): boolean {
  */
 export function goadTaskShortKind(command: string): string {
   if (/;\s*provide\b[\s\S]*;\s*provision_lab\b/.test(command)) return "Install"
-  const m = command.match(/--repl\s+"[^"]*;\s*(provide|install_extension|provision_lab|provision_extension)\b/)
+  if (/;\s*install\b/.test(command)) return "Install"
+  const m = command.match(
+    /--repl\s+"[^"]*;\s*(provide|install|install_extension|provision_lab|provision_extension)\b/,
+  )
   if (!m) return "Running"
   switch (m[1]) {
     case "provide":
       return "Provide"
+    case "install":
+      return "Install"
     case "install_extension": {
       const n = parseInstallExtensionNames(command).length
       return n > 1 ? "Install extensions" : "Install extension"
@@ -76,11 +83,39 @@ export function goadHistoryTitle(command: string): string {
     const label = `Install extensions: ${installNames.join(", ")}`
     return label.length > 120 ? `${label.slice(0, 117)}…` : label
   }
-  const mProvExt = command.match(/provision_extension\s+([^\s;"]+)/)
-  if (mProvExt) return `Re-provision extension: ${mProvExt[1]}`
+  // Legacy Ludus wizard: `provide;provision_lab;provision_extension …` in one REPL.
+  // Check this before bare `provision_extension` or we mis-title as "Re-provision".
   if (/;\s*provide\b[\s\S]*;\s*provision_lab\b/.test(command)) {
+    const provNames: string[] = []
+    const pe = /provision_extension\s+([^\s;"]+)/g
+    let pm: RegExpExecArray | null
+    while ((pm = pe.exec(command)) !== null) {
+      provNames.push(pm[1])
+    }
+    if (provNames.length === 1) return `Install (lab + extension: ${provNames[0]})`
+    if (provNames.length > 1) {
+      const tail = provNames.join(", ")
+      const label = `Install (lab + extensions: ${tail})`
+      return label.length > 120 ? `${label.slice(0, 117)}…` : label
+    }
     return "Install (Provide + Provision lab)"
   }
+  // Wizard / repair: `set_extensions …;…;install` or `use …;install`
+  if (/;\s*install\b/.test(command)) {
+    const sm = command.match(/set_extensions\s+([^";]+)/)
+    if (sm) {
+      const names = sm[1].trim().split(/\s+/).filter(Boolean)
+      if (names.length === 1) return `Install (lab + extension: ${names[0]})`
+      if (names.length > 1) {
+        const tail = names.join(", ")
+        const label = `Install (lab + extensions: ${tail})`
+        return label.length > 120 ? `${label.slice(0, 117)}…` : label
+      }
+    }
+    return "Install"
+  }
+  const mProvExt = command.match(/provision_extension\s+([^\s;"]+)/)
+  if (mProvExt) return `Re-provision extension: ${mProvExt[1]}`
   if (/;\s*provision_lab\b/.test(command)) return "Provision lab"
   if (/;\s*provide\b/.test(command)) return "Provide"
   if (command.length > 72) return `${command.slice(0, 69)}…`
@@ -263,6 +298,8 @@ export function findCorrelatedGoadTask(
       bestOverlapTask = task
     }
     if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
+      // Network-tag follow-up deploys never ran GOAD — do not steal the install task via proximity.
+      if (isNetworkOnlyTagDeploy(deploy)) continue
       const dist = Math.min(
         Math.abs(dStart - task.startedAt),
         Math.abs(dEnd - task.startedAt),
@@ -284,7 +321,17 @@ export function correlateHistoryEntries(
   const usedTaskIds = new Set<string>()
   const correlated: CorrelatedHistoryEntry[] = []
 
-  for (const deploy of deployHistory) {
+  // Ludus /range/logs/history is often newest-first. Process oldest deploy first so
+  // the primary GOAD-driven full deploy claims the GOAD task by overlap before a
+  // later network-tag row can match the same task via zero-overlap proximity.
+  const deploysChrono = [...deployHistory].sort((a, b) => {
+    const ta = new Date(a.start).getTime()
+    const tb = new Date(b.start).getTime()
+    if (ta !== tb) return ta - tb
+    return (a.id || "").localeCompare(b.id || "")
+  })
+
+  for (const deploy of deploysChrono) {
     const dStart = new Date(deploy.start).getTime()
     const dEnd = new Date(deploy.end).getTime() || Date.now()
 
@@ -304,6 +351,7 @@ export function correlateHistoryEntries(
         bestOverlapTask = task
       }
       if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
+        if (isNetworkOnlyTagDeploy(deploy)) continue
         const dist = Math.min(
           Math.abs(dStart - task.startedAt),
           Math.abs(dEnd - task.startedAt),

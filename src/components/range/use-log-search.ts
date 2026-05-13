@@ -12,13 +12,19 @@ export function useLogSearch(lines: string[], options?: UseLogSearchOptions) {
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
   const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const matchLineRefsRef = useRef<Map<number, HTMLDivElement>>(new Map())
 
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 220)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+
   const matchIndices = useMemo(() => {
-    if (!searchQuery.trim()) return []
-    const q = searchQuery.toLowerCase()
+    if (!debouncedQuery.trim()) return []
+    const q = debouncedQuery.toLowerCase()
     const normalize = normalizeRef.current ?? ((s: string) => s)
     const result: number[] = []
     lines.forEach((line, i) => {
@@ -27,11 +33,11 @@ export function useLogSearch(lines: string[], options?: UseLogSearchOptions) {
     return result
     // normalizeRef is stable (ref), intentionally excluded from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, searchQuery])
+  }, [lines, debouncedQuery])
 
   const matchSet = useMemo(() => new Set(matchIndices), [matchIndices])
 
-  useEffect(() => { setCurrentMatchIdx(0) }, [searchQuery])
+  useEffect(() => { setCurrentMatchIdx(0) }, [debouncedQuery])
 
   useEffect(() => {
     if (matchIndices.length === 0) return

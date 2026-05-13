@@ -293,7 +293,7 @@ case "${auth_choice:-1}" in
     set_kv "PROXMOX_SSH_PASSWORD" ""
     set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
     root_ssh_key_auth=1
-    echo "Key installed. If this key is root's, add the matching public key to /root/.ssh/authorized_keys on the server (see README)."
+    echo "Key installed. If this key is root's, add the matching public key to /root/.ssh/authorized_keys on the server (see docs/ssh-and-auth.md)."
     ;;
   2)
     read -r -p "Path to existing private key file: " key_path
@@ -363,7 +363,7 @@ echo "=== Next steps ==="
 echo "  • HTTPS UI: https://localhost (port 443 via bundled nginx) — self-signed warning unless you add docker/nginx/certificates/cert.pem + key.pem before first start"
 echo "  • Optional: docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d exposes http://127.0.0.1:3000 to the app directly (bypass nginx)"
 echo "  • Log in with a Ludus (non-root) SSH/PAM user. In-browser noVNC uses that session password for the user's Proxmox ticket."
-echo "  • On the Ludus server: put LUDUS_API_KEY in ~/.bashrc for that user (and root) if needed — see README."
+echo "  • On the Ludus server: put LUDUS_API_KEY in ~/.bashrc for that user (and root) if needed — see docs/getting-started.md."
 echo "  • In LUX: Settings → Test root SSH & admin API"
 echo ""
 echo "Done."

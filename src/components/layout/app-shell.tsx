@@ -60,18 +60,18 @@ function ShellContent({ children }: { children: React.ReactNode }) {
   const { collapsed } = useSidebar()
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden bg-background">
       <Sidebar />
       <Header />
       <main
         className={cn(
-          "pt-16 min-h-screen flex flex-col",
+          "flex flex-1 flex-col min-h-0 pt-16",
           "transition-[padding-left] duration-200 ease-in-out",
           collapsed ? "pl-16" : "pl-64",
         )}
       >
         <ImpersonationBanner />
-        <div className="p-6 flex-1">{children}</div>
+        <div className="flex flex-1 flex-col min-h-0 overflow-x-hidden overflow-y-auto p-6">{children}</div>
       </main>
     </div>
   )

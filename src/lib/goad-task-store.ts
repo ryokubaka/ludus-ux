@@ -36,8 +36,8 @@ export interface GoadTask {
   instanceId?: string
   username?: string
   /**
-   * Ludus API key used for this GOAD run (session or impersonation). In-memory only
-   * — not stored in SQLite — so reconcile can call Ludus as the same user as GOAD.
+   * Ludus user API key from the session that started this GOAD task (same as log stream).
+   * Ephemeral — not persisted to SQLite; used by reconcile for GET /range/logs when root key is not a valid Ludus X-API-KEY.
    */
   ludusApiKey?: string
   /** In-memory line buffer for running tasks; loaded lazily from file for completed ones. */
@@ -88,6 +88,7 @@ function hydrateFromDb(): void {
       line_count: number
       phase: string | null
       has_network_rules: number
+      ludus_api_key: string | null
     }
     // Any task still marked "running" in the DB is stale — the process died with
     // the container. Mark them as "error" immediately so the UI doesn't spin forever.
@@ -99,7 +100,7 @@ function hydrateFromDb(): void {
 
     const rows = db
       .prepare(
-        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count, phase, has_network_rules
+        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count, phase, has_network_rules, ludus_api_key
          FROM goad_tasks
          ORDER BY started_at ASC
          LIMIT ?`
@@ -112,6 +113,7 @@ function hydrateFromDb(): void {
         command: row.command,
         instanceId: row.instance_id ?? undefined,
         username: row.username ?? undefined,
+        ludusApiKey: row.ludus_api_key ?? undefined,
         status: row.status as TaskStatus,
         startedAt: row.started_at,
         endedAt: row.ended_at ?? undefined,
@@ -282,10 +284,10 @@ export function createTask(
   try {
     getDb()
       .prepare(
-        `INSERT INTO goad_tasks (id, command, instance_id, username, status, started_at, line_count)
-         VALUES (?, ?, ?, ?, 'running', ?, 0)`
+        `INSERT INTO goad_tasks (id, command, instance_id, username, status, started_at, line_count, ludus_api_key)
+         VALUES (?, ?, ?, ?, 'running', ?, 0, ?)`
       )
-      .run(id, command, instanceId ?? null, username ?? null, now)
+      .run(id, command, instanceId ?? null, username ?? null, now, task.ludusApiKey ?? null)
   } catch (err) {
     console.error("[task-store] createTask DB write failed:", err)
   }
@@ -298,6 +300,7 @@ export function createTask(
   })
   taskOrder.push(id)
   evictOldestIfNeeded()
+  notifyTaskStatus(id, "running")
   return id
 }
 
@@ -334,8 +337,8 @@ export function appendLine(taskId: string, line: string): string | undefined {
 
   // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
   // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
-  // runs every N lines (see goad-ludus-reconcile.ts).
-  if (entry.task.lineCount % 12 === 0 && entry.task.status === "running") {
+  // runs every 6 log lines while running (was 12 — slower provide output + PB verify retries).
+  if (entry.task.lineCount % 6 === 0 && entry.task.status === "running") {
     const snap = {
       taskId,
       instanceId: entry.task.instanceId,
@@ -358,9 +361,11 @@ export function completeTask(
 ): void {
   const entry = taskMap.get(taskId)
   if (!entry) return
-  // Once a task has reached a terminal state (aborted/completed/error) don't
-  // let a late SSH close event overwrite it — e.g. after Stop Command, the
-  // SSH channel closing would otherwise clobber "aborted" with "error".
+  // Guard against late SSH channel-close events racing with an explicit Stop.
+  // When the user hits Stop, abortTask() sets status → "aborted" first. The
+  // underlying SSH stream then closes and calls completeTask again with "error".
+  // Without this check the second call would silently overwrite "aborted" with
+  // "error", making the UI show the wrong final state.
   if (entry.task.status !== "running") return
   const now = Date.now()
   entry.task.status = status
@@ -380,6 +385,21 @@ export function completeTask(
   }
   entry.lineSubscribers.clear()
   entry.closeSubscribers.clear()
+  notifyTaskStatus(taskId, status)
+
+  void import("@/lib/goad-pending-network-workflow")
+    .then((m) =>
+      m.runAfterGoadTaskCompleteIfNeeded({
+        taskId,
+        command: entry.task.command,
+        exitCode,
+        status,
+        instanceId: entry.task.instanceId,
+        username: entry.task.username ?? undefined,
+        ludusApiKey: entry.task.ludusApiKey,
+      }),
+    )
+    .catch((err) => console.error("[goad-task-store] pending-network workflow:", err))
 }
 
 export function abortTask(taskId: string): void {
@@ -475,6 +495,27 @@ export function getRunningTasksForInstance(instanceId: string): GoadTask[] {
     }
   }
   return out
+}
+
+// ── Global task status events (for lightweight SSE invalidation) ──────────────
+
+type TaskStatusCallback = (taskId: string, status: TaskStatus) => void
+const globalStatusSubscribers = new Set<TaskStatusCallback>()
+
+/**
+ * Subscribe to status changes for ALL tasks (creation + completion).
+ * Returns an unsubscribe function. Used by the task-events SSE endpoint so
+ * the task list page can invalidate its query without polling every 3 s.
+ */
+export function subscribeToTaskStatusEvents(cb: TaskStatusCallback): () => void {
+  globalStatusSubscribers.add(cb)
+  return () => globalStatusSubscribers.delete(cb)
+}
+
+function notifyTaskStatus(taskId: string, status: TaskStatus): void {
+  for (const cb of globalStatusSubscribers) {
+    try { cb(taskId, status) } catch {}
+  }
 }
 
 // ── Subscription (for SSE replay + live stream) ───────────────────────────────

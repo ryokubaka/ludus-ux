@@ -1,2 +1,4 @@
-export const APP_VERSION = "0.9.9"
-export const APP_VERSION_LABEL = "beta"
+/** Display version — keep in sync with `package.json`. */
+export const APP_VERSION = "1.0.0"
+/** Optional qualifier next to the version in UI (e.g. pre-release); empty after GA. */
+export const APP_VERSION_LABEL = ""

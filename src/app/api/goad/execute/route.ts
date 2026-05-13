@@ -7,6 +7,7 @@ import { getSettings } from "@/lib/settings-store"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
+import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 
 export const dynamic = "force-dynamic"
 
@@ -26,14 +27,21 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({ args: "", instanceId: undefined }))
-  const { args, instanceId, impersonateAs, rangeId: bodyRangeId } = body as {
+  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags } = body as {
     args?: string
     instanceId?: string
-    impersonateAs?: { username: string; apiKey: string }
+    /** apiKey is optional: when absent, the session cookie's impersonation key is used. */
+    impersonateAs?: { username: string; apiKey?: string }
     /** Explicit rangeID to target — passed by the caller when a dedicated range
      *  is known up-front (e.g. new-instance flow where the range was pre-created). */
     rangeId?: string
+    ludusDeployTags?: unknown
   }
+
+  const ludusDeployTags =
+    Array.isArray(rawDeployTags) && rawDeployTags.every((x) => typeof x === "string")
+      ? filterLudusDeployTags(rawDeployTags as string[])
+      : []
 
   if (!args) {
     return new Response("data: [ERROR] No command args provided\n\n", {
@@ -60,18 +68,31 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  // Defense-in-depth: if the caller didn't explicitly pass impersonateAs in the
-  // body, check whether the session cookie carries an active impersonation (set by
-  // /api/auth/impersonate POST).  This mirrors how the proxy route works and
-  // ensures that even if a caller forgets to thread impersonation through the
-  // body, the execute route still runs under the correct identity.
+  // Defense-in-depth: check whether the session cookie carries an active
+  // impersonation (set by /api/auth/impersonate POST).  This is the authoritative
+  // source for the impersonation API key — the body's impersonateAs.apiKey is
+  // omitted now that the client no longer stores apiKey in sessionStorage.
   const imp = resolveAdminImpersonationFromRequest(session, request)
   const sessionImpersonate =
     session.isAdmin && imp.apiKey && imp.userId
       ? { username: imp.userId, apiKey: imp.apiKey }
       : null
-  // Body-provided impersonation takes precedence over session-inferred.
-  const effectiveImpersonate = impersonateAs ?? sessionImpersonate ?? null
+
+  // Merge body impersonation with cookie:
+  //   - If body has both username + apiKey, use as-is (legacy callers).
+  //   - If body has only username (apiKey stripped — no longer stored client-side),
+  //     take the apiKey from the session cookie's impersonation state.
+  //   - If no body impersonation at all, use the session cookie impersonation.
+  const effectiveImpersonate = (() => {
+    if (!impersonateAs) return sessionImpersonate
+    if (impersonateAs.apiKey) return { username: impersonateAs.username, apiKey: impersonateAs.apiKey }
+    // Body has username but no apiKey — fall back to cookie apiKey for this user.
+    // If the cookie doesn't have an apiKey either, drop impersonation rather than
+    // constructing an object with null apiKey (which would fail downstream type checks).
+    const cookieApiKey = sessionImpersonate?.apiKey
+    if (!cookieApiKey) return sessionImpersonate
+    return { username: impersonateAs.username, apiKey: cookieApiKey }
+  })()
 
   // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────
   // Priority: 1) explicit in request body (client passes instance.ludusRangeId)
@@ -150,7 +171,8 @@ export async function POST(request: NextRequest) {
           },
           creds,
           effectiveImpersonate ?? undefined,
-          effectiveRangeId
+          effectiveRangeId,
+          ludusDeployTags.length > 0 ? ludusDeployTags : undefined
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

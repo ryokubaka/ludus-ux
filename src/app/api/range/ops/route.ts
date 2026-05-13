@@ -24,6 +24,7 @@ import {
   pruneOldRangeOps,
   type RangeOpType,
 } from "@/lib/range-op-store"
+import { recordLuxTestingOpTerminal } from "@/lib/range-testing-audit"
 
 // Remove the bare getDb() call — it was being tree-shaken by webpack.
 // Schema creation is handled inside each exported store function instead.
@@ -35,14 +36,15 @@ function getEffective(
 ) {
   const imp = resolveAdminImpersonationFromRequest(session, request)
   return {
-    effectiveApiKey:   imp.apiKey || session.apiKey,
+    effectiveApiKey: imp.apiKey || session.apiKey,
     effectiveUsername: imp.userId || session.username,
+    ludusUserOverride: imp.userId ?? undefined,
   }
 }
 
 /**
  * How long we wait for a testing op to complete before declaring it stalled.
- * Proxmox snapshot/revert is typically fast but can take a significant time on
+ * Proxmox snapshot/revert is typically fast (< 5 min) but can take longer on
  * large VMs or slow storage.  20 min is generous while still giving timely
  * feedback instead of silently expiring via the 30-min TTL.
  */
@@ -72,6 +74,7 @@ async function checkCompletion(
   op: ReturnType<typeof getActiveRangeOp> & object,
   effectiveApiKey: string,
   rangeId: string,
+  ludusUserOverride?: string,
 ) {
   if (!op || op.status === "completed" || op.status === "error") return op
 
@@ -83,6 +86,7 @@ async function checkCompletion(
   if (op.status === "running" && Date.now() - op.startedAt > TESTING_OP_MAX_AGE_MS) {
     forgetTestingStopRetry(op.id)
     completeRangeOp(op.id, false)
+    recordLuxTestingOpTerminal(op, false, { apiKey: effectiveApiKey, userOverride: ludusUserOverride })
     return { ...op, status: "error" as const }
   }
 
@@ -105,7 +109,7 @@ async function checkCompletion(
       const result = await ludusRequest<{
         rangeState?: string
         testingEnabled?: boolean
-      }>(`/range?rangeID=${encodeURIComponent(rangeId)}`, { apiKey: effectiveApiKey })
+      }>(`/range?rangeID=${encodeURIComponent(rangeId)}`, { apiKey: effectiveApiKey, userOverride: ludusUserOverride })
 
       if (!result.data) return op
       rangeState    = result.data.rangeState
@@ -126,6 +130,7 @@ async function checkCompletion(
     if (testingEnabled === expectedBool) {
       forgetTestingStopRetry(op.id)
       completeRangeOp(op.id, true)
+      recordLuxTestingOpTerminal(op, true, { apiKey: effectiveApiKey, userOverride: ludusUserOverride })
       return { ...op, status: "completed" as const }
     }
 
@@ -137,6 +142,7 @@ async function checkCompletion(
     if (rangeState === "ERROR" || rangeState === "ABORTED") {
       forgetTestingStopRetry(op.id)
       completeRangeOp(op.id, false)
+      recordLuxTestingOpTerminal(op, false, { apiKey: effectiveApiKey, userOverride: ludusUserOverride })
       return { ...op, status: "error" as const }
     }
 
@@ -154,6 +160,7 @@ async function checkCompletion(
       void ludusRequest(`/testing/stop?rangeID=${encodeURIComponent(rangeId)}`, {
         method: "PUT",
         apiKey: effectiveApiKey,
+        userOverride: ludusUserOverride,
         timeout: 5 * 60_000,
       }).catch(() => {})
     }
@@ -179,14 +186,14 @@ export async function GET(request: NextRequest) {
   const rangeId = request.nextUrl.searchParams.get("rangeId")
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const { effectiveApiKey, effectiveUsername } = getEffective(request, session)
+  const { effectiveApiKey, effectiveUsername, ludusUserOverride } = getEffective(request, session)
 
   // Housekeeping — fire-and-forget, never throws
   try { pruneOldRangeOps() } catch {}
 
   let op = getActiveRangeOp(rangeId, effectiveUsername)
   if (op) {
-    op = await checkCompletion(op, effectiveApiKey, rangeId)
+    op = await checkCompletion(op, effectiveApiKey, rangeId, ludusUserOverride)
   }
 
   return NextResponse.json({ op })
@@ -205,7 +212,7 @@ export async function POST(request: NextRequest) {
   const { rangeId, opType, dismissStuckOp } = body
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const { effectiveApiKey, effectiveUsername } = getEffective(request, session)
+  const { effectiveApiKey, effectiveUsername, ludusUserOverride } = getEffective(request, session)
 
   /** Clear a stuck DB op when Ludus never reported completion (user can retry or fix VMs). */
   if (dismissStuckOp === true) {
@@ -244,6 +251,7 @@ export async function POST(request: NextRequest) {
   const result = await ludusRequest(ludusPath, {
     method: "PUT",
     apiKey: effectiveApiKey,
+    userOverride: ludusUserOverride,
     timeout: 5 * 60_000,
   })
 
@@ -257,6 +265,7 @@ export async function POST(request: NextRequest) {
     // Ludus explicitly rejected the call (4xx / 5xx) — fail immediately.
     forgetTestingStopRetry(op.id)
     completeRangeOp(op.id, false)
+    recordLuxTestingOpTerminal(op, false, { apiKey: effectiveApiKey, userOverride: ludusUserOverride })
     return NextResponse.json(
       { error: result.error || `Ludus returned HTTP ${result.status}` },
       { status: result.status || 500 }

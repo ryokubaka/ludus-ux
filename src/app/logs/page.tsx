@@ -12,7 +12,7 @@ import { LogViewer } from "@/components/range/log-viewer"
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import { Activity, RefreshCw, Trash2, Download, History, ArrowLeft, ShieldAlert } from "lucide-react"
-import { ludusApi, getImpersonationApiKey, getImpersonationHeaders, getVmOperationLog } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog } from "@/lib/api"
 import {
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
@@ -22,7 +22,9 @@ import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
 import type { LogHistoryEntry } from "@/lib/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 
 export default function LogsPage() {
   const { toast } = useToast()
@@ -74,6 +76,21 @@ export default function LogsPage() {
       return all.filter((t) => t.instanceId === iid || t.command.includes(iid))
     },
     enabled: !!goadInstanceForRange,
+    staleTime: STALE.short,
+  })
+
+  const { data: logMarkerEnrichment = null } = useQuery({
+    queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId),
+    queryFn: async (): Promise<RangeLogMarkerEnrichment | null> => {
+      const rid = selectedRangeId!
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      if (!res.ok) return null
+      return (await res.json()) as RangeLogMarkerEnrichment
+    },
+    enabled: !!selectedRangeId,
     staleTime: STALE.short,
   })
 
@@ -158,7 +175,8 @@ export default function LogsPage() {
     ])
     if (logResult.data) {
       const text = logResult.data.result || ""
-      setLines(text.split("\n").filter((l) => l.trim()))
+      const all = text.split("\n").filter((l) => l.trim())
+      setLines(all.slice(-MAX_STREAM_LOG_LINES))
     } else if (logResult.error) {
       toast({ variant: "destructive", title: "Failed to load logs", description: logResult.error })
     }
@@ -175,14 +193,12 @@ export default function LogsPage() {
 
     ;(async () => {
       try {
-        const impKey = getImpersonationApiKey()
-        const headers: Record<string, string> = {}
-        if (impKey) headers["X-Impersonate-Apikey"] = impKey
-
+        // No X-Impersonate-Apikey — the server reads the apiKey from the
+        // session cookie via resolveAdminImpersonationFromRequest.
         const streamUrl = selectedRangeId
           ? `/api/logs/stream?rangeId=${selectedRangeId}`
           : "/api/logs/stream"
-        const res = await fetch(streamUrl, { signal: ctrl.signal, headers })
+        const res = await fetch(streamUrl, { signal: ctrl.signal })
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const dec = new TextDecoder()
@@ -197,7 +213,7 @@ export default function LogsPage() {
           const displayLines = newLines.filter(
             (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ")
           )
-          if (displayLines.length) setLines((prev) => [...prev, ...displayLines])
+          if (displayLines.length) setLines((prev) => appendStreamLines(prev, displayLines))
           const doneLine = newLines.find((l) => l.startsWith("[DONE] "))
           if (doneLine) {
             setRangeState(doneLine.slice(7).trim())
@@ -346,6 +362,7 @@ export default function LogsPage() {
               loading={historyListLoading}
               onSelect={handleSelectLog}
               selectedId={selectedLogId}
+              enrichment={logMarkerEnrichment ?? undefined}
               goadInstanceId={goadInstanceForRange}
               goadTasks={
                 goadInstanceForRange
@@ -356,6 +373,7 @@ export default function LogsPage() {
               }
               onRefresh={() => {
                 void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogHistory(scopeTag, selectedRangeId) })
+                void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
                 void queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
               }}
               refreshing={historyRefreshing || (!!goadInstanceForRange && goadTasksListLoading)}

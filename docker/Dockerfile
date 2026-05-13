@@ -1,4 +1,5 @@
-FROM node:20-alpine AS base
+# Node 24 is Active LTS (2025–2026); Next 15 engines allow >=20.
+FROM node:24-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
@@ -6,15 +7,19 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+# patch-package applies during postinstall (patches @eslint/eslintrc for ESLint 9 + minimatch).
+COPY patches ./patches
+# Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
+RUN npm install -g npm@11.14.0
 RUN npm install --legacy-peer-deps
 
 # Bundle noVNC into a single browser ES module using esbuild.
-# The @novnc/novnc npm package ships CJS (lib/rfb.js uses Babel-compiled require()),
+# The @novnc/novnc npm package ships CJS (core/rfb.js uses Babel-compiled require()),
 # so we can't serve it as a native ES module directly. esbuild resolves all
 # require() calls and outputs a single self-contained ESM file.
-RUN npm install --no-save @novnc/novnc@1.5.0 && \
+RUN npm install --no-save @novnc/novnc@1.7.0 && \
     mkdir -p /app/novnc-static && \
-    npx --yes esbuild node_modules/@novnc/novnc/lib/rfb.js \
+    npx --yes esbuild node_modules/@novnc/novnc/core/rfb.js \
         --bundle --format=esm --outfile=/app/novnc-static/rfb.js && \
     rm -rf node_modules/@novnc
 
@@ -37,7 +42,7 @@ RUN npm run build
 RUN npx esbuild server/ws-server.ts \
     --bundle \
     --platform=node \
-    --target=node18 \
+    --target=node24 \
     --format=cjs \
     --external:./server \
     --external:bufferutil \
@@ -65,6 +70,10 @@ RUN chown nextjs:nodejs .next
 # Automatically leverage output traces to reduce image size
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Native addon: Next standalone trace can omit `better_sqlite3.node`, which breaks
+# all SQLite-backed features (settings decrypt, GOAD tasks, etc.) at runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
 
 # Release notes API (`GET /api/changelog`) reads `CHANGELOG.md` from cwd — not part of Next standalone trace.
 COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md

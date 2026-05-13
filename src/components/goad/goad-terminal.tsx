@@ -11,6 +11,7 @@ import {
   type AnsibleLogTheme,
 } from "@/lib/ansible-colors"
 import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { appendStreamLines } from "@/lib/log-buffer"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
 import {
@@ -320,6 +321,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  /** Task id for the active /api/goad/execute or …/stream connection — used to backfill exitCode from SQLite. */
+  const streamTaskIdRef = useRef<string | null>(null)
   const getExtraHeadersRef = useRef(options?.getExtraHeaders)
   getExtraHeadersRef.current = options?.getExtraHeaders
 
@@ -332,6 +335,9 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     setExitCode(null)
     setIsRunning(true)
     let streamExit: number | null = null
+    if (captureTaskId) {
+      streamTaskIdRef.current = null
+    }
 
     const extra = getExtraHeadersRef.current?.() ?? {}
     const merged = new Headers()
@@ -360,6 +366,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
         // Capture task ID emitted by the execute route
         if (captureTaskId && line.startsWith("[TASKID] ")) {
           const tid = line.slice(9).trim()
+          streamTaskIdRef.current = tid
           setTaskId(tid)
           return // hide [TASKID] lines from display
         }
@@ -368,7 +375,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           streamExit = Number.isNaN(code) ? null : code
           setExitCode(streamExit)
         }
-        setLines((prev) => [...prev, line])
+        setLines((prev) => appendStreamLines(prev, line))
       }
 
       while (true) {
@@ -383,6 +390,15 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
                 if (raw.startsWith("data: ")) dispatchPayload(raw.slice(6))
                 else if (raw.startsWith("data:")) dispatchPayload(raw.slice(5))
               }
+            }
+          }
+          // Trailing fragment after final chunk often has no closing "\n\n" — still dispatch.
+          if (sseCarry.trim()) {
+            for (const raw of sseCarry.split("\n")) {
+              const t = raw.trim()
+              if (!t) continue
+              if (t.startsWith("data: ")) dispatchPayload(t.slice(6))
+              else if (t.startsWith("data:")) dispatchPayload(t.slice(5))
             }
           }
           break
@@ -400,10 +416,29 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        setLines((prev) => [...prev, `[ERROR] ${(err as Error).message}`])
+        setLines((prev) => appendStreamLines(prev, `[ERROR] ${(err as Error).message}`))
       }
     } finally {
       setIsRunning(false)
+      if (streamExit === null && streamTaskIdRef.current) {
+        try {
+          const tid = streamTaskIdRef.current
+          const ex = getExtraHeadersRef.current?.() ?? {}
+          const res = await fetch(`/api/goad/tasks/${encodeURIComponent(tid)}`, {
+            credentials: "include",
+            headers: { ...ex },
+          })
+          if (res.ok) {
+            const task = (await res.json()) as { status?: string; exitCode?: number }
+            if (task.status !== "running" && typeof task.exitCode === "number") {
+              streamExit = task.exitCode
+              setExitCode(task.exitCode)
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     }
     return streamExit
   }, [])
@@ -412,6 +447,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    streamTaskIdRef.current = tid
     setTaskId(tid)
 
     return connectToStream(
@@ -424,10 +460,13 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const run = useCallback(async (
     args: string,
     instanceId?: string,
-    impersonateAs?: { username: string; apiKey: string },
+    /** apiKey is optional: when absent, the server uses the session cookie's impersonation key. */
+    impersonateAs?: { username: string; apiKey?: string },
     /** Dedicated Ludus rangeID — injected as LUDUS_RANGE_ID so GOAD targets
      *  only this instance's range, leaving other ranges untouched. */
-    rangeId?: string
+    rangeId?: string,
+    /** Passed to Ludus wrapper as `--tags` on each `ludus range deploy` (allowlist server-side). */
+    ludusDeployTags?: string[]
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -439,7 +478,13 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ args, instanceId, impersonateAs, rangeId }),
+        body: JSON.stringify({
+          args,
+          instanceId,
+          impersonateAs,
+          rangeId,
+          ...(ludusDeployTags && ludusDeployTags.length > 0 ? { ludusDeployTags } : {}),
+        }),
         signal: controller.signal,
       },
       true
@@ -470,6 +515,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
 
   const clear = useCallback(() => {
     abortRef.current?.abort()
+    streamTaskIdRef.current = null
     setLines([])
     setExitCode(null)
     setTaskId(null)

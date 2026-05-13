@@ -9,6 +9,7 @@ import {
 } from "react"
 import { fetchClientEffectiveScopeTag, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
 import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
+import { IMPERSONATION_STORAGE_KEY } from "@/lib/impersonation-headers"
 
 const EffectiveScopeContext = createContext<string>("_guest|self")
 
@@ -21,13 +22,24 @@ export function EffectiveScopeProvider({
 }) {
   const [tag, setTag] = useState(initialScopeTag)
 
-  // Do not reset with `setTag(initialScopeTag)` on every layout prop change —
-  // that runs after this layout pass and would clobber sessionStorage-driven
-  // impersonation (SSR cookie often `…|self` while storage already has `…|user`).
+  // Three-layer hydration — each layer is more authoritative than the last:
+  //
+  //  1. SSR baseline: `initialScopeTag` from the server (cookie scope at render time).
+  //     This is the starting value of `tag` and is good enough for the first paint.
+  //
+  //  2. sessionStorage fast-path (useLayoutEffect — runs before paint): if the
+  //     browser already has a different impersonation identity in sessionStorage
+  //     (e.g. the user just switched targets), apply it synchronously so query
+  //     keys and RangeProvider see the correct scope before any data fetches fire.
+  //     The SSR cookie often lags by one round-trip on user switch.
+  //
+  //  3. Authoritative async fetch (useEffect): /api/auth/session + /api/auth/impersonate
+  //     give the definitive cookie-side identity. This overwrites the sync value once
+  //     the responses arrive.
+  //
+  // Do NOT reset to `initialScopeTag` on every prop change — that would clobber
+  // a storage-driven impersonation that is already correct.
 
-  // SessionStorage impersonation can differ from SSR cookie scope until
-  // /api/auth/impersonate finishes — apply the sync tag immediately so query
-  // keys and RangeProvider match the browser's effective identity.
   useLayoutEffect(() => {
     const sync = readClientEffectiveScopeTagSync()
     if (sync !== initialScopeTag) setTag(sync)
@@ -51,7 +63,7 @@ export function EffectiveScopeProvider({
       void fetchClientEffectiveScopeTag().then(setTag)
     }
     const onStorage = (e: StorageEvent) => {
-      if (e.key === "goad_impersonation" || e.key === "ludus-auth-username") {
+      if (e.key === IMPERSONATION_STORAGE_KEY || e.key === "ludus-auth-username") {
         setTag(readClientEffectiveScopeTagSync())
         void fetchClientEffectiveScopeTag().then(setTag)
       }

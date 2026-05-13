@@ -15,8 +15,10 @@ services:
       # that Docker cannot resolve (VPN-only DNS, Windows hosts file entries, etc.).
       # Set this in your .env and the container will add the mapping to /etc/hosts automatically.
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
-      # Session encryption secret (change this!)
+      # Session encryption secret (required in production: min 32 chars, not a placeholder — see docs/environment.md)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}
+      # Lab-only: accept self-signed TLS to Ludus/PocketBase/Proxmox. Omit or false in hardened production (use NODE_EXTRA_CA_CERTS).
+      - LUDUS_TLS_INSECURE=${LUDUS_TLS_INSECURE:-true}
       # Ludus API — defaults from LUDUS_SSH_HOST; override LUDUS_URL / LUDUS_ADMIN_URL in .env if needed.
       - LUDUS_URL=${LUDUS_URL:-https://${LUDUS_SSH_HOST}:8080}
       - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
@@ -40,6 +42,7 @@ services:
       - TRUST_PROXY_TLS=${TRUST_PROXY_TLS:-true}
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - NODE_ENV=production
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh
       - ${DATA_DIR:-./data}:/app/data
@@ -66,6 +69,7 @@ services:
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - LUDUS_SSH_HOST=${LUDUS_SSH_HOST}
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
+      - TZ=${TZ:-America/New_York}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

@@ -40,8 +40,21 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
-import { LudusPerformanceTab } from "@/components/settings/ludus-performance-tab"
+import dynamic from "next/dynamic"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+
+const LudusPerformanceTab = dynamic(
+  () =>
+    import("@/components/settings/ludus-performance-tab").then((m) => ({
+      default: m.LudusPerformanceTab,
+    })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="text-muted-foreground text-sm py-8 text-center">Loading performance…</div>
+    ),
+  },
+)
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +66,8 @@ interface Settings {
   goadPath: string
   goadEnabled: boolean
   rootApiKey?: string
+  /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
+  rootApiKeyOverriddenByEnv?: boolean
   proxmoxSshUser?: string
   proxmoxSshPassword?: string
   proxmoxSshKeyPath?: string
@@ -353,7 +368,9 @@ function AboutTab() {
           <p className="text-sm text-muted-foreground">Cyber Range Manager</p>
           <div className="flex items-center justify-center gap-2 pt-1">
             <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
-            <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
+            {APP_VERSION_LABEL ? (
+              <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
+            ) : null}
           </div>
         </div>
         <div className="flex items-center gap-4 text-xs text-muted-foreground/70">
@@ -707,6 +724,17 @@ function SettingsContent() {
                   Required for user/group management. Found at{" "}
                   <code className="text-primary">/opt/ludus/install/root-api-key</code> on the server.
                 </p>
+                {draft?.rootApiKeyOverriddenByEnv ? (
+                  <Alert variant="default" className="mt-2 border-amber-500/40 bg-amber-500/10">
+                    <Info className="h-4 w-4 text-amber-400" />
+                    <AlertDescription className="text-xs text-amber-100/90">
+                      <strong>LUDUS_ROOT_API_KEY</strong> is set in the container environment, so that value is used for
+                      admin API calls and overrides anything saved in SQLite. If admin actions return 401, fix or remove
+                      the env entry in Docker Compose / <code className="text-primary">.env</code> so it matches the
+                      Ludus root key file above.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
               </div>
             </CardContent>
           </Card>
@@ -807,7 +835,7 @@ function SettingsContent() {
                       Test root SSH &amp; admin API
                     </Button>
                     <p className="text-xs text-muted-foreground">
-                      Runs from the app container using the values in this form. Confirms root SSH and admin API reachability.
+                      Runs from the app container using the values in this form. Confirms root SSH and admin API reachability with your session Ludus API key.
                     </p>
                     {credentialTestResult && (
                       <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">

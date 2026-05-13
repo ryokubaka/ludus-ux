@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { RefreshCw, Clock, Loader2, ScrollText, Puzzle, Server, ChevronLeft, ChevronRight } from "lucide-react"
 import { cn, extractArray, timeAgo } from "@/lib/utils"
 import type { LogHistoryEntry } from "@/lib/types"
+import { useElapsed } from "@/hooks/use-elapsed"
 import {
   type CorrelatedHistoryEntry,
   type GoadTaskForCorrelation,
@@ -16,6 +17,8 @@ import {
   goadIntegratedRowTitle,
   integratedHistoryBadge,
 } from "@/lib/goad-deploy-history-correlation"
+import { rangeLogHistoryListPrimary } from "@/lib/range-log-history-label"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 
 function statusVariant(status: string) {
   switch (status.toLowerCase()) {
@@ -66,6 +69,21 @@ export function formatLogHistoryDuration(start: string, end: string): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
+/** In-progress Ludus deploy history rows — show elapsed from `start` that ticks (not a stale `end`). */
+function ludusDeployHistoryShowsLiveElapsed(status: string): boolean {
+  const s = status.toLowerCase()
+  return s === "running" || s === "waiting" || s === "deploying"
+}
+
+function LogHistoryEntryDuration({ entry }: { entry: LogHistoryEntry }) {
+  const startMs = new Date(entry.start).getTime()
+  const active =
+    ludusDeployHistoryShowsLiveElapsed(entry.status) && Number.isFinite(startMs) && startMs > 0
+  const live = useElapsed(active ? startMs : null)
+  if (active && live) return <span>{live}</span>
+  return <span>{formatLogHistoryDuration(entry.start, entry.end)}</span>
+}
+
 /** Compact local wall-clock for scanability in history rows */
 export function formatLogHistoryLocalRange(start: string, end: string): string {
   const s = new Date(start)
@@ -102,6 +120,8 @@ interface LogHistoryListProps {
   /** When true, show the `template` field if Ludus populated it (deploy tags / template name). */
   showTemplate?: boolean
   emptyMessage?: string
+  /** LUX markers for testing toggles + tag deploys (labels / Testing page). */
+  enrichment?: RangeLogMarkerEnrichment | null
 }
 
 export function LogHistoryList({
@@ -116,6 +136,7 @@ export function LogHistoryList({
   totalEntryCount,
   showTemplate,
   emptyMessage = "No log history yet",
+  enrichment,
 }: LogHistoryListProps) {
   const router = useRouter()
   const headerTotal = totalEntryCount ?? entries.length
@@ -187,7 +208,9 @@ export function LogHistoryList({
                   )}
                   <span>{timeAgo(entry.start)}</span>
                   <span className="text-border">·</span>
-                  <span>{formatLogHistoryDuration(entry.start, entry.end)}</span>
+                  <span>
+                    <LogHistoryEntryDuration entry={entry} />
+                  </span>
                   <span className="text-border">·</span>
                   <code
                     className="font-mono text-[10px] text-muted-foreground/90 break-all"
@@ -196,6 +219,9 @@ export function LogHistoryList({
                     {entry.id}
                   </code>
                 </div>
+                <p className="text-sm font-medium text-foreground leading-snug truncate">
+                  {rangeLogHistoryListPrimary(entry, enrichment)}
+                </p>
                 <p className="text-[11px] text-muted-foreground/90 leading-snug">
                   {formatLogHistoryLocalRange(entry.start, entry.end)}
                 </p>
@@ -302,6 +328,7 @@ export function PaginatedLogHistoryList({
     emptyMessage,
     loading,
     showTemplate,
+    enrichment,
   } = rest
   const router = useRouter()
 
@@ -418,6 +445,7 @@ export function PaginatedLogHistoryList({
               row={row}
               selectedId={selectedId}
               showTemplate={showTemplate}
+              enrichment={enrichment}
               onSelectDeploy={(id) => {
                 if (row.goadTask && goadInstanceId) {
                   router.push(
@@ -500,6 +528,7 @@ export function CorrelatedHistoryRow({
   row,
   selectedId,
   showTemplate,
+  enrichment,
   onSelectDeploy,
   onSelectGoadOnly,
   /** When set (e.g. GOAD instance page), receives the full row — preferred over deploy/goad callbacks. */
@@ -508,6 +537,7 @@ export function CorrelatedHistoryRow({
   row: CorrelatedHistoryEntry
   selectedId: string | null
   showTemplate?: boolean
+  enrichment?: RangeLogMarkerEnrichment | null
   onSelectDeploy?: (deployId: string) => void
   onSelectGoadOnly?: () => void
   onSelectRow?: (row: CorrelatedHistoryEntry) => void
@@ -517,6 +547,24 @@ export function CorrelatedHistoryRow({
   const batch = row.mergedBatchDeploys
   const deploysForMetrics =
     batch && batch.length > 0 ? batch : deploy ? [deploy] : []
+
+  const ludusOnlyLiveStartMs =
+    row.kind === "ludus_only" && deploy && ludusDeployHistoryShowsLiveElapsed(deploy.status)
+      ? new Date(deploy.start).getTime()
+      : null
+  const ludusOnlyLiveElapsed = useElapsed(
+    ludusOnlyLiveStartMs !== null && Number.isFinite(ludusOnlyLiveStartMs) ? ludusOnlyLiveStartMs : null,
+  )
+
+  let integratedLudusLiveStartMs: number | null = null
+  if (row.kind === "goad_integrated" && deploysForMetrics.length > 0) {
+    const candidates = deploysForMetrics
+      .filter((d) => ludusDeployHistoryShowsLiveElapsed(d.status))
+      .map((d) => new Date(d.start).getTime())
+      .filter((t) => Number.isFinite(t) && t > 0)
+    if (candidates.length > 0) integratedLudusLiveStartMs = Math.min(...candidates)
+  }
+  const integratedLudusLiveElapsed = useElapsed(integratedLudusLiveStartMs)
 
   const selectedKey = deploy?.id ?? task?.id ?? ""
   const isSelected =
@@ -580,12 +628,21 @@ export function CorrelatedHistoryRow({
           ? splitIntegratedDuration(deploy, task)
           : splitIntegratedDurationMerged(deploysForMetrics, task)
     const parts: string[] = []
-    if (deployMs > 0) parts.push(`${formatMsDuration(deployMs)} deploy`)
+    if (deployMs > 0) {
+      if (integratedLudusLiveStartMs !== null && integratedLudusLiveElapsed) {
+        parts.push(`${integratedLudusLiveElapsed} deploy`)
+      } else {
+        parts.push(`${formatMsDuration(deployMs)} deploy`)
+      }
+    }
     if (provisionMs > 0) parts.push(`${formatMsDuration(provisionMs)} provision`)
     if (totalMs > 0 && parts.length > 1) parts.push(`${formatMsDuration(totalMs)} total`)
     durationLabel = parts.join(" · ") || formatMsDuration(totalMs)
   } else if (row.kind === "ludus_only" && deploy) {
-    durationLabel = formatLogHistoryDuration(deploy.start, deploy.end)
+    durationLabel =
+      ludusOnlyLiveStartMs !== null && ludusOnlyLiveElapsed
+        ? ludusOnlyLiveElapsed
+        : formatLogHistoryDuration(deploy.start, deploy.end)
   } else if (row.kind === "goad_only" && task) {
     durationLabel = formatGoadTaskDurationMs(task.startedAt, task.endedAt)
   }
@@ -623,6 +680,13 @@ export function CorrelatedHistoryRow({
     return ""
   })()
 
+  const deployForLabel =
+    deploysForMetrics.length > 0
+      ? deploysForMetrics.reduce((a, b) =>
+          new Date(a.start).getTime() <= new Date(b.start).getTime() ? a : b,
+        )
+      : deploy ?? null
+
   return (
     <Card
       className={cn(
@@ -657,6 +721,17 @@ export function CorrelatedHistoryRow({
               </>
             )}
           </div>
+
+          {deployForLabel && (row.kind === "ludus_only" || row.kind === "goad_integrated") && (
+            <p
+              className={cn(
+                "leading-snug truncate",
+                task ? "text-xs text-muted-foreground" : "text-sm font-medium text-foreground",
+              )}
+            >
+              {rangeLogHistoryListPrimary(deployForLabel, enrichment)}
+            </p>
+          )}
 
           {/* Meta line 1: time ago · duration · lines · Ludus+GOAD */}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">

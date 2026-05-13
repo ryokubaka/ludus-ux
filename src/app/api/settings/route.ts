@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings, updateSettings, type RuntimeSettings } from "@/lib/settings-store"
+import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/resolve-root-api-key"
 import { invalidateCatalogCache } from "@/lib/goad-ssh"
 
 export async function GET(request: NextRequest) {
@@ -23,7 +24,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(safeSettings)
   }
 
-  return NextResponse.json(settings)
+  return NextResponse.json({
+    ...settings,
+    rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
+  })
 }
 
 export async function POST(request: NextRequest) {
@@ -47,15 +51,18 @@ export async function POST(request: NextRequest) {
   if (typeof body.sshPort === "number") patch.sshPort = body.sshPort
   if (typeof body.goadPath === "string") patch.goadPath = body.goadPath.trim()
   if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
+  if (typeof body.rootApiKey === "string") patch.rootApiKey = body.rootApiKey.trim()
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
   if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
-  if (typeof body.rootApiKey === "string") patch.rootApiKey = body.rootApiKey.trim()
 
   const updated = updateSettings(patch)
   // Invalidate cached catalog if goadPath changed
   if ("goadPath" in patch) {
     invalidateCatalogCache()
   }
-  return NextResponse.json(updated)
+  return NextResponse.json({
+    ...updated,
+    rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
+  })
 }

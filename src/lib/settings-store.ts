@@ -6,12 +6,21 @@
  *   2. Environment variables (read lazily at runtime, never at build time)
  *   3. User overrides saved via the Settings UI (persisted to SQLite)
  *
+ * Exception: `rootApiKey` — non-empty `LUDUS_ROOT_API_KEY` wins after merge (see
+ * `resolveRootApiKey`); SQLite/UI value used only when env unset or whitespace-only.
+ * At rest, `rootApiKey` and `proxmoxSshPassword` are AES-256-GCM encrypted (APP_SECRET).
+ *
  * Overrides survive container restarts because they are stored in the
  * volume-mounted SQLite database at $DATA_DIR/ludus-ux.db.
  */
 
-import crypto from "crypto"
 import { getDb } from "./db"
+import { normalizeLudusApiKeyInput, resolveRootApiKey } from "./resolve-root-api-key"
+import {
+  decryptSettingsValueAtRest,
+  encryptSettingsValueAtRest,
+  isSettingsValueAtRestEncrypted,
+} from "./settings-value-at-rest"
 
 export interface RuntimeSettings {
   ludusUrl: string
@@ -41,7 +50,13 @@ export interface RuntimeSettings {
 // SQLite overrides are read on every `getSettings()` — no in-process cache.
 // Next can run multiple workers; a save on one worker must be visible to others
 // (cached module state caused stale ludusUrl / admin URL until restart).
-const ENCRYPTED_VALUE_PREFIX = "enc:v1:"
+
+/** Keys whose SQLite `value` column stores `enc:v1:` ciphertext (decrypted only server-side). */
+const SETTINGS_SECRET_KEYS: Array<keyof RuntimeSettings> = ["proxmoxSshPassword", "rootApiKey"]
+
+function appSecretForSettingsAtRest(): string {
+  return process.env.APP_SECRET || "change-me-in-production-32-chars!!"
+}
 
 function defaults(): RuntimeSettings {
   return {
@@ -51,7 +66,7 @@ function defaults(): RuntimeSettings {
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
     goadPath: process.env.GOAD_PATH || "/opt/GOAD",
     goadEnabled: process.env.ENABLE_GOAD !== "false",
-    rootApiKey: process.env.LUDUS_ROOT_API_KEY || "",
+    rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     proxmoxSshUser: process.env.PROXMOX_SSH_USER || "root",
     proxmoxSshPassword: process.env.PROXMOX_SSH_PASSWORD || "",
     proxmoxSshKeyPath: "",
@@ -73,43 +88,25 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "proxmoxSshKeyPath",
 ]
 
-function deriveSettingsEncryptionKey(): Buffer {
-  return crypto.createHash("sha256").update(process.env.APP_SECRET || "change-me-in-production-32-chars!!").digest()
-}
-
-function encryptSettingValue(value: string): string {
-  if (!value) return value
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv("aes-256-gcm", deriveSettingsEncryptionKey(), iv)
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return `${ENCRYPTED_VALUE_PREFIX}${Buffer.concat([iv, tag, ciphertext]).toString("base64")}`
-}
-
-function decryptSettingValue(value: string): string {
-  if (!value || !value.startsWith(ENCRYPTED_VALUE_PREFIX)) return value
-  const raw = Buffer.from(value.slice(ENCRYPTED_VALUE_PREFIX.length), "base64")
-  if (raw.length < 29) throw new Error("encrypted setting payload is too short")
-  const iv = raw.subarray(0, 12)
-  const tag = raw.subarray(12, 28)
-  const ciphertext = raw.subarray(28)
-  const decipher = crypto.createDecipheriv("aes-256-gcm", deriveSettingsEncryptionKey(), iv)
-  decipher.setAuthTag(tag)
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")
-}
-
 function encodeSettingForDb(key: string, value: unknown): string {
   const text = String(value)
-  return key === "proxmoxSshPassword" ? encryptSettingValue(text) : text
+  return SETTINGS_SECRET_KEYS.includes(key as keyof RuntimeSettings)
+    ? encryptSettingsValueAtRest(text, appSecretForSettingsAtRest())
+    : text
 }
 
 function decodeSettingFromDb(key: string, value: string): { value: string; needsRewrite: boolean } {
-  if (key !== "proxmoxSshPassword") return { value, needsRewrite: false }
-  if (!value || !value.startsWith(ENCRYPTED_VALUE_PREFIX)) {
+  if (!SETTINGS_SECRET_KEYS.includes(key as keyof RuntimeSettings)) {
+    return { value, needsRewrite: false }
+  }
+  if (!value || !isSettingsValueAtRestEncrypted(value)) {
     return { value, needsRewrite: !!value }
   }
   try {
-    return { value: decryptSettingValue(value), needsRewrite: false }
+    return {
+      value: decryptSettingsValueAtRest(value, appSecretForSettingsAtRest()),
+      needsRewrite: false,
+    }
   } catch (err) {
     console.error(`[settings-store] Failed to decrypt ${key} from DB:`, err)
     return { value: "", needsRewrite: false }
@@ -138,8 +135,11 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
         (result as Record<string, unknown>)[k] = decoded.value
       }
       if (decoded.needsRewrite) {
-        db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
-          .run(encryptSettingValue(decoded.value), Date.now(), key)
+        db.prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?").run(
+          encryptSettingsValueAtRest(decoded.value, appSecretForSettingsAtRest()),
+          Date.now(),
+          key
+        )
       }
     }
     return result
@@ -180,11 +180,11 @@ export function getSettings(): RuntimeSettings {
   if ((overrides.ludusAdminUrl ?? "").trim() === "") {
     delete overrides.ludusAdminUrl
   }
-  // Blank root key in SQLite must not shadow LUDUS_ROOT_API_KEY from env (same idea as ludusUrl).
   if ((overrides.rootApiKey ?? "").trim() === "") {
     delete overrides.rootApiKey
   }
   const effective = { ...defaults(), ...overrides }
+  effective.rootApiKey = resolveRootApiKey(process.env.LUDUS_ROOT_API_KEY, effective.rootApiKey)
   effective.ludusUrl = effective.ludusUrl.trim()
   effective.ludusAdminUrl = effective.ludusAdminUrl.trim()
   return effective

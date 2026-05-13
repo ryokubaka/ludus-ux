@@ -266,11 +266,19 @@ export function removeExtensionVmsFromRangeConfig(
   return out
 }
 
-/** True when the network snapshot contains at least one custom firewall rule. */
+/** True when `network.rules` is a non-empty array (explicit firewall rows). */
 export function hasNetworkRules(snapshot: Record<string, unknown> | null): boolean {
   if (!snapshot) return false
   const rules = snapshot.rules
   return Array.isArray(rules) && rules.length > 0
+}
+
+/** True when the captured `network:` object has any keys beyond an empty stub (rules, VLANs, dns, etc.). */
+export function networkSnapshotNeedsRedeploy(snapshot: Record<string, unknown> | null): boolean {
+  if (!snapshot || typeof snapshot !== "object") return false
+  if (hasNetworkRules(snapshot)) return true
+  const keys = Object.keys(snapshot).filter((k) => !k.startsWith("_"))
+  return keys.length > 0
 }
 
 /**

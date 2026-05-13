@@ -7,6 +7,7 @@ import { queryKeys } from "./query-keys"
 import { STALE } from "./query-client"
 import { extractArray } from "./utils"
 import { readClientEffectiveScopeTagSync } from "./effective-scope"
+import { readImpersonationHeadersFromSessionStorage } from "./impersonation-headers"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -30,24 +31,10 @@ const RangeContext = createContext<RangeContextValue>({
 
 const STORAGE_KEY = "lux_selected_range"
 
-/** Same headers as ImpersonationProvider / ludusApi — read each fetch so CRLF-style races with React state never desync from sessionStorage. */
-function readImpersonationHeadersForFetch(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = sessionStorage.getItem("goad_impersonation")
-    if (!raw) return {}
-    const { apiKey, username } = JSON.parse(raw) as { apiKey?: string; username?: string }
-    const headers: Record<string, string> = {}
-    if (apiKey) headers["X-Impersonate-Apikey"] = apiKey
-    if (username) headers["X-Impersonate-As"] = username
-    return headers
-  } catch {
-    return {}
-  }
-}
-
 async function fetchAccessibleRanges(): Promise<RangeAccessEntry[]> {
-  const res = await fetch("/api/proxy/ranges/accessible", { headers: readImpersonationHeadersForFetch() })
+  const res = await fetch("/api/proxy/ranges/accessible", {
+    headers: readImpersonationHeadersFromSessionStorage(),
+  })
   if (!res.ok) return []
   const data = await res.json()
   const list = extractArray<RangeAccessEntry>(data)
@@ -121,10 +108,10 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refreshRanges = useCallback(async () => {
-    await queryClient.refetchQueries({
-      queryKey: queryKeys.accessibleRangesList(readClientEffectiveScopeTagSync()),
-      exact: true,
-    })
+    // Invalidate every scoped copy of the accessible-ranges query — a single
+    // exact refetch can miss the active observer's key after impersonation /
+    // scope hydration timing, leaving deleted ranges visible in the sidebar.
+    await queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
   }, [queryClient])
 
   useEffect(() => {

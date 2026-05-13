@@ -34,9 +34,7 @@ export async function GET(request: NextRequest) {
   const rangeId = request.nextUrl.searchParams.get("rangeID")
   const ludusPath = rangeId ? `/range/config?rangeID=${encodeURIComponent(rangeId)}` : "/range/config"
 
-  const impersonateApiKey = session.isAdmin
-    ? request.headers.get("X-Impersonate-Apikey") || null
-    : null
+  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   try {

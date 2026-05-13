@@ -114,20 +114,22 @@ function ansibleLineClassDark(line: string): string {
   if (lower.includes("[fatal]") || lower.includes("fatal:")) return "text-red-500 font-bold"
   if (lower.includes("unreachable:") || lower.includes("unreachable!")) return "text-red-500 font-bold"
 
-  // Generic errors and bare "failed" keyword (excludes stats values like failed=0)
-  if (lower.includes("[error]") || lower.includes("error:") ||
-      (lower.includes("failed") && !/\bfailed=\d/.test(lower))) return "text-red-400"
+  // Ansible task result prefixes **before** failure heuristics — JSON often contains
+  // `"failed": false` / `failed_when_result`, which must not paint the whole line red.
+  if (lower.includes("changed:")) return "text-yellow-400"
+  if (lower.includes("[ok]") || lower.includes("ok:")) return "text-green-400"
+  if (lower.includes("skipping:")) return "text-cyan-400"
 
   if (lower.includes("[warning]") || lower.includes("warn:")) return "text-yellow-400"
 
-  // changed: → yellow (Ansible native colour for changed tasks)
-  if (lower.includes("changed:")) return "text-yellow-400"
+  if (lower.includes("[error]") || lower.includes("error:")) return "text-red-400"
+  if (/"failed"\s*:\s*true/.test(lower)) return "text-red-400"
+  if (/\bfailed!/i.test(lower)) return "text-red-400"
 
-  // skipping: → cyan (Ansible native colour for skipped tasks)
-  if (lower.includes("skipping:")) return "text-cyan-400"
-
-  // ok: → green
-  if (lower.includes("[ok]") || lower.includes("ok:")) return "text-green-400"
+  const forFailedProbe = lower
+    .replace(/"failed"\s*:\s*false/gi, "")
+    .replace(/\bfailed_when_result\b/gi, "when_result")
+  if (/\bfailed\b/.test(forFailedProbe) && !/\bfailed=\d/.test(forFailedProbe)) return "text-red-400"
 
   // GOAD / Ludus bracket-style control messages ("[INFO]", "[RECAP]", …)
   if (lower.includes("[play]") || lower.includes("[task]") || lower.includes("[recap]")) return "text-white font-semibold"

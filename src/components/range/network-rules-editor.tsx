@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, type ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -360,6 +360,8 @@ export interface NetworkRulesEditorProps {
   /** If true, show an "Apply to Config" button instead of inline apply behaviour */
   showApplyButton?: boolean
   onApply?: () => void
+  /** Extra controls to the right of Apply (e.g. Save, Force, deploy shortcuts). */
+  actionSlot?: ReactNode
 }
 
 export function NetworkRulesEditor({
@@ -368,6 +370,7 @@ export function NetworkRulesEditor({
   availableVlans = [],
   showApplyButton,
   onApply,
+  actionSlot,
 }: NetworkRulesEditorProps) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -480,7 +483,7 @@ export function NetworkRulesEditor({
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" onClick={addRule}>
           <Plus className="h-4 w-4" />
           Add Rule
@@ -490,6 +493,7 @@ export function NetworkRulesEditor({
             Apply to Config
           </Button>
         )}
+        {actionSlot}
       </div>
     </div>
   )

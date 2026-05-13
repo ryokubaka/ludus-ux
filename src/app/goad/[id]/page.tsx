@@ -1,5 +1,10 @@
 "use client"
 
+/** Milliseconds without a new log line before the deploy stream is considered stalled
+ *  and will be reconnected.  15 s is aggressive enough to feel responsive without
+ *  causing spurious reconnects on Ludus' ~10 s log-flush intervals. */
+const DEPLOY_STREAM_STALL_MS = 15_000
+
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
@@ -12,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { GoadTerminal, useGoadStream } from "@/components/goad/goad-terminal"
+import { GoadLogSplitPane } from "@/components/goad/goad-log-split-pane"
 import {
   ArrowLeft,
   Terminal,
@@ -37,6 +43,7 @@ import {
   FileText,
   Copy,
   Download,
+  Unlink,
   X,
   Activity,
   MapPin,
@@ -57,6 +64,9 @@ import type {
   LogHistoryEntry,
 } from "@/lib/types"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+import { goadChainDebug } from "@/lib/goad-chain-debug"
 import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
@@ -79,27 +89,34 @@ import {
   correlateHistoryEntries,
   aggregateDeployStatuses,
 } from "@/lib/goad-deploy-history-correlation"
-import { extractNetworkSection, applyNetworkSection, removeExtensionVmsFromRangeConfig, hasNetworkRules, networkSectionEqual } from "@/lib/network-rules"
+import {
+  extractNetworkSection,
+  applyNetworkSection,
+  removeExtensionVmsFromRangeConfig,
+  networkSnapshotNeedsRedeploy,
+  networkSectionEqual,
+} from "@/lib/network-rules"
 import { clearRangeAborting } from "@/lib/range-aborting"
+import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
+import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { useAbortRange } from "@/lib/use-abort-range"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+import {
+  checkTemplates,
+  formatDuration,
+  formatTaskInstant,
+  normalizeGoadInstanceTab,
+  readInitialGoadTab,
+  isDeployActionCommand,
+  DEPLOY_TAB_ACTIONS,
+  TERMINAL_TAB_ACTIONS,
+} from "@/components/goad/goad-instance-tab-utils"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
-
-function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
-  const present: string[] = []
-  const missingUnbuilt: string[] = []
-  const missingAbsent: string[] = []
-  for (const t of required) {
-    if (builtNames.has(t)) present.push(t)
-    else if (allNames.has(t)) missingUnbuilt.push(t)
-    else missingAbsent.push(t)
-  }
-  return { present, missingUnbuilt, missingAbsent, ready: missingUnbuilt.length === 0 && missingAbsent.length === 0 }
-}
 
 function TemplateChips({
   required,
@@ -166,67 +183,6 @@ function TemplateChips({
   )
 }
 
-function formatTaskInstant(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  })
-}
-
-function formatDuration(startedAt: number, endedAt?: number): string {
-  const ms = (endedAt ?? Date.now()) - startedAt
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-/** Tab classification for Ludus range deploy vs GOAD-terminal-only actions. */
-const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
-const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
-
-const GOAD_INSTANCE_TAB_IDS = new Set([
-  "deploy",
-  "terminal",
-  "info",
-  "inventories",
-  "extensions",
-  "history",
-])
-
-/** Legacy / mistaken query values → a real `TabsTrigger` value (`logs` had no trigger). */
-function normalizeGoadInstanceTab(tab: string): string {
-  if (tab === "logs") return "deploy"
-  if (GOAD_INSTANCE_TAB_IDS.has(tab)) return tab
-  return "deploy"
-}
-
-/** First paint: URL ?tab= wins (normalized); otherwise default to "deploy". */
-function readInitialGoadTab(): string {
-  if (typeof window === "undefined") return "deploy"
-  try {
-    const raw = new URLSearchParams(window.location.search).get("tab")
-    if (raw) return normalizeGoadInstanceTab(raw)
-  } catch {
-    /* ignore */
-  }
-  return "deploy"
-}
-
-/**
- * True when a GOAD command string corresponds to a deploy-class action (one
- * that triggers a Ludus range deploy and should land on the Deploy Status tab).
- * Replaces the old sessionStorage `actionStorageKey` approach so that action
- * type is derived from the server-stored task command — no browser state needed.
- */
-function isDeployActionCommand(command: string): boolean {
-  return /;\s*(provide|install_extension|provision_lab)\b/.test(command)
-}
-
 function GoadInstancePage() {
   const params = useParams()
   const router = useRouter()
@@ -289,6 +245,7 @@ function GoadInstancePage() {
   const scopeTag = useEffectiveScopeTag()
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
+  const goadListQueryBucket = impersonation?.username ?? "self"
   const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
@@ -316,14 +273,18 @@ function GoadInstancePage() {
     rangeLogRefreshLock.current = true
     setRangeLogRefreshBusy(true)
     stopRangeStreaming()
-    requestAnimationFrame(() => {
-      startRangeStreaming(rid, { snapshotStart: false })
+    void (async () => {
+      const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+      startRangeStreaming(rid, {
+        snapshotStart: false,
+        ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+      })
       void refreshRangeStateFromServer(rid)
-    })
-    window.setTimeout(() => {
-      rangeLogRefreshLock.current = false
-      setRangeLogRefreshBusy(false)
-    }, 750)
+      window.setTimeout(() => {
+        rangeLogRefreshLock.current = false
+        setRangeLogRefreshBusy(false)
+      }, 750)
+    })()
   }, [
     instance?.ludusRangeId,
     stopRangeStreaming,
@@ -339,9 +300,9 @@ function GoadInstancePage() {
     if (!isRunning) setGoadStreamStartedAt(null)
   }, [isRunning])
 
-  // Range log timer: prefer the server-persisted GOAD task start time so it
-  // survives refresh; fall back to context's streamStartedAt for non-GOAD deploys.
-  const rangeElapsed = useElapsed(isRangeStreaming ? (goadStreamStartedAt ?? rangeStreamStartedAt) : null)
+  // Range log timer: Ludus deploy elapsed — `streamStartedAt` is anchored to the
+  // in-flight deploy history row when reconnecting (refresh) so it does not reset.
+  const rangeElapsed = useElapsed(isRangeStreaming ? rangeStreamStartedAt : null)
   const goadElapsed = useElapsed(goadStreamStartedAt)
 
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
@@ -349,11 +310,49 @@ function GoadInstancePage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [deployHistory, setDeployHistory] = useState<LogHistoryEntry[]>([])
   const [deployHistoryLoading, setDeployHistoryLoading] = useState(false)
+  const [logMarkerEnrichment, setLogMarkerEnrichment] = useState<RangeLogMarkerEnrichment | null>(null)
   const [selectedHistoryEntry, setSelectedHistoryEntry] = useState<CorrelatedHistoryEntry | null>(null)
   const [historyDeployLines, setHistoryDeployLines] = useState<string[]>([])
   const [historyGoadLines, setHistoryGoadLines] = useState<string[]>([])
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
   const [activeTab, setActiveTab] = useState(() => readInitialGoadTab())
+  // When state is DEPLOYING/WAITING and no live stream, reconnect once on the
+  // rising edge (avoid reconnecting every 5s — that reset the SSE and could
+  // disrupt range state / log continuity during long GOAD+Ludus runs).
+  const prevPbDeployingRef = useRef(false)
+  const lastDeployStreamReconnectRef = useRef(0)
+  useEffect(() => {
+    if (activeTab !== "deploy") return
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid) return
+
+    const tick = async () => {
+      const rs = await refreshRangeStateFromServer(rid)
+      const deploying = rs === "DEPLOYING" || rs === "WAITING"
+      const now = Date.now()
+      if (deploying && !isRangeStreamingRef.current) {
+        const edge = !prevPbDeployingRef.current
+        const stalled =
+          prevPbDeployingRef.current &&
+          now - lastDeployStreamReconnectRef.current > DEPLOY_STREAM_STALL_MS
+        if (edge || stalled) {
+          handleRefreshRangeLogs()
+          lastDeployStreamReconnectRef.current = now
+        }
+      }
+      if (!deploying) {
+        prevPbDeployingRef.current = false
+        lastDeployStreamReconnectRef.current = 0
+      } else {
+        prevPbDeployingRef.current = true
+      }
+    }
+    void tick()
+    const id = window.setInterval(() => {
+      void tick()
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [activeTab, instance?.ludusRangeId, refreshRangeStateFromServer, handleRefreshRangeLogs])
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
@@ -419,15 +418,34 @@ function GoadInstancePage() {
       title: "Range deployment failed",
       description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
     })
+  // Intentionally omits `stop` and `toast` — both are stable refs; adding them
+  // would cause unnecessary re-registrations without changing behavior.
   }, [rangeState, isRunning]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Watchdog B: GOAD exited but the range is still stuck in DEPLOYING.
-  // Route through the unified abort hook so it goes through Ludus (user →
+  const prevRangeStateForChainDebug = useRef<string | null>(null)
+  useEffect(() => {
+    const prev = prevRangeStateForChainDebug.current
+    prevRangeStateForChainDebug.current = rangeState
+    const rid = instance?.ludusRangeId?.trim()
+    if (
+      rid &&
+      (prev === "DEPLOYING" || prev === "WAITING") &&
+      rangeState === "SUCCESS"
+    ) {
+      goadChainDebug("ludus_range_success", { rangeId: rid, instanceId })
+    }
+  }, [rangeState, instance?.ludusRangeId, instanceId])
+
+  // Watchdog B: GOAD exited with failure (non-zero) but the range is still stuck
+  // in DEPLOYING. Route through the unified abort hook so it goes through Ludus (user →
   // admin) and falls back to PocketBase if the goroutine has already exited.
   // Skip if postProcessingRef is set: runAction intentionally launched a
   // network-tag deploy AFTER GOAD finished — that's the DEPLOYING we see.
   useEffect(() => {
     if (exitCode === null || !instance?.ludusRangeId) return
+    // Success: Ludus often stays DEPLOYING/WAITING briefly after GOAD exits 0
+    // (merge deploy still settling). Must not treat that as a stuck failure.
+    if (exitCode === 0) return
     if (rangeState !== "DEPLOYING" && rangeState !== "WAITING") return
     if (autoStoppedRef.current) return
     if (postProcessingRef.current) return
@@ -442,14 +460,19 @@ function GoadInstancePage() {
     toast({
       variant: "destructive",
       title: "Deployment failed",
-      description: "GOAD exited with an error while the range was still deploying. Resetting the range state automatically.",
+      description:
+        "GOAD finished with a non-zero exit code while the range was still deploying. Resetting the range state automatically.",
     })
+  // Intentionally omits `taskId`, `abortRangeUnified`, `stopRangeStreaming`, and `toast`
+  // — stable refs/callbacks that must not re-trigger the effect on every render.
   }, [exitCode, rangeState, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Read ?tab=<value> from the URL on first mount (e.g. redirected from goad/new)
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab")
     if (tab) setActiveTab(normalizeGoadInstanceTab(tab))
+  // Run only once on mount — URL params don't change and we don't want to
+  // clobber a tab the user manually selected after initial load.
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-start range log streaming and (conditionally) switch to Deploy Status
@@ -482,7 +505,13 @@ function GoadInstancePage() {
       // snapshotStart: true when a new deploy begins, so this doesn't
       // interfere with fresh deploys.
       if (rid && !isRangeStreaming) {
-        startRangeStreaming(rid, { snapshotStart: false })
+        void (async () => {
+          const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+          startRangeStreaming(rid, {
+            snapshotStart: false,
+            ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+          })
+        })()
       }
       return
     }
@@ -508,7 +537,13 @@ function GoadInstancePage() {
     // snapshot; otherwise the panel stays empty until the next *new* line (History
     // still shows prior output).
     if (isDeployAction && rid && !isRangeStreaming) {
-      startRangeStreaming(rid, { snapshotStart: false })
+      void (async () => {
+        const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+        startRangeStreaming(rid, {
+          snapshotStart: false,
+          ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+        })
+      })()
     }
 
     if (!autoTabRef.current && isDeployAction) {
@@ -531,7 +566,11 @@ function GoadInstancePage() {
           const rs = String(data.rangeState ?? "").toUpperCase()
           if (rs !== "DEPLOYING" && rs !== "WAITING") return
           if (cancelled || isRangeStreamingRef.current) return
-          startRangeStreaming(rid, { snapshotStart: false })
+          const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+          startRangeStreaming(rid, {
+            snapshotStart: false,
+            ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+          })
           if (!autoTabRef.current) {
             autoTabRef.current = true
             setActiveTab("deploy")
@@ -544,6 +583,9 @@ function GoadInstancePage() {
         cancelled = true
       }
     }
+  // Intentionally omits streaming callbacks and action-state vars — they are
+  // stable refs or change in response to the same triggers. Re-registering on
+  // every state change would cause double-starts of the range log stream.
   }, [isRunning, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // On page load / refresh OR when a new task starts: read the server-persisted
@@ -571,6 +613,8 @@ function GoadInstancePage() {
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
+  // Only re-run when taskId changes — the setter functions are stable and
+  // don't need to be in the dep list.
   }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Server-side resume: on mount, query /api/goad/tasks for any running task on
@@ -603,6 +647,8 @@ function GoadInstancePage() {
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
+  // Only re-run when instanceId changes — resumeTask and impersonationHeaders
+  // are stable and including them would cause spurious re-resume attempts.
   }, [instanceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wizard post-deploy effect: after a wizard-initiated GOAD task finishes,
@@ -613,15 +659,24 @@ function GoadInstancePage() {
     if (wizardNetworkHandledRef.current) return
     const rangeId = instance.ludusRangeId
     const id = instance.instanceId
-    wizardNetworkHandledRef.current = true
-
     void (async () => {
       try {
-        const res = await fetch(`/api/goad/instances/${encodeURIComponent(id)}/pending-network`)
+        const res = await fetch(`/api/goad/instances/${encodeURIComponent(id)}/pending-network`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+          body: JSON.stringify({ __luxConsumePendingNetwork: true }),
+          cache: "no-store",
+        })
         if (!res.ok) return
         const data = await res.json() as { snapshot: Record<string, unknown> | null }
         const snapshot = data.snapshot
-        if (!snapshot) return
+        if (!snapshot) {
+          wizardNetworkHandledRef.current = true
+          return
+        }
+        if (wizardNetworkHandledRef.current) return
+        wizardNetworkHandledRef.current = true
 
         const completedId = taskIdRef.current
         setPostProcessingStep("network-deploying")
@@ -641,9 +696,36 @@ function GoadInstancePage() {
             const merged = applyNetworkSection(yaml, snapshot)
             await ludusApi.setRangeConfig(merged, rangeId)
           }
+          // Match runAction / startNetworkTagDeploy: do not start a tag deploy while
+          // Ludus is still in DEPLOYING/WAITING from GOAD's internal range deploy.
+          await waitUntilLudusRangeNotDeploying(() => ludusApi.getRangeStatus(rangeId), {
+            pollMs: 5_000,
+            absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+          })
           for (let attempt = 0; attempt < 3; attempt++) {
+            const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeId)
-            if (!dep.error) break
+            if (!dep.error) {
+              await registerLuxDeployTagRun(rangeId, ["network"], tagRunAt)
+              const nw = await waitForNetworkTagDeployCompletion({
+                rangeId,
+                requestedAtMs: tagRunAt,
+                fetchHistory: () => ludusApi.getRangeLogHistory(rangeId),
+                fetchStatus: () => ludusApi.getRangeStatus(rangeId),
+                pollMs: 5_000,
+                absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+              })
+              if (!nw.ok) {
+                console.warn("[LUX] post-GOAD network tag wait:", nw.via, nw.detail)
+              }
+              await fetch("/api/range/reconcile-pb", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+                body: JSON.stringify({ rangeId }),
+              }).catch(() => {})
+              break
+            }
             if (attempt < 2) await new Promise((r) => setTimeout(r, 2000))
           }
         } finally {
@@ -659,7 +741,7 @@ function GoadInstancePage() {
         }
       } catch { /* best-effort */ }
     })()
-  }, [exitCode, instance?.instanceId, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [exitCode, instance?.instanceId, instance?.ludusRangeId, impersonationHeaders])
 
   const [reprovisioningExtension, setReprovisioningExtension] = useState<string | null>(null)
   const [removingExtension, setRemovingExtension] = useState<string | null>(null)
@@ -788,6 +870,8 @@ function GoadInstancePage() {
       setInventories([])
     }
     setInventoriesLoading(false)
+  // Omits `selectedInventoryName` setter — stable; adding it would cause the
+  // callback to be recreated whenever selection changes, breaking memoization.
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const copyInventoryToClipboard = (content: string, name: string) => {
@@ -818,6 +902,8 @@ function GoadInstancePage() {
       ))
     } catch {}
     setHistoryLoading(false)
+  // Omits setter functions — all stable; only re-create when the instance or
+  // impersonation scope changes.
   }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchDeployHistory = useCallback(async () => {
@@ -830,9 +916,27 @@ function GoadInstancePage() {
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
 
+  const fetchLogMarkerEnrichment = useCallback(async () => {
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid) {
+      setLogMarkerEnrichment(null)
+      return
+    }
+    try {
+      const res = await fetch(`/api/range/log-enrichment?rangeId=${encodeURIComponent(rid)}`, {
+        credentials: "include",
+        headers: { ...impersonationHeaders() },
+      })
+      if (!res.ok) setLogMarkerEnrichment(null)
+      else setLogMarkerEnrichment((await res.json()) as RangeLogMarkerEnrichment)
+    } catch {
+      setLogMarkerEnrichment(null)
+    }
+  }, [instance?.ludusRangeId, impersonationHeaders])
+
   const fetchAllHistory = useCallback(async () => {
-    await Promise.all([fetchTaskHistory(), fetchDeployHistory()])
-  }, [fetchTaskHistory, fetchDeployHistory])
+    await Promise.all([fetchTaskHistory(), fetchDeployHistory(), fetchLogMarkerEnrichment()])
+  }, [fetchTaskHistory, fetchDeployHistory, fetchLogMarkerEnrichment])
 
   const handleSelectHistoryEntry = useCallback(async (entry: CorrelatedHistoryEntry) => {
     setSelectedHistoryEntry(entry)
@@ -899,6 +1003,9 @@ function GoadInstancePage() {
         setTemplates(extractArray<TemplateObject>(d))
       })
       .catch(() => {})
+  // `fetchInstances` is a useCallback that already captures instanceId and
+  // impersonationHeaders — it is the right trigger for the whole block.
+  // The direct fetch calls inside are intentionally stable one-shots.
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -1023,9 +1130,16 @@ function GoadInstancePage() {
     } else if (TERMINAL_TAB_ACTIONS.has(action)) {
       setActiveTab("terminal")
     }
-    const rulesPresent = hasNetworkRules(networkSnapshot)
+    const networkFollowup = networkSnapshotNeedsRedeploy(networkSnapshot)
 
+    goadChainDebug("goad_action_start", {
+      action,
+      rangeId: instance?.ludusRangeId ?? null,
+      instanceId,
+      goadArgsHead: goadArgs.slice(0, 240),
+    })
     const code = await run(goadArgs, instanceId, impersonation ?? undefined, instance?.ludusRangeId ?? undefined)
+    goadChainDebug("goad_action_exit", { action, exitCode: code, instanceId })
     setCurrentAction(null)
     // Capture task ID now — taskIdRef.current is kept in sync via render-time assignment
     const completedTaskId = taskIdRef.current
@@ -1063,21 +1177,37 @@ function GoadInstancePage() {
           // start a second deploy while one is active fails immediately. Poll until
           // the range settles before firing the network-tag deploy.
           if (rangeIdForRestore) {
-            const SETTLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 min max wait
-            const SETTLE_POLL_MS = 5_000
-            const settleStart = Date.now()
-            while (Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
-              const status = await ludusApi.getRangeStatus(rangeIdForRestore)
-              const stateNow = status.data?.rangeState
-              if (stateNow !== "DEPLOYING" && stateNow !== "WAITING") break
-              await new Promise((r) => setTimeout(r, SETTLE_POLL_MS))
-            }
+            await waitUntilLudusRangeNotDeploying(() => ludusApi.getRangeStatus(rangeIdForRestore), {
+              pollMs: 5_000,
+              absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+            })
           }
 
           let deployErr: string | null = null
           for (let attempt = 0; attempt < 3; attempt++) {
+            const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeIdForRestore)
             if (!dep.error) {
+              if (rangeIdForRestore) {
+                await registerLuxDeployTagRun(rangeIdForRestore, ["network"], tagRunAt)
+                const nw = await waitForNetworkTagDeployCompletion({
+                  rangeId: rangeIdForRestore,
+                  requestedAtMs: tagRunAt,
+                  fetchHistory: () => ludusApi.getRangeLogHistory(rangeIdForRestore),
+                  fetchStatus: () => ludusApi.getRangeStatus(rangeIdForRestore),
+                  pollMs: 5_000,
+                  absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+                })
+                if (!nw.ok) {
+                  console.warn("[LUX] post-GOAD network tag wait:", nw.via, nw.detail)
+                }
+                await fetch("/api/range/reconcile-pb", {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+                  body: JSON.stringify({ rangeId: rangeIdForRestore }),
+                }).catch(() => {})
+              }
               deployErr = null
               break
             }
@@ -1142,7 +1272,7 @@ function GoadInstancePage() {
               )
               console.warn(JSON.stringify(networkSnapshot, null, 2))
             } catch { /* ignore */ }
-          } else if (rulesPresent) {
+          } else if (networkFollowup) {
             // Config is restored, but iptables on the router was already flushed
             // by GOAD's earlier deploy (which saw a config with no network: block).
             // A tag-scoped deploy re-runs only the router's firewall/network
@@ -1171,11 +1301,31 @@ function GoadInstancePage() {
               })
             }
           }
+        } else if (networkAlreadyCorrect && networkFollowup) {
+          // Ludus YAML already matched the snapshot (pre-inject / wrapper path), but
+          // iptables can still be wrong until the network Ansible role runs again.
+          const deployErr = await startNetworkTagDeploy()
+          if (deployErr) {
+            toast({
+              variant: "destructive",
+              title: "Firewall redeploy required",
+              description:
+                `Your network: block is already in range-config, but auto-deploy of the "network" tag failed (${deployErr}). Run Range Configuration → Deploy (tag "network") to apply router firewall rules.`,
+            })
+          } else if (code === 0) {
+            toast({
+              title: "Firewall rules refreshed",
+              description:
+                "Range-config already had your network: block; a network-tag deploy was started so the router reapplies iptables. Watch Range Logs to confirm.",
+            })
+          } else {
+            toast({
+              title: "Firewall redeploy running after GOAD error",
+              description:
+                `GOAD exited ${code}; your network: block was unchanged in Ludus, but a network-tag deploy was started to re-sync the router.`,
+            })
+          }
         }
-        // NOTE: if networkAlreadyCorrect the Ludus wrapper (goad-ssh.ts) already
-        // intercepted GOAD's "ludus range config set" and re-injected the network
-        // block before the config was pushed to Ludus. GOAD's own range deploy ran
-        // with the correct config, so iptables are already enforced. No extra deploy.
       }
     }
     } finally {
@@ -1297,7 +1447,7 @@ function GoadInstancePage() {
         "",
         "This runs two GOAD steps in one session:",
         "  1. Provide — create/update Ludus VMs and range infrastructure (no full lab Ansible yet).",
-        "  2. Provision lab — run all Ansible playbooks for this lab (often 30–90 minutes).",
+        "  2. Provision lab — run all Ansible playbooks for this lab.",
         "",
         "Use this for a full install when you would otherwise click Provide and then Provision Lab separately.",
       ].join("\n"),
@@ -1358,7 +1508,7 @@ function GoadInstancePage() {
 
   const handleInstallExtension = (name: string) =>
     confirm(
-      `Install "${name}"? Deploys new VMs and runs Ansible.`,
+      `Install "${name}"? Deploys new VMs and runs Ansible — can take 30–90 min.`,
       () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
       `ext-install:${name}`,
     )
@@ -1575,35 +1725,53 @@ function GoadInstancePage() {
         // Refresh the range list so the deleted range is dropped from context
         // and the UI automatically switches to the next available range.
         await refreshRanges()
+        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
         toast({ title: "Lab destroyed" })
         router.push("/goad")
       }
     )
   }
 
-  const handleForceDelete = () =>
+  /** Remove GOAD workspace + LUX DB link only; Ludus range and VMs stay. */
+  const handleDeleteInstanceOnly = () =>
     confirm(
-      `FORCE DELETE "${instanceId}"? This bypasses GOAD and directly destroys the Ludus range + workspace. Use only when normal destroy fails.`,
+      `Remove GOAD instance "${instanceId}" from the server? The Ludus range and its VMs will not be deleted. You can deploy a new GOAD instance into this range later. This cannot be undone.`,
       async () => {
         try {
           const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...impersonationHeaders() },
-            body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+            body: JSON.stringify({
+              ludusRangeId: instance?.ludusRangeId,
+              skipRangeDeletion: true,
+            }),
           })
           const result = await res.json()
-          // Refresh range list so the deleted range is dropped and UI auto-switches
           await refreshRanges()
+          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
+          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
           if (result.errors?.length) {
-            toast({ title: "Force delete partially succeeded", description: result.errors.join("; "), variant: "destructive" })
+            toast({
+              title: "Remove instance completed with issues",
+              description: result.errors.join("; "),
+              variant: "destructive",
+            })
           } else {
-            toast({ title: "Instance force-deleted" })
+            toast({
+              title: "GOAD instance removed",
+              description: "Workspace deleted; Ludus range was left intact.",
+            })
           }
           router.push("/goad")
         } catch (err) {
-          toast({ title: "Force delete failed", description: (err as Error).message, variant: "destructive" })
+          toast({
+            title: "Remove instance failed",
+            description: (err as Error).message,
+            variant: "destructive",
+          })
         }
-      }
+      },
     )
 
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === instance?.lab)
@@ -1657,7 +1825,7 @@ function GoadInstancePage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7rem)] gap-6 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 basis-0 gap-6 w-full overflow-hidden">
       {/* ── Re-assign dialog ─────────────────────────────────────────────── */}
       {showReassign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -1883,20 +2051,20 @@ function GoadInstancePage() {
             )}
             <Button
               size="sm" variant="outline"
+              className="border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              onClick={handleDeleteInstanceOnly} disabled={isRunning || !!pendingAction}
+              title="Remove GOAD workspace on the server; Ludus range and VMs are not deleted"
+            >
+              <Unlink className="h-3.5 w-3.5" />
+              Delete Instance Only
+            </Button>
+            <Button
+              size="sm" variant="outline"
               className="border-red-500/30 text-red-400 hover:bg-red-500/10"
               onClick={handleDestroy} disabled={isRunning || !!pendingAction}
             >
               <Trash2 className="h-3.5 w-3.5" />
               Delete Instance + Range
-            </Button>
-            <Button
-              size="sm" variant="outline"
-              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              onClick={handleForceDelete} disabled={isRunning || !!pendingAction}
-              title="Force-delete: bypass GOAD and directly remove the Ludus range + workspace"
-            >
-              <X className="h-3.5 w-3.5" />
-              Force Delete
             </Button>
           </div>
         </CardContent>
@@ -1938,7 +2106,7 @@ function GoadInstancePage() {
         </TabsList>
 
         {/* Deploy Status — side-by-side Range Logs + GOAD terminal */}
-        <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1">
+        <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
           {/* Status bar */}
           <div className="flex items-center gap-3 mb-3 flex-shrink-0 flex-wrap">
             {isRunning && currentAction && (
@@ -2028,27 +2196,32 @@ function GoadInstancePage() {
             </Alert>
           )}
 
-          {/* Side-by-side panels */}
-          <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
-            <GoadTerminal
-              lines={rangeLogLines}
-              onClear={clearRangeLogs}
-              onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
-              refreshLoading={rangeLogRefreshBusy}
-              label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
-              className="flex flex-col min-h-0 h-full"
-            />
-            <GoadTerminal
-              lines={lines}
-              onClear={clear}
-              label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
-              className="flex flex-col min-h-0 h-full"
-            />
-          </div>
+          {/* Side-by-side panels (resizable on md+) */}
+          <GoadLogSplitPane
+            className="flex-1 min-h-0 gap-3"
+            left={
+              <GoadTerminal
+                lines={rangeLogLines}
+                onClear={clearRangeLogs}
+                onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
+                refreshLoading={rangeLogRefreshBusy}
+                label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
+                className="flex flex-col min-h-0 h-full"
+              />
+            }
+            right={
+              <GoadTerminal
+                lines={lines}
+                onClear={clear}
+                label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+                className="flex flex-col min-h-0 h-full"
+              />
+            }
+          />
         </TabsContent>
 
         {/* Terminal (GOAD output only — kept for backward compat / manual inspection) */}
-        <TabsContent value="terminal" className="mt-4 flex flex-col min-h-0 flex-1">
+        <TabsContent value="terminal" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
           {lines.length === 0 && !isRunning && (
             <p className="text-xs text-muted-foreground mb-3 flex-shrink-0">
               Use the action buttons above to run GOAD commands. Output will appear here and persist if you navigate away.
@@ -2597,26 +2770,31 @@ function GoadInstancePage() {
                       )}
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
-                    <GoadTerminal
-                      lines={historyDeployLines}
-                      label={`Range Logs — ${instance?.ludusRangeId ?? "no range"}${
-                        selectedHistoryEntry.deployEntry
-                          ? ` · ${
-                              selectedHistoryEntry.mergedBatchDeploys?.length
-                                ? aggregateDeployStatuses(selectedHistoryEntry.mergedBatchDeploys)
-                                : selectedHistoryEntry.deployEntry.status
-                            }`
-                          : ""
-                      }`}
-                      className="flex flex-col min-h-0 h-full"
-                    />
-                    <GoadTerminal
-                      lines={historyGoadLines}
-                      label={`GOAD Logs — ${instanceId}${selectedHistoryEntry.goadTask ? ` · ${selectedHistoryEntry.goadTask.command}` : ""}`}
-                      className="flex flex-col min-h-0 h-full"
-                    />
-                  </div>
+                  <GoadLogSplitPane
+                    className="gap-3 flex-1 min-h-0"
+                    left={
+                      <GoadTerminal
+                        lines={historyDeployLines}
+                        label={`Range Logs — ${instance?.ludusRangeId ?? "no range"}${
+                          selectedHistoryEntry.deployEntry
+                            ? ` · ${
+                                selectedHistoryEntry.mergedBatchDeploys?.length
+                                  ? aggregateDeployStatuses(selectedHistoryEntry.mergedBatchDeploys)
+                                  : selectedHistoryEntry.deployEntry.status
+                              }`
+                            : ""
+                        }`}
+                        className="flex flex-col min-h-0 h-full"
+                      />
+                    }
+                    right={
+                      <GoadTerminal
+                        lines={historyGoadLines}
+                        label={`GOAD Logs — ${instanceId}${selectedHistoryEntry.goadTask ? ` · ${selectedHistoryEntry.goadTask.command}` : ""}`}
+                        className="flex flex-col min-h-0 h-full"
+                      />
+                    }
+                  />
                 </>
               )}
             </div>
@@ -2657,6 +2835,7 @@ function GoadInstancePage() {
                         row={entry}
                         selectedId={null}
                         showTemplate
+                        enrichment={logMarkerEnrichment}
                         onSelectRow={(row) => void handleSelectHistoryEntry(row)}
                       />
                     ))}

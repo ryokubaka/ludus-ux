@@ -2,7 +2,7 @@
  * When GOAD's Ansible run has finished (PLAY RECAP, all hosts failed=0) but the
  * Ludus deploy goroutine never flips PocketBase `rangeState` out of
  * DEPLOYING/WAITING, GOAD's `provide` command keeps polling forever
- * ("deployment in progress (DEPLOYING)").
+ * ("deploying...be patient" / legacy "deployment in progress (DEPLOYING)" spam).
  *
  * PLAY RECAP often appears only in Ludus range logs while the GOAD REPL task log
  * shows only poll spam — the old logic required recap inside the GOAD buffer,
@@ -11,11 +11,14 @@
  * This module patches `rangeState` to SUCCESS in PocketBase (same last-resort
  * idea as `/api/range/abort`, but for success).
  *
- * Uses LUDUS_ROOT_API_KEY when valid; also the **same Ludus API key as the GOAD
- * SSH session** (logged-in user or impersonation) for GET /range/logs and GET /range
- * when the root key is missing or rejected — GOAD already proves that key works
- * against Ludus for this range. PocketBase `rangeState` patch still uses the root
- * key (PB superuser password) via `getToken()`.
+ * Uses the Ludus root API key from LUX settings: **PocketBase first** for
+ * `rangeState` (same token as PB admin — avoids admin-port-only 401 when the key
+ * is valid for PB but misconfigured for `:8081`), then Ludus GET `/range` on the
+ * admin API with a **fallback to the main Ludus API URL** on HTTP 401/403.
+ * `/range/logs` prefers the **GOAD task owner's Ludus user API key** (same as the
+ * log stream / session), then root key with admin→main fallback, then SSH to
+ * `ansible.log`. `LUDUS_ROOT_API_KEY` remains the PocketBase admin password for
+ * `setPbRangeState` / PB auth — it is not always a valid Ludus v2 `X-API-KEY`.
  *
  * **Ludus product expectation:** the deploy controller should set PocketBase
  * `rangeState` to `SUCCESS` (or `ERROR`) when the deploy Ansible run finishes.
@@ -24,9 +27,10 @@
 
 import { ludusGet, ludusRequest } from "./ludus-client"
 import { getSettings } from "./settings-store"
-import { setPbRangeState } from "./pocketbase-client"
+import { fetchPbRangeStatus, setPbRangeState } from "./pocketbase-client"
 import { readGoadRangeId } from "./goad-ssh"
-import { rootPasswordCredsIfSet } from "./root-ssh-auth"
+import { sshExec } from "./proxmox-ssh"
+import { isRootProxmoxSshConfigured, rootPasswordCredsIfSet } from "./root-ssh-auth"
 import { splitLeadingWallTimestamp } from "./log-line-timestamp"
 
 const reconciledTaskIds = new Set<string>()
@@ -37,7 +41,7 @@ const diagLastAt = new Map<string, number>()
 const THROTTLE_MS = 30_000
 /** Weighted score after last PLAY RECAP in the same buffer (GOAD log). */
 const MIN_STUCK_SIGNAL_SCORE = 14
-/** Standalone Ludus "deployment in progress" lines in the GOAD task log. */
+/** Standalone deploy-poll lines in the GOAD task log (string from goad-mod ludus.py). */
 const MIN_DEPLOY_POLL_LINES = 14
 /** When recap exists only in Ludus `/range/logs`, fewer GOAD-only poll lines suffice. */
 const MIN_DEPLOY_POLL_LINES_LUDUS_RECAP = 8
@@ -74,12 +78,19 @@ function parseAnsibleRecapAllOk(log: string, recapIdx: number): boolean {
   return hostLines.every((l) => /\bfailed\s*=\s*0\b/.test(l))
 }
 
+/** True when GOAD/Ludus is polling while rangeState is still DEPLOYING (exact GOAD string from ludus.py). */
+function isDeployPollLine(body: string): boolean {
+  if (/deploying\.\.\.\s*be\s+patient/i.test(body)) return true
+  if (/deployment\s+in\s+progress/i.test(body) && /DEPLOYING/i.test(body)) return true
+  return false
+}
+
 /** Lines after PLAY RECAP that indicate GOAD is stuck polling Ludus while rangeState stays DEPLOYING. */
 function postRecapStuckSignalScore(log: string, recapIdx: number): number {
   let score = 0
   for (const line of log.slice(recapIdx).split("\n")) {
     const body = lineBodyForRecap(line)
-    if (/deployment\s+in\s+progress/i.test(body) && /DEPLOYING/i.test(body)) {
+    if (isDeployPollLine(body)) {
       score += 2
     } else if (/using\s+api\s+key\s+from\s+env/i.test(body)) {
       score += 1
@@ -92,124 +103,183 @@ function countDeployingPollLinesFull(log: string): number {
   let n = 0
   for (const line of log.split("\n")) {
     const body = lineBodyForRecap(line)
-    if (/deployment\s+in\s+progress/i.test(body) && /DEPLOYING/i.test(body)) n++
+    if (isDeployPollLine(body)) n++
   }
   return n
 }
 
-function ludusRangeLogsResult(res: { data?: { result?: string }; status: number }): string | null {
-  if (res.status < 200 || res.status >= 300) return null
-  const raw = res.data?.result
-  if (typeof raw !== "string" || !raw.length) return null
-  return raw.length > LUDUS_RANGE_LOGS_MAX_CHARS ? raw.slice(-LUDUS_RANGE_LOGS_MAX_CHARS) : raw
+/**
+ * Normalize Ludus GET /range?rangeID=… JSON (same shapes as /api/range/pb-status).
+ * Some builds wrap the range in `{ "result": { … } }` or return an array.
+ */
+function ludusGetRangeObjectList(data: unknown): Record<string, unknown>[] {
+  if (data == null) return []
+  if (Array.isArray(data)) return data as Record<string, unknown>[]
+  if (typeof data === "object" && data !== null && "result" in data) {
+    const inner = (data as { result?: unknown }).result
+    if (Array.isArray(inner)) return inner as Record<string, unknown>[]
+    if (inner && typeof inner === "object") return [inner as Record<string, unknown>]
+  }
+  if (typeof data === "object" && data !== null && "rangeID" in (data as object)) {
+    return [data as Record<string, unknown>]
+  }
+  return []
 }
 
-function rangeStateFromLudusBody(data: unknown): string | null {
-  if (data == null || typeof data !== "object") return null
-  const o = data as Record<string, unknown>
-  if ("rangeState" in o && o.rangeState != null) {
-    return String(o.rangeState).trim().toUpperCase()
+function rangeStateFromRow(row: Record<string, unknown>): string | null {
+  const raw = row.rangeState ?? row.RangeState
+  if (typeof raw !== "string" || !raw.trim()) return null
+  return raw.trim().toUpperCase()
+}
+
+/** Read rangeState from Ludus admin GET /range body for a given rangeID. */
+function extractRangeStateFromLudusGetBody(data: unknown, wantRangeId: string): string | null {
+  const want = wantRangeId.trim()
+  const rows = ludusGetRangeObjectList(data)
+  const byId = rows.find((r) => {
+    const id = r.rangeID ?? r.RangeID
+    return typeof id === "string" && id.trim() === want
+  })
+  const row = byId ?? (rows.length === 1 ? rows[0] : undefined)
+  if (!row) return null
+  return rangeStateFromRow(row)
+}
+
+/**
+ * `rangeState` for reconcile: PocketBase first (works when Ludus admin HTTP rejects
+ * the key but PB auth still works), then Ludus GET `/range` admin → main URL on 401/403.
+ */
+async function readRangeStateForReconcile(rangeId: string): Promise<string | null> {
+  const rid = rangeId.trim()
+
+  const pb = await fetchPbRangeStatus(rid)
+  if (pb?.rangeState) {
+    const rs = String(pb.rangeState).trim().toUpperCase()
+    if (rs) return rs
   }
-  if ("result" in o) return rangeStateFromLudusBody(o.result)
+
+  const settings = getSettings()
+  const apiKey = settings.rootApiKey?.trim()
+  if (!apiKey) return null
+
+  const path = `/range?rangeID=${encodeURIComponent(rid)}`
+  let res = await ludusRequest<unknown>(path, { method: "GET", apiKey, useAdminEndpoint: true })
+  if ((res.status === 401 || res.status === 403) && settings.ludusUrl?.trim()) {
+    diagThrottled(
+      `range-state-fallback-${rid}`,
+      `GET /range (admin) HTTP ${res.status} — retrying on main Ludus API (same key)`,
+      600_000,
+    )
+    res = await ludusRequest<unknown>(path, { method: "GET", apiKey, useAdminEndpoint: false })
+  }
+  if (res.status >= 200 && res.status < 300 && res.data !== undefined) {
+    return extractRangeStateFromLudusGetBody(res.data, rid)
+  }
   return null
 }
 
-/** Tail of Ludus deploy text — same source as Range Logs (admin read for reconcile). */
-async function readLudusRangeLogsForReconcile(rangeId: string, runtimeApiKey?: string): Promise<string | null> {
+/** Same path as `api/logs/stream` readGoadLog — Ludus v2 range deploy log on host. */
+function capLudusLogTail(raw: string): string {
+  const t = raw.trimEnd()
+  return t.length > LUDUS_RANGE_LOGS_MAX_CHARS ? t.slice(-LUDUS_RANGE_LOGS_MAX_CHARS) : t
+}
+
+/** Root SSH to Ludus host; avoids Ludus HTTP when `/range/logs` rejects root key. */
+async function readLudusAnsibleLogViaSsh(rangeId: string): Promise<string | null> {
+  const rid = rangeId.trim()
+  if (!/^[\w.-]+$/.test(rid)) return null
   const settings = getSettings()
-  const rootKey = settings.rootApiKey?.trim()
-  const runKey = runtimeApiKey?.trim()
-  const path = `/range/logs?rangeID=${encodeURIComponent(rangeId)}`
-  const optsBase = { timeout: 45_000 as const }
-
-  if (!rootKey && !runKey) return null
-
-  // No root key configured — only the GOAD session key can call Ludus.
-  if (!rootKey && runKey) {
-    const res = await ludusGet<{ result?: string }>(path, { ...optsBase, apiKey: runKey, useAdminEndpoint: false })
-    const ok = ludusRangeLogsResult(res)
-    if (ok != null) return ok
+  if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
+  const logPath = `/opt/ludus/ranges/${rid}/ansible.log`
+  try {
+    const content = await sshExec(
+      settings.sshHost,
+      settings.sshPort,
+      settings.proxmoxSshUser || "root",
+      settings.proxmoxSshPassword || "",
+      `cat "${logPath}" 2>/dev/null || true`,
+    )
+    if (!content.trim()) return null
+    return capLudusLogTail(content)
+  } catch (e) {
     diagThrottled(
-      `logs-http-${rangeId}-session-only`,
-      `GET /range/logs (:8080, session key only) failed for rangeId=${rangeId}: HTTP ${res.status} ${res.error ?? ""}`.trim(),
+      `logs-ssh-${rid}`,
+      `SSH read ansible.log failed for rangeId=${rid}: ${e instanceof Error ? e.message : String(e)}`,
       120_000,
     )
     return null
   }
+}
 
-  const resAdmin = await ludusGet<{ result?: string }>(path, { ...optsBase, apiKey: rootKey!, useAdminEndpoint: true })
-  const okAdmin = ludusRangeLogsResult(resAdmin)
-  if (okAdmin != null) return okAdmin
+/** Tail of Ludus deploy text — Ludus HTTP `/range/logs` or SSH ansible.log (PLAY RECAP). */
+async function readLudusRangeLogsForReconcile(
+  rangeId: string,
+  opts?: { taskLudusApiKey?: string },
+): Promise<string | null> {
+  const settings = getSettings()
+  const apiKey = (settings.rootApiKey ?? "").trim()
+  const taskKey = opts?.taskLudusApiKey?.trim() ?? ""
 
-  if (resAdmin.status === 401 || resAdmin.status === 403) {
-    const resUser = await ludusGet<{ result?: string }>(path, { ...optsBase, apiKey: rootKey!, useAdminEndpoint: false })
-    const okUser = ludusRangeLogsResult(resUser)
-    if (okUser != null) return okUser
+  const path = `/range/logs?rangeID=${encodeURIComponent(rangeId)}`
 
-    if (runKey && runKey !== rootKey) {
-      const resRun = await ludusGet<{ result?: string }>(path, { ...optsBase, apiKey: runKey, useAdminEndpoint: false })
-      const okRun = ludusRangeLogsResult(resRun)
-      if (okRun != null) return okRun
-      if (resRun.status === 401 || resRun.status === 403) {
-        diagThrottled(
-          `ludus-range-logs-auth`,
-          `GET /range/logs failed for rangeId=${rangeId}: root :8081 HTTP ${resAdmin.status}, root :8080 HTTP ${resUser.status}, GOAD session key :8080 HTTP ${resRun.status} ${(resRun.error ?? resUser.error ?? resAdmin.error ?? "").slice(0, 100)} — fix LUDUS_ROOT_API_KEY (Ludus root token) or confirm the Ludus user that started GOAD can read this range.`,
-          3_600_000,
-        )
-        return null
+  // Match `api/logs/stream`: main Ludus URL + user's Ludus API key (not root PB password).
+  if (taskKey) {
+    const resTask = await ludusGet<{ result?: string }>(path, {
+      apiKey: taskKey,
+      useAdminEndpoint: false,
+      timeout: 45_000,
+    })
+    if (resTask.status >= 200 && resTask.status < 300) {
+      const rawT = resTask.data?.result
+      if (typeof rawT === "string" && rawT.length) {
+        return capLudusLogTail(rawT)
       }
+    }
+  }
+
+  if (apiKey) {
+    const fetchLogs = (useAdmin: boolean) =>
+      ludusGet<{ result?: string }>(path, {
+        apiKey,
+        useAdminEndpoint: useAdmin,
+        timeout: 45_000,
+      })
+
+    let res = await fetchLogs(true)
+    if ((res.status === 401 || res.status === 403) && settings.ludusUrl?.trim()) {
       diagThrottled(
-        `logs-http-${rangeId}-runtime`,
-        `GET /range/logs (GOAD session key, :8080) failed for rangeId=${rangeId}: HTTP ${resRun.status} ${resRun.error ?? ""}`.trim(),
+        `logs-fallback-${rangeId}`,
+        `GET /range/logs (admin) HTTP ${res.status} — retrying on main Ludus API (root key).`,
+        600_000,
+      )
+      res = await fetchLogs(false)
+    }
+
+    if (res.status >= 200 && res.status < 300) {
+      const raw = res.data?.result
+      if (typeof raw === "string" && raw.length) return capLudusLogTail(raw)
+    } else {
+      const authHint =
+        res.status === 401 || res.status === 403
+          ? " — /range/logs expects the range owner's Ludus user API key (same as Range Logs stream). `LUDUS_ROOT_API_KEY` is the PB admin password for PocketBase patches, not always valid as X-API-KEY on v2."
+          : ""
+      diagThrottled(
+        `logs-http-${rangeId}`,
+        `GET /range/logs failed for rangeId=${rangeId}: HTTP ${res.status} ${res.error ?? ""}${authHint}`.trim(),
         120_000,
       )
-      return null
     }
+  }
 
-    if (resUser.status === 401 || resUser.status === 403) {
-      diagThrottled(
-        `ludus-range-logs-root-key-rejected`,
-        `GET /range/logs failed (admin HTTP ${resAdmin.status}, user port HTTP ${resUser.status}) for rangeId=${rangeId}: ${(resUser.error ?? resAdmin.error ?? "").slice(0, 120)} — LUDUS_ROOT_API_KEY rejected. No GOAD session Ludus key was available to retry (start deploy from LUX after upgrade).`,
-        3_600_000,
-      )
-      return null
-    }
+  const viaSsh = await readLudusAnsibleLogViaSsh(rangeId)
+  if (viaSsh) {
     diagThrottled(
-      `logs-http-${rangeId}-user`,
-      `GET /range/logs (user :8080) failed for rangeId=${rangeId}: HTTP ${resUser.status} ${resUser.error ?? ""}`.trim(),
-      120_000,
+      `logs-ssh-ok-${rangeId}`,
+      `reconcile: Ludus /range/logs unavailable or empty; using SSH ansible.log for PLAY RECAP (rangeId=${rangeId})`,
+      600_000,
     )
-    return null
   }
-
-  diagThrottled(
-    `logs-http-${rangeId}-admin`,
-    `GET /range/logs (admin) failed for rangeId=${rangeId}: HTTP ${resAdmin.status} ${resAdmin.error ?? ""}`.trim(),
-    120_000,
-  )
-  return null
-}
-
-async function readRangeStateForReconcile(rangeId: string, runtimeApiKey?: string): Promise<string | null> {
-  const rootKey = getSettings().rootApiKey?.trim()
-  const runKey = runtimeApiKey?.trim()
-  const path = `/range?rangeID=${encodeURIComponent(rangeId)}`
-
-  if (rootKey) {
-    const res = await ludusRequest<unknown>(path, { method: "GET", apiKey: rootKey, useAdminEndpoint: true })
-    if (res.status >= 200 && res.status < 300 && res.data != null) {
-      const st = rangeStateFromLudusBody(res.data)
-      if (st) return st
-    }
-  }
-  if (runKey && runKey !== rootKey) {
-    const res = await ludusRequest<unknown>(path, { method: "GET", apiKey: runKey, useAdminEndpoint: false })
-    if (res.status >= 200 && res.status < 300 && res.data != null) {
-      const st = rangeStateFromLudusBody(res.data)
-      if (st) return st
-    }
-  }
-  return null
+  return viaSsh
 }
 
 export async function tryReconcileStuckDeploySnapshot(args: {
@@ -217,6 +287,7 @@ export async function tryReconcileStuckDeploySnapshot(args: {
   instanceId?: string
   status: string
   logText: string
+  /** Session Ludus user API key from the GOAD task — same credential as Range Logs stream. */
   ludusApiKey?: string
 }): Promise<boolean> {
   const { taskId, instanceId, status, logText, ludusApiKey } = args
@@ -234,11 +305,10 @@ export async function tryReconcileStuckDeploySnapshot(args: {
   try {
     const settings = getSettings()
     const rootApiKey = settings.rootApiKey?.trim()
-    const sessionKey = ludusApiKey?.trim()
-    if (!rootApiKey && !sessionKey) {
+    if (!rootApiKey) {
       diagThrottled(
-        `task-${taskId}-no-keys`,
-        `task ${taskId}: skip reconcile (set LUDUS_ROOT_API_KEY and/or run GOAD from LUX so a Ludus session API key is available)`,
+        `task-${taskId}-no-root-key`,
+        `task ${taskId}: skip reconcile (set Ludus root API key in LUX settings for admin /range + PocketBase patch)`,
         300_000,
       )
       return false
@@ -261,7 +331,7 @@ export async function tryReconcileStuckDeploySnapshot(args: {
 
     let ludusBlock: string | null = null
     if (!goadRecapOk) {
-      ludusBlock = await readLudusRangeLogsForReconcile(rid, sessionKey)
+      ludusBlock = await readLudusRangeLogsForReconcile(rid, { taskLudusApiKey: ludusApiKey })
     }
     const recapLudus = ludusBlock ? ludusBlock.lastIndexOf("PLAY RECAP") : -1
     const ludusRecapOk =
@@ -281,11 +351,11 @@ export async function tryReconcileStuckDeploySnapshot(args: {
 
     if (!stuck) return false
 
-    const current = await readRangeStateForReconcile(rid, sessionKey)
+    const current = await readRangeStateForReconcile(rid)
     if (!current) {
       diagThrottled(
         `range-${rid}-no-state`,
-        `rangeId=${rid}: skip reconcile (GET /range returned no rangeState with root and/or session Ludus key)`,
+        `rangeId=${rid}: skip reconcile (no rangeState from PocketBase + Ludus GET /range)`,
         120_000,
       )
       return false
@@ -294,23 +364,29 @@ export async function tryReconcileStuckDeploySnapshot(args: {
 
     lastAttemptAt.set(taskId, now)
 
-    if (!rootApiKey) {
-      diagThrottled(
-        `range-${rid}-no-root-pb`,
-        `rangeId=${rid}: skip PocketBase SUCCESS patch (LUDUS_ROOT_API_KEY unset — cannot auth PB superuser)`,
-        300_000,
-      )
-      return false
-    }
-
     const err = await setPbRangeState(rid, "SUCCESS")
     if (err) {
       console.warn(`[goad-ludus-reconcile] PocketBase SUCCESS patch failed for ${rangeId}: ${err}`)
       return false
     }
+
+    const afterPatch = await readRangeStateForReconcile(rid)
+    const stillDeploying =
+      afterPatch === "DEPLOYING" ||
+      afterPatch === "WAITING" ||
+      afterPatch == null
+
+    if (stillDeploying) {
+      lastAttemptAt.delete(taskId)
+      console.warn(
+        `[goad-ludus-reconcile] PocketBase PATCH returned OK but rangeState is still ${afterPatch ?? "unknown"} for "${rangeId}" — will retry (Ludus may overwrite PB or read lag).`,
+      )
+      return false
+    }
+
     reconciledTaskIds.add(taskId)
     console.info(
-      `[goad-ludus-reconcile] Patched rangeState=SUCCESS for "${rangeId}" (task ${taskId}; goadRecap=${goadRecapOk} ludusRecap=${ludusRecapOk} deployPollLines=${deployPollsFull})`,
+      `[goad-ludus-reconcile] Patched rangeState=SUCCESS for "${rangeId}" (task ${taskId}; goadRecap=${goadRecapOk} ludusRecap=${ludusRecapOk} deployPollLines=${deployPollsFull}; verified=${afterPatch})`,
     )
     return true
   } catch (e) {
@@ -318,3 +394,81 @@ export async function tryReconcileStuckDeploySnapshot(args: {
     return false
   }
 }
+
+/**
+ * Post-GOAD `network`-tag deploy (firewall) runs after the GOAD SSH task has
+ * already exited, so `appendLine` reconcile never fires. If PocketBase still
+ * shows DEPLOYING while Ludus already reports SUCCESS, patch PB. If Ludus is
+ * still DEPLOYING/WAITING but `/range/logs` shows a clean latest PLAY RECAP,
+ * patch PB (Ansible finished; Ludus/PB desync).
+ *
+ * Does **not** patch when Ludus reports ERROR/ABORTED. Recap fallback runs only
+ * when Ludus state is DEPLOYING or WAITING (avoids trusting stale recap after ERROR).
+ */
+export async function reconcilePbAfterFollowOnLudusDeploy(
+  rangeId: string,
+  ludusUserApiKey?: string,
+): Promise<{ patched: boolean; detail: string }> {
+  const rid = rangeId.trim()
+  if (!rid) return { patched: false, detail: "empty rangeId" }
+
+  const pbRow = await fetchPbRangeStatus(rid)
+  const pbState = String(pbRow?.rangeState ?? "").trim().toUpperCase()
+  if (pbState !== "DEPLOYING" && pbState !== "WAITING") {
+    return { patched: false, detail: `pocketbase not stuck (${pbState || "unknown"})` }
+  }
+
+  const key = ludusUserApiKey?.trim()
+  if (!key) {
+    return { patched: false, detail: "no Ludus API key for GET /range" }
+  }
+
+  let ludusState: string | null = null
+  const lr = await ludusGet<unknown>(`/range?rangeID=${encodeURIComponent(rid)}`, {
+    apiKey: key,
+    useAdminEndpoint: false,
+    timeout: 45_000,
+  })
+  if (lr.status >= 200 && lr.status < 300 && lr.data !== undefined) {
+    ludusState = extractRangeStateFromLudusGetBody(lr.data, rid)
+  }
+
+  if (ludusState === "ERROR" || ludusState === "ABORTED") {
+    return { patched: false, detail: `ludus terminal ${ludusState}` }
+  }
+
+  if (ludusState === "SUCCESS") {
+    const err = await setPbRangeState(rid, "SUCCESS")
+    if (err) return { patched: false, detail: err }
+    return { patched: true, detail: "pocketbase synced from ludus SUCCESS" }
+  }
+
+  if (ludusState !== "DEPLOYING" && ludusState !== "WAITING") {
+    return {
+      patched: false,
+      detail: `ludus state ${ludusState ?? "unreadable"} — not patching`,
+    }
+  }
+
+  const ludusBlock = await readLudusRangeLogsForReconcile(rid, { taskLudusApiKey: key })
+  const recapLudus = ludusBlock ? ludusBlock.lastIndexOf("PLAY RECAP") : -1
+  const ludusRecapOk =
+    ludusBlock != null &&
+    recapLudus >= 0 &&
+    parseAnsibleRecapAllOk(ludusBlock, recapLudus)
+  if (!ludusRecapOk) {
+    return {
+      patched: false,
+      detail: "pocketbase stuck; ludus still deploying and no clean PLAY RECAP in logs",
+    }
+  }
+
+  const err = await setPbRangeState(rid, "SUCCESS")
+  if (err) return { patched: false, detail: err }
+  const after = await readRangeStateForReconcile(rid)
+  if (after === "DEPLOYING" || after === "WAITING" || after == null) {
+    return { patched: false, detail: "PATCH ok but rangeState still deploying (retry later)" }
+  }
+  return { patched: true, detail: "pocketbase patched from PLAY RECAP while ludus API lagged" }
+}
+

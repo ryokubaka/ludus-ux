@@ -6,8 +6,11 @@ import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
-import { debugAgentLogServer } from "@/lib/debug-agent-log-server"
 import { createDeployLogDedupe } from "@/lib/deploy-log-sse-dedupe"
+import {
+  augmentLudusDeployHistoryLines,
+  deployLogLineHasLeadingWallTimestamp,
+} from "@/lib/log-line-timestamp"
 
 export const dynamic = "force-dynamic"
 
@@ -75,6 +78,18 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const sendLudusOrGoadLine = (prefix: "LUDUS" | "GOAD", line: string, stamp: string) => {
+        try {
+          const t = line.trimStart()
+          const payload = deployLogLineHasLeadingWallTimestamp(line)
+            ? `[${prefix}] ${line}`
+            : `[${prefix}] [${stamp}] ${line}`
+          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+        } catch {
+          /* controller closed */
+        }
+      }
+
       try {
         let lastLudusCount = 0
         let lastGoadCount = 0
@@ -93,6 +108,8 @@ export async function GET(request: NextRequest) {
         const WARMUP_POLLS = 150  // 5 min warmup window
         let warmupRemaining  = WARMUP_POLLS
         let wasDeploying     = false
+        /** Require consecutive polls not deploying before [DONE] (avoids one-poll flicker mid-GOAD). */
+        let nonDeployingAfterWasDeploying = 0
         let lastEmittedState = ""
 
         // Idle-timeout: Ludus can get stuck in DEPLOYING when its internal
@@ -117,15 +134,6 @@ export async function GET(request: NextRequest) {
           if (s && s !== "DEPLOYING" && s !== "WAITING") {
             send("DONE", s, snapshot)
             streamDone = true
-            // #region agent log
-            debugAgentLogServer({
-              hypothesisId: "H1",
-              location: "logs/stream/route.ts:tryEmitTerminalDone",
-              message: "deploy sse reconciled terminal DONE",
-              data: { reason, state: s, rangeId },
-              runId: "post-fix",
-            })
-            // #endregion
           }
         }
 
@@ -133,15 +141,6 @@ export async function GET(request: NextRequest) {
           pollIdx++
           if (request.signal.aborted) {
             await tryEmitTerminalDone("request-aborted")
-            // #region agent log
-            debugAgentLogServer({
-              hypothesisId: "H4",
-              location: "logs/stream/route.ts:loop",
-              message: "deploy sse request.signal aborted (after reconcile)",
-              data: { rangeId: rangeId || null, pollIdx, lastEmittedState, streamDone },
-              runId: "post-fix",
-            })
-            // #endregion
             break
           }
 
@@ -167,27 +166,27 @@ export async function GET(request: NextRequest) {
               firstPoll = false
             } else {
               firstPoll = false
-              for (const line of newLines) {
-                send("LUDUS", line, pollStamp)
-                deployDedupe.remember(line)
+              let ludusEmit = newLines
+              if (
+                newLines.length > 1 &&
+                newLines.every((l) => !deployLogLineHasLeadingWallTimestamp(l))
+              ) {
+                const t1 = Date.now()
+                const t0 = t1 - Math.min(6 * 60 * 60 * 1000, Math.max(60_000, newLines.length * 2000))
+                ludusEmit = augmentLudusDeployHistoryLines(
+                  newLines,
+                  new Date(t0).toISOString(),
+                  new Date(t1).toISOString(),
+                )
+              }
+              for (let i = 0; i < ludusEmit.length; i++) {
+                const out = ludusEmit[i]
+                sendLudusOrGoadLine("LUDUS", out, pollStamp)
+                deployDedupe.remember(newLines[i] ?? out)
               }
               if (newLines.length > 0) lastActivityAt = Date.now()
             }
           } else if (result.error) {
-            // #region agent log
-            debugAgentLogServer({
-              hypothesisId: "H4",
-              location: "logs/stream/route.ts:ludusLogs",
-              message: "ludus /range/logs error break",
-              data: {
-                pollIdx,
-                errLen: result.error.length,
-                errHead: result.error.slice(0, 120),
-                rangeId: rangeId || null,
-              },
-              runId: "pre-fix",
-            })
-            // #endregion
             send("ERROR", result.error, pollStamp)
             break
           }
@@ -217,38 +216,17 @@ export async function GET(request: NextRequest) {
             if (!skipGoadBackfill) {
               for (const line of goadResult.lines) {
                 if (deployDedupe.isDuplicate(line)) continue
-                send("GOAD", line, pollStamp)
+                sendLudusOrGoadLine("GOAD", line, pollStamp)
                 deployDedupe.remember(line)
               }
             }
             if (!skipGoadBackfill && goadResult.lines.length > 0) lastActivityAt = Date.now()
           }
 
-          if (pollIdx % 15 === 0) {
-            // #region agent log
-            debugAgentLogServer({
-              hypothesisId: "H2-H3",
-              location: "logs/stream/route.ts:pollSnapshot",
-              message: "deploy sse poll snapshot",
-              data: {
-                pollIdx,
-                state: state ?? null,
-                wasDeploying,
-                lastEmittedState,
-                rangeId: rangeId || null,
-                idleSec: Math.round((Date.now() - lastActivityAt) / 1000),
-                maxPollsRemaining: maxPolls,
-                lastLudusCount,
-                lastGoadCount,
-              },
-              runId: "pre-fix",
-            })
-            // #endregion
-          }
-
           // ── Termination logic ──────────────────────────────────────────────
           if (state === "DEPLOYING" || state === "WAITING") {
             wasDeploying = true
+            nonDeployingAfterWasDeploying = 0
             warmupRemaining = WARMUP_POLLS  // reset warmup every time we see DEPLOYING
 
             // Idle timeout: if no new log lines have arrived for IDLE_TIMEOUT_MS
@@ -268,42 +246,19 @@ export async function GET(request: NextRequest) {
                   )
                 }
               } catch { /* best-effort */ }
-              // #region agent log
-              debugAgentLogServer({
-                hypothesisId: "H3",
-                location: "logs/stream/route.ts:idleTimeout",
-                message: "deploy sse DONE idle-timeout while deploying",
-                data: {
-                  state,
-                  wasDeploying,
-                  pollIdx,
-                  idleSec: Math.round((Date.now() - lastActivityAt) / 1000),
-                  rangeId: rangeId || null,
-                },
-                runId: "pre-fix",
-              })
-              // #endregion
               send("DONE", state, pollStamp)
               streamDone = true
               break
             }
           } else if (state) {
-            // Not deploying — decide whether to keep waiting or exit
             if (wasDeploying) {
-              // We saw DEPLOYING earlier and it has now finished — done
-              // #region agent log
-              debugAgentLogServer({
-                hypothesisId: "H1-H2",
-                location: "logs/stream/route.ts:wasDeployingDone",
-                message: "deploy sse DONE after wasDeploying",
-                data: { state, pollIdx, rangeId: rangeId || null },
-                runId: "pre-fix",
-              })
-              // #endregion
-              send("DONE", state, pollStamp)
-              streamDone = true
-              break
-            }
+              nonDeployingAfterWasDeploying++
+              if (nonDeployingAfterWasDeploying >= 2) {
+                send("DONE", state, pollStamp)
+                streamDone = true
+                break
+              }
+            } else {
             // During warmup we intentionally do NOT exit immediately on ERROR/ABORTED.
             // GOAD deployments leave the range in ERROR (empty, no VMs) for several
             // minutes while it sets up the workspace and before `ludus range deploy`
@@ -319,57 +274,22 @@ export async function GET(request: NextRequest) {
             const idleMs = Date.now() - lastActivityAt
             const elapsed = (WARMUP_POLLS - warmupRemaining) * 2000
             if (elapsed > 10_000 && idleMs > 3 * 60_000) {
-              // #region agent log
-              debugAgentLogServer({
-                hypothesisId: "H1",
-                location: "logs/stream/route.ts:warmupIdleDone",
-                message: "deploy sse DONE testing-mode idle",
-                data: { state, pollIdx, elapsed, idleMs, rangeId: rangeId || null },
-                runId: "pre-fix",
-              })
-              // #endregion
               send("DONE", state, pollStamp)
               streamDone = true
               break
             }
             warmupRemaining--
             if (warmupRemaining <= 0) {
-              // Gave up waiting for the operation to begin
-              // #region agent log
-              debugAgentLogServer({
-                hypothesisId: "H1",
-                location: "logs/stream/route.ts:warmupExhausted",
-                message: "deploy sse DONE warmup exhausted",
-                data: { state, pollIdx, rangeId: rangeId || null },
-                runId: "pre-fix",
-              })
-              // #endregion
               send("DONE", state, pollStamp)
               streamDone = true
               break
+            }
             }
           }
 
           await new Promise((r) => setTimeout(r, 2000))
         }
         await tryEmitTerminalDone("after-loop")
-        // #region agent log
-        if (!streamDone) {
-          debugAgentLogServer({
-            hypothesisId: "H1",
-            location: "logs/stream/route.ts:afterLoop",
-            message: "deploy sse loop ended without DONE path",
-            data: {
-              pollIdx,
-              maxPollsRemaining: maxPolls,
-              lastEmittedState,
-              wasDeploying,
-              rangeId: rangeId || null,
-            },
-            runId: "post-fix",
-          })
-        }
-        // #endregion
       } catch (err) {
         send("ERROR", `Stream error: ${(err as Error).message}`, getCachedLudusWallHmsOrUtc())
       } finally {

@@ -321,6 +321,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  /** Task id for the active /api/goad/execute or …/stream connection — used to backfill exitCode from SQLite. */
+  const streamTaskIdRef = useRef<string | null>(null)
   const getExtraHeadersRef = useRef(options?.getExtraHeaders)
   getExtraHeadersRef.current = options?.getExtraHeaders
 
@@ -333,6 +335,9 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     setExitCode(null)
     setIsRunning(true)
     let streamExit: number | null = null
+    if (captureTaskId) {
+      streamTaskIdRef.current = null
+    }
 
     const extra = getExtraHeadersRef.current?.() ?? {}
     const merged = new Headers()
@@ -361,6 +366,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
         // Capture task ID emitted by the execute route
         if (captureTaskId && line.startsWith("[TASKID] ")) {
           const tid = line.slice(9).trim()
+          streamTaskIdRef.current = tid
           setTaskId(tid)
           return // hide [TASKID] lines from display
         }
@@ -386,6 +392,15 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
               }
             }
           }
+          // Trailing fragment after final chunk often has no closing "\n\n" — still dispatch.
+          if (sseCarry.trim()) {
+            for (const raw of sseCarry.split("\n")) {
+              const t = raw.trim()
+              if (!t) continue
+              if (t.startsWith("data: ")) dispatchPayload(t.slice(6))
+              else if (t.startsWith("data:")) dispatchPayload(t.slice(5))
+            }
+          }
           break
         }
 
@@ -405,6 +420,25 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       }
     } finally {
       setIsRunning(false)
+      if (streamExit === null && streamTaskIdRef.current) {
+        try {
+          const tid = streamTaskIdRef.current
+          const ex = getExtraHeadersRef.current?.() ?? {}
+          const res = await fetch(`/api/goad/tasks/${encodeURIComponent(tid)}`, {
+            credentials: "include",
+            headers: { ...ex },
+          })
+          if (res.ok) {
+            const task = (await res.json()) as { status?: string; exitCode?: number }
+            if (task.status !== "running" && typeof task.exitCode === "number") {
+              streamExit = task.exitCode
+              setExitCode(task.exitCode)
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     }
     return streamExit
   }, [])
@@ -413,6 +447,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    streamTaskIdRef.current = tid
     setTaskId(tid)
 
     return connectToStream(
@@ -479,6 +514,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
 
   const clear = useCallback(() => {
     abortRef.current?.abort()
+    streamTaskIdRef.current = null
     setLines([])
     setExitCode(null)
     setTaskId(null)

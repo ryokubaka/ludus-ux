@@ -164,7 +164,7 @@ function parseChangelog(md: string): ParsedVersion[] {
   let currentSection: ParsedSection | null = null
 
   for (const line of lines) {
-    // ## [1.0.0] — 2026-05-07
+    // ## [1.0.0] — 2026-05-13
     if (line.startsWith("## ")) {
       if (current) versions.push(current)
       current = { title: line.replace(/^## /, "").trim(), sections: [] }

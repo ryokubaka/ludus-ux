@@ -84,8 +84,17 @@ import {
   correlateHistoryEntries,
   aggregateDeployStatuses,
 } from "@/lib/goad-deploy-history-correlation"
-import { extractNetworkSection, applyNetworkSection, removeExtensionVmsFromRangeConfig, hasNetworkRules, networkSectionEqual } from "@/lib/network-rules"
+import {
+  extractNetworkSection,
+  applyNetworkSection,
+  removeExtensionVmsFromRangeConfig,
+  networkSnapshotNeedsRedeploy,
+  networkSectionEqual,
+} from "@/lib/network-rules"
 import { clearRangeAborting } from "@/lib/range-aborting"
+import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
+import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { useAbortRange } from "@/lib/use-abort-range"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
@@ -259,14 +268,18 @@ function GoadInstancePage() {
     rangeLogRefreshLock.current = true
     setRangeLogRefreshBusy(true)
     stopRangeStreaming()
-    requestAnimationFrame(() => {
-      startRangeStreaming(rid, { snapshotStart: false })
+    void (async () => {
+      const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+      startRangeStreaming(rid, {
+        snapshotStart: false,
+        ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+      })
       void refreshRangeStateFromServer(rid)
-    })
-    window.setTimeout(() => {
-      rangeLogRefreshLock.current = false
-      setRangeLogRefreshBusy(false)
-    }, 750)
+      window.setTimeout(() => {
+        rangeLogRefreshLock.current = false
+        setRangeLogRefreshBusy(false)
+      }, 750)
+    })()
   }, [
     instance?.ludusRangeId,
     stopRangeStreaming,
@@ -282,9 +295,9 @@ function GoadInstancePage() {
     if (!isRunning) setGoadStreamStartedAt(null)
   }, [isRunning])
 
-  // Range log timer: prefer the server-persisted GOAD task start time so it
-  // survives refresh; fall back to context's streamStartedAt for non-GOAD deploys.
-  const rangeElapsed = useElapsed(isRangeStreaming ? (goadStreamStartedAt ?? rangeStreamStartedAt) : null)
+  // Range log timer: Ludus deploy elapsed — `streamStartedAt` is anchored to the
+  // in-flight deploy history row when reconnecting (refresh) so it does not reset.
+  const rangeElapsed = useElapsed(isRangeStreaming ? rangeStreamStartedAt : null)
   const goadElapsed = useElapsed(goadStreamStartedAt)
 
   const [catalog, setCatalog] = useState<GoadCatalog | null>(null)
@@ -298,9 +311,11 @@ function GoadInstancePage() {
   const [historyGoadLines, setHistoryGoadLines] = useState<string[]>([])
   const [historyDetailLoading, setHistoryDetailLoading] = useState(false)
   const [activeTab, setActiveTab] = useState(() => readInitialGoadTab())
-  // Deploy tab: poll PocketBase range state every 5s so a follow-on Ludus deploy
-  // (e.g. extension-triggered) is detected after the SSE stream closed on [DONE].
-  // When state is DEPLOYING/WAITING and no live stream, reconnect like manual refresh.
+  // When state is DEPLOYING/WAITING and no live stream, reconnect once on the
+  // rising edge (avoid reconnecting every 5s — that reset the SSE and could
+  // disrupt range state / log continuity during long GOAD+Ludus runs).
+  const prevPbDeployingRef = useRef(false)
+  const lastDeployStreamReconnectRef = useRef(0)
   useEffect(() => {
     if (activeTab !== "deploy") return
     const rid = instance?.ludusRangeId?.trim()
@@ -308,8 +323,23 @@ function GoadInstancePage() {
 
     const tick = async () => {
       const rs = await refreshRangeStateFromServer(rid)
-      if ((rs === "DEPLOYING" || rs === "WAITING") && !isRangeStreamingRef.current) {
-        handleRefreshRangeLogs()
+      const deploying = rs === "DEPLOYING" || rs === "WAITING"
+      const now = Date.now()
+      if (deploying && !isRangeStreamingRef.current) {
+        const edge = !prevPbDeployingRef.current
+        const stalled =
+          prevPbDeployingRef.current &&
+          now - lastDeployStreamReconnectRef.current > 45_000
+        if (edge || stalled) {
+          handleRefreshRangeLogs()
+          lastDeployStreamReconnectRef.current = now
+        }
+      }
+      if (!deploying) {
+        prevPbDeployingRef.current = false
+        lastDeployStreamReconnectRef.current = 0
+      } else {
+        prevPbDeployingRef.current = true
       }
     }
     void tick()
@@ -464,7 +494,13 @@ function GoadInstancePage() {
       // snapshotStart: true when a new deploy begins, so this doesn't
       // interfere with fresh deploys.
       if (rid && !isRangeStreaming) {
-        startRangeStreaming(rid, { snapshotStart: false })
+        void (async () => {
+          const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+          startRangeStreaming(rid, {
+            snapshotStart: false,
+            ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+          })
+        })()
       }
       return
     }
@@ -490,7 +526,13 @@ function GoadInstancePage() {
     // snapshot; otherwise the panel stays empty until the next *new* line (History
     // still shows prior output).
     if (isDeployAction && rid && !isRangeStreaming) {
-      startRangeStreaming(rid, { snapshotStart: false })
+      void (async () => {
+        const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+        startRangeStreaming(rid, {
+          snapshotStart: false,
+          ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+        })
+      })()
     }
 
     if (!autoTabRef.current && isDeployAction) {
@@ -513,7 +555,11 @@ function GoadInstancePage() {
           const rs = String(data.rangeState ?? "").toUpperCase()
           if (rs !== "DEPLOYING" && rs !== "WAITING") return
           if (cancelled || isRangeStreamingRef.current) return
-          startRangeStreaming(rid, { snapshotStart: false })
+          const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+          startRangeStreaming(rid, {
+            snapshotStart: false,
+            ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+          })
           if (!autoTabRef.current) {
             autoTabRef.current = true
             setActiveTab("deploy")
@@ -595,15 +641,24 @@ function GoadInstancePage() {
     if (wizardNetworkHandledRef.current) return
     const rangeId = instance.ludusRangeId
     const id = instance.instanceId
-    wizardNetworkHandledRef.current = true
-
     void (async () => {
       try {
-        const res = await fetch(`/api/goad/instances/${encodeURIComponent(id)}/pending-network`)
+        const res = await fetch(`/api/goad/instances/${encodeURIComponent(id)}/pending-network`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+          body: JSON.stringify({ __luxConsumePendingNetwork: true }),
+          cache: "no-store",
+        })
         if (!res.ok) return
         const data = await res.json() as { snapshot: Record<string, unknown> | null }
         const snapshot = data.snapshot
-        if (!snapshot) return
+        if (!snapshot) {
+          wizardNetworkHandledRef.current = true
+          return
+        }
+        if (wizardNetworkHandledRef.current) return
+        wizardNetworkHandledRef.current = true
 
         const completedId = taskIdRef.current
         setPostProcessingStep("network-deploying")
@@ -625,22 +680,32 @@ function GoadInstancePage() {
           }
           // Match runAction / startNetworkTagDeploy: do not start a tag deploy while
           // Ludus is still in DEPLOYING/WAITING from GOAD's internal range deploy.
-          {
-            const SETTLE_TIMEOUT_MS = 10 * 60 * 1000
-            const SETTLE_POLL_MS = 5_000
-            const settleStart = Date.now()
-            while (Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
-              const st = await ludusApi.getRangeStatus(rangeId)
-              const stateNow = st.data?.rangeState
-              if (stateNow !== "DEPLOYING" && stateNow !== "WAITING") break
-              await new Promise((r) => setTimeout(r, SETTLE_POLL_MS))
-            }
-          }
+          await waitUntilLudusRangeNotDeploying(() => ludusApi.getRangeStatus(rangeId), {
+            pollMs: 5_000,
+            absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+          })
           for (let attempt = 0; attempt < 3; attempt++) {
             const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeId)
             if (!dep.error) {
-              void registerLuxDeployTagRun(rangeId, ["network"], tagRunAt)
+              await registerLuxDeployTagRun(rangeId, ["network"], tagRunAt)
+              const nw = await waitForNetworkTagDeployCompletion({
+                rangeId,
+                requestedAtMs: tagRunAt,
+                fetchHistory: () => ludusApi.getRangeLogHistory(rangeId),
+                fetchStatus: () => ludusApi.getRangeStatus(rangeId),
+                pollMs: 5_000,
+                absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+              })
+              if (!nw.ok) {
+                console.warn("[LUX] post-GOAD network tag wait:", nw.via, nw.detail)
+              }
+              await fetch("/api/range/reconcile-pb", {
+                method: "POST",
+                credentials: "include",
+                headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+                body: JSON.stringify({ rangeId }),
+              }).catch(() => {})
               break
             }
             if (attempt < 2) await new Promise((r) => setTimeout(r, 2000))
@@ -658,7 +723,7 @@ function GoadInstancePage() {
         }
       } catch { /* best-effort */ }
     })()
-  }, [exitCode, instance?.instanceId, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [exitCode, instance?.instanceId, instance?.ludusRangeId, impersonationHeaders])
 
   const [reprovisioningExtension, setReprovisioningExtension] = useState<string | null>(null)
   const [removingExtension, setRemovingExtension] = useState<string | null>(null)
@@ -1040,7 +1105,7 @@ function GoadInstancePage() {
     } else if (TERMINAL_TAB_ACTIONS.has(action)) {
       setActiveTab("terminal")
     }
-    const rulesPresent = hasNetworkRules(networkSnapshot)
+    const networkFollowup = networkSnapshotNeedsRedeploy(networkSnapshot)
 
     goadChainDebug("goad_action_start", {
       action,
@@ -1087,15 +1152,10 @@ function GoadInstancePage() {
           // start a second deploy while one is active fails immediately. Poll until
           // the range settles before firing the network-tag deploy.
           if (rangeIdForRestore) {
-            const SETTLE_TIMEOUT_MS = 10 * 60 * 1000 // 10 min max wait
-            const SETTLE_POLL_MS = 5_000
-            const settleStart = Date.now()
-            while (Date.now() - settleStart < SETTLE_TIMEOUT_MS) {
-              const status = await ludusApi.getRangeStatus(rangeIdForRestore)
-              const stateNow = status.data?.rangeState
-              if (stateNow !== "DEPLOYING" && stateNow !== "WAITING") break
-              await new Promise((r) => setTimeout(r, SETTLE_POLL_MS))
-            }
+            await waitUntilLudusRangeNotDeploying(() => ludusApi.getRangeStatus(rangeIdForRestore), {
+              pollMs: 5_000,
+              absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+            })
           }
 
           let deployErr: string | null = null
@@ -1103,7 +1163,26 @@ function GoadInstancePage() {
             const tagRunAt = Date.now()
             const dep = await ludusApi.deployRange(["network"], undefined, rangeIdForRestore)
             if (!dep.error) {
-              if (rangeIdForRestore) void registerLuxDeployTagRun(rangeIdForRestore, ["network"], tagRunAt)
+              if (rangeIdForRestore) {
+                await registerLuxDeployTagRun(rangeIdForRestore, ["network"], tagRunAt)
+                const nw = await waitForNetworkTagDeployCompletion({
+                  rangeId: rangeIdForRestore,
+                  requestedAtMs: tagRunAt,
+                  fetchHistory: () => ludusApi.getRangeLogHistory(rangeIdForRestore),
+                  fetchStatus: () => ludusApi.getRangeStatus(rangeIdForRestore),
+                  pollMs: 5_000,
+                  absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS,
+                })
+                if (!nw.ok) {
+                  console.warn("[LUX] post-GOAD network tag wait:", nw.via, nw.detail)
+                }
+                await fetch("/api/range/reconcile-pb", {
+                  method: "POST",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+                  body: JSON.stringify({ rangeId: rangeIdForRestore }),
+                }).catch(() => {})
+              }
               deployErr = null
               break
             }
@@ -1168,7 +1247,7 @@ function GoadInstancePage() {
               )
               console.warn(JSON.stringify(networkSnapshot, null, 2))
             } catch { /* ignore */ }
-          } else if (rulesPresent) {
+          } else if (networkFollowup) {
             // Config is restored, but iptables on the router was already flushed
             // by GOAD's earlier deploy (which saw a config with no network: block).
             // A tag-scoped deploy re-runs only the router's firewall/network
@@ -1197,11 +1276,31 @@ function GoadInstancePage() {
               })
             }
           }
+        } else if (networkAlreadyCorrect && networkFollowup) {
+          // Ludus YAML already matched the snapshot (pre-inject / wrapper path), but
+          // iptables can still be wrong until the network Ansible role runs again.
+          const deployErr = await startNetworkTagDeploy()
+          if (deployErr) {
+            toast({
+              variant: "destructive",
+              title: "Firewall redeploy required",
+              description:
+                `Your network: block is already in range-config, but auto-deploy of the "network" tag failed (${deployErr}). Run Range Configuration → Deploy (tag "network") to apply router firewall rules.`,
+            })
+          } else if (code === 0) {
+            toast({
+              title: "Firewall rules refreshed",
+              description:
+                "Range-config already had your network: block; a network-tag deploy was started so the router reapplies iptables. Watch Range Logs to confirm.",
+            })
+          } else {
+            toast({
+              title: "Firewall redeploy running after GOAD error",
+              description:
+                `GOAD exited ${code}; your network: block was unchanged in Ludus, but a network-tag deploy was started to re-sync the router.`,
+            })
+          }
         }
-        // NOTE: if networkAlreadyCorrect the Ludus wrapper (goad-ssh.ts) already
-        // intercepted GOAD's "ludus range config set" and re-injected the network
-        // block before the config was pushed to Ludus. GOAD's own range deploy ran
-        // with the correct config, so iptables are already enforced. No extra deploy.
       }
     }
     } finally {

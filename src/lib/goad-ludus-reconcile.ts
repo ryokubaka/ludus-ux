@@ -394,3 +394,81 @@ export async function tryReconcileStuckDeploySnapshot(args: {
     return false
   }
 }
+
+/**
+ * Post-GOAD `network`-tag deploy (firewall) runs after the GOAD SSH task has
+ * already exited, so `appendLine` reconcile never fires. If PocketBase still
+ * shows DEPLOYING while Ludus already reports SUCCESS, patch PB. If Ludus is
+ * still DEPLOYING/WAITING but `/range/logs` shows a clean latest PLAY RECAP,
+ * patch PB (Ansible finished; Ludus/PB desync).
+ *
+ * Does **not** patch when Ludus reports ERROR/ABORTED. Recap fallback runs only
+ * when Ludus state is DEPLOYING or WAITING (avoids trusting stale recap after ERROR).
+ */
+export async function reconcilePbAfterFollowOnLudusDeploy(
+  rangeId: string,
+  ludusUserApiKey?: string,
+): Promise<{ patched: boolean; detail: string }> {
+  const rid = rangeId.trim()
+  if (!rid) return { patched: false, detail: "empty rangeId" }
+
+  const pbRow = await fetchPbRangeStatus(rid)
+  const pbState = String(pbRow?.rangeState ?? "").trim().toUpperCase()
+  if (pbState !== "DEPLOYING" && pbState !== "WAITING") {
+    return { patched: false, detail: `pocketbase not stuck (${pbState || "unknown"})` }
+  }
+
+  const key = ludusUserApiKey?.trim()
+  if (!key) {
+    return { patched: false, detail: "no Ludus API key for GET /range" }
+  }
+
+  let ludusState: string | null = null
+  const lr = await ludusGet<unknown>(`/range?rangeID=${encodeURIComponent(rid)}`, {
+    apiKey: key,
+    useAdminEndpoint: false,
+    timeout: 45_000,
+  })
+  if (lr.status >= 200 && lr.status < 300 && lr.data !== undefined) {
+    ludusState = extractRangeStateFromLudusGetBody(lr.data, rid)
+  }
+
+  if (ludusState === "ERROR" || ludusState === "ABORTED") {
+    return { patched: false, detail: `ludus terminal ${ludusState}` }
+  }
+
+  if (ludusState === "SUCCESS") {
+    const err = await setPbRangeState(rid, "SUCCESS")
+    if (err) return { patched: false, detail: err }
+    return { patched: true, detail: "pocketbase synced from ludus SUCCESS" }
+  }
+
+  if (ludusState !== "DEPLOYING" && ludusState !== "WAITING") {
+    return {
+      patched: false,
+      detail: `ludus state ${ludusState ?? "unreadable"} — not patching`,
+    }
+  }
+
+  const ludusBlock = await readLudusRangeLogsForReconcile(rid, { taskLudusApiKey: key })
+  const recapLudus = ludusBlock ? ludusBlock.lastIndexOf("PLAY RECAP") : -1
+  const ludusRecapOk =
+    ludusBlock != null &&
+    recapLudus >= 0 &&
+    parseAnsibleRecapAllOk(ludusBlock, recapLudus)
+  if (!ludusRecapOk) {
+    return {
+      patched: false,
+      detail: "pocketbase stuck; ludus still deploying and no clean PLAY RECAP in logs",
+    }
+  }
+
+  const err = await setPbRangeState(rid, "SUCCESS")
+  if (err) return { patched: false, detail: err }
+  const after = await readRangeStateForReconcile(rid)
+  if (after === "DEPLOYING" || after === "WAITING" || after == null) {
+    return { patched: false, detail: "PATCH ok but rangeState still deploying (retry later)" }
+  }
+  return { patched: true, detail: "pocketbase patched from PLAY RECAP while ludus API lagged" }
+}
+

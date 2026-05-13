@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
 import { bustAdminCache } from "@/lib/admin-data"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership } from "@/lib/range-ownership-store"
+
+type CreateRangeBody = {
+  rangeID: string
+  name: string
+  description?: string
+  purpose?: string
+  userID?: string[]
+  [key: string]: unknown
+}
 
 export const dynamic = "force-dynamic"
 
@@ -43,28 +51,22 @@ export async function POST(request: NextRequest) {
   const callerUserIds: string[] = Array.isArray(body.userID) ? body.userID : []
   const userID = Array.from(new Set([effectiveUsername, ...callerUserIds]))
 
-  const settings  = getSettings()
-  const adminBase = (settings.ludusAdminUrl || settings.ludusUrl.replace(/:8080\b/, ":8081")).replace(/\/$/, "")
-  const url       = `${adminBase}/api/v2/ranges/create`
-
   try {
-    const res = await fetch(url, {
+    const createRes = await ludusRequest<Record<string, unknown>>(`/ranges/create`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": effectiveApiKey,
-      },
-      body: JSON.stringify({ ...body, userID }),
-      cache: "no-store",
+      apiKey: effectiveApiKey,
+      useAdminEndpoint: true,
+      body: { ...(body as CreateRangeBody), userID },
     })
 
-    const data = await res.json().catch(() => null)
-    if (!res.ok) {
+    if (createRes.error) {
       return NextResponse.json(
-        { error: data?.error || data?.result || `HTTP ${res.status}` },
-        { status: res.status }
+        { error: createRes.error },
+        { status: createRes.status > 0 ? createRes.status : 500 },
       )
     }
+
+    const data = createRes.data
 
     // ── Assign the range to the effective user ────────────────────────────────
     // Ludus ignores the `userID` field in the create body; assignment requires
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
       bustAdminCache()
     }
 
-    return NextResponse.json(data, { status: res.status })
+    return NextResponse.json(data ?? {}, { status: createRes.status || 200 })
   } catch (err) {
     return NextResponse.json(
       { error: `Connection failed: ${(err as Error).message}` },

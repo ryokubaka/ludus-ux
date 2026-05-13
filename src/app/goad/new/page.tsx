@@ -36,6 +36,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import { useRange } from "@/lib/range-context"
@@ -309,14 +310,18 @@ export default function NewGoadInstancePage() {
     rangeLogRefreshLock.current = true
     setRangeLogRefreshBusy(true)
     stopRangeStreaming()
-    requestAnimationFrame(() => {
-      startRangeStreaming(rid, { snapshotStart: false })
+    void (async () => {
+      const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+      startRangeStreaming(rid, {
+        snapshotStart: false,
+        ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
+      })
       void refreshRangeStateFromServer(rid)
-    })
-    window.setTimeout(() => {
-      rangeLogRefreshLock.current = false
-      setRangeLogRefreshBusy(false)
-    }, 750)
+      window.setTimeout(() => {
+        rangeLogRefreshLock.current = false
+        setRangeLogRefreshBusy(false)
+      }, 750)
+    })()
   }, [
     dedicatedRangeId,
     activeRangeId,
@@ -415,7 +420,7 @@ export default function NewGoadInstancePage() {
         body: JSON.stringify({
           rangeID: candidateId,
           name: displayName,
-          description: `Dedicated Ludus range for GOAD ${selectedLab} instance`,
+          description: `Dedicated Ludus range for ${selectedLab} instance`,
         }),
       })
       const data = await res.json().catch(() => ({}))
@@ -571,26 +576,26 @@ export default function NewGoadInstancePage() {
         if (taskId) {
           // Link the task to the instance on the server (instanceId may be absent
           // on the task if the execute route was called without it).
-          fetch(`/api/goad/tasks/${taskId}/link-instance`, {
+          await fetch(`/api/goad/tasks/${taskId}/link-instance`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ instanceId: existingId }),
           }).catch(() => {})
         }
         if (capturedRangeId) {
-          fetch("/api/goad/instances/set-range", {
+          await fetch("/api/goad/instances/set-range", {
             method: "POST",
             headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
             body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [existingId] }),
           }).catch(() => {})
         }
-        // Persist wizard network rules so [id]/page.tsx can re-apply them after
-        // GOAD finishes (GOAD's install may overwrite range-config with a version
+        // Persist wizard network rules so post-GOAD workflow / [id] page can re-apply
+        // after GOAD finishes (GOAD's install may overwrite range-config with a version
         // that drops the network: block).
         if (networkRules.length > 0) {
           const snapshot = extractNetworkSection(injectNetworkRules("", networkRules))
           if (snapshot) {
-            fetch(`/api/goad/instances/${encodeURIComponent(existingId)}/pending-network`, {
+            await fetch(`/api/goad/instances/${encodeURIComponent(existingId)}/pending-network`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(snapshot),
@@ -676,7 +681,7 @@ export default function NewGoadInstancePage() {
               redirected = true
               const newId = newInst.instanceId as string
               if (capturedRangeId) {
-                fetch("/api/goad/instances/set-range", {
+                await fetch("/api/goad/instances/set-range", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
                   body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [newId] }),
@@ -687,19 +692,19 @@ export default function NewGoadInstancePage() {
                 if (taskId) {
                   // Link the creation task to the new instance on the server so it
                   // shows up in the instance's Logs History tab.  Best-effort.
-                  fetch(`/api/goad/tasks/${taskId}/link-instance`, {
+                  await fetch(`/api/goad/tasks/${taskId}/link-instance`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ instanceId: newId }),
                   }).catch(() => {})
                 }
               }
-              // Persist wizard network rules so [id]/page.tsx can re-apply them
+              // Persist wizard network rules so post-GOAD workflow / [id] page can re-apply
               // after GOAD finishes (GOAD's install may overwrite range-config).
               if (networkRules.length > 0) {
                 const snapshot = extractNetworkSection(injectNetworkRules("", networkRules))
                 if (snapshot) {
-                  fetch(`/api/goad/instances/${encodeURIComponent(newId)}/pending-network`, {
+                  await fetch(`/api/goad/instances/${encodeURIComponent(newId)}/pending-network`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(snapshot),

@@ -4,18 +4,21 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
-## [1.0.0] — 2026-05-12
+## [1.0.0] — 2026-05-13
 
 **LUX**
 - [Add] First stable release — out of beta!
-- [Change] **README** — Root readme is a short overview + quick links; long-form install, SSH, env, features, architecture, dev, API, and screenshots live under **[docs/](docs/index.md)**.
 - [Add] **Range Configuration → Firewall Rules** — Toolbar next to **Apply to Config** adds **Save Config**, **Force** (same testing-mode `--force` flag as the page header), and **Deploy Firewall Rules** (merge rules into YAML, save to Ludus, then deploy with the `network` tag only).
+- [Change] **README** — Root readme is a short overview + quick links; long-form install, SSH, env, features, architecture, dev, API, and screenshots live under **[docs/](docs/index.md)**.
 - [Improve] **Range logs → History** — Saved deploy logs show clock times the same way as the live log, in order top to bottom, without confusing extra digits on the time.
 - [Improve] **Groups → remove a shared range** — Adding or removing a range from a group may need that range’s **router** machine turned on first. Dialog box now allows router power operations and ability to add/remove from the group.
 - [Improve] **Refresh feedback** — Groups, GOAD home (including recent activity), and the console **Reconnect** button show a brief spinner while things load again.
+- [Fix] **Dashboard** — No more brief HTTP 400 error on the home dashboard while a range is deploying or live logs are connecting
 
 **GOAD**
 - [Add] **Resizable log split** — Drag the center handle between **Ludus range logs** and **GOAD logs** on Deploy Status and Logs History; panel widths persist (browser localStorage).
+- [Improve] **GOAD deploy history** — History rows read more clearly when a small firewall-only redeploy comes right after a big GOAD run, so labels and GOAD log groupings are less likely to look wrong.
+- [Improve] **GOAD terminal** — If the live stream ends without a clear “finished with exit code …” line, the UI still learns success or failure from the server once the task has stopped.
 - [Fix] **Range logs** — Ansible line colouring ignores benign JSON `"failed": false`; GOAD instance/new pages fill the shell below the impersonation banner without hard-coded `100vh` offsets.
 - [Fix] **Extension Installations** — Lab setup and each add-on now run one after another on the server so nothing gets skipped.
 

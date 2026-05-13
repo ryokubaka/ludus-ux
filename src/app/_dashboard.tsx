@@ -69,6 +69,7 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import {
   clearRangeAborting,
   isRangeAborting,
@@ -145,7 +146,42 @@ export function DashboardPageClient() {
   const [deployHistoryDetailLoading, setDeployHistoryDetailLoading] = useState(false)
 
   // ── Deploy log stream ───────────────────────────────────────────────────────
-  const { lines: logLines, isStreaming, rangeState: streamRangeState, activeRangeId: streamingRangeId, streamStartedAt, startStreaming, stopStreaming, clearLogs } = useDeployLogContext()
+  const {
+    lines: logLines,
+    isStreaming,
+    rangeState: streamRangeState,
+    activeRangeId: streamingRangeId,
+    streamStartedAt,
+    startStreaming,
+    stopStreaming,
+    clearLogs,
+    refreshRangeStateFromServer,
+  } = useDeployLogContext()
+
+  const deployLogRefreshLock = useRef(false)
+  const [deployLogRefreshBusy, setDeployLogRefreshBusy] = useState(false)
+  const handleRefreshDeployLogs = useCallback(() => {
+    const rid = selectedRangeId?.trim()
+    if (!rid || deployLogRefreshLock.current) return
+    deployLogRefreshLock.current = true
+    setDeployLogRefreshBusy(true)
+    stopStreaming()
+    void (async () => {
+      try {
+        const anchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+        startStreaming(rid, {
+          snapshotStart: false,
+          ...(anchor != null ? { deployElapsedAnchorMs: anchor } : {}),
+        })
+        void refreshRangeStateFromServer(rid)
+      } finally {
+        window.setTimeout(() => {
+          deployLogRefreshLock.current = false
+          setDeployLogRefreshBusy(false)
+        }, 750)
+      }
+    })()
+  }, [selectedRangeId, stopStreaming, startStreaming, refreshRangeStateFromServer])
 
   // ── Range status query ──────────────────────────────────────────────────────
   // Replaces fetchRanges + silentRefresh + setInterval(silentRefresh, 15000).
@@ -163,10 +199,17 @@ export function DashboardPageClient() {
   } = useQuery({
     queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId),
     queryFn: async () => {
-      const result = await ludusApi.getRangeStatus(selectedRangeId ?? undefined)
+      const rid = selectedRangeId?.trim()
+      if (!rid) return null
+      const result = await ludusApi.getRangeStatus(rid)
       if (result.error) {
-        // Legacy: synthetic 400 for missing rangeID (prefer empty-id guard in api.ts now).
-        if (result.status === 400 && !selectedRangeId?.trim()) return null
+        // Ludus sometimes returns HTTP 400 for GET /range during deploy / log-stream
+        // startup while GET /range/logs/history still succeeds (see access logs). Treat
+        // as transient: keep last good snapshot or empty state instead of throwing.
+        if (result.status === 400) {
+          const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(scopeTag, selectedRangeId))
+          return prev ?? null
+        }
         throw new Error(typeof result.error === "string" ? result.error : "Failed to load range status")
       }
       if (!result.data) return null
@@ -185,12 +228,12 @@ export function DashboardPageClient() {
         prevVMs,
         stateUpper: state,
         scopeTag,
-        rangeId: selectedRangeId ?? "",
+        rangeId: rid,
       })
 
       return { ...data, VMs: vms }
     },
-    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId?.trim(),
     staleTime: STALE.realtime,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
@@ -409,7 +452,20 @@ export function DashboardPageClient() {
     if (deployingLike && !isRangeAborting(selectedRangeId)) {
       setDeploying(true)
       setShowLogs(true)
-      if (!streamIsForThisRange) startStreaming(selectedRangeId ?? undefined)
+      if (!streamIsForThisRange) {
+        const rid = selectedRangeId?.trim()
+        if (rid) {
+          void (async () => {
+            const anchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+            startStreaming(rid, {
+              snapshotStart: false,
+              ...(anchor != null ? { deployElapsedAnchorMs: anchor } : {}),
+            })
+          })()
+        } else {
+          startStreaming(undefined, { snapshotStart: false })
+        }
+      }
     } else if (!deployingLike) {
       // Ludus GET confirms a terminal state (ERROR / SUCCESS / ABORTED / etc.).
       // Clear deploying unconditionally — this covers the case where the SSE
@@ -504,7 +560,7 @@ export function DashboardPageClient() {
       return
     }
     toast({ title: "Deploy started" })
-    startStreaming(selectedRangeId ?? undefined)
+    startStreaming(selectedRangeId ?? undefined, { snapshotStart: true })
   }
   const handleDeploy = () => confirm("Start range deployment?", doDeploy)
 
@@ -1285,11 +1341,20 @@ export function DashboardPageClient() {
                             </span>
                           )}
                         </h4>
-                        <Button size="sm" variant="ghost" onClick={() => setShowLogs(false)}>
+                        <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setShowLogs(false)}>
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <LogViewer lines={logLines} onClear={clearLogs} maxHeight="300px" />
+                      <LogViewer
+                        lines={logLines}
+                        onClear={clearLogs}
+                        maxHeight="300px"
+                        live={isStreaming}
+                        liveLabel="Deploy logs"
+                        onRefresh={selectedRangeId?.trim() ? handleRefreshDeployLogs : undefined}
+                        refreshLoading={deployLogRefreshBusy}
+                        downloadFilename={`ludus-deploy-${(selectedRangeId ?? "range").replace(/[^a-zA-Z0-9_-]+/g, "_")}`}
+                      />
                     </div>
                   )}
 

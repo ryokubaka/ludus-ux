@@ -55,6 +55,11 @@ function lineLooksTimestamped(line: string): boolean {
   return false
 }
 
+/** True when a Ludus/GOAD log line already carries a usable wall timestamp (do not inject poll time). */
+export function deployLogLineHasLeadingWallTimestamp(line: string): boolean {
+  return lineLooksTimestamped(line)
+}
+
 /**
  * Split `[HH:MM:SS]` or `[YYYY-MM-DDTHH:mm:ss…]` wall prefix from the rest of the line.
  */

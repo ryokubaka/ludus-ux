@@ -380,6 +380,20 @@ export function completeTask(
   }
   entry.lineSubscribers.clear()
   entry.closeSubscribers.clear()
+
+  void import("@/lib/goad-pending-network-workflow")
+    .then((m) =>
+      m.runAfterGoadTaskCompleteIfNeeded({
+        taskId,
+        command: entry.task.command,
+        exitCode,
+        status,
+        instanceId: entry.task.instanceId,
+        username: entry.task.username ?? undefined,
+        ludusApiKey: entry.task.ludusApiKey,
+      }),
+    )
+    .catch((err) => console.error("[goad-task-store] pending-network workflow:", err))
 }
 
 export function abortTask(taskId: string): void {

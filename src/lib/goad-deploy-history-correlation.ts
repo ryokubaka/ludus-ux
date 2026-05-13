@@ -298,6 +298,8 @@ export function findCorrelatedGoadTask(
       bestOverlapTask = task
     }
     if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
+      // Network-tag follow-up deploys never ran GOAD — do not steal the install task via proximity.
+      if (isNetworkOnlyTagDeploy(deploy)) continue
       const dist = Math.min(
         Math.abs(dStart - task.startedAt),
         Math.abs(dEnd - task.startedAt),
@@ -319,7 +321,17 @@ export function correlateHistoryEntries(
   const usedTaskIds = new Set<string>()
   const correlated: CorrelatedHistoryEntry[] = []
 
-  for (const deploy of deployHistory) {
+  // Ludus /range/logs/history is often newest-first. Process oldest deploy first so
+  // the primary GOAD-driven full deploy claims the GOAD task by overlap before a
+  // later network-tag row can match the same task via zero-overlap proximity.
+  const deploysChrono = [...deployHistory].sort((a, b) => {
+    const ta = new Date(a.start).getTime()
+    const tb = new Date(b.start).getTime()
+    if (ta !== tb) return ta - tb
+    return (a.id || "").localeCompare(b.id || "")
+  })
+
+  for (const deploy of deploysChrono) {
     const dStart = new Date(deploy.start).getTime()
     const dEnd = new Date(deploy.end).getTime() || Date.now()
 
@@ -339,6 +351,7 @@ export function correlateHistoryEntries(
         bestOverlapTask = task
       }
       if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
+        if (isNetworkOnlyTagDeploy(deploy)) continue
         const dist = Math.min(
           Math.abs(dStart - task.startedAt),
           Math.abs(dEnd - task.startedAt),

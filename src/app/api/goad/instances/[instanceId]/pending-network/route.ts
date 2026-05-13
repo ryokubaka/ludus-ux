@@ -4,25 +4,35 @@
  * When a user creates a new GOAD instance via the wizard and provides custom
  * firewall rules, GOAD's internal install process overwrites range-config.yml
  * before those rules can be applied. The wizard persists the network snapshot
- * here; goad/[id]/page.tsx reads and deletes it after the GOAD task finishes,
- * then re-applies the rules and triggers a network-tag deploy.
+ * here; after the GOAD SSH task completes, `goad-pending-network-workflow.ts`
+ * consumes it server-side (no need to keep the instance page open). The GET /
+ * POST take branches remain for compatibility and admin tooling.
  *
  * Storage: DATA_DIR/pending-network/{instanceId}.json
  * Follows the same pattern as DATA_DIR/tasks/ (metadata in files, not in DB).
+ *
+ * Clients that need to read+delete the snapshot should POST the same URL with
+ * body `{ "__luxConsumePendingNetwork": true }` (see POST handler branch).
  */
 import fs from "fs"
-import path from "path"
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { DATA_DIR } from "@/lib/db"
+import {
+  PENDING_NETWORK_DIR,
+  pendingNetworkJsonPath,
+  readUnlinkPendingNetworkSnapshot,
+} from "@/lib/goad-pending-network-fs"
 
-const PENDING_NETWORK_DIR = path.join(DATA_DIR, "pending-network")
+export const dynamic = "force-dynamic"
 
-function pendingNetworkPath(instanceId: string): string {
-  return path.join(PENDING_NETWORK_DIR, `${instanceId}.json`)
+const LUX_CONSUME_PENDING_BODY_KEY = "__luxConsumePendingNetwork"
+
+function takePendingNetworkSnapshot(instanceId: string): NextResponse {
+  const snapshot = readUnlinkPendingNetworkSnapshot(instanceId)
+  return NextResponse.json({ snapshot: snapshot ?? null })
 }
 
-/** POST — store a wizard network snapshot for this instance */
+/** POST — store snapshot, or take+delete when body `{ "__luxConsumePendingNetwork": true }` */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ instanceId: string }> }
@@ -33,7 +43,17 @@ export async function POST(
   }
 
   const { instanceId } = await params
-  const snapshot = await request.json().catch(() => null)
+  const rawBody = await request.json().catch(() => null)
+  if (
+    rawBody &&
+    typeof rawBody === "object" &&
+    (rawBody as Record<string, unknown>)[LUX_CONSUME_PENDING_BODY_KEY] === true &&
+    Object.keys(rawBody as Record<string, unknown>).length === 1
+  ) {
+    return takePendingNetworkSnapshot(instanceId)
+  }
+
+  const snapshot = rawBody
   if (!snapshot || typeof snapshot !== "object") {
     return NextResponse.json({ error: "Invalid snapshot" }, { status: 400 })
   }
@@ -41,7 +61,7 @@ export async function POST(
   try {
     fs.mkdirSync(PENDING_NETWORK_DIR, { recursive: true })
     fs.writeFileSync(
-      pendingNetworkPath(instanceId),
+      pendingNetworkJsonPath(instanceId),
       JSON.stringify({ snapshot, savedAt: Date.now(), username: session.username }),
       "utf8",
     )
@@ -64,21 +84,8 @@ export async function GET(
   }
 
   const { instanceId } = await params
-  const filePath = pendingNetworkPath(instanceId)
-
-  if (!fs.existsSync(filePath)) {
-    return NextResponse.json({ snapshot: null })
-  }
-
-  try {
-    const raw = fs.readFileSync(filePath, "utf8")
-    const data = JSON.parse(raw) as { snapshot: Record<string, unknown>; savedAt: number; username?: string }
-    fs.unlinkSync(filePath)
-    return NextResponse.json({ snapshot: data.snapshot })
-  } catch (err) {
-    console.error("[pending-network] read failed:", err)
-    return NextResponse.json({ snapshot: null })
-  }
+  const snapshot = readUnlinkPendingNetworkSnapshot(instanceId)
+  return NextResponse.json({ snapshot: snapshot ?? null })
 }
 
 /** DELETE — discard a pending snapshot without reading it */
@@ -92,7 +99,7 @@ export async function DELETE(
   }
 
   const { instanceId } = await params
-  const filePath = pendingNetworkPath(instanceId)
+  const filePath = pendingNetworkJsonPath(instanceId)
   try { fs.unlinkSync(filePath) } catch { /* file may not exist */ }
   return NextResponse.json({ ok: true })
 }

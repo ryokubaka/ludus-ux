@@ -18,6 +18,9 @@ import {
 interface LogViewerProps {
   lines: string[]
   onClear?: () => void
+  /** Reconnect / refetch log stream (toolbar: after pause, before scroll-to-bottom). */
+  onRefresh?: () => void
+  refreshLoading?: boolean
   /** When true, auto-scroll follows new lines. When false (static history view), auto-scroll controls are hidden. */
   autoScroll?: boolean
   className?: string
@@ -35,6 +38,8 @@ const BOTTOM_THRESHOLD = 80
 export function LogViewer({
   lines,
   onClear,
+  onRefresh,
+  refreshLoading,
   autoScroll: parentAutoScroll = true,
   className,
   maxHeight = "400px",
@@ -164,6 +169,8 @@ export function LogViewer({
         searchOpen={searchOpen}
         onSearchToggle={toggleSearch}
         onClear={onClear ? () => { resume(); onClear() } : undefined}
+        onRefresh={onRefresh}
+        refreshLoading={refreshLoading}
         leftSlot={leftSlot}
       />
 

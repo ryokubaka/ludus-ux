@@ -1,7 +1,7 @@
 /**
  * Stable scope tag for TanStack Query keys + localStorage persistence buckets.
  * Format: `${loginUsername}|${viewAsUsername}` where viewAs is the impersonated
- * Ludus user id (same as X-Impersonate-As) or the literal "self".
+ * Ludus `User.name` principal (cookie `impersonationUserId`, same as X-Impersonate-As) or "self".
  */
 
 import type { SessionData } from "@/lib/session"

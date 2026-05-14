@@ -35,10 +35,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeID and name are required" }, { status: 400 })
   }
 
-  const { apiKey: impersonateKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateKey, ludusPrincipal } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateKey || session.apiKey
-  /** SSH / display hint when GET /user returns multiple rows (admin API key). */
-  const hint = (impersonateAs || session.username).trim()
+  /** Ludus `name` / login hint when GET /user returns multiple rows. */
+  const hint = ((impersonateKey ? ludusPrincipal : null) || session.username).trim()
 
   const { rootApiKey } = getSettings()
   const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, rootApiKey)

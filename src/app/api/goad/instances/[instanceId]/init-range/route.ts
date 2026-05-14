@@ -48,25 +48,26 @@ export async function POST(
 
   const rootCreds = rootPasswordCredsIfSet(settings)
 
-  const { apiKey: impersonateApiKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey, ludusPrincipal, ludusUserId: impLudusUid, sshLogin } =
+    resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
-  const effectiveUsername = impersonateAs || session.username
-  const hint = effectiveUsername.trim()
+  const ludusHint = ((impersonateApiKey ? ludusPrincipal : null) || session.username).trim()
+  const sshForSlug = (impersonateApiKey ? sshLogin || ludusPrincipal || "" : session.username).trim()
 
   const existing = await readGoadRangeId(instanceId, rootCreds)
   if (existing) {
     const whoHeal = await ludusRequest<unknown>("/user", { apiKey: effectiveApiKey })
     const callerHeal =
       !whoHeal.error && whoHeal.status === 200
-        ? ludusCallerFromGetUser(whoHeal.data, hint)
+        ? ludusCallerFromGetUser(whoHeal.data, ludusHint)
         : undefined
-    const ownerPbId = callerHeal?.userId?.trim() || effectiveUsername
+    const ownerPbId = callerHeal?.userId?.trim() || impLudusUid || sshForSlug
     setOwnership(existing, ownerPbId, session.username)
     bustAdminCache()
     return NextResponse.json({ rangeId: existing, created: false })
   }
 
-  const { rangeId, name: rangeName } = deriveRangeInfo(instanceId, effectiveUsername)
+  const { rangeId, name: rangeName } = deriveRangeInfo(instanceId, sshForSlug)
 
   const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, settings.rootApiKey)
   if (!createRangeApiKey) {
@@ -86,7 +87,7 @@ export async function POST(
     )
   }
 
-  const caller = ludusCallerFromGetUser(who.data, hint)
+  const caller = ludusCallerFromGetUser(who.data, ludusHint)
   const ludusUserId = caller?.userId?.trim()
   if (!ludusUserId) {
     return NextResponse.json(

@@ -100,7 +100,12 @@ export interface SessionData {
   sshPassword?: string
   /** Set when an admin is actively impersonating another user. */
   impersonationApiKey?: string
+  /** Ludus GET /user `name` (or fallback) — X-Impersonate-As + GET /user matching; not the alphanumeric id. */
   impersonationUserId?: string
+  /** Ludus alphanumeric `userID` — range.userID map keys, range APIs. */
+  impersonationLudusUserId?: string
+  /** POSIX login — ~/.bashrc, sudo -u, GOAD instance id prefix. */
+  impersonationSshLogin?: string
 }
 
 /** Encrypt session data into a URL-safe base64 string */

@@ -44,14 +44,25 @@ function ludusRangeListFromResponse(data: unknown): RangeObject[] {
 
 function getEffectiveKeys(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
+  session: {
+    apiKey: string
+    username: string
+    isAdmin: boolean
+    impersonationApiKey?: string
+    impersonationUserId?: string
+    impersonationLudusUserId?: string
+    impersonationSshLogin?: string
+  },
 ) {
   const imp = resolveAdminImpersonationFromRequest(session, request)
   const impersonateApiKey = imp.apiKey
-  const impersonateUserId = imp.userId
   return {
-    effectiveApiKey:  impersonateApiKey || session.apiKey,
-    effectiveUserId:  impersonateUserId || session.username,
+    effectiveApiKey: impersonateApiKey || session.apiKey,
+    /** PocketBase `ranges.userID` — Ludus alphanumeric id. */
+    effectiveUserId:
+      impersonateApiKey
+        ? (imp.ludusUserId || imp.ludusPrincipal || session.username).trim()
+        : session.username,
   }
 }
 

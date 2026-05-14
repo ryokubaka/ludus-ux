@@ -12,5 +12,10 @@ export async function GET(request: NextRequest) {
     username: session.username,
     isAdmin: session.isAdmin,
     loginAt: session.loginAt,
+    /** Ludus GET /user `name` principal when impersonating — client hint for `/user` resolution. */
+    impersonationLudusPrincipal:
+      session.impersonationApiKey && session.impersonationUserId?.trim()
+        ? session.impersonationUserId
+        : null,
   })
 }

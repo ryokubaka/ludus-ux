@@ -6,6 +6,24 @@
 import type { UserObject } from "./types"
 import { extractArray } from "./utils"
 
+/** Home dir / sudo / GOAD workspace owner — `proxmoxUsername`, else a single-token `name`, else `userID`. */
+const POSIX_USER = /^[a-zA-Z0-9_.-]+$/
+
+export function ludusImpersonationFields(u: Pick<UserObject, "userID" | "name" | "proxmoxUsername">): {
+  ludusPrincipal: string
+  ludusUserId: string
+  sshLogin: string
+} {
+  const ludusUserId = (u.userID ?? "").trim()
+  const ludusPrincipal = (u.name ?? "").trim() || ludusUserId
+  const px = (u.proxmoxUsername ?? "").trim()
+  let sshLogin = px
+  if (!sshLogin) {
+    sshLogin = POSIX_USER.test(ludusPrincipal) ? ludusPrincipal : ludusUserId
+  }
+  return { ludusPrincipal, ludusUserId, sshLogin }
+}
+
 export function ludusCallerFromGetUser(
   raw: unknown,
   loginHint: string,

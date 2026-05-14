@@ -380,11 +380,20 @@ export const ludusApi = {
     const [who, sessRaw] = await Promise.all([
       get<import("./types").UserObject[]>("/user"),
       fetch("/api/auth/session", { credentials: "include" }).then(async (r) =>
-        r.ok ? ((await r.json()) as { username?: string }) : null,
+        r.ok
+          ? ((await r.json()) as {
+              username?: string
+              impersonationLudusPrincipal?: string | null
+            })
+          : null,
       ),
     ])
 
-    const hint = (sessRaw?.username ?? "").trim()
+    const hint = (
+      (sessRaw?.impersonationLudusPrincipal ??
+        sessRaw?.username ??
+        "") as string
+    ).trim()
     const ludusPbId =
       who.error || who.data === undefined
         ? undefined

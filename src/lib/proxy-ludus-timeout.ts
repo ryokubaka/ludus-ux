@@ -7,6 +7,9 @@ const DEFAULT_MS = 30_000
 const SLOW_MS = 120_000
 const VERY_SLOW_MS = 5 * 60_000
 
+/** Ludus user + Linux provisioning (POST /user, credentials, GET /user/apikey) — same ceiling as heavy range ops on slow hardware. */
+export const LUDUS_USER_PROVISION_TIMEOUT_MS = VERY_SLOW_MS
+
 /**
  * @param path Ludus path only (no query), e.g. `/range/deploy`
  * @param method HTTP method (case-insensitive)
@@ -41,6 +44,15 @@ export function getProxyLudusTimeoutMs(path: string, method: string): number {
   if (m === "POST" && /^\/ansible\/(role|collection)\b/.test(path)) return SLOW_MS
 
   if ((m === "POST" || m === "DELETE") && /^\/groups\/[^/]+\/(users|ranges)$/.test(path)) return SLOW_MS
+
+  // Ludus drives Proxmox/Linux user creation — often >30s on slow clusters.
+  if (
+    (m === "POST" && /^\/user\/?$/i.test(path)) ||
+    (m === "POST" && /^\/user\/credentials\/?$/i.test(path)) ||
+    (m === "GET" && /^\/user\/apikey\b/i.test(path))
+  ) {
+    return LUDUS_USER_PROVISION_TIMEOUT_MS
+  }
 
   return DEFAULT_MS
 }

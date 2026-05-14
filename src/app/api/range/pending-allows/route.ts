@@ -17,6 +17,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import {
   getPendingAllowsWithTimestamps,
   addPendingAllow,
@@ -29,14 +30,17 @@ const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 
 function getEffective(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean },
+  session: {
+    apiKey: string
+    username: string
+    isAdmin: boolean
+    impersonationApiKey?: string
+    impersonationUserId?: string
+    impersonationLudusUserId?: string
+    impersonationSshLogin?: string
+  },
 ) {
-  const impersonateAs = session.isAdmin
-    ? request.headers.get("X-Impersonate-As") || null
-    : null
-  return {
-    effectiveUsername: impersonateAs || session.username,
-  }
+  return { effectiveUsername: effectiveImpersonatedOperatorUsername(session, request) }
 }
 
 // ── GET ──────────────────────────────────────────────────────────────────────

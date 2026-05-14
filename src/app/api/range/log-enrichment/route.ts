@@ -10,11 +10,22 @@ import { pruneLuxRangeLogMarkers, listLuxTestingEvents, listLuxDeployTagRuns } f
 
 function getEffective(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
+  session: {
+    apiKey: string
+    username: string
+    isAdmin: boolean
+    impersonationApiKey?: string
+    impersonationUserId?: string
+    impersonationLudusUserId?: string
+    impersonationSshLogin?: string
+  },
 ) {
   const imp = resolveAdminImpersonationFromRequest(session, request)
   return {
-    effectiveUsername: imp.userId || session.username,
+    effectiveUsername:
+      imp.apiKey
+        ? (imp.sshLogin || imp.ludusPrincipal || session.username).trim()
+        : session.username,
   }
 }
 

@@ -32,13 +32,16 @@ import { recordLuxTestingOpTerminal } from "@/lib/range-testing-audit"
 /** Resolve impersonation state and return { effectiveApiKey, effectiveUsername }. */
 function getEffective(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
+  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string; impersonationLudusUserId?: string; impersonationSshLogin?: string },
 ) {
   const imp = resolveAdminImpersonationFromRequest(session, request)
   return {
     effectiveApiKey: imp.apiKey || session.apiKey,
-    effectiveUsername: imp.userId || session.username,
-    ludusUserOverride: imp.userId ?? undefined,
+    effectiveUsername:
+      imp.apiKey
+        ? (imp.sshLogin || imp.ludusPrincipal || session.username).trim()
+        : session.username,
+    ludusUserOverride: imp.apiKey ? imp.ludusPrincipal ?? undefined : undefined,
   }
 }
 

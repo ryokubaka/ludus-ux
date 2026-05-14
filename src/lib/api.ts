@@ -19,6 +19,7 @@ import {
 import {
   readImpersonationHeadersFromSessionStorage,
 } from "./impersonation-headers"
+import { ludusCallerFromGetUser } from "./ludus-user-from-profile"
 
 /**
  * Read active impersonation state from sessionStorage (browser only).
@@ -375,11 +376,41 @@ export const ludusApi = {
   createRange: async (data: { name: string; rangeID: string; description?: string; purpose?: string; userID?: string[] }): Promise<{ data?: { result: string }; error?: string; status: number }> => {
     const headers: Record<string, string> = { "Content-Type": "application/json" }
     Object.assign(headers, getImpersonationHeaders())
+
+    const [who, sessRaw] = await Promise.all([
+      get<import("./types").UserObject[]>("/user"),
+      fetch("/api/auth/session", { credentials: "include" }).then(async (r) =>
+        r.ok ? ((await r.json()) as { username?: string }) : null,
+      ),
+    ])
+
+    const hint = (sessRaw?.username ?? "").trim()
+    const ludusPbId =
+      who.error || who.data === undefined
+        ? undefined
+        : ludusCallerFromGetUser(who.data, hint)?.userId
+
+    let payload: typeof data
+    if (ludusPbId) {
+      const extras = Array.isArray(data.userID) ? data.userID : []
+      const filtered = extras.filter(
+        (x): x is string =>
+          typeof x === "string" &&
+          /^[A-Za-z0-9]{1,20}$/.test(x.trim()) &&
+          x.trim().toLowerCase() !== ludusPbId.toLowerCase(),
+      )
+      payload = { ...data, userID: [ludusPbId, ...filtered] }
+    } else {
+      const copy = { ...data }
+      delete copy.userID
+      payload = copy
+    }
+
     try {
       const res = await fetch("/api/range/create", {
         method: "POST",
         headers,
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       })
       const resData = await res.json().catch(() => null)
       if (!res.ok) return { error: resData?.error || `HTTP ${res.status}`, status: res.status }

@@ -3,6 +3,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { bustAdminCache } from "@/lib/admin-data"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
+import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { getSettings } from "@/lib/settings-store"
 import { setOwnership } from "@/lib/range-ownership-store"
 
@@ -20,13 +21,8 @@ export const dynamic = "force-dynamic"
 /**
  * POST /api/range/create
  *
- * Creates a new Ludus range and assigns it to the requesting user.
- * Proxies to the Ludus admin API (port 8081) which handles the low-level
- * Proxmox pool + vmbr setup.
- *
- * The creating user is automatically added to the `userID` list so the range
- * appears in their account immediately — callers do not need to pass userID.
- * Admins impersonating another user will have the impersonated user assigned.
+ * Resolves PocketBase Ludus userID via GET /user (same as [List user details](https://api-docs.ludus.cloud/list-user-details-24251971e0)),
+ * forwards that to Ludus `/ranges/create` + assign — never trusts a login name as `userID`.
  */
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)
@@ -39,10 +35,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeID and name are required" }, { status: 400 })
   }
 
-  // Effective user for assign; create uses same session key first, then optional ROOT (see ludus-client admin base).
   const { apiKey: impersonateKey, userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateKey || session.apiKey
-  const effectiveUsername = impersonateAs || session.username
+  /** SSH / display hint when GET /user returns multiple rows (admin API key). */
+  const hint = (impersonateAs || session.username).trim()
 
   const { rootApiKey } = getSettings()
   const createRangeApiKey = ludusRangeCreateApiKey(effectiveApiKey, rootApiKey)
@@ -56,17 +52,42 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Always assign the range to the effective user so it's visible in their
-  // account immediately.  Merge with any userIDs the caller specified.
-  const callerUserIds: string[] = Array.isArray(body.userID) ? body.userID : []
-  const userID = Array.from(new Set([effectiveUsername, ...callerUserIds]))
+  const who = await ludusRequest<unknown>("/user", { apiKey: effectiveApiKey })
+  if (who.error || who.status !== 200) {
+    return NextResponse.json(
+      { error: who.error || `GET /user failed (HTTP ${who.status})` },
+      { status: who.status > 0 ? who.status : 503 },
+    )
+  }
+
+  const caller = ludusCallerFromGetUser(who.data, hint)
+  if (!caller?.userId) {
+    return NextResponse.json(
+      {
+        error:
+          "Could not read your Ludus userID from GET /user — if you use an admin key, impersonate so LUX matches the right profile.",
+      },
+      { status: 422 },
+    )
+  }
+
+  const pbId = caller.userId
+  /** Always authoritative — client `userID` is ignored except optional extra alphanumeric ids merged below. */
+  const userIDs = new Set<string>([pbId])
+  const extra = Array.isArray(body.userID) ? body.userID : []
+  for (const raw of extra) {
+    if (typeof raw !== "string") continue
+    const t = raw.trim()
+    if (!t || t.toLowerCase() === pbId.toLowerCase()) continue
+    if (/^[A-Za-z0-9]{1,20}$/.test(t)) userIDs.add(t)
+  }
 
   try {
     const createRes = await ludusRequest<Record<string, unknown>>(`/ranges/create`, {
       method: "POST",
       apiKey: createRangeApiKey,
       useAdminEndpoint: true,
-      body: { ...(body as CreateRangeBody), userID },
+      body: { ...(body as CreateRangeBody), userID: [...userIDs] },
     })
 
     if (createRes.error) {
@@ -78,11 +99,8 @@ export async function POST(request: NextRequest) {
 
     const data = createRes.data
 
-    // ── Assign the range to the effective user ────────────────────────────────
-    // Ludus ignores the `userID` field in the create body; assignment requires
-    // a dedicated POST /ranges/assign/<user>/<rangeID> call on the standard port.
     const assignRes = await ludusRequest(
-      `/ranges/assign/${encodeURIComponent(effectiveUsername)}/${encodeURIComponent(body.rangeID)}`,
+      `/ranges/assign/${encodeURIComponent(pbId)}/${encodeURIComponent(body.rangeID)}`,
       { method: "POST", apiKey: effectiveApiKey },
     )
     const alreadyOwned =
@@ -90,8 +108,7 @@ export async function POST(request: NextRequest) {
       assignRes.error.toLowerCase().includes("already has access")
 
     if (!assignRes.error || alreadyOwned) {
-      // Persist to SQLite so Ranges Overview reflects it immediately
-      setOwnership(body.rangeID, effectiveUsername, session.username)
+      setOwnership(body.rangeID, pbId, session.username)
       bustAdminCache()
     }
 
@@ -99,7 +116,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     return NextResponse.json(
       { error: `Connection failed: ${(err as Error).message}` },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

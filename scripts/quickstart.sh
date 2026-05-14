@@ -99,6 +99,114 @@ PY
   unset _LUX_K _LUX_V
 }
 
+# Ensure sshd will accept this private key: append derived pubkey to REMOTE_USER's authorized_keys (root only).
+# Tries BatchMode + -i key first; if that fails, optional one-shot SSH password + sshpass.
+lux_ssh_remote_authorized_keys_body() {
+  local b64="$1"
+  cat <<REMOTE
+set -euo pipefail
+PUB=\$(printf '%s' '$b64' | base64 -d | tr -d '\r')
+mkdir -p "\$HOME/.ssh"
+chmod 700 "\$HOME/.ssh"
+touch "\$HOME/.ssh/authorized_keys"
+chmod 600 "\$HOME/.ssh/authorized_keys"
+grep -qxF "\$PUB" "\$HOME/.ssh/authorized_keys" || printf '%s\n' "\$PUB" >> "\$HOME/.ssh/authorized_keys"
+REMOTE
+}
+
+lux_ssh_append_pubkey_remote() {
+  local b64="$1"
+  shift
+  lux_ssh_remote_authorized_keys_body "$b64" | ssh "$@" 'bash -s'
+}
+
+lux_install_pubkey_for_root_ssh() {
+  local key_file="$1" host="$2" port="$3" remote_user="${4:-root}"
+  local -a BASE=( -o StrictHostKeyChecking=accept-new -p "$port" )
+
+  if [[ "$remote_user" != "root" ]]; then
+    echo "Skipping authorized_keys auto-setup (only implemented for PROXMOX_SSH_USER=root). See docs/ssh-and-auth.md."
+    return 0
+  fi
+
+  if ! command -v ssh-keygen &>/dev/null; then
+    echo "ssh-keygen not found; cannot derive public key for authorized_keys. See docs/ssh-and-auth.md." >&2
+    return 0
+  fi
+
+  local pub_tmp b64
+  pub_tmp=$(mktemp)
+  if ! ssh-keygen -y -f "$key_file" >"$pub_tmp" 2>/dev/null; then
+    rm -f "$pub_tmp"
+    echo "Could not derive pubkey from $key_file (wrong format or passphrase-protected). Add PROXMOX_SSH_KEY_PASSPHRASE to .env after setup, or unlock once with ssh-keygen -y; see docs/ssh-and-auth.md." >&2
+    return 0
+  fi
+  export _LUX_PUB_TMP="$pub_tmp"
+  b64=$(python3 -c "import base64, os; print(base64.b64encode(open(os.environ['_LUX_PUB_TMP'], 'rb').read()).decode())")
+  unset _LUX_PUB_TMP
+  rm -f "$pub_tmp"
+
+  echo "Ensuring ${remote_user}@${host} accepts this key (authorized_keys)…"
+
+  if lux_ssh_append_pubkey_remote "$b64" "${BASE[@]}" -o BatchMode=yes -i "$key_file" "${remote_user}@${host}"; then
+    echo "authorized_keys OK — key login should work for LUX."
+    return 0
+  fi
+
+  echo "Pubkey not authorized yet (or passphrase required). One-shot SSH password can append the pubkey."
+
+  local LUX_AK_PW=""
+  read -r -s -p "SSH password for ${remote_user}@${host} (Enter to skip manual step): " LUX_AK_PW
+  echo
+  if [[ -z "$LUX_AK_PW" ]]; then
+    echo "Skipped. Append pubkey manually — docs/ssh-and-auth.md."
+    unset LUX_AK_PW
+    return 0
+  fi
+
+  if ! command -v sshpass &>/dev/null; then
+    echo "sshpass is required to use the password non-interactively." >&2
+    read -r -p "Install sshpass now (apt/dnf/yum/brew/pacman)? [Y/n] " _iak
+    _iak="${_iak:-y}"
+    if [[ "${_iak,,}" =~ ^y ]]; then
+      set +e
+      if command -v apt-get &>/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y sshpass
+      elif command -v apt &>/dev/null; then
+        sudo apt update -qq && sudo apt install -y sshpass
+      elif command -v dnf &>/dev/null; then
+        sudo dnf install -y sshpass
+      elif command -v yum &>/dev/null; then
+        sudo yum install -y sshpass
+      elif command -v brew &>/dev/null; then
+        brew install sshpass
+      elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm sshpass 2>/dev/null || pacman -S --noconfirm sshpass
+      fi
+      set -e
+    fi
+    if ! command -v sshpass &>/dev/null; then
+      echo "sshpass still missing. Install it or run the steps in docs/ssh-and-auth.md on the server." >&2
+      unset LUX_AK_PW
+      return 0
+    fi
+  fi
+
+  if lux_ssh_remote_authorized_keys_body "$b64" | SSHPASS="$LUX_AK_PW" sshpass -e ssh "${BASE[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no "${remote_user}@${host}" 'bash -s'; then
+    unset LUX_AK_PW
+    if lux_ssh_append_pubkey_remote "$b64" "${BASE[@]}" -o BatchMode=yes -i "$key_file" "${remote_user}@${host}"; then
+      echo "authorized_keys updated — verified key login."
+    else
+      echo "Pubkey appended but key login still fails (passphrase, PermitRootLogin, or wrong key); check docs/ssh-and-auth.md."
+    fi
+    return 0
+  fi
+
+  unset LUX_AK_PW
+  echo "Password SSH failed; authorized_keys unchanged. See docs/ssh-and-auth.md." >&2
+  return 0
+}
+
 read -r -p "Ludus server hostname or IP (LUDUS_SSH_HOST) [required]: " LUDUS_SSH_HOST
 LUDUS_SSH_HOST="${LUDUS_SSH_HOST//[[:space:]]/}"
 if [[ -z "$LUDUS_SSH_HOST" ]]; then
@@ -288,12 +396,12 @@ case "${auth_choice:-1}" in
       fi
     fi
     chmod 600 "$KEY_DIR/id_rsa"
+    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" root
     # LUX uses this key to SSH as root on the Ludus/Proxmox host (fetch user above is only for copying the file).
     set_kv "PROXMOX_SSH_USER" "root"
     set_kv "PROXMOX_SSH_PASSWORD" ""
     set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
     root_ssh_key_auth=1
-    echo "Key installed. If this key is root's, add the matching public key to /root/.ssh/authorized_keys on the server (see docs/ssh-and-auth.md)."
     ;;
   2)
     read -r -p "Path to existing private key file: " key_path
@@ -305,7 +413,9 @@ case "${auth_choice:-1}" in
     cp "$key_path" "$KEY_DIR/id_rsa"
     chmod 600 "$KEY_DIR/id_rsa"
     read -r -p "PROXMOX_SSH_USER [root]: " px_user
-    set_kv "PROXMOX_SSH_USER" "${px_user:-root}"
+    px_user="${px_user:-root}"
+    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$px_user"
+    set_kv "PROXMOX_SSH_USER" "$px_user"
     set_kv "PROXMOX_SSH_PASSWORD" ""
     set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
     root_ssh_key_auth=1

@@ -44,19 +44,28 @@ function readStorage(): ImpersonationData | null {
  *
  * The apiKey is POSTed to the session cookie (httpOnly, encrypted) and then
  * discarded from JS memory — it is never written to sessionStorage.
- * Only the username is persisted locally so the UI can show who is being
- * impersonated. All server-side routes read the apiKey from the cookie via
- * resolveAdminImpersonationFromRequest.
+ * Only identifiers are persisted locally (never apiKey).
+ * Cookie stores ludusPrincipal (User.name), ludusUserId, sshLogin via POST body.
  */
-export async function saveImpersonation(data: { username: string; apiKey: string }): Promise<void> {
-  // Store only the username — never the apiKey — in sessionStorage.
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ username: data.username }))
-  // Cookie update must complete before dispatching the changed event so that
-  // queries refetching on the event use the new user's API key from the cookie.
+export async function saveImpersonation(data: {
+  apiKey: string
+  ludusPrincipal: string
+  ludusUserId: string
+  sshLogin: string
+}): Promise<void> {
+  sessionStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ username: data.ludusPrincipal }),
+  )
   await fetch("/api/auth/impersonate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: data.username, apiKey: data.apiKey }),
+    body: JSON.stringify({
+      ludusPrincipal: data.ludusPrincipal,
+      ludusUserId: data.ludusUserId,
+      sshLogin: data.sshLogin,
+      apiKey: data.apiKey,
+    }),
   }).catch(() => { /* non-fatal — cookie update is best-effort */ })
   window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
 }

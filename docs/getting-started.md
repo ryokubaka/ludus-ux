@@ -12,7 +12,7 @@
 
 | Feature | Requires |
 |---|---|
-| GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` |
+| GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` + **`sudo`** (minimal Debian / Proxmox may not ship `sudo`; install with e.g. `apt install -y sudo` as root before using GOAD from LUX) |
 
 ## Verify Docker and Compose
 

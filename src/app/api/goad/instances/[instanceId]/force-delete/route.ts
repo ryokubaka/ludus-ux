@@ -17,7 +17,10 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import {
+  effectiveImpersonatedOperatorUsername,
+  resolveAdminImpersonationFromRequest,
+} from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
@@ -41,8 +44,7 @@ export async function POST(
   // Instance IDs contain the username prefix (e.g. "alice-goad-mini-ludus"),
   // so this is a lightweight ownership guard; admins bypass it.
   if (!session.isAdmin) {
-    const impersonateAs = request.headers.get("X-Impersonate-As")
-    const effectiveUser = impersonateAs || session.username
+    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
     if (!instanceId.toLowerCase().startsWith(effectiveUser.toLowerCase() + "-")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }

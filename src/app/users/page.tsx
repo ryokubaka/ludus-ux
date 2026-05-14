@@ -43,6 +43,7 @@ import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { saveImpersonation } from "@/lib/impersonation-context"
+import { ludusImpersonationFields } from "@/lib/ludus-user-from-profile"
 
 export default function UsersPage() {
   const { toast } = useToast()
@@ -51,26 +52,29 @@ export default function UsersPage() {
   const router = useRouter()
 
   // ── Impersonation ──────────────────────────────────────────────────────────
-  const [impersonateTarget, setImpersonateTarget] = useState<{ userID: string } | null>(null)
+  const [impersonateTarget, setImpersonateTarget] = useState<ReturnType<typeof ludusImpersonationFields> | null>(null)
   const [impersonateApiKey, setImpersonateApiKey] = useState("")
   const [fetchingKey, setFetchingKey] = useState<string | null>(null)
   const [showImpersonateKey, setShowImpersonateKey] = useState(false)
   const apiKeyInputRef = useRef<HTMLInputElement>(null)
 
-  const startImpersonate = useCallback(async (userID: string) => {
-    setFetchingKey(userID)
+  const startImpersonate = useCallback(async (user: UserObject) => {
+    const fields = ludusImpersonationFields(user)
+    setFetchingKey(user.userID)
     try {
-      const res = await fetch(`/api/admin/fetch-user-apikey?username=${encodeURIComponent(userID)}`)
+      const res = await fetch(
+        `/api/admin/fetch-user-apikey?username=${encodeURIComponent(fields.sshLogin)}`,
+      )
       const data = await res.json()
       if (data.apiKey) {
-        await saveImpersonation({ username: userID, apiKey: data.apiKey })
-        toast({ title: `Now managing as ${userID}` })
+        await saveImpersonation({ ...fields, apiKey: data.apiKey })
+        toast({ title: `Now managing as ${fields.ludusPrincipal}` })
         router.push("/")
         return
       }
     } catch { /* SSH unavailable — fall through to manual dialog */ }
     finally { setFetchingKey(null) }
-    setImpersonateTarget({ userID })
+    setImpersonateTarget(fields)
     setImpersonateApiKey("")
     setShowImpersonateKey(false)
     setTimeout(() => apiKeyInputRef.current?.focus(), 50)
@@ -81,8 +85,8 @@ export default function UsersPage() {
       toast({ variant: "destructive", title: "API key required" })
       return
     }
-    await saveImpersonation({ username: impersonateTarget.userID, apiKey: impersonateApiKey.trim() })
-    toast({ title: `Now managing as ${impersonateTarget.userID}` })
+    await saveImpersonation({ ...impersonateTarget, apiKey: impersonateApiKey.trim() })
+    toast({ title: `Now managing as ${impersonateTarget.ludusPrincipal}` })
     setImpersonateTarget(null)
     router.push("/")
   }
@@ -208,21 +212,27 @@ export default function UsersPage() {
       }
     }
 
-    // Step 3: Roll/retrieve the API key and write it to ~/.bashrc
+    // Step 3: Roll/retrieve the API key and write it to ~/.bashrc (server waits up to 5 min per Ludus call; SSH side polls for passwd entry)
     try {
       const keyRes = await fetch("/api/users/roll-key", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: uid }),
       })
-      const keyData = await keyRes.json() as { bashrcUpdated?: boolean; bashrcError?: string }
-      if (keyData.bashrcUpdated) {
-        notes.push(".bashrc initialized")
+      const keyData = await keyRes.json() as {
+        bashrcUpdated?: boolean
+        bashrcError?: string
+        error?: string
+      }
+      if (!keyRes.ok) {
+        notes.push(`api key/bashrc: ${keyData?.error ?? `HTTP ${keyRes.status}`}`)
+      } else if (keyData.bashrcUpdated) {
+        notes.push(".bashrc initialized (verified)")
       } else if (keyData.bashrcError) {
         notes.push(`bashrc: ${keyData.bashrcError}`)
       }
-    } catch {
-      // non-fatal
+    } catch (err) {
+      notes.push(`api key/bashrc: ${(err as Error).message}`)
     }
 
     toast({
@@ -488,7 +498,7 @@ export default function UsersPage() {
                             size="sm"
                             variant="outline"
                             className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
-                            onClick={() => startImpersonate(user.userID)}
+                            onClick={() => startImpersonate(user)}
                             disabled={fetchingKey === user.userID}
                             title={`Manage Ludus as ${user.userID}`}
                           >
@@ -629,7 +639,7 @@ export default function UsersPage() {
               }
             >
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              {adding ? "Creating… (up to 1 min)" : "Add User"}
+              {adding ? "Creating… (up to ~1 minute on slow hosts)" : "Add User"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -761,20 +771,20 @@ export default function UsersPage() {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
                 <Terminal className="h-4 w-4 text-primary" />
-                Manage as <code className="text-primary font-mono">{impersonateTarget.userID}</code>
+                Manage as <code className="text-primary font-mono">{impersonateTarget.ludusPrincipal}</code>
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
               <Alert>
                 <AlertDescription className="text-xs">
-                  Could not auto-read the API key from <code className="font-mono">~{impersonateTarget.userID}/.bashrc</code>{" "}
+                  Could not auto-read the API key from <code className="font-mono">~{impersonateTarget.sshLogin}/.bashrc</code>{" "}
                   via root SSH. Enter it manually below.
-                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.userID}</code>.
+                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.sshLogin}</code>.
                 </AlertDescription>
               </Alert>
               <div className="space-y-1.5">
                 <Label htmlFor="users-impersonate-apikey" className="text-xs">
-                  {impersonateTarget.userID}&apos;s Ludus API Key
+                  {impersonateTarget.ludusPrincipal}&apos;s Ludus API Key
                 </Label>
                 <div className="flex gap-2">
                   <Input

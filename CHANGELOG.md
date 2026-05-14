@@ -4,6 +4,23 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [1.0.1] — 2026-05-14
+
+**LUX**
+- [Add] **Quickstart** — `scripts/quickstart.sh` supports **`--full`**, **`--menu`**, and an in-script choice of a lighter **menu** versus the **full wizard** again.
+- [Add] **Quickstart** — During interactive setup, the script can install **`sudo`** on the Ludus/Proxmox SSH target where minimal Debian-style installs omit it
+- [Improve] **Quickstart** — Publishes your **`SSH_KEY_PATH`/`id_rsa`** public half to the Ludus server to address SSH key only based authentication 
+- [Fix] **Range creation `userID`** — Client `ludusApi.createRange` resolves the caller’s Ludus `userID` instead of incorrect `name`
+- [Fix] **Admin impersonation** — “Manage as” stores **`userID`**, **`name`**, and **SSH login** separately so Ludus range APIs see the real **`userID`**, SSH/GOAD still use **`proxmoxUsername`** (`name` fallback), instead of collapsing everything into **`name`** and breaking impersonated workflows
+- [Fix] **Settings merge** — Empty `proxmoxSshPassword` / `proxmoxSshUser` values stored in SQLite no longer override `PROXMOX_SSH_*` from the environment (same idea as the root API key), so `.env` Proxmox SSH credentials are not masked after a Settings save with blank fields.
+- [Fix] **Ranges Overview → shared services (ADMIN pool)** — `/api/admin/shared-vms` and `/api/admin/vm` now authenticate to Proxmox only with configured root SSH: `PROXMOX_SSH_USER`, `PROXMOX_SSH_PASSWORD`, and/or the mounted private key. They no longer reuse the browser session’s Ludus SSH password.
+- [Fix] **Shared VM start/stop** — `PUT /api/admin/vm` accepts key-only Proxmox auth (previously required a non-empty password even when a root key was mounted).
+
+**Docs**
+- [Improve] **Getting started (requirements)** — Optional GOAD row now calls out **`sudo`** on the Ludus server for minimal Debian/Proxmox-style installs (`apt`-style reminder).
+
+---
+
 ## [1.0.0] — 2026-05-13
 
 **LUX**

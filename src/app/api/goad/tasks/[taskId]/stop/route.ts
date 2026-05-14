@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import { abortTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
 
@@ -27,10 +28,7 @@ export async function POST(
   const { getTask } = await import("@/lib/goad-task-store")
   const task = getTask(taskId)
   if (task) {
-    const impersonateAs = session.isAdmin
-      ? request.headers.get("X-Impersonate-As") || null
-      : null
-    const effectiveUser = impersonateAs || session.username
+    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
     if (!session.isAdmin && task.username && task.username !== effectiveUser) {
       return NextResponse.json({ error: "Not found" }, { status: 404 })
     }

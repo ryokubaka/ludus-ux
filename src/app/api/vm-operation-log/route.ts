@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { insertVmOperation, listVmOperations } from "@/lib/vm-operation-log"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
 export const dynamic = "force-dynamic"
 
@@ -17,10 +18,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const impersonateAs =
-    session.isAdmin && request.headers.get("X-Impersonate-As")
-      ? request.headers.get("X-Impersonate-As")!.trim()
-      : null
+  const effectiveOp = effectiveImpersonatedOperatorUsername(session, request)
 
   const url = new URL(request.url)
   const rangeId = url.searchParams.get("rangeId")?.trim() || null
@@ -32,7 +30,7 @@ export async function GET(request: NextRequest) {
   // on insert). Admins default to "everyone" unless they pass ?username=.
   let usernameFilter: string | null = null
   if (!session.isAdmin) {
-    usernameFilter = impersonateAs || session.username
+    usernameFilter = effectiveOp
   } else {
     const qUser = url.searchParams.get("username")?.trim()
     if (qUser) usernameFilter = qUser
@@ -64,11 +62,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const impersonateAs =
-    session.isAdmin && request.headers.get("X-Impersonate-As")
-      ? request.headers.get("X-Impersonate-As")!.trim()
-      : null
-  const username = impersonateAs || session.username
+  const username = effectiveImpersonatedOperatorUsername(session, request)
 
   let body: Record<string, unknown>
   try {

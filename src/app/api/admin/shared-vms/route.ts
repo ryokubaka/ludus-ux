@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { hasSshExecAuth } from "@/lib/root-ssh-auth"
+import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 
 export const dynamic = "force-dynamic"
 
@@ -32,10 +32,14 @@ export async function GET(request: NextRequest) {
   }
 
   const settings = getSettings()
-  const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!hasSshExecAuth(settings, session.sshPassword)) {
+  // Proxmox pvesh must use PROXMOX_SSH_* / mounted key only — never the browser session's Ludus SSH password.
+  const sshPass = (settings.proxmoxSshPassword || "").trim()
+  if (!isRootProxmoxSshConfigured(settings)) {
     return NextResponse.json(
-      { error: "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD, mount a root key (./ssh), or log in with a user SSH password." },
+      {
+        error:
+          "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
+      },
       { status: 503 },
     )
   }

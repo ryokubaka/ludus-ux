@@ -2,7 +2,7 @@
  * POST /api/users/roll-key
  * Body: { userId: string }
  *
- * Uses Ludus v2 API: GET /user/apikey?userID=USERID with the ROOT key.
+ * Uses Ludus v2 API: GET /user/apikey?userID=… (logged-in admin key on port 8080).
  * Per the Ludus API docs, the userID query param allows an admin to reset
  * any user's key in a single call — no SSH-read of the current key needed.
  *
@@ -16,9 +16,18 @@ import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
+import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
 
+export const maxDuration = 600
+
 export const dynamic = "force-dynamic"
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
+}
 
 function extractKey(data: unknown): string {
   if (typeof data === "string") return data
@@ -57,7 +66,7 @@ export async function POST(request: NextRequest) {
   // Docs: https://api-docs.ludus.cloud/reset-and-retrieve-the-ludus-api-key-for-a-user-24251977e0
   const ludusResult = await ludusGet<{ result: { apiKey: string; userID: string } }>(
     `/user/apikey?userID=${encodeURIComponent(userId)}`,
-    { apiKey: session.apiKey }
+    { apiKey: session.apiKey, timeout: LUDUS_USER_PROVISION_TIMEOUT_MS },
   )
 
   if (ludusResult.error) {
@@ -90,6 +99,7 @@ export async function POST(request: NextRequest) {
         const userListResult = await ludusRequest<UserObject[]>("/user/all", {
           apiKey: session.apiKey,
           useAdminEndpoint: true,
+          timeout: LUDUS_USER_PROVISION_TIMEOUT_MS,
         })
         const found = userListResult.data?.find(
           (u) => u.userID.toLowerCase() === userId.toLowerCase()
@@ -99,12 +109,21 @@ export async function POST(request: NextRequest) {
         // fallback to userID
       }
 
-      const homeDir = await sshExec(
-        settings.sshHost, settings.sshPort, sshUser, sshPw,
-        `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
-      )
+      let homeDir = ""
+      for (let attempt = 0; attempt < 8; attempt++) {
+        try {
+          homeDir = await sshExec(
+            settings.sshHost, settings.sshPort, sshUser, sshPw,
+            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
+          )
+        } catch {
+          homeDir = ""
+        }
+        if (homeDir?.trim()) break
+        if (attempt < 7) await sleep(4000)
+      }
 
-      if (homeDir) {
+      if (homeDir?.trim()) {
         await sshExec(
           settings.sshHost, settings.sshPort, sshUser, sshPw,
           `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
@@ -112,9 +131,20 @@ export async function POST(request: NextRequest) {
           `echo 'export LUDUS_API_KEY=${newKey}' >> ${homeDir}/.bashrc; ` +
           `echo 'export LUDUS_VERSION=2' >> ${homeDir}/.bashrc`
         )
-        bashrcUpdated = true
+        const verify = await sshExec(
+          settings.sshHost, settings.sshPort, sshUser, sshPw,
+          `grep -c 'LUDUS_API_KEY=' "${homeDir}/.bashrc" 2>/dev/null || printf 0`
+        )
+        const n = parseInt(String(verify).trim(), 10)
+        if (Number.isFinite(n) && n > 0) {
+          bashrcUpdated = true
+        } else {
+          bashrcError =
+            ".bashrc did not contain LUDUS_API_KEY after write (slow disk or permissions — use Roll API key once the account exists)"
+        }
       } else {
-        bashrcError = `Linux user "${linuxUser}" not found — bashrc not updated`
+        bashrcError =
+          `Linux user "${linuxUser}" has no home yet after waiting — Ludus may still be provisioning. Use Roll API key again in a minute.`
       }
     } catch (err) {
       bashrcError = (err as Error).message

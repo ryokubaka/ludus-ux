@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getTask, updateTaskPhase, setTaskHasNetworkRules } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
 export const dynamic = "force-dynamic"
 
@@ -20,10 +21,7 @@ export async function GET(
   }
 
   // Enforce ownership: admins can see any task; users can only see their own.
-  const impersonateAs = session.isAdmin
-    ? request.headers.get("X-Impersonate-As") || null
-    : null
-  const effectiveUser = impersonateAs || session.username
+  const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
   if (!session.isAdmin && task.username && task.username !== effectiveUser) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }

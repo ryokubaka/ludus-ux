@@ -28,6 +28,8 @@
 import { ludusGet, ludusRequest } from "./ludus-client"
 import { getSettings } from "./settings-store"
 import { fetchPbRangeStatus, setPbRangeState } from "./pocketbase-client"
+import { getHandoffByInstanceId, getHandoffByTaskId } from "./goad-deploy-handoff-store"
+import { getInstanceRangeLocal } from "./goad-instance-range-store"
 import { readGoadRangeId } from "./goad-ssh"
 import { sshExec } from "./proxmox-ssh"
 import { isRootProxmoxSshConfigured, rootPasswordCredsIfSet } from "./root-ssh-auth"
@@ -82,6 +84,9 @@ function parseAnsibleRecapAllOk(log: string, recapIdx: number): boolean {
 function isDeployPollLine(body: string): boolean {
   if (/deploying\.\.\.\s*be\s+patient/i.test(body)) return true
   if (/deployment\s+in\s+progress/i.test(body) && /DEPLOYING/i.test(body)) return true
+  // Newer / alternate Ludus CLI status lines while PocketBase stays DEPLOYING.
+  if (/\bstill\s+deploying\b/i.test(body)) return true
+  if (/\bwaiting\b.*\b(deploy|deployment)\b/i.test(body) && /(DEPLOYING|WAITING)/i.test(body)) return true
   return false
 }
 
@@ -315,16 +320,19 @@ export async function tryReconcileStuckDeploySnapshot(args: {
     }
 
     const rootCreds = rootPasswordCredsIfSet(settings)
-    const rangeId = await readGoadRangeId(instanceId, rootCreds)
-    if (!rangeId?.trim()) {
+    const fromFile = (await readGoadRangeId(instanceId, rootCreds))?.trim()
+    const fromLocal = getInstanceRangeLocal(instanceId)?.trim()
+    const fromHandoffTask = getHandoffByTaskId(taskId)?.rangeId?.trim()
+    const fromHandoffInstance = getHandoffByInstanceId(instanceId)?.rangeId?.trim()
+    const rid = fromFile || fromLocal || fromHandoffTask || fromHandoffInstance
+    if (!rid) {
       diagThrottled(
         `task-${taskId}-no-rangeid`,
-        `task ${taskId}: skip reconcile (readGoadRangeId empty for instanceId=${instanceId} — check .goad_range_id and root SSH)`,
+        `task ${taskId}: skip reconcile (no rangeId: .goad_range_id, goad_instance_ranges, deploy_handoffs all empty for task/instance)`,
         120_000,
       )
       return false
     }
-    const rid = rangeId.trim()
 
     const recapGoad = logText.lastIndexOf("PLAY RECAP")
     const goadRecapOk = recapGoad >= 0 && parseAnsibleRecapAllOk(logText, recapGoad)
@@ -366,7 +374,7 @@ export async function tryReconcileStuckDeploySnapshot(args: {
 
     const err = await setPbRangeState(rid, "SUCCESS")
     if (err) {
-      console.warn(`[goad-ludus-reconcile] PocketBase SUCCESS patch failed for ${rangeId}: ${err}`)
+      console.warn(`[goad-ludus-reconcile] PocketBase SUCCESS patch failed for ${rid}: ${err}`)
       return false
     }
 
@@ -379,14 +387,14 @@ export async function tryReconcileStuckDeploySnapshot(args: {
     if (stillDeploying) {
       lastAttemptAt.delete(taskId)
       console.warn(
-        `[goad-ludus-reconcile] PocketBase PATCH returned OK but rangeState is still ${afterPatch ?? "unknown"} for "${rangeId}" — will retry (Ludus may overwrite PB or read lag).`,
+        `[goad-ludus-reconcile] PocketBase PATCH returned OK but rangeState is still ${afterPatch ?? "unknown"} for "${rid}" — will retry (Ludus may overwrite PB or read lag).`,
       )
       return false
     }
 
     reconciledTaskIds.add(taskId)
     console.info(
-      `[goad-ludus-reconcile] Patched rangeState=SUCCESS for "${rangeId}" (task ${taskId}; goadRecap=${goadRecapOk} ludusRecap=${ludusRecapOk} deployPollLines=${deployPollsFull}; verified=${afterPatch})`,
+      `[goad-ludus-reconcile] Patched rangeState=SUCCESS for "${rid}" (task ${taskId}; goadRecap=${goadRecapOk} ludusRecap=${ludusRecapOk} deployPollLines=${deployPollsFull}; verified=${afterPatch})`,
     )
     return true
   } catch (e) {

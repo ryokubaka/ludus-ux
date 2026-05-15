@@ -26,15 +26,23 @@ export async function fetchGoadInstancesForRequest(
     }
   }
 
-  const { apiKey: impersonateApiKey, userId: impersonateAs } = session
+  const { apiKey: impersonateApiKey, ludusUserId, sshLogin, ludusPrincipal } = session
     ? resolveAdminImpersonationFromRequest(session, request)
-    : { apiKey: null, userId: null }
+    : { apiKey: null, ludusUserId: null, sshLogin: null, ludusPrincipal: null }
 
-  const creds = (!impersonateAs && session?.sshPassword)
+  const creds = (!impersonateApiKey && session?.sshPassword)
     ? { username: session.username, password: session.sshPassword }
     : undefined
   const effectiveApiKey = impersonateApiKey || session?.apiKey || ""
-  const viewAsUsername = impersonateAs || session?.username
+
+  /** Ludus range.userID (alphanumeric), not POSIX. */
+  const viewAsLudusUserKey = impersonateApiKey
+    ? (ludusUserId || ludusPrincipal || "").toLowerCase()
+    : ((session?.username ?? "").toLowerCase())
+  /** GOAD workspace __owner__, sudo, POSIX. */
+  const viewAsSshOwner = impersonateApiKey
+    ? (sshLogin || ludusPrincipal || "")
+    : (session?.username ?? "")
 
   try {
     const [allInstances, rangesResult] = await Promise.all([
@@ -83,17 +91,15 @@ export async function fetchGoadInstancesForRequest(
     })
 
     const adminViewParam = request.nextUrl.searchParams.get("adminView") === "1"
-    const isAdminGlobalView = session?.isAdmin && (!impersonateAs || adminViewParam)
+    const isAdminGlobalView = session?.isAdmin && (!impersonateApiKey || adminViewParam)
 
-    const myRangeIds = new Set(
-      userToRangeIds.get((viewAsUsername ?? "").toLowerCase()) ?? [],
-    )
+    const myRangeIds = new Set(userToRangeIds.get(viewAsLudusUserKey) ?? [])
 
     const instances = isAdminGlobalView
       ? enriched
       : enriched.filter((i) => {
-          if (!viewAsUsername) return true
-          if (!i.ownerUserId || i.ownerUserId === viewAsUsername) return true
+          if (!viewAsSshOwner) return true
+          if (!i.ownerUserId || i.ownerUserId === viewAsSshOwner) return true
           if (i.ludusRangeId && myRangeIds.has(i.ludusRangeId)) return true
           return false
         })

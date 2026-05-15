@@ -1,10 +1,9 @@
 {
   "name": "ludus-ux",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
-    "postinstall": "patch-package",
     "copy:monaco": "node scripts/copy-monaco.js",
     "dev": "npm run copy:monaco && next dev",
     "build": "npm run copy:monaco && next build",
@@ -77,7 +76,6 @@
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",
     "eslint-config-next": "15.5.18",
-    "patch-package": "^8.0.0",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.3.0",
     "typescript": "^5",

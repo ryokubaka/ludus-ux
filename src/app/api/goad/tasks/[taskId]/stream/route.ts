@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server"
 import { subscribeToTask, getTask } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
 export const dynamic = "force-dynamic"
 
@@ -25,10 +26,7 @@ export async function GET(
   // Enforce ownership before opening the stream.
   const task = getTask(taskId)
   if (task) {
-    const impersonateAs = session.isAdmin
-      ? request.headers.get("X-Impersonate-As") || null
-      : null
-    const effectiveUser = impersonateAs || session.username
+    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
     if (!session.isAdmin && task.username && task.username !== effectiveUser) {
       return new Response("data: [ERROR] Not found\n\n", {
         status: 404,

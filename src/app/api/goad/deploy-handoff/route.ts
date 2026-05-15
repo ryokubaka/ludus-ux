@@ -47,8 +47,9 @@ export async function POST(request: NextRequest) {
   }
 
   // Resolve the effective username for multi-user / impersonation scenarios.
-  const { userId: impersonateAs } = resolveAdminImpersonationFromRequest(session, request)
-  const username = impersonateAs || session.username
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const sshUser = ((imp.apiKey ? imp.sshLogin || imp.ludusPrincipal : null) || session.username || "").trim()
+  const username = sshUser
 
   // Persist the range→instance mapping immediately so the server can find it
   // even if the client-side set-range call never completes.

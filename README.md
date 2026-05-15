@@ -3,7 +3,7 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.0.0-green)]()
+[![Version](https://img.shields.io/badge/version-1.0.1-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
@@ -40,7 +40,7 @@ On a machine that already has a git clone of this repo (same layout as manual se
 cd ludus-ux
 bash scripts/upgrade.sh           # interactive: pick remote branch or tag
 bash scripts/upgrade.sh main      # non-interactive examples
-bash scripts/upgrade.sh v1.0.0
+bash scripts/upgrade.sh v1.0.1
 ```
 
 The script fetches from your configured remote, checks out the chosen ref, then runs `docker compose up -d --build` (or `docker-compose` if that is what you use). Host paths **`./data`**, **`./ssh`**, **`./docker/nginx/certificates`**, and **`.env`** are left as-is so SQLite and keys survive the rebuild.

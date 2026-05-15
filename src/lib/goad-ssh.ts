@@ -337,7 +337,10 @@ export async function sshExec(
  */
 export function workspaceSshExecPlan(
   request: NextRequest,
-  session: Pick<SessionData, "isAdmin" | "username" | "sshPassword">,
+  session: Pick<
+    SessionData,
+    "isAdmin" | "username" | "sshPassword" | "impersonationApiKey" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+  >,
   innerCommand: string,
   rootCreds: SSHCreds | undefined,
   userCreds: SSHCreds | undefined,
@@ -345,8 +348,9 @@ export function workspaceSshExecPlan(
   | { ok: true; command: string; creds: SSHCreds | undefined }
   | { ok: false; status: number; error: string } {
   const imp = resolveAdminImpersonationFromRequest(session, request)
+  const sudoUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
   const impersonateAs =
-    session.isAdmin && imp.userId && imp.apiKey ? { username: imp.userId } : null
+    session.isAdmin && sudoUser && imp.apiKey ? { username: sudoUser } : null
 
   if (impersonateAs) {
     const settings = getSettings()

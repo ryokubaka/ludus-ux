@@ -18,10 +18,23 @@ function isAllowlistTestingOpType(s: string): s is "testing_allow_add" | "testin
 
 function getEffective(
   request: NextRequest,
-  session: { apiKey: string; username: string; isAdmin: boolean; impersonationApiKey?: string; impersonationUserId?: string },
+  session: {
+    apiKey: string
+    username: string
+    isAdmin: boolean
+    impersonationApiKey?: string
+    impersonationUserId?: string
+    impersonationLudusUserId?: string
+    impersonationSshLogin?: string
+  },
 ) {
   const imp = resolveAdminImpersonationFromRequest(session, request)
-  return { effectiveUsername: imp.userId || session.username }
+  return {
+    effectiveUsername:
+      imp.apiKey
+        ? (imp.sshLogin || imp.ludusPrincipal || session.username).trim()
+        : session.username,
+  }
 }
 
 export async function POST(request: NextRequest) {

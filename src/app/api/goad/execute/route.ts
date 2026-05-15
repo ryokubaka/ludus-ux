@@ -73,9 +73,10 @@ export async function POST(request: NextRequest) {
   // source for the impersonation API key — the body's impersonateAs.apiKey is
   // omitted now that the client no longer stores apiKey in sessionStorage.
   const imp = resolveAdminImpersonationFromRequest(session, request)
+  const sshUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
   const sessionImpersonate =
-    session.isAdmin && imp.apiKey && imp.userId
-      ? { username: imp.userId, apiKey: imp.apiKey }
+    session.isAdmin && imp.apiKey && sshUser
+      ? { username: sshUser, apiKey: imp.apiKey }
       : null
 
   // Merge body impersonation with cookie:
@@ -91,7 +92,10 @@ export async function POST(request: NextRequest) {
     // constructing an object with null apiKey (which would fail downstream type checks).
     const cookieApiKey = sessionImpersonate?.apiKey
     if (!cookieApiKey) return sessionImpersonate
-    return { username: impersonateAs.username, apiKey: cookieApiKey }
+    // Cookie carries POSIX sshLogin; UI may send Ludus principal in the body — keep sudo identity from cookie.
+    const sudoIdentity =
+      sessionImpersonate.username.trim() || impersonateAs.username.trim()
+    return { username: sudoIdentity, apiKey: cookieApiKey }
   })()
 
   // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────

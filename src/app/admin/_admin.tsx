@@ -44,9 +44,10 @@ import { cn, getRangeStateBadge } from "@/lib/utils"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { saveImpersonation } from "@/lib/impersonation-context"
+import { ludusImpersonationFields } from "@/lib/ludus-user-from-profile"
 
 interface ImpersonateTarget {
-  userID: string
+  fields: ReturnType<typeof ludusImpersonationFields>
   displayName: string
 }
 
@@ -382,13 +383,17 @@ export function AdminPageClient() {
    * If found, immediately commit the impersonation and navigate to /goad.
    * If not found, fall back to the manual-entry dialog.
    */
-  const startImpersonate = useCallback(async (userID: string, displayName: string) => {
+  const startImpersonate = useCallback(async (user: UserObject) => {
+    const fields = ludusImpersonationFields(user)
+    const displayName = user.name?.trim() || user.userID
     setFetchingKey(true)
     try {
-      const res = await fetch(`/api/admin/fetch-user-apikey?username=${encodeURIComponent(userID)}`)
+      const res = await fetch(
+        `/api/admin/fetch-user-apikey?username=${encodeURIComponent(fields.sshLogin)}`,
+      )
       const data = await res.json()
       if (data.apiKey) {
-        await saveImpersonation({ username: userID, apiKey: data.apiKey })
+        await saveImpersonation({ ...fields, apiKey: data.apiKey })
         toast({ title: `Now managing as ${displayName}` })
         router.push("/")
         return
@@ -399,7 +404,7 @@ export function AdminPageClient() {
       setFetchingKey(false)
     }
     // Fallback: prompt manually
-    setImpersonateTarget({ userID, displayName })
+    setImpersonateTarget({ fields, displayName })
     setImpersonateApiKey("")
     setTimeout(() => apiKeyInputRef.current?.focus(), 50)
   }, [router, toast])
@@ -410,7 +415,7 @@ export function AdminPageClient() {
       return
     }
     const target = impersonateTarget
-    await saveImpersonation({ username: target.userID, apiKey: impersonateApiKey.trim() })
+    await saveImpersonation({ ...target.fields, apiKey: impersonateApiKey.trim() })
     toast({ title: `Now managing as ${target.displayName}` })
     setImpersonateTarget(null)
     router.push("/")
@@ -466,7 +471,7 @@ export function AdminPageClient() {
                 <KeyRound className="h-4 w-4" />
                 <AlertDescription className="text-xs">
                   Could not auto-read the API key from <code>~/.bashrc</code>. Enter it manually below.
-                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.displayName}</code>.
+                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.fields.sshLogin}</code>.
                 </AlertDescription>
               </Alert>
               <div className="space-y-1.5">
@@ -784,14 +789,14 @@ export function AdminPageClient() {
                                   size="sm"
                                   variant="outline"
                                   className="h-7 gap-1.5 border-primary/30 text-primary hover:bg-primary/10 text-xs whitespace-nowrap"
-                                  onClick={() => startImpersonate(user.userID, user.userID)}
+                                  onClick={() => startImpersonate(user)}
                                 >
                                   <Terminal className="h-3 w-3" />
                                   Manage
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="right" className="text-xs">
-                                Manage Ludus as {user.userID}
+                                Manage Ludus as {user.name?.trim() || user.userID}
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>

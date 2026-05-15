@@ -7,9 +7,8 @@
  *
  * Routes that need the impersonation API key read it from the session cookie
  * via resolveAdminImpersonationFromRequest (lib/admin-impersonation-request.ts).
- * The X-Impersonate-As header carries only the username as a fast-path hint
- * (e.g. for ownership checks) and for routes that need the effective username
- * before the cookie round-trip completes.
+ * The X-Impersonate-As header carries the Ludus `User.name` hint (POSIX login
+ * is in the session cookie separately) so the proxy/cookie pairing stays correct.
  */
 
 export const IMPERSONATION_STORAGE_KEY = "goad_impersonation"

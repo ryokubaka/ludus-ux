@@ -16,6 +16,9 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Fix] **Ranges Overview → shared services (ADMIN pool)** — `/api/admin/shared-vms` and `/api/admin/vm` now authenticate to Proxmox only with configured root SSH: `PROXMOX_SSH_USER`, `PROXMOX_SSH_PASSWORD`, and/or the mounted private key. They no longer reuse the browser session’s Ludus SSH password.
 - [Fix] **Shared VM start/stop** — `PUT /api/admin/vm` accepts key-only Proxmox auth (previously required a non-empty password even when a root key was mounted).
 
+**GOAD**
+- [Fix] **Long `provide` → `provision_lab` stall** — `goad-ludus-reconcile` now resolves the Ludus range from `.goad_range_id`, SQLite **`goad_instance_ranges`**, or **`deploy_handoffs`** (by `taskId` / `instanceId`) when the SSH sidecar file is missing. **Deploy-poll detection** accepts a few alternate Ludus status strings. **`appendLine` reconcile** no longer joins the entire in-memory GOAD log (was O(n) every 6 lines and could freeze Node on 30+ minute streams); it passes the last **25 000** lines only so PocketBase `SUCCESS` patching keeps up and GOAD can exit `provide` into `provision_lab`.
+
 **Docs**
 - [Improve] **Getting started (requirements)** — Optional GOAD row now calls out **`sudo`** on the Ludus server for minimal Debian/Proxmox-style installs (`apt`-style reminder).
 

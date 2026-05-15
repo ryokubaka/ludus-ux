@@ -7,8 +7,6 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-# patch-package applies during postinstall (patches @eslint/eslintrc for ESLint 9 + minimatch).
-COPY patches ./patches
 # Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
 RUN npm install -g npm@11.14.0
 RUN npm install --legacy-peer-deps

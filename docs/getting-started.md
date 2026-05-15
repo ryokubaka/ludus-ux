@@ -144,7 +144,7 @@ Use this when you already have a **git clone** of the repo on the Docker host. T
 
 1. Quiet `git fetch` from your remote (`--prune --tags`).
 2. Lists **active branches** and **release tags** from the remote (`git ls-remote`).
-3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v1.0.0`).
+3. You pick a branch or tag (interactive menu), **or** pass the name as the first argument (e.g. `main`, `v1.0.1`).
 4. Checks out the branch (reset to remote tip) **or** the tag (detached HEAD). Local commits on a branch are discarded—stash first if needed.
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
@@ -159,7 +159,7 @@ Non-interactive (examples):
 
 ```bash
 bash scripts/upgrade.sh main
-bash scripts/upgrade.sh v1.0.0
+bash scripts/upgrade.sh v1.0.1
 ```
 
 Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](../CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.

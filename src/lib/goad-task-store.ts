@@ -67,6 +67,9 @@ interface TaskEntry {
 
 const MAX_TASKS = 200
 
+/** Last N lines only — full join on 50k+ line tasks blocked the event loop and reconcile never completed. */
+const RECONCILE_LOG_TAIL_LINES = 25_000
+
 const taskMap = new Map<string, TaskEntry>()
 const taskOrder: string[] = []
 
@@ -339,11 +342,16 @@ export function appendLine(taskId: string, line: string): string | undefined {
   // finished but Ludus never flipped PocketBase `rangeState`. Heuristic reconcile
   // runs every 6 log lines while running (was 12 — slower provide output + PB verify retries).
   if (entry.task.lineCount % 6 === 0 && entry.task.status === "running") {
+    const lines = entry.task.lines
+    const tail =
+      lines.length <= RECONCILE_LOG_TAIL_LINES
+        ? lines
+        : lines.slice(-RECONCILE_LOG_TAIL_LINES)
     const snap = {
       taskId,
       instanceId: entry.task.instanceId,
       status: entry.task.status,
-      logText: entry.task.lines.join("\n"),
+      logText: tail.join("\n"),
       ludusApiKey: entry.task.ludusApiKey,
     }
     void import("./goad-ludus-reconcile")

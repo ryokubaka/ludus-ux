@@ -68,6 +68,10 @@ import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
 import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
+import {
+  extensionIsProvisionOnly,
+  goadSupportsProvisionOnlyExtensions,
+} from "@/lib/goad-catalog-capabilities"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn, extractArray, timeAgo } from "@/lib/utils"
@@ -403,7 +407,7 @@ function GoadInstancePage() {
 
   // Watchdog A: range entered a terminal error state while GOAD is still running.
   // Stop the GOAD SSH process so it doesn't waste time running Ansible on failed
-  // infrastructure (which would otherwise keep the command alive for 30–90 min).
+  // infrastructure (which would otherwise keep the command alive for a GOAD deployment).
   useEffect(() => {
     if (rangeState === "DEPLOYING" || rangeState === "WAITING") {
       sawDeployingRef.current = true
@@ -1506,12 +1510,20 @@ function GoadInstancePage() {
       }
     )
 
-  const handleInstallExtension = (name: string) =>
+  const handleInstallExtension = (name: string) => {
+    const def = extMap[name]
+    const noNewVms = def ? extensionIsProvisionOnly(def) : false
+    const skipDeploy = noNewVms && goadSupportsProvisionOnlyExtensions(catalog)
     confirm(
-      `Install "${name}"? Deploys new VMs and runs Ansible — can take 30–90 min.`,
+      skipDeploy
+        ? `Enable "${name}" and run Ansible only (no Ludus range deploy)?`
+        : noNewVms
+        ? `Install "${name}"? This extension adds no VMs, but GOAD at ${catalog?.goadPath ?? "your server"} does not support provision-only install_extension — a full Ludus range deploy will run.`
+        : `Install "${name}"? Deploys new VMs and runs Ansible.`,
       () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
       `ext-install:${name}`,
     )
+  }
 
   // provision_extension runs Ansible only (no infrastructure changes) — safe to re-run
   const handleReprovisionExtension = (ext: string) =>
@@ -1783,6 +1795,8 @@ function GoadInstancePage() {
     if (!instance?.lab) return true
     return ext.compatibility.includes("*") || ext.compatibility.includes(instance.lab)
   })
+  const provisionOnlyExtensionsSupported = goadSupportsProvisionOnlyExtensions(catalog)
+  const hasZeroVmExtensionsToInstall = uninstalledExtensions.some(extensionIsProvisionOnly)
 
   if (loading) {
     return (
@@ -2246,7 +2260,7 @@ function GoadInstancePage() {
         </TabsContent>
 
         {/* Lab Info */}
-        <TabsContent value="info" className="mt-4">
+        <TabsContent value="info" className="mt-4 flex flex-col min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-4">
             <Card className="border-primary/40 bg-primary/5">
               <CardContent className="p-3 flex items-center justify-between gap-3">
@@ -2325,7 +2339,7 @@ function GoadInstancePage() {
         </TabsContent>
 
         {/* Compiled inventories (base + extension inventories from workspace) */}
-        <TabsContent value="inventories" className="mt-4">
+        <TabsContent value="inventories" className="mt-4 flex flex-col min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">
@@ -2406,8 +2420,8 @@ function GoadInstancePage() {
           </div>
         </TabsContent>
 
-        {/* Extensions */}
-        <TabsContent value="extensions" className="mt-4">
+        {/* Extensions — flex-1 + overflow so long lists scroll inside the tab panel */}
+        <TabsContent value="extensions" className="mt-4 flex flex-col min-h-0 flex-1 overflow-y-auto">
           <div className="space-y-4">
             <Alert>
               <AlertDescription className="text-xs">
@@ -2520,12 +2534,14 @@ function GoadInstancePage() {
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase mb-1">Available to Install</p>
                 <p className="text-[11px] text-muted-foreground mb-3">
-                  Install adds new VMs and runs Ansible (30–90 min). Re-provision re-runs Ansible only. Remove destroys extension VMs.
+                  Install adds new VMs and runs Ansible. Re-provision re-runs Ansible only. Remove destroys extension VMs.
                 </p>
                 <div className="grid gap-2">
                   {uninstalledExtensions.map((ext) => {
                     const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
                     const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                    const noNewVms = extensionIsProvisionOnly(ext)
+                    const skipDeploy = noNewVms && provisionOnlyExtensionsSupported
                     const canInstall =
                       templatesReady &&
                       !!instance.ludusRangeId &&
@@ -2582,11 +2598,15 @@ function GoadInstancePage() {
                                 ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
                                 : isRunning
                                 ? "Wait for current action to finish"
+                                : skipDeploy
+                                ? "Enable extension and run Ansible only (no Ludus deploy)"
+                                : noNewVms
+                                ? "Install — GOAD on this server may still run Ludus range deploy"
                                 : "Install this extension"
                             }
                           >
                             <Play className="h-3.5 w-3.5" />
-                            Install
+                            {skipDeploy ? "Provision" : "Install"}
                           </Button>
                         </div>
                         <ConfirmBar

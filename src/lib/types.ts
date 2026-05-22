@@ -343,6 +343,11 @@ export interface GoadCatalog {
   goadPath: string
   labs: GoadLabDef[]
   extensions: GoadExtensionDef[]
+  /** Probed from GOAD sources on the Ludus server (goad.py / extension.py). */
+  capabilities?: {
+    /** install_extension skips provider.install() when extension.json machines is []. */
+    provisionOnlyExtensions: boolean
+  }
 }
 
 export interface GoadCommand {

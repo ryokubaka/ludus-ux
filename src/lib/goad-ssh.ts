@@ -508,7 +508,7 @@ export async function streamGoadCommand(
   // the settings store) and create+chmod the directory before the user's command
   // starts.  This runs as actual root — no sudo required.
   //
-  // The await adds ~1-2 s of setup latency, which is negligible for a 30-90 min
+  // The await adds ~1-2 s of setup latency, which is negligible for a GOAD deployment.
   // GOAD deployment.  Failure is silenced here; the preamble below still checks
   // writability and prints a clear actionable error if it isn't writable.
   const GOAD_WORKSPACE = `${goadPath}/workspace`;
@@ -1116,7 +1116,34 @@ def discover(goad_path):
                 except Exception:
                     pass
 
+    result["capabilities"] = {
+        "provisionOnlyExtensions": probe_provision_only_extensions(goad_path),
+    }
+
     print(json.dumps(result))
+
+def probe_provision_only_extensions(goad_path):
+    """True when GOAD install_extension skips ludus deploy for machines=[] extensions."""
+    goad_py = os.path.join(goad_path, "goad.py")
+    ext_py = os.path.join(goad_path, "goad", "extension.py")
+    if not os.path.isfile(goad_py) or not os.path.isfile(ext_py):
+        return False
+    try:
+        with open(goad_py, encoding="utf-8", errors="ignore") as f:
+            goad_src = f.read()
+        with open(ext_py, encoding="utf-8", errors="ignore") as f:
+            ext_src = f.read()
+    except Exception:
+        return False
+    install_skip = (
+        "extension.machines" in goad_src
+        and (
+            "adds no provider VMs" in goad_src
+            or "skipping install()" in goad_src.lower()
+        )
+    )
+    machines_field = "self.machines" in ext_src and "machines" in ext_src
+    return install_skip and machines_field
 
 discover(sys.argv[1])
 `
@@ -1149,6 +1176,9 @@ export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog
       goadPath,
       labs: parsed.labs || [],
       extensions: parsed.extensions || [],
+      capabilities: {
+        provisionOnlyExtensions: parsed.capabilities?.provisionOnlyExtensions === true,
+      },
     };
     catalogCache = { data: catalog, expiry: Date.now() + CATALOG_TTL_MS, goadPath };
     return catalog;

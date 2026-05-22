@@ -4,6 +4,14 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [1.0.2] — 2026-05-22
+
+**LUX**
+- [Fix] **GOAD instance → Extensions tab** — Long extension lists scroll inside the tab panel again (scrollbar visible); same layout fix for **Lab Info** and **Inventories** tabs when content exceeds the viewport.
+- [Improve] **GOAD extensions (no new VMs)** — Extensions with no Ludus machines show **Provision** instead of **Install** and confirm Ansible-only enablement (no range deploy). Feature requires modification to GOAD (see [goad-mod](https://github.com/ryokubaka/goad-mod)). Normal GOAD will execute `ludus range deploy` even for a zero-VM extension.
+
+---
+
 ## [1.0.1] — 2026-05-14
 
 **LUX**

@@ -4,6 +4,15 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 ---
 
+## [1.0.3] — 2026-05-26
+
+**LUX**
+- [Improve] **Dashboard → VM power** — Per-VM and bulk power on/off stay in a pending/spinning state until Ludus confirms each VM is running or stopped; status shows **Starting…** / **Stopping…**; **All On** / **All Off** spin until every targeted VM confirms (slow Ludus timeouts still poll for confirmation).
+- [Fix] **Post-GOAD firewall redeploy banner** — Step 2 no longer sticks after **Deploy Tags: network** succeeds; empty-template Ludus history rows now match in terminal state (not only while `running`), GOAD tasks poll while `phase=network-deploy`, and the dashboard clears stale phase when history already shows completion.
+- [Security] **ws** 8.21.0 — patches GHSA-58qx-3vcg-4xpx / CVE-2026-45736; **brace-expansion** 5.0.6+ override — patches GHSA-jxxr-4gwj-5jf2 / CVE-2026-45149.
+
+---
+
 ## [1.0.2] — 2026-05-22
 
 **LUX**

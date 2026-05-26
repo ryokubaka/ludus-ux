@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -9,10 +9,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Monitor, Power, PowerOff, RefreshCw, Circle, Download, MonitorPlay, Loader2, ExternalLink, Trash2 } from "lucide-react"
+import { Monitor, Power, PowerOff, Circle, Download, MonitorPlay, Loader2, ExternalLink, Trash2 } from "lucide-react"
 import type { VMObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
+import { vmDisplayName, waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 
@@ -44,9 +45,10 @@ export function VMTable({
   const { toast } = useToast()
   const [selectedVMs, setSelectedVMs] = useState<Set<string>>(new Set())
   const [loadingVMs, setLoadingVMs] = useState<Set<string>>(new Set())
+  const [pendingPowerAction, setPendingPowerAction] = useState<Map<string, "on" | "off">>(new Map())
   const [destroyingProxmoxId, setDestroyingProxmoxId] = useState<number | null>(null)
 
-  const vmName = (vm: VMObject) => vm.name || vm.vmName || `vm-${vm.ID}`
+  const vmName = vmDisplayName
   const isRunning = (vm: VMObject) => vm.poweredOn ?? (vm.powerState === "running")
   const showConsole = !!(onOpenBrowser || onOpenBrowserNewWindow || onDownloadVv)
 
@@ -67,38 +69,100 @@ export function VMTable({
     }
   }
 
-  const handlePower = async (names: string[], action: "on" | "off") => {
-    setLoadingVMs((prev) => new Set([...Array.from(prev), ...names]))
-    // Scope to the current range so Ludus does not fall back to the user's
-    // default range — which breaks (or targets the wrong range) whenever the
-    // dashboard is showing a non-default or GOAD-mapped range. Without this,
-    // Ludus returns `Range <id> not found for user <user>`.
-    const result = action === "on"
-      ? await ludusApi.powerOn(names, rangeId)
-      : await ludusApi.powerOff(names, rangeId)
-    if (result.error) {
-      if (
-        tryToastLudusSlowHttpError({
-          toast,
-          error: result.error,
-          slowTitle: "Slow response from Ludus",
-          onSlow: () => onRefresh?.(),
-        })
-      ) {
-        // keep loading cleared below
-      } else {
-        toast({ variant: "destructive", title: "Error", description: result.error })
-      }
-    } else {
-      toast({ title: `Power ${action}`, description: `${names.length} VM(s)` })
-      onRefresh?.()
-    }
+  const clearPendingPower = (names: string[]) => {
     setLoadingVMs((prev) => {
       const next = new Set(prev)
       names.forEach((n) => next.delete(n))
       return next
     })
+    setPendingPowerAction((prev) => {
+      const next = new Map(prev)
+      names.forEach((n) => next.delete(n))
+      return next
+    })
   }
+
+  const handlePower = async (names: string[], action: "on" | "off") => {
+    setLoadingVMs((prev) => new Set([...Array.from(prev), ...names]))
+    setPendingPowerAction((prev) => {
+      const next = new Map(prev)
+      names.forEach((n) => next.set(n, action))
+      return next
+    })
+    let pollAfterRequest = false
+    try {
+      // Scope to the current range so Ludus does not fall back to the user's
+      // default range — which breaks (or targets the wrong range) whenever the
+      // dashboard is showing a non-default or GOAD-mapped range. Without this,
+      // Ludus returns `Range <id> not found for user <user>`.
+      const result = action === "on"
+        ? await ludusApi.powerOn(names, rangeId)
+        : await ludusApi.powerOff(names, rangeId)
+      if (result.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: result.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => onRefresh?.(),
+          })
+        ) {
+          pollAfterRequest = true
+        } else {
+          toast({ variant: "destructive", title: "Error", description: result.error })
+          return
+        }
+      } else {
+        toast({
+          title: action === "on" ? "Powering on" : "Powering off",
+          description: `${names.length} VM(s) — waiting for confirmation…`,
+        })
+        pollAfterRequest = true
+      }
+
+      if (pollAfterRequest) {
+        onRefresh?.()
+        const wait = await waitForVmPowerConfirmation({
+          rangeId,
+          vmNames: names,
+          action,
+          fetchStatus: () => ludusApi.getRangeStatus(rangeId),
+        })
+        onRefresh?.()
+        if (wait.ok) {
+          toast({
+            title: action === "on" ? "Power on confirmed" : "Power off confirmed",
+            description: `${names.length} VM(s)`,
+          })
+        } else if (wait.via === "timeout") {
+          toast({
+            variant: "destructive",
+            title: "Power state not confirmed yet",
+            description:
+              wait.pending.length === 1
+                ? `${wait.pending[0]} may still be ${action === "on" ? "starting" : "stopping"}. Refresh to check.`
+                : `${wait.pending.length} VM(s) may still be ${action === "on" ? "starting" : "stopping"}. Refresh to check.`,
+          })
+        }
+      }
+    } finally {
+      clearPendingPower(names)
+    }
+  }
+
+  // Parent range polls can confirm power before our waiter finishes — drop spinners early.
+  useEffect(() => {
+    if (pendingPowerAction.size === 0) return
+    const confirmed: string[] = []
+    for (const [name, action] of pendingPowerAction) {
+      const vm = vms.find((v) => vmName(v) === name)
+      if (!vm) continue
+      const running = isRunning(vm)
+      const matches = action === "on" ? running : !running
+      if (matches) confirmed.push(name)
+    }
+    if (confirmed.length > 0) clearPendingPower(confirmed)
+  }, [vms, pendingPowerAction])
 
   const handleDestroyVm = async (vm: VMObject) => {
     const name = vmName(vm)
@@ -172,12 +236,20 @@ export function VMTable({
           <span className="text-sm text-muted-foreground">{selectedVMs.size} selected</span>
           <div className="flex gap-2 ml-auto">
             <Button size="sm" variant="outline" className="gap-1 text-green-400 border-green-400/30"
+              disabled={selectedArray.some((n) => loadingVMs.has(n))}
               onClick={() => handlePower(selectedArray, "on")}>
-              <Power className="h-3 w-3" /> Power On
+              {selectedArray.some((n) => loadingVMs.has(n) && pendingPowerAction.get(n) === "on")
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <Power className="h-3 w-3" />}
+              Power On
             </Button>
             <Button size="sm" variant="destructive"
+              disabled={selectedArray.some((n) => loadingVMs.has(n))}
               onClick={() => handlePower(selectedArray, "off")}>
-              <PowerOff className="h-3 w-3" /> Power Off
+              {selectedArray.some((n) => loadingVMs.has(n) && pendingPowerAction.get(n) === "off")
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : <PowerOff className="h-3 w-3" />}
+              Power Off
             </Button>
           </div>
         </div>
@@ -220,6 +292,7 @@ export function VMTable({
                 const name = vmName(vm)
                 const running = isRunning(vm)
                 const powerLoading = loadingVMs.has(name)
+                const pendingAction = pendingPowerAction.get(name)
                 const isDownloading = downloadingVm === name
                 const isOpening = openingVm === name
                 const proxmoxId = vm.proxmoxID ?? vm.ID
@@ -243,10 +316,21 @@ export function VMTable({
                     </td>
                     <td className="p-3">
                       <div className="flex items-center gap-1.5">
-                        <Circle className={cn("h-2 w-2 fill-current", running ? "text-green-400" : "text-red-400")} />
-                        <span className={cn("text-xs", running ? "text-green-400" : "text-red-400")}>
-                          {running ? "Running" : "Stopped"}
-                        </span>
+                        {powerLoading ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
+                            <span className="text-xs text-amber-400">
+                              {pendingAction === "on" ? "Starting…" : "Stopping…"}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Circle className={cn("h-2 w-2 fill-current", running ? "text-green-400" : "text-red-400")} />
+                            <span className={cn("text-xs", running ? "text-green-400" : "text-red-400")}>
+                              {running ? "Running" : "Stopped"}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </td>
                     <td className="p-3">
@@ -319,7 +403,9 @@ export function VMTable({
                             <Button size="icon-sm" variant="ghost"
                               disabled={powerLoading || running}
                               onClick={() => handlePower([name], "on")}>
-                              {powerLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Power className="h-3 w-3 text-green-400" />}
+                              {powerLoading && pendingAction === "on"
+                                ? <Loader2 className="h-3 w-3 animate-spin text-green-400" />
+                                : <Power className="h-3 w-3 text-green-400" />}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>Power On</TooltipContent>
@@ -329,7 +415,9 @@ export function VMTable({
                             <Button size="icon-sm" variant="ghost"
                               disabled={powerLoading || !running}
                               onClick={() => handlePower([name], "off")}>
-                              <PowerOff className="h-3 w-3 text-red-400" />
+                              {powerLoading && pendingAction === "off"
+                                ? <Loader2 className="h-3 w-3 animate-spin text-red-400" />
+                                : <PowerOff className="h-3 w-3 text-red-400" />}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>Power Off</TooltipContent>

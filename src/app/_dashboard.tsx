@@ -77,11 +77,16 @@ import {
 import { useAbortRange } from "@/lib/use-abort-range"
 import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
 import {
+  pickNetworkFollowupDeployRow,
+  isDeployHistoryRunning,
+} from "@/lib/wait-lux-network-tag-deploy"
+import {
   clearVmPartialListStreak,
   dedupeVMs,
   resolveVmListForRangeQuery,
   vmIsRunning,
 } from "@/lib/dashboard-vm-merge"
+import { waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
 
 /** Re-open inventory for the same range without waiting on Ludus again. */
 const INVENTORY_CACHE_MS = 3 * 60 * 1000
@@ -122,6 +127,7 @@ export function DashboardPageClient() {
   }, [])
   const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
   const [destroyingAllVmsRangeId, setDestroyingAllVmsRangeId] = useState<string | null>(null)
+  const [powerAllPending, setPowerAllPending] = useState<"on" | "off" | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [downloadingVm, setDownloadingVm] = useState<string | null>(null)
@@ -315,8 +321,10 @@ export function DashboardPageClient() {
     // deploy row — otherwise the first fetch often has no "running" task yet and
     // polling stays off until a manual refresh invalidates.
     refetchInterval: (q) => {
-      const tasksRunning = (q.state.data ?? []).some((t) => t.status === "running")
-      return tasksRunning || shouldPollGoadTasksAux ? 3000 : false
+      const data = q.state.data ?? []
+      const tasksRunning = data.some((t) => t.status === "running")
+      const postGoadNetwork = data.some((t) => t.phase === "network-deploy")
+      return tasksRunning || postGoadNetwork || shouldPollGoadTasksAux ? 3000 : false
     },
   })
 
@@ -731,31 +739,65 @@ export function DashboardPageClient() {
 
   const doPowerAll = async (action: "on" | "off") => {
     const vms = rangeData?.VMs || (rangeData as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
-    const vmNames = vms.map((v: VMObject) => v.name || `vm-${v.ID}`).filter(Boolean)
+    const vmNames = vms.map((v: VMObject) => v.name || v.vmName || `vm-${v.ID}`).filter(Boolean)
     if (vmNames.length === 0) {
       toast({ variant: "destructive", title: "No VMs", description: "No VMs in this range to power " + action })
       return
     }
-    const result = action === "on"
-      ? await ludusApi.powerOn(vmNames, selectedRangeId ?? undefined)
-      : await ludusApi.powerOff(vmNames, selectedRangeId ?? undefined)
-    if (result.error) {
-      if (
-        tryToastLudusSlowHttpError({
-          toast,
-          error: result.error,
-          slowTitle: "Slow response from Ludus",
-          onSlow: () => {
-            setTimeout(invalidateRangeStatus, 3000)
-          },
+    setPowerAllPending(action)
+    let pollAfterRequest = false
+    try {
+      const result = action === "on"
+        ? await ludusApi.powerOn(vmNames, selectedRangeId ?? undefined)
+        : await ludusApi.powerOff(vmNames, selectedRangeId ?? undefined)
+      if (result.error) {
+        if (
+          tryToastLudusSlowHttpError({
+            toast,
+            error: result.error,
+            slowTitle: "Slow response from Ludus",
+            onSlow: () => {
+              void invalidateRangeStatus()
+            },
+          })
+        ) {
+          pollAfterRequest = true
+        } else {
+          toast({ variant: "destructive", title: "Error", description: result.error })
+          return
+        }
+      } else {
+        toast({
+          title: action === "on" ? "Powering on all VMs" : "Powering off all VMs",
+          description: `${vmNames.length} VMs — waiting for confirmation…`,
         })
-      ) {
-        return
+        pollAfterRequest = true
       }
-      toast({ variant: "destructive", title: "Error", description: result.error })
-    } else {
-      toast({ title: `Powering ${action} all VMs`, description: `${vmNames.length} VMs targeted` })
-      setTimeout(invalidateRangeStatus, 3000)
+
+      if (pollAfterRequest) {
+        void invalidateRangeStatus()
+        const wait = await waitForVmPowerConfirmation({
+          rangeId: selectedRangeId ?? undefined,
+          vmNames,
+          action,
+          fetchStatus: () => ludusApi.getRangeStatus(selectedRangeId ?? undefined),
+        })
+        void invalidateRangeStatus()
+        if (wait.ok) {
+          toast({
+            title: action === "on" ? "All VMs running" : "All VMs stopped",
+            description: `${vmNames.length} VMs confirmed`,
+          })
+        } else if (wait.via === "timeout") {
+          toast({
+            variant: "destructive",
+            title: "Power state not confirmed yet",
+            description: `${wait.pending.length} VM(s) may still be ${action === "on" ? "starting" : "stopping"}. Refresh to check.`,
+          })
+        }
+      }
+    } finally {
+      setPowerAllPending(null)
     }
   }
   const handlePowerAll = (action: "on" | "off") =>
@@ -961,7 +1003,33 @@ export function DashboardPageClient() {
       queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
     }
     prevActiveTaskIdRef.current = curr
-  }, [activeGoadTask?.id, selectedRangeId, queryClient])
+  }, [activeGoadTask?.id, selectedRangeId, queryClient, scopeTag])
+
+  // Stale phase guard: if SQLite still says network-deploy but Ludus history
+  // already shows a terminal network follow-up, clear phase so the Step 2 banner
+  // does not persist (e.g. after a page refresh mid-wait or a missed poll).
+  const stalePhaseClearRef = useRef<string | null>(null)
+  useEffect(() => {
+    const task = latestGoadTask
+    if (!task || task.phase !== "network-deploy" || !task.endedAt) return
+    const anchorMs = task.endedAt
+    const row = pickNetworkFollowupDeployRow(deployHistoryEntries, anchorMs)
+    if (!row || isDeployHistoryRunning(row.status || "")) return
+    if (stalePhaseClearRef.current === task.id) return
+    stalePhaseClearRef.current = task.id
+    void (async () => {
+      try {
+        await fetch(`/api/goad/tasks/${encodeURIComponent(task.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phase: null }),
+        })
+        await queryClient.invalidateQueries({ queryKey: [...queryKeys.goadTasks(), scopeTag], exact: false })
+      } catch {
+        stalePhaseClearRef.current = null
+      }
+    })()
+  }, [latestGoadTask, deployHistoryEntries, queryClient, scopeTag])
 
   return (
     <div className="space-y-6">
@@ -1136,11 +1204,17 @@ export function DashboardPageClient() {
                         </Button>
                       )
                     )}
-                    <Button variant="outline" onClick={() => handlePowerAll("on")} disabled={!!pendingAction} className="gap-1.5">
-                      <Power className="h-3.5 w-3.5 text-green-400" /> All On
+                    <Button variant="outline" onClick={() => handlePowerAll("on")} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
+                      {powerAllPending === "on"
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-green-400" />
+                        : <Power className="h-3.5 w-3.5 text-green-400" />}
+                      {powerAllPending === "on" ? "Powering on…" : "All On"}
                     </Button>
-                    <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction} className="gap-1.5">
-                      <PowerOff className="h-3.5 w-3.5 text-red-400" /> All Off
+                    <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
+                      {powerAllPending === "off"
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-red-400" />
+                        : <PowerOff className="h-3.5 w-3.5 text-red-400" />}
+                      {powerAllPending === "off" ? "Powering off…" : "All Off"}
                     </Button>
                     <Button
                       type="button"

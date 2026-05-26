@@ -13,7 +13,7 @@ export type NetworkTagDeployWaitResult =
   | { ok: true; via: "range_idle_after_inflight"; detail: string }
   | { ok: false; via: "history_failed" | "range_error" | "ceiling"; entry?: LogHistoryEntry; detail: string }
 
-function isDeployHistoryRunning(status: string): boolean {
+export function isDeployHistoryRunning(status: string): boolean {
   const s = status.trim().toLowerCase()
   return s === "running" || s === "pending" || s === "waiting"
 }
@@ -48,8 +48,11 @@ function isCandidateNetworkFollowupRow(e: LogHistoryEntry, requestedAtMs: number
     .filter(Boolean)
   if (parts.includes("network")) return true
 
-  const st = (e.status || "").trim().toLowerCase()
-  if (st === "running" && parts.length === 0) {
+  // Ludus often leaves `template` empty on tag deploy rows; LUX labels them via
+  // SQLite markers in the UI. Match any status (running *or* success) in the
+  // narrow post-trigger window — previously only `running` matched, so a row
+  // that flipped to Success stopped matching and the wait loop never resolved.
+  if (parts.length === 0) {
     return ts >= requestedAtMs - 5_000 && ts <= requestedAtMs + 6 * 60_000
   }
 

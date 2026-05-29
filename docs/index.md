@@ -10,6 +10,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [SSH and authentication](ssh-and-auth.md) | Root vs session auth, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |
 | [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
+| [Templates](templates.md) | Packer template builds in LUX, add-from-source, Proxmox ACL troubleshooting |
 | [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |
 | [Persistent data](persistent-data.md) | What lives under `data/` and related paths |
 | [Development](development.md) | Local `npm run dev`, Playwright E2E |

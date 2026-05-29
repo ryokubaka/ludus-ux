@@ -28,6 +28,8 @@ import {
   ChevronRight,
   Package,
   BookOpen,
+  Search,
+  X,
   Plus,
   Bug,
   Minus,
@@ -40,6 +42,7 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { cn } from "@/lib/utils"
 import dynamic from "next/dynamic"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 
@@ -90,7 +93,6 @@ type TagMeta = { label: string; className: string; Icon: React.FC<LucideProps> }
 const TAG_META: Record<string, TagMeta> = {
   add:      { label: "Add",      Icon: Plus,           className: "bg-green-500/15 text-green-400 border-green-500/30" },
   fix:      { label: "Fix",      Icon: Bug,            className: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
-  change:   { label: "Change",   Icon: ArrowRightLeft, className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
   improve:  { label: "Enhance",  Icon: Zap,            className: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
   perf:     { label: "Perf",     Icon: Zap,            className: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30" },
   security: { label: "Security", Icon: ShieldAlert,    className: "bg-red-500/15 text-red-400 border-red-500/30" },
@@ -98,6 +100,18 @@ const TAG_META: Record<string, TagMeta> = {
   breaking: { label: "Breaking", Icon: OctagonAlert,  className: "bg-rose-600/20 text-rose-300 border-rose-500/40" },
   docs:     { label: "Docs",     Icon: BookOpen,       className: "bg-slate-500/15 text-slate-300 border-slate-500/30" },
 }
+
+/** Order for quick-filter chips (only tags present in the changelog are shown). */
+const TAG_FILTER_ORDER = [
+  "add",
+  "improve",
+  "fix",
+  "security",
+  "perf",
+  "docs",
+  "remove",
+  "breaking",
+] as const
 
 interface ParsedEntry {
   tag: string
@@ -159,17 +173,129 @@ function allEntries(v: ParsedVersion): ParsedEntry[] {
   return v.groups.flatMap((g) => g.entries)
 }
 
-function renderInline(text: string) {
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function entryMatchesQuery(
+  entry: ParsedEntry,
+  groupName: string | null,
+  version: ParsedVersion,
+  q: string,
+): boolean {
+  const meta = TAG_META[entry.tag]
+  const haystacks = [
+    entry.text,
+    entry.tag,
+    meta?.label ?? "",
+    groupName ?? "",
+    version.title,
+    version.date,
+  ]
+  return haystacks.some((h) => h.toLowerCase().includes(q))
+}
+
+function filterChangelogByTag(versions: ParsedVersion[], tag: string | null): ParsedVersion[] {
+  if (!tag) return versions
+  const out: ParsedVersion[] = []
+  for (const v of versions) {
+    const groups: ParsedGroup[] = []
+    for (const g of v.groups) {
+      const entries = g.entries.filter((e) => e.tag === tag)
+      if (entries.length > 0) groups.push({ ...g, entries })
+    }
+    if (groups.length > 0) out.push({ ...v, groups })
+  }
+  return out
+}
+
+function changelogTagCounts(versions: ParsedVersion[]): Record<string, number> {
+  const acc: Record<string, number> = {}
+  for (const v of versions) {
+    for (const e of allEntries(v)) {
+      acc[e.tag] = (acc[e.tag] ?? 0) + 1
+    }
+  }
+  return acc
+}
+
+function filterChangelogVersions(versions: ParsedVersion[], query: string): ParsedVersion[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return versions
+
+  const out: ParsedVersion[] = []
+  for (const v of versions) {
+    const titleMatch = v.title.toLowerCase().includes(q) || v.date.toLowerCase().includes(q)
+    if (titleMatch) {
+      out.push(v)
+      continue
+    }
+
+    const groups: ParsedGroup[] = []
+    for (const g of v.groups) {
+      const groupNameMatch = (g.name ?? "").toLowerCase().includes(q)
+      const entries = groupNameMatch
+        ? g.entries
+        : g.entries.filter((e) => entryMatchesQuery(e, g.name, v, q))
+      if (entries.length > 0) groups.push({ ...g, entries })
+    }
+    if (groups.length > 0) out.push({ ...v, groups })
+  }
+  return out
+}
+
+function countFilteredEntries(versions: ParsedVersion[]): number {
+  return versions.reduce((s, v) => s + allEntries(v).length, 0)
+}
+
+function renderPlainWithHighlight(text: string, query: string, keyPrefix: string) {
+  const q = query.trim()
+  if (!q) return <>{text}</>
+  const re = new RegExp(`(${escapeRegExp(q)})`, "gi")
+  const parts = text.split(re)
+  const qLower = q.toLowerCase()
+  return (
+    <>
+      {parts.map((part, i) =>
+        part && part.toLowerCase() === qLower ? (
+          <mark key={`${keyPrefix}-${i}`} className="bg-primary/25 text-foreground rounded-sm px-0.5">
+            {part}
+          </mark>
+        ) : (
+          <span key={`${keyPrefix}-${i}`}>{part}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+function renderInline(text: string, highlightQuery = "") {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/)
   return parts.map((part, i) => {
     if (part.startsWith("**") && part.endsWith("**"))
-      return <strong key={i} className="font-medium text-foreground">{part.slice(2, -2)}</strong>
+      return (
+        <strong key={i} className="font-medium text-foreground">
+          {highlightQuery ? renderPlainWithHighlight(part.slice(2, -2), highlightQuery, `b-${i}`) : part.slice(2, -2)}
+        </strong>
+      )
     if (part.startsWith("`") && part.endsWith("`"))
-      return <code key={i} className="text-primary text-[11px] bg-muted px-1 py-0.5 rounded">{part.slice(1, -1)}</code>
+      return (
+        <code key={i} className="text-primary text-[11px] bg-muted px-1 py-0.5 rounded">
+          {highlightQuery ? renderPlainWithHighlight(part.slice(1, -1), highlightQuery, `c-${i}`) : part.slice(1, -1)}
+        </code>
+      )
     const lm = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
     if (lm)
-      return <a key={i} href={lm[2]} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:text-primary/80">{lm[1]}</a>
-    return <span key={i}>{part}</span>
+      return (
+        <a key={i} href={lm[2]} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:text-primary/80">
+          {highlightQuery ? renderPlainWithHighlight(lm[1], highlightQuery, `l-${i}`) : lm[1]}
+        </a>
+      )
+    return highlightQuery ? (
+      <span key={i}>{renderPlainWithHighlight(part, highlightQuery, `t-${i}`)}</span>
+    ) : (
+      <span key={i}>{part}</span>
+    )
   })
 }
 
@@ -179,6 +305,8 @@ function ReleaseNotes() {
   const [raw, setRaw] = useState<string | null>(null)
   const [error, setError] = useState(false)
   const [expanded, setExpanded] = useState<Record<number, boolean>>({ 0: true })
+  const [searchQuery, setSearchQuery] = useState("")
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
 
   useEffect(() => {
     fetch("/api/changelog")
@@ -188,6 +316,20 @@ function ReleaseNotes() {
   }, [])
 
   const versions = useMemo(() => (raw ? parseChangelog(raw) : []), [raw])
+  const tagCountsAll = useMemo(() => changelogTagCounts(versions), [versions])
+  const filteredVersions = useMemo(() => {
+    let v = filterChangelogByTag(versions, tagFilter)
+    v = filterChangelogVersions(v, searchQuery)
+    return v
+  }, [versions, tagFilter, searchQuery])
+  const searchActive = searchQuery.trim().length > 0
+  const filterActive = searchActive || tagFilter != null
+  const matchCount = countFilteredEntries(filteredVersions)
+
+  useEffect(() => {
+    if (!filterActive) return
+    setExpanded(Object.fromEntries(filteredVersions.map((_, i) => [i, true])))
+  }, [filterActive, filteredVersions])
 
   if (error) return <p className="text-sm text-destructive py-4 text-center">Could not load changelog.</p>
   if (!raw) return (
@@ -202,10 +344,80 @@ function ReleaseNotes() {
     GOAD: "text-orange-400 border-orange-400/40 bg-orange-400/10",
   }
 
+  const hl = searchQuery.trim()
+
   return (
+    <div className="space-y-3">
+      <div className="relative">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <Input
+          type="text"
+          role="searchbox"
+          placeholder="Search release notes…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="h-8 pl-8 pr-8 text-sm"
+          aria-label="Search release notes"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            aria-label="Clear search"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by change type">
+        <button
+          type="button"
+          onClick={() => setTagFilter(null)}
+          className={cn(
+            "text-[10px] font-medium px-2 py-0.5 rounded border transition-colors",
+            tagFilter === null
+              ? "border-primary/50 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground",
+          )}
+        >
+          All
+        </button>
+        {TAG_FILTER_ORDER.map((tag) => {
+          const count = tagCountsAll[tag]
+          const meta = TAG_META[tag]
+          if (!count || !meta) return null
+          const selected = tagFilter === tag
+          return (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => setTagFilter(selected ? null : tag)}
+              aria-pressed={selected}
+              className={cn(
+                "inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors",
+                selected ? "ring-1 ring-primary/40" : "opacity-80 hover:opacity-100",
+                meta.className,
+              )}
+            >
+              <meta.Icon className="h-2.5 w-2.5" />
+              {meta.label}
+              <span className="opacity-70">{count}</span>
+            </button>
+          )
+        })}
+      </div>
+      {filterActive && (
+        <p className="text-xs text-muted-foreground">
+          {matchCount === 0
+            ? "No matching changes."
+            : `${matchCount} change${matchCount === 1 ? "" : "s"} in ${filteredVersions.length} version${filteredVersions.length === 1 ? "" : "s"}`}
+        </p>
+      )}
+      {filterActive && matchCount === 0 ? null : (
     <div className="divide-y divide-border/40">
-      {versions.map((v, vi) => {
-        const isOpen = !!expanded[vi]
+      {filteredVersions.map((v, vi) => {
+        const isOpen = filterActive || !!expanded[vi]
         const entries = allEntries(v)
         const tagCounts = entries.reduce<Record<string, number>>((acc, e) => {
           acc[e.tag] = (acc[e.tag] ?? 0) + 1
@@ -221,7 +433,9 @@ function ReleaseNotes() {
               aria-expanded={isOpen}
             >
               <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform shrink-0 ${isOpen ? "rotate-90" : ""}`} />
-              <span className="text-sm font-semibold text-foreground group-hover:text-primary flex-1">{v.title}</span>
+              <span className="text-sm font-semibold text-foreground group-hover:text-primary flex-1">
+                {hl ? renderPlainWithHighlight(v.title, hl, `title-${vi}`) : v.title}
+              </span>
               <span className="text-xs text-muted-foreground/50 font-mono shrink-0">{entries.length} changes</span>
               {vi === 0 && <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">Latest</Badge>}
             </button>
@@ -262,7 +476,7 @@ function ReleaseNotes() {
                                   <meta.Icon className="h-2.5 w-2.5" />
                                   {meta.label}
                                 </span>
-                                <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text)}</span>
+                                <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text, hl)}</span>
                               </div>
                             )
                           })}
@@ -280,7 +494,7 @@ function ReleaseNotes() {
                             <meta.Icon className="h-2.5 w-2.5" />
                             {meta.label}
                           </span>
-                          <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text)}</span>
+                          <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text, hl)}</span>
                         </div>
                       )
                     })}
@@ -291,6 +505,8 @@ function ReleaseNotes() {
           </div>
         )
       })}
+    </div>
+      )}
     </div>
   )
 }

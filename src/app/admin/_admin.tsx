@@ -89,6 +89,11 @@ export function AdminPageClient() {
 
   const ranges = adminData?.ranges ?? []
   const users = adminData?.users ?? []
+  /** ROOT is admin-only; hide from utilization overview. */
+  const usersVisible = useMemo(
+    () => users.filter((u) => u.userID.toUpperCase() !== "ROOT"),
+    [users],
+  )
   const error = adminDataError ? (adminDataError as Error).message : null
 
   const [impersonateTarget, setImpersonateTarget] = useState<ImpersonateTarget | null>(null)
@@ -243,12 +248,16 @@ export function AdminPageClient() {
     // Build userID → Set<rangeID> from the server's authoritative ownership map,
     // with optimistic session-local overrides on top.
     const map = new Map<string, Set<string>>()
-    for (const u of fetchedUsers) map.set(u.userID, new Set())
+    for (const u of fetchedUsers) {
+      if (u.userID.toUpperCase() === "ROOT") continue
+      map.set(u.userID, new Set())
+    }
 
     const merged = { ...serverOwnership }
     for (const [rid, uid] of _pinnedAssignments) merged[rid] = uid
 
     for (const [rangeID, userID] of Object.entries(merged)) {
+      if (userID.toUpperCase() === "ROOT") continue
       if (!map.has(userID)) map.set(userID, new Set())
       // Remove from any previous owner first
       for (const [uid, ids] of map) { if (uid !== userID) ids.delete(rangeID) }
@@ -425,10 +434,10 @@ export function AdminPageClient() {
   const deployedRanges = ranges.filter((r) => r.rangeState === "SUCCESS").length
   const deployingRanges = ranges.filter((r) => r.rangeState === "DEPLOYING" || r.rangeState === "WAITING").length
 
-  // Sorted users list — purely alphabetical by userID
+  // Sorted users list — purely alphabetical by userID (ROOT excluded)
   const sortedUsers = useMemo(() =>
-    [...users].sort((a, b) => a.userID.localeCompare(b.userID)),
-  [users])
+    [...usersVisible].sort((a, b) => a.userID.localeCompare(b.userID)),
+  [usersVisible])
 
   // Ranges with no known owner
   const unclaimedRanges = useMemo(() => {
@@ -714,7 +723,7 @@ export function AdminPageClient() {
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
-          ) : users.length === 0 ? (
+          ) : usersVisible.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground text-sm">
               No users found.
             </div>

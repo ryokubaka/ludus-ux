@@ -2,6 +2,29 @@
 
 All notable changes to Ludus UX (LUX) will be documented in this file.
 
+Each bullet uses a single tag:
+
+ - **[Add]** - New capability
+ - **[Fix]** - Bug or wrong behavior
+ - **[Improve]** - UX polish or refactor without a new feature
+ - **[Perf]** - Performance improvement
+ - **[Security]** - Security fix
+ - **[Docs]** - Documentation improvement
+ - **[Remove]** - Removed capability
+ - **[Breaking]** - Breaking change
+
+---
+
+## [1.0.4] — 2026-05-28
+
+**LUX**
+- [Fix] **Testing Mode** — Start/stop progress labels (button, log panel, alerts) follow PocketBase `testingEnabled` instead of the DB op record, so stopping testing no longer briefly shows "Starting Testing Mode…" while Ludus is still processing.
+- [Fix] **Settings → Ludus Performance** — CPU chart reads utilization from Proxmox `pvesh get /cluster/resources` (pvestatd) instead of `/nodes/{node}/status`, which often reported 0% on independent polls.
+- [Add] **Settings → About → Release notes** — Keyword search and quick filters by tag (Add, Fix, Enhance, …) across version titles, groups (LUX/GOAD), and descriptions, with match counts, auto-expanded hits, and highlighted terms.
+- [Improve] **CHANGELOG** — Retired generic `[Change]` tag; all historical bullets recategorized (see [tag guide](https://github.com/ryokubaka/ludus-ux/blob/main/CHANGELOG.md)).
+- [Improve] **Ranges Overview** — Hide the **ROOT** user row from Users & Ranges; ROOT is admin-only and not a Ludus utilization user.
+- [Docs] **Templates** — New [docs/templates.md](docs/templates.md): how the Templates page works (build, add-from-source, logs), Proxmox permissions for `iso_download_pve`, and troubleshooting `403 Permission check failed` when `AccessNetwork` ACL is on the wrong node (e.g. `/nodes/127.0.0.1` vs `proxmox_node`).
+
 ---
 
 ## [1.0.3] — 2026-05-26
@@ -46,7 +69,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 **LUX**
 - [Add] First stable release — out of beta!
 - [Add] **Range Configuration → Firewall Rules** — Toolbar next to **Apply to Config** adds **Save Config**, **Force** (same testing-mode `--force` flag as the page header), and **Deploy Firewall Rules** (merge rules into YAML, save to Ludus, then deploy with the `network` tag only).
-- [Change] **README** — Root readme is a short overview + quick links; long-form install, SSH, env, features, architecture, dev, API, and screenshots live under **[docs/](docs/index.md)**.
+- [Docs] **README** — Root readme is a short overview + quick links; long-form install, SSH, env, features, architecture, dev, API, and screenshots live under **[docs/](docs/index.md)**.
 - [Improve] **Range logs → History** — Saved deploy logs show clock times the same way as the live log, in order top to bottom, without confusing extra digits on the time.
 - [Improve] **Groups → remove a shared range** — Adding or removing a range from a group may need that range’s **router** machine turned on first. Dialog box now allows router power operations and ability to add/remove from the group.
 - [Improve] **Refresh feedback** — Groups, GOAD home (including recent activity), and the console **Reconnect** button show a brief spinner while things load again.
@@ -101,7 +124,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
   - **TLS PEMs** for nginx moved from repo-root **`certificates/`** to **`docker/nginx/certificates/`** (`cert.pem`, `key.pem`) — **migrate files** before or after pull; nginx generates self-signed certs on first boot if missing.
 - [Fix] Admin delete user — purge PocketBase `logs` rows that reference the user (`POST /api/users/purge-pocketbase-logs`) before Ludus `DELETE /user`; fixes referential integrity errors when deploy-run history exists
 - [Fix] GOAD terminal word wrap — inner `<pre>` replaced with `<div>` (`white-space: pre` blocked wrapping); wrap on by default; scroll pane `min-w-0` for flex shrink
-- [Change] Light log theme — black body text on GOAD terminal and shared `LogViewer`; Ansible / PLAY RECAP line colours for light backgrounds via `ansibleClassForTheme`
+- [Improve] Light log theme — black body text on GOAD terminal and shared `LogViewer`; Ansible / PLAY RECAP line colours for light backgrounds via `ansibleClassForTheme`
 
 **GOAD**
 - [Fix] `provide` stuck on **deployment in progress (DEPLOYING)** after Ansible **PLAY RECAP** succeeds — LUX watches streamed GOAD logs; when Ludus never flips PocketBase `rangeState` off DEPLOYING/WAITING, writes **SUCCESS** via PB (same escape hatch as abort; requires configured Ludus root API key and root SSH to read `.goad_range_id`)
@@ -116,7 +139,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 **LUX**
 - [Add] Playwright smoke (`npm run test:e2e`) — optional `E2E_*` env vars; see `config/playwright.config.ts`
 - [Add] Playwright: health, auth-gate, login UI, navigation, logout (`e2e/helpers/auth.ts`)
-- [Change] Tooling layout: `config/next.config.cjs`, `tailwind.config.ts`, `playwright.config.ts`, `postcss.config.cjs`, and `tsconfig.base.json` under `config/`
+- [Improve] Tooling layout: `config/next.config.cjs`, `tailwind.config.ts`, `playwright.config.ts`, `postcss.config.cjs`, and `tsconfig.base.json` under `config/`
 - [Perf] TanStack cache + `localStorage` namespaced per login/impersonation scope (`@sc` query keys); dashboard inventory cache keyed by scope; manual refresh no longer blocked by 15s poll
 - [Fix] Admin manual impersonation waits for `/api/auth/impersonate` cookie before navigating home
 - [Fix] Login: derive `isAdmin` from the correct Ludus `GET /user` row when the API returns an array; fixes missing admin sidebar for real admins
@@ -132,7 +155,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Add] Dashboard: **Destroy all VMs** (range object kept) via `DELETE /range/{rangeID}/vms`; confirmation copy contrasts with **Delete Range**
 - [Add] VM Operations audit entry for bulk destroy-all-VMs
 - [Fix] `ConfirmBar` preserves newline characters in multi-line confirmation prompts (`whitespace-pre-line`)
-- [Change] Configuration page: removed non-functional yaml-language-server schema tip banner
+- [Fix] Configuration page: removed non-functional yaml-language-server schema tip banner
 - [Security] **postcss** 8.5.10+ (CVE-2026-41305 / GHSA-qx2v-qp2m-jg93) — direct devDependency; `overrides.next.postcss` so Next’s nested copy matches patched release
 
 ---
@@ -145,7 +168,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Fix] Log body font-size now follows the toolbar (`.log-line` no longer pinned `text-xs`, which blocked resizing on Ludus Ansible output)
 - [Fix] noVNC resolves the Proxmox node from cluster resources by VMID before creating the VNC proxy ticket, instead of assuming the first node.
 - [Fix] noVNC missing-password errors now clearly explain that Proxmox HTTP tickets require the user's PAM password; SSH keys still work for SPICE and `pvesh` paths only.
-- [Change] noVNC now authenticates to Proxmox as the logged-in LUX user's PAM account (`proxmoxUsername@pam`) using the user's session password, instead of reusing `PROXMOX_SSH_USER` / root PAM credentials.
+- [Fix] noVNC now authenticates to Proxmox as the logged-in LUX user's PAM account (`proxmoxUsername@pam`) using the user's session password, instead of reusing `PROXMOX_SSH_USER` / root PAM credentials.
 - [Security] `proxmoxSshPassword` saved from the Settings UI is encrypted at rest in SQLite using `APP_SECRET`; existing plaintext values are rewritten encrypted on next settings load.
 - [Docs] README now separates root SSH auth from browser-console PAM auth and adds VNC 401 troubleshooting.
 - [Docs] Quickstart now explains the optional root `PROXMOX_SSH_PASSWORD` and that in-browser noVNC uses the logged-in user's password.
@@ -181,7 +204,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Fix] Network YAML comparison now semantic — eliminates false-positive post-GOAD firewall deploys
 - [Fix] Trailing quote removed from GOAD Logs History extension names
 - [Fix] Ansible `{{ range_id }}` resolved to actual value in VM operation audit entries
-- [Change] GOAD task phase, network flags, and start time persisted server-side in SQLite
+- [Add] GOAD task phase, network flags, and start time persisted server-side in SQLite
 
 ---
 
@@ -196,7 +219,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 - [Fix] Ansible ports schema error — `ports: all` emitted when `protocol: all`
 - [Fix] iptables rule ordering — rules written reversed to match Ludus `-I` insert semantics
 - [Fix] Deploy Logs panel moved above toolbar for immediate visibility without scrolling
-- [Change] Protocol and Action dropdowns display text centred for readability
+- [Improve] Protocol and Action dropdowns display text centred for readability
 
 **GOAD**
 - [Add] Firewall Rules step in Deploy New GOAD Instance wizard
@@ -206,7 +229,7 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 ## [0.9.2] — 2026-04-02
 
 - [Security] Next.js 15.5.14 — patches GHSA-h25m-26qc-wcjf (RSC-related DoS)
-- [Change] React 18.3.1 pinned as minimum for Next 15 compatibility
+- [Fix] React 18.3.1 pinned as minimum for Next 15 compatibility
 
 ---
 

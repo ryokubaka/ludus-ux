@@ -1019,12 +1019,11 @@ export default function TestingPage() {
 
   const selectedRange = contextRanges.find((r) => r.rangeID === selectedRangeId)
 
-  const isStopping = activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)
+  // PocketBase testingEnabled is authoritative for start vs stop UI (not DB opType).
   const progressLabel =
     opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
     : isDeploying   ? "Processing…"
-    : isStopping  ? "Stopping…"
-    : opInProgress ? "Starting…"
+    : isInProgress  ? (isEnabled ? "Stopping…" : "Starting…")
     : ""
 
   const statusBadgeExtra: { label: string; variant: "info" | "secondary" } | null =
@@ -1120,7 +1119,7 @@ export default function TestingPage() {
                             const m = Math.floor(elapsedSec / 60)
                             const s = elapsedSec % 60
                             const elapsed = m > 0 ? `${m}m ${s}s` : `${s}s`
-                            const verb = activeOp?.opType === "testing_start" ? "Snapshotting" : "Reverting"
+                            const verb = isEnabled ? "Reverting" : "Snapshotting"
                             return `${verb} VMs on Proxmox — watching for completion… (${elapsed})`
                           })()
                         : isEnabled
@@ -1199,7 +1198,7 @@ export default function TestingPage() {
                   <Clock className="h-4 w-4 text-blue-300" />
                   <AlertDescription className="text-xs space-y-3">
                     <p>
-                      {(activeOp?.opType === "testing_stop" || (opInProgress && isEnabled)) ? "Stop Testing" : "Start Testing"} is in progress.{" "}
+                      {isEnabled ? "Stop Testing" : "Start Testing"} is in progress.{" "}
                       {isDeploying
                         ? "Range is actively processing — logs are streaming below."
                         : "Waiting for Ludus to begin processing. Logs will appear automatically."}
@@ -1289,7 +1288,7 @@ export default function TestingPage() {
                           ? "Applying allow rule…"
                           : removingEntry
                           ? "Removing allow rule…"
-                          : (activeOp?.opType === "testing_stop" || (opInProgress && isEnabled))
+                          : isEnabled
                           ? "Stopping Testing Mode…"
                           : "Starting Testing Mode…"}
                       </span>

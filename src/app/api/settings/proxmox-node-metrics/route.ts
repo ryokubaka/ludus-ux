@@ -9,84 +9,14 @@ import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import {
+  parseClusterResourceNodes,
+  parseNodeList,
+  parseNodeStatusLoad,
+} from "@/lib/proxmox-node-metrics-parse"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
-
-const SAFE_NODE = /^[a-zA-Z0-9._-]+$/
-
-function unwrapPveshJson(raw: string): unknown {
-  const j = JSON.parse(raw) as unknown
-  if (j && typeof j === "object" && "data" in j) {
-    const d = (j as { data: unknown }).data
-    return d
-  }
-  return j
-}
-
-function parseNodeList(raw: string): string[] {
-  const j = unwrapPveshJson(raw)
-  const arr = Array.isArray(j) ? j : []
-  const names: string[] = []
-  for (const row of arr) {
-    if (!row || typeof row !== "object") continue
-    const n = (row as { node?: string }).node
-    if (typeof n === "string" && SAFE_NODE.test(n)) names.push(n)
-  }
-  return names
-}
-
-type MemBlock = { used?: number; total?: number }
-
-function parseLoad1(loadavg: unknown): number | null {
-  if (typeof loadavg === "string") {
-    const first = loadavg.trim().split(/\s+/)[0]
-    const v = parseFloat(first)
-    return Number.isFinite(v) ? v : null
-  }
-  if (Array.isArray(loadavg) && loadavg.length > 0) {
-    const v = parseFloat(String(loadavg[0]))
-    return Number.isFinite(v) ? v : null
-  }
-  return null
-}
-
-function parseNodeStatusPayload(raw: string): {
-  cpuPct: number | null
-  memPct: number | null
-  load1: number | null
-} {
-  let inner: unknown
-  try {
-    inner = unwrapPveshJson(raw)
-  } catch {
-    return { cpuPct: null, memPct: null, load1: null }
-  }
-  const o = inner && typeof inner === "object" ? (inner as Record<string, unknown>) : null
-  if (!o) return { cpuPct: null, memPct: null, load1: null }
-
-  let cpuPct: number | null = null
-  const cpu = o.cpu
-  if (typeof cpu === "number" && Number.isFinite(cpu)) {
-    const ratio = cpu > 1 ? cpu / 100 : cpu
-    cpuPct = Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10
-  }
-
-  let memPct: number | null = null
-  const mem = o.memory
-  if (mem && typeof mem === "object") {
-    const m = mem as MemBlock
-    const t = m.total
-    const u = m.used
-    if (typeof t === "number" && t > 0 && typeof u === "number") {
-      memPct = Math.round(Math.min(1, Math.max(0, u / t)) * 1000) / 10
-    }
-  }
-
-  const load1 = parseLoad1(o.loadavg)
-
-  return { cpuPct, memPct, load1 }
-}
 
 export async function GET(req: NextRequest) {
   const session = await getSessionFromRequest(req)
@@ -112,22 +42,27 @@ export async function GET(req: NextRequest) {
   const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
 
   try {
-    const nodeJson = await sshExec(
-      sshHost,
-      sshPort,
-      sshUser,
-      sshPass,
-      "pvesh get /nodes --output-format json",
-    )
+    const [nodeJson, resourcesJson] = await Promise.all([
+      sshExec(sshHost, sshPort, sshUser, sshPass, "pvesh get /nodes --output-format json"),
+      sshExec(
+        sshHost,
+        sshPort,
+        sshUser,
+        sshPass,
+        "pvesh get /cluster/resources --type node --output-format json",
+      ),
+    ])
     const nodeNames = parseNodeList(nodeJson)
     if (!nodeNames.length) {
       return NextResponse.json({ error: "No Proxmox nodes returned from pvesh" }, { status: 502 })
     }
 
+    const resourceByNode = parseClusterResourceNodes(resourcesJson)
     const capturedAt = Date.now()
 
     const results = await Promise.all(
       nodeNames.map(async (name) => {
+        const fromResources = resourceByNode.get(name)
         try {
           const statusJson = await sshExec(
             sshHost,
@@ -136,11 +71,22 @@ export async function GET(req: NextRequest) {
             sshPass,
             `pvesh get /nodes/${name}/status --output-format json`,
           )
-          const { cpuPct, memPct, load1 } = parseNodeStatusPayload(statusJson)
-          return { name, cpuPct, memPct, load1 }
+          const load1 = parseNodeStatusLoad(statusJson)
+          return {
+            name,
+            cpuPct: fromResources?.cpuPct ?? null,
+            memPct: fromResources?.memPct ?? null,
+            load1,
+          }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
-          return { name, cpuPct: null, memPct: null, load1: null, error: msg }
+          return {
+            name,
+            cpuPct: fromResources?.cpuPct ?? null,
+            memPct: fromResources?.memPct ?? null,
+            load1: null,
+            error: msg,
+          }
         }
       }),
     )

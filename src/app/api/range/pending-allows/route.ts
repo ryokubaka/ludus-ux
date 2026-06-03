@@ -25,6 +25,7 @@ import {
   pruneStalePendingAllows,
   type PendingAllowOpType,
 } from "@/lib/pending-allow-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
   const { effectiveUsername } = getEffective(request, session)
   addPendingAllow(rangeId, effectiveUsername, entry, opType as PendingAllowOpType)
   console.log(`[pending-allows] POST ${effectiveUsername}/${rangeId}: ${opType} "${entry}"`)
+  logLuxRouteAction(request, session, { detail: `${opType} ${entry}` })
   return NextResponse.json({ ok: true }, { status: 201 })
 }
 
@@ -132,5 +134,6 @@ export async function DELETE(request: NextRequest) {
   const { effectiveUsername } = getEffective(request, session)
   removePendingAllows(rangeId, effectiveUsername, entries, opType as PendingAllowOpType)
   console.log(`[pending-allows] DELETE ${effectiveUsername}/${rangeId}: ${opType} [${entries.join(", ")}]`)
+  logLuxRouteAction(request, session, { detail: `${opType} [${entries.join(", ")}]` })
   return NextResponse.json({ ok: true })
 }

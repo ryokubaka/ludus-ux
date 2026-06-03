@@ -28,9 +28,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { sshExec } from "@/lib/goad-ssh"
 import { getSessionFromRequest } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -154,7 +156,7 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
   try {
     templatesDir = await findTemplatesDir()
   } catch (err) {
-    const msg = (err as Error).message
+    const msg = logAndSafeError("templates/add", err, "Template add failed")
     if (/all configured authentication methods failed/i.test(msg) || /authentication/i.test(msg)) {
       throw new Error(
         "Root SSH authentication failed. To add templates, configure root SSH access: " +
@@ -262,7 +264,11 @@ export async function POST(request: NextRequest) {
     )
   )
 
-  return NextResponse.json({
-    results: results.map((r) => (r.status === "fulfilled" ? r.value : { name: "?", success: false, message: String(r.reason) })),
+  const mapped = results.map((r) => (r.status === "fulfilled" ? r.value : { name: "?", success: false, message: String(r.reason) }))
+  const allOk = mapped.every((r) => r.success)
+  logLuxRouteAction(request, session, {
+    outcome: allOk ? "success" : "failure",
+    detail: `templates=${templates.map((t) => t.name).join(",")}`,
   })
+  return NextResponse.json({ results: mapped })
 }

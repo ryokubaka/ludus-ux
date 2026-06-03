@@ -10,6 +10,7 @@
  * a direct getent passwd lookup by userID if the API call fails.
  */
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
@@ -17,6 +18,7 @@ import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const maxDuration = 600
 
@@ -84,7 +86,7 @@ export async function POST(request: NextRequest) {
       if (attempt < 7) await sleep(4000)
     }
   } catch (err) {
-    return NextResponse.json({ error: `SSH error: ${(err as Error).message}` }, { status: 500 })
+    return NextResponse.json({ error: logAndSafeError("users/change-password", err, "Failed to change password") }, { status: 500 })
   }
 
   if (!homeDir) {
@@ -110,8 +112,10 @@ export async function POST(request: NextRequest) {
       `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
     )
   } catch (err) {
-    return NextResponse.json({ error: `Failed to change password: ${(err as Error).message}` }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Failed to change password" })
+    return NextResponse.json({ error: logAndSafeError("users/change-password", err, "Failed to change password") }, { status: 500 })
   }
 
+  logLuxRouteAction(request, session, { detail: `userId=${userId}` })
   return NextResponse.json({ success: true })
 }

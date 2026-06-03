@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { hasSshExecAuth } from "@/lib/root-ssh-auth"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -141,6 +143,7 @@ export async function GET(request: NextRequest) {
 
       const vvContent = formatSpiceVv(ticket, vmName, sshHost)
       const filename = `${vmName.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
+      logLuxRouteAction(request, session, { detail: `vmId=${vmId} type=spice` })
       return new Response(vvContent, {
         headers: {
           "Content-Type": "application/x-virt-viewer",
@@ -160,6 +163,7 @@ export async function GET(request: NextRequest) {
 
     const vvContent = formatVncVv(sshHost, vnc.port, vnc.ticket, vmName)
     const filename = `${vmName.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
+    logLuxRouteAction(request, session, { detail: `vmId=${vmId} type=vnc` })
     return new Response(vvContent, {
       headers: {
         "Content-Type": "application/x-virt-viewer",
@@ -170,6 +174,7 @@ export async function GET(request: NextRequest) {
     })
   } catch (err) {
     const message = (err as Error).message
+    logLuxRouteAction(request, session, { outcome: "failure", detail: message.slice(0, 120) })
     return NextResponse.json(
       { error: `Console access failed: ${message}` },
       { status: 500 }

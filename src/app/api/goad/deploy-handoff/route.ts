@@ -21,6 +21,7 @@ import {
 } from "@/lib/goad-deploy-handoff-store"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { writePendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -70,6 +71,7 @@ export async function POST(request: NextRequest) {
   pruneOldHandoffs()
 
   const handoff = createDeployHandoff({ rangeId, instanceId, username, networkRulesJson })
+  logLuxRouteAction(request, session, { detail: `rangeId=${rangeId} handoffId=${handoff.id}` })
   return NextResponse.json({ handoffId: handoff.id })
 }
 
@@ -92,5 +94,6 @@ export async function PATCH(request: NextRequest) {
   }
 
   linkHandoffToTask(handoffId, taskId)
+  logLuxRouteAction(request, session, { detail: `handoffId=${handoffId} taskId=${taskId}` })
   return NextResponse.json({ ok: true })
 }

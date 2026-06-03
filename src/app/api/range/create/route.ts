@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -6,6 +7,8 @@ import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { getSettings } from "@/lib/settings-store"
 import { setOwnership } from "@/lib/range-ownership-store"
+import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { logAppEvent } from "@/lib/app-log"
 
 type CreateRangeBody = {
   rangeID: string
@@ -112,10 +115,16 @@ export async function POST(request: NextRequest) {
       bustAdminCache()
     }
 
+    logAppEvent("range_create", `rangeID=${body.rangeID}`, {
+      username: session.username,
+      ip: clientIpFromRequest(request),
+      outcome: "success",
+    })
+
     return NextResponse.json(data ?? {}, { status: createRes.status || 200 })
   } catch (err) {
     return NextResponse.json(
-      { error: `Connection failed: ${(err as Error).message}` },
+      { error: logAndSafeError("range/create", err, "Connection failed") },
       { status: 500 },
     )
   }

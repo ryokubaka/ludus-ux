@@ -71,6 +71,9 @@ function applySecurityHeaders(response: NextResponse): void {
       "font-src 'self' data:",
       "connect-src 'self' wss: ws:",
       "worker-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
       "frame-ancestors 'self'",
     ].join("; "),
   )
@@ -89,11 +92,15 @@ export async function middleware(request: NextRequest) {
 
   if (!session) {
     if (pathname.startsWith("/api/")) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+      const unauth = NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+      applySecurityHeaders(unauth)
+      return unauth
     }
     const loginUrl = new URL("/login", request.url)
     loginUrl.searchParams.set("next", pathname)
-    return NextResponse.redirect(loginUrl)
+    const redirect = NextResponse.redirect(loginUrl)
+    applySecurityHeaders(redirect)
+    return redirect
   }
 
   const response = NextResponse.next()

@@ -3,16 +3,18 @@ import fs from "fs"
 import path from "path"
 import { getSessionFromRequest } from "@/lib/session"
 import { DATA_DIR } from "@/lib/db"
+import { detectImageType } from "@/lib/safe-filename"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads")
-const LOGO_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]
+const LOGO_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+const MAX_LOGO_SIZE = 10 * 1024 * 1024 // 10 MB
 const MIME: Record<string, string> = {
   ".png":  "image/png",
   ".jpg":  "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif":  "image/gif",
   ".webp": "image/webp",
-  ".svg":  "image/svg+xml",
 }
 
 function findLogo(): string | null {
@@ -38,10 +40,6 @@ function serveBundledDefault(): NextResponse {
   })
 }
 
-/**
- * Custom logo bytes if uploaded; otherwise bundled default. Avoids 404 on
- * `<img src="/api/logo">` and keeps HEAD vs GET consistent.
- */
 export async function GET() {
   const logoPath = findLogo()
   if (!logoPath) return serveBundledDefault()
@@ -51,13 +49,11 @@ export async function GET() {
   return new NextResponse(content, {
     headers: {
       "Content-Type": MIME[ext] ?? "image/png",
-      // No browser caching — we want the sidebar to pick up a new upload immediately
       "Cache-Control": "no-cache, no-store, must-revalidate",
     },
   })
 }
 
-/** 200 = custom logo on disk; 204 = using default only (not an error — avoids console 404 noise). */
 export async function HEAD() {
   const logoPath = findLogo()
   if (!logoPath) {
@@ -73,10 +69,12 @@ export async function HEAD() {
   })
 }
 
-/** Upload a new logo (admin only). Replaces any existing logo. */
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 })
+  if (!session?.isAdmin) {
+    if (session) logLuxRouteAction(request, session, { outcome: "failure", detail: "Admin required" })
+    return NextResponse.json({ error: "Admin required" }, { status: 403 })
+  }
 
   let formData: FormData
   try {
@@ -87,34 +85,48 @@ export async function POST(request: NextRequest) {
 
   const file = formData.get("logo") as File | null
   if (!file || !file.name) return NextResponse.json({ error: "No file provided" }, { status: 400 })
+  if (file.size > MAX_LOGO_SIZE) {
+    return NextResponse.json({ error: "File exceeds 10 MB limit" }, { status: 413 })
+  }
 
   const ext = path.extname(file.name).toLowerCase()
   if (!LOGO_EXTS.includes(ext)) {
     return NextResponse.json({ error: `Unsupported format. Allowed: ${LOGO_EXTS.join(", ")}` }, { status: 400 })
   }
 
-  // Remove any existing logo before writing the new one
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const detected = detectImageType(buffer)
+  if (!detected) {
+    return NextResponse.json({ error: "File must be JPEG, PNG, WebP, or GIF" }, { status: 415 })
+  }
+
   for (const e of LOGO_EXTS) {
     const old = path.join(UPLOADS_DIR, `logo${e}`)
     if (fs.existsSync(old)) fs.unlinkSync(old)
   }
 
   fs.mkdirSync(UPLOADS_DIR, { recursive: true })
-  const dest = path.join(UPLOADS_DIR, `logo${ext}`)
-  const buf = Buffer.from(await file.arrayBuffer())
-  fs.writeFileSync(dest, buf)
+  const dest = path.join(UPLOADS_DIR, `logo.${detected.ext}`)
+  fs.writeFileSync(dest, buffer)
 
+  logLuxRouteAction(request, session)
   return NextResponse.json({ success: true })
 }
 
-/** Delete the custom logo (admin only). */
 export async function DELETE(request: NextRequest) {
   const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 })
+  if (!session?.isAdmin) {
+    if (session) logLuxRouteAction(request, session, { outcome: "failure", detail: "Admin required" })
+    return NextResponse.json({ error: "Admin required" }, { status: 403 })
+  }
 
   const logoPath = findLogo()
-  if (!logoPath) return NextResponse.json({ error: "No logo set" }, { status: 404 })
+  if (!logoPath) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "No logo set" })
+    return NextResponse.json({ error: "No logo set" }, { status: 404 })
+  }
 
   fs.unlinkSync(logoPath)
+  logLuxRouteAction(request, session)
   return NextResponse.json({ success: true })
 }

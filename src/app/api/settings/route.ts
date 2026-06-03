@@ -3,6 +3,8 @@ import { getSessionFromRequest } from "@/lib/session"
 import { getSettings, updateSettings, type RuntimeSettings } from "@/lib/settings-store"
 import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/resolve-root-api-key"
 import { invalidateCatalogCache } from "@/lib/goad-ssh"
+import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { logAppEvent } from "@/lib/app-log"
 
 export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)
@@ -61,6 +63,11 @@ export async function POST(request: NextRequest) {
   if ("goadPath" in patch) {
     invalidateCatalogCache()
   }
+  logAppEvent("settings_save", "Settings updated", {
+    username: session.username,
+    ip: clientIpFromRequest(request),
+    outcome: "success",
+  })
   return NextResponse.json({
     ...updated,
     rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),

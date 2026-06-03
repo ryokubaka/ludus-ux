@@ -9,6 +9,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { getSessionFromRequest } from "@/lib/session"
 import { insertLuxTestingEvent, pruneLuxRangeLogMarkers } from "@/lib/range-log-markers-store"
 import type { LuxTestingOpType } from "@/lib/range-log-marker-types"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 const DETAIL_MAX = 500
 
@@ -82,5 +83,6 @@ export async function POST(request: NextRequest) {
     detail,
   })
 
+  logLuxRouteAction(request, session, { detail: `${opType} success=${success}` })
   return NextResponse.json({ id })
 }

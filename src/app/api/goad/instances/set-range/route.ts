@@ -14,6 +14,7 @@ import { getSettings } from "@/lib/settings-store"
 import { writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -55,5 +56,9 @@ export async function POST(request: NextRequest) {
   }
 
   const allOk = results.every((r) => r.ok)
+  logLuxRouteAction(request, session, {
+    outcome: allOk ? "success" : "failure",
+    detail: `rangeId=${rangeId} instances=${instanceIds.length}`,
+  })
   return NextResponse.json({ ok: allOk, results }, { status: allOk ? 200 : 207 })
 }

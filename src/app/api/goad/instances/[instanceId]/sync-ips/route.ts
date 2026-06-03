@@ -29,6 +29,7 @@ import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -181,6 +182,10 @@ export async function POST(
     errors.push(`Inventory update error: ${(err as Error).message}`)
   }
 
+  logLuxRouteAction(request, session, {
+    outcome: errors.length === 0 ? "success" : "failure",
+    detail: `instanceId=${instanceId} newIpRange=${newIpRange}`,
+  })
   return NextResponse.json({
     success: errors.length === 0,
     oldIpRange: oldIpRange ?? "unknown",

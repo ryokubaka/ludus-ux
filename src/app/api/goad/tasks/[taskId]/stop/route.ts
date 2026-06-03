@@ -3,6 +3,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import { abortTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -41,5 +42,6 @@ export async function POST(
   // cleanup is not registered but the task status is still "running")
   abortTask(taskId)
 
+  logLuxRouteAction(request, session, { detail: `taskId=${taskId} killed=${killed}` })
   return NextResponse.json({ success: true, killed })
 }

@@ -77,9 +77,10 @@ export async function GET(request: NextRequest) {
 
   // ── Single range ────────────────────────────────────────────────────────────
   if (rangeId) {
-    // PocketBase fast-path: returns testingEnabled + rangeState without Ludus overhead
     const pbStatus = await fetchPbRangeStatus(rangeId)
-    if (pbStatus) return NextResponse.json(pbStatus)
+    if (pbStatus) {
+      return NextResponse.json(pbStatus)
+    }
 
     // Fallback: query Ludus API (covers case where root API key is not configured)
     const result = await ludusRequest<unknown>(`/range?rangeID=${encodeURIComponent(rangeId)}`, {

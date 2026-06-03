@@ -3,6 +3,8 @@ import { getSessionFromRequest, type SessionData } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { proxmoxLogin, proxmoxGetNodeForVmid, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
 import { storeVncSession } from "@/lib/vnc-token-store"
+import { logAndSafeError } from "@/lib/safe-client-error"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 
@@ -56,6 +58,7 @@ export async function GET(request: NextRequest) {
     // The browser gets the token + the vncticket (needed as VNC password inside
     // the RFB protocol). The PVEAuthCookie stays server-side only.
     const token = storeVncSession({
+      username: session.username,
       pveHost: sshHost,
       wsPath: vnc.wsPath,
       port: vnc.port,
@@ -67,8 +70,10 @@ export async function GET(request: NextRequest) {
       vmid: vmId,
     })
 
+    logLuxRouteAction(request, session, { detail: `vmId=${vmId} vmName=${vmName}` })
     return NextResponse.json({ token, ticket: vnc.ticket, vmName })
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Console connection failed" })
+    return NextResponse.json({ error: logAndSafeError("vnc-info", err, "Console connection failed") }, { status: 500 })
   }
 }

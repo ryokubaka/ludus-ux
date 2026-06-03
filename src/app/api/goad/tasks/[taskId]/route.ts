@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getTask, updateTaskPhase, setTaskHasNetworkRules } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -48,5 +49,6 @@ export async function PATCH(
   if ("phase" in body) updateTaskPhase(taskId, body.phase ?? null)
   if ("hasNetworkRules" in body) setTaskHasNetworkRules(taskId, body.hasNetworkRules ?? false)
 
+  logLuxRouteAction(request, session, { detail: `taskId=${taskId}` })
   return NextResponse.json({ ok: true })
 }

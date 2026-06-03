@@ -9,6 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
@@ -130,6 +131,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ vms })
   } catch (err) {
     console.error("[shared-vms] Error:", err)
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: logAndSafeError("admin/shared-vms", err, "Failed to load shared VMs") }, { status: 500 })
   }
 }

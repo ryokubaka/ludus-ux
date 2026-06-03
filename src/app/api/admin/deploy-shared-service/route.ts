@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -68,6 +69,7 @@ export async function POST(request: NextRequest) {
   )
 
   if (result.error) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: result.error })
     return NextResponse.json(
       {
         error: result.error,
@@ -77,6 +79,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  logLuxRouteAction(request, session, { detail: `service=${service}${rangeId ? ` rangeId=${rangeId}` : ""}` })
   return NextResponse.json({
     ok: true,
     service,

@@ -8,6 +8,8 @@ import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
+import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { logAppEvent } from "@/lib/app-log"
 
 export const dynamic = "force-dynamic"
 
@@ -132,6 +134,11 @@ export async function POST(request: NextRequest) {
   // Task is attributed to the impersonated user so it appears in their history
   const taskOwner = effectiveImpersonate?.username ?? session?.username
   const taskId = createTask(args, instanceId, taskOwner, apiKey ?? undefined)
+  logAppEvent("goad_execute", `task=${taskId} instance=${instanceId ?? "none"}`, {
+    username: session.username,
+    ip: clientIpFromRequest(request),
+    outcome: "success",
+  })
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({

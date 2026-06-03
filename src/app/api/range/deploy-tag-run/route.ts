@@ -10,6 +10,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/range-log-markers-store"
 import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-correlate"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 function getEffective(
   request: NextRequest,
@@ -79,5 +80,6 @@ export async function POST(request: NextRequest) {
     if (ludusLogId) updateLuxDeployTagRunLudusLogId(runId, ludusLogId)
   })()
 
+  logLuxRouteAction(request, session, { detail: `rangeId=${rangeId} tags=${tagsCsv}` })
   return NextResponse.json({ id: runId, tags, requestedAt })
 }

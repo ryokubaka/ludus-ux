@@ -23,6 +23,9 @@ export async function GET(req: NextRequest) {
   if (!session) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 })
   }
+  if (!session.isAdmin) {
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+  }
 
   const settings = getSettings()
   // Root `pvesh` over SSH — use only settings/env root password or mounted key.

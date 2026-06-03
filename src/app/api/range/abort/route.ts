@@ -41,6 +41,7 @@ import { invokeCleanup } from "@/lib/task-cleanup-registry"
 import { abortTask, getRunningTasksForInstance } from "@/lib/goad-task-store"
 import { setPbRangeState } from "@/lib/pocketbase-client"
 import type { RangeObject } from "@/lib/types"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -193,6 +194,10 @@ export async function POST(request: NextRequest) {
   if (!ludusAborted && !pbForced) {
     // Rare case: Ludus refused abort AND PocketBase write failed. Surface the
     // reason so the UI can toast something actionable.
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: pbError || "Unable to abort the range via Ludus or PocketBase.",
+    })
     return NextResponse.json(
       {
         success: false,
@@ -208,6 +213,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  logLuxRouteAction(request, session, { detail: `rangeId=${rangeId} method=${method}` })
   return NextResponse.json({
     success: true,
     goadKilled,

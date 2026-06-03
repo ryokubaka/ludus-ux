@@ -26,6 +26,7 @@ import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { setPbRangeOwner } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -81,8 +82,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (errors.length > 0) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: errors[0]?.slice(0, 120) })
     return NextResponse.json({ ok: false, errors }, { status: 207 })
   }
 
+  logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} targetUserId=${targetUserId}` })
   return NextResponse.json({ ok: true })
 }

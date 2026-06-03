@@ -64,7 +64,7 @@ function lineBodyForRecap(line: string): string {
   return splitLeadingWallTimestamp(line).body
 }
 
-function parseAnsibleRecapAllOk(log: string, recapIdx: number): boolean {
+export function parseAnsibleRecapAllOk(log: string, recapIdx: number): boolean {
   const tail = log.slice(recapIdx)
   const lines = tail.split("\n").slice(0, 150)
   const hostLines: string[] = []
@@ -216,8 +216,81 @@ async function readLudusAnsibleLogViaSsh(rangeId: string): Promise<string | null
   }
 }
 
+function ludusAnsibleLogPath(rangeId: string): string | null {
+  const rid = rangeId.trim()
+  if (!/^[\w.-]+$/.test(rid)) return null
+  return `/opt/ludus/ranges/${rid}/ansible.log`
+}
+
+/** ansible.log mtime on Ludus host (ms epoch) — anchor history timestamps, not browser refresh time. */
+export async function readLudusAnsibleLogMtimeMs(rangeId: string): Promise<number | null> {
+  const logPath = ludusAnsibleLogPath(rangeId)
+  if (!logPath) return null
+  const settings = getSettings()
+  if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
+  try {
+    const out = await sshExec(
+      settings.sshHost,
+      settings.sshPort,
+      settings.proxmoxSshUser || "root",
+      settings.proxmoxSshPassword || "",
+      `stat -c %Y "${logPath}" 2>/dev/null || echo 0`,
+    )
+    const sec = parseInt(out.trim(), 10)
+    return Number.isFinite(sec) && sec > 0 ? sec * 1000 : null
+  } catch {
+    return null
+  }
+}
+
+/** Full ansible.log byte length on Ludus host (uncapped). */
+export async function readLudusAnsibleLogByteLength(rangeId: string): Promise<number | null> {
+  const logPath = ludusAnsibleLogPath(rangeId)
+  if (!logPath) return null
+  const settings = getSettings()
+  if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
+  try {
+    const out = await sshExec(
+      settings.sshHost,
+      settings.sshPort,
+      settings.proxmoxSshUser || "root",
+      settings.proxmoxSshPassword || "",
+      `wc -c < "${logPath}" 2>/dev/null || echo 0`,
+    )
+    const n = parseInt(out.trim(), 10)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  } catch {
+    return null
+  }
+}
+
+/** Uncapped ansible.log suffix from byte offset (for testing-mode reconcile when HTTP tail truncates). */
+export async function readLudusAnsibleLogSuffixFromByteOffset(
+  rangeId: string,
+  byteOffset: number,
+): Promise<string | null> {
+  const logPath = ludusAnsibleLogPath(rangeId)
+  if (!logPath) return null
+  const settings = getSettings()
+  if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
+  const start = Math.max(1, Math.floor(byteOffset) + 1)
+  try {
+    const content = await sshExec(
+      settings.sshHost,
+      settings.sshPort,
+      settings.proxmoxSshUser || "root",
+      settings.proxmoxSshPassword || "",
+      `tail -c +${start} "${logPath}" 2>/dev/null | head -c 524288 || true`,
+    )
+    return content.trim() ? content : null
+  } catch {
+    return null
+  }
+}
+
+
 /** Tail of Ludus deploy text — Ludus HTTP `/range/logs` or SSH ansible.log (PLAY RECAP). */
-async function readLudusRangeLogsForReconcile(
+export async function readLudusRangeLogsForReconcile(
   rangeId: string,
   opts?: { taskLudusApiKey?: string },
 ): Promise<string | null> {

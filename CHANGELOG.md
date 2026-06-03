@@ -15,6 +15,29 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.0.5] — 2026-06-02
+
+**LUX**
+- [Add] **Admin → Application Logs** — Admin Application Logs page with live streaming of sign-in and application events. Ludus proxy and LUX API routes log user actions so the Application filter is populated, not only auth events.
+- [Add] Structured application event logging for settings, impersonation, user roles, ranges, and GOAD.
+- [Fix] Settings admin controls respect current Ludus admin role (live revalidation on session refresh).
+- [Fix] **Testing Mode** — PocketBase `testingEnabled` reconciles when Ludus/ansible finishes (op-scoped, log slice after op start) so UI matches backend state.
+- [Fix] **Testing Mode** — Op completion follows op-scoped ansible logs first; PocketBase sync is best-effort only. Removed passive pb-status reconcile that could fight in-flight ops and flip `testingEnabled` wrong.
+- [Fix] **Testing Mode** — Log markers persisted in SQLite so op completion survives container restart; full-tail fallback when marker missing.
+- [Fix] **Range Logs** — History timestamps anchor to ansible.log mtime on Ludus host instead of browser refresh time.
+- [Improve] **Testing Mode** — Range selection locked on the Testing page and sidebar Active Range dropdown while start/stop is in progress.
+- [Improve] Ludus Performance moved from Settings to Admin → Performance.
+- [Security] Shorter session lifetime (eight hours).
+- [Security] Login rate limiting to slow down password guessing (one-minute lockout after too many attempts).
+- [Security] Stronger upload checks for profile images and the site logo (10 MB logo limit).
+- [Security] Safer error pages and API responses in production.
+- [Security] Improved web server and TLS settings behind nginx.
+- [Security] Console connections use single-use access tokens.
+- [Security] Sign-in and sign-out events are written to the application log.
+- [Security] **vitest** 4.1.8 — patches GHSA-5xrq-8626-4rwp / CVE-2026-47429
+
+---
+
 ## [1.0.4] — 2026-05-28
 
 **LUX**

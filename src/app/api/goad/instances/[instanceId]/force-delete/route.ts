@@ -26,6 +26,7 @@ import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 import { getDb } from "@/lib/db"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -126,5 +127,9 @@ export async function POST(
     // Non-fatal — old entry will be harmlessly ignored since workspace is gone
   }
 
+  logLuxRouteAction(request, session, {
+    outcome: results.errors.length === 0 ? "success" : "failure",
+    detail: `instanceId=${instanceId} rangeDeleted=${results.rangeDeleted}`,
+  })
   return NextResponse.json(results)
 }

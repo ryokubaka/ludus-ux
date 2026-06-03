@@ -31,7 +31,7 @@ import net from "net"
 import fs from "fs"
 import { WebSocketServer, WebSocket } from "ws"
 import { Client as SSHClient } from "ssh2"
-import { getVncSession } from "../src/lib/vnc-token-store"
+import { consumeVncSession, type VncSession } from "../src/lib/vnc-token-store"
 import { proxmoxCreateVncProxy, proxmoxLogin } from "../src/lib/proxmox-http"
 import { readPrivateKey, getSshKeyPassphrase } from "../src/lib/root-ssh-auth"
 
@@ -140,13 +140,7 @@ function shouldRetryUpstream(code: number): boolean {
   return code === 1006 || code === 1002 || code === 1011
 }
 
-async function refreshUpstreamSession(session: {
-  pveHost: string
-  pveUser?: string
-  pvePassword?: string
-  node?: string
-  vmid?: string
-}) {
+async function refreshUpstreamSession(session: VncSession) {
   if (!session.pveUser || !session.pvePassword || !session.node || !session.vmid) {
     return null
   }
@@ -184,7 +178,7 @@ function handleVncProxy(clientWs: WebSocket, token: string) {
     return
   }
 
-  const session = getVncSession(token)
+  const session = consumeVncSession(token)
   if (!session) {
     clientWs.close(4001, "Invalid or expired session token")
     return

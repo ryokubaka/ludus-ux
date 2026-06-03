@@ -23,6 +23,7 @@ import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { bustAdminCache } from "@/lib/admin-data"
 import { setOwnership } from "@/lib/range-ownership-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -64,6 +65,7 @@ export async function POST(
     const ownerPbId = callerHeal?.userId?.trim() || impLudusUid || sshForSlug
     setOwnership(existing, ownerPbId, session.username)
     bustAdminCache()
+    logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${existing} existing` })
     return NextResponse.json({ rangeId: existing, created: false })
   }
 
@@ -144,5 +146,6 @@ export async function POST(
     )
   }
 
+  logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })
   return NextResponse.json({ rangeId, created: true })
 }

@@ -14,6 +14,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { setPbUserAdmin } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
+import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { logAppEvent } from "@/lib/app-log"
 
 export const dynamic = "force-dynamic"
 
@@ -48,6 +50,12 @@ export async function POST(request: NextRequest) {
 
   // Bust admin data cache so the next GET reflects the role change
   bustAdminCache()
+
+  logAppEvent("user_role_change", `${userID} isAdmin=${isAdmin}`, {
+    username: session.username,
+    ip: clientIpFromRequest(request),
+    outcome: "success",
+  })
 
   return NextResponse.json({ ok: true, userID, isAdmin })
 }

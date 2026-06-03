@@ -14,6 +14,7 @@ import {
   Users,
   Users2,
   Package,
+  Activity,
   Zap,
   Plus,
   Settings,
@@ -80,6 +81,8 @@ const navGroups: NavGroup[] = [
       { href: "/admin", label: "Ranges Overview", icon: ShieldCheck, adminOnly: true },
       { href: "/users", label: "Users", icon: Users, adminOnly: true },
       { href: "/groups", label: "Groups", icon: Users2, adminOnly: true },
+      { href: "/admin/performance", label: "Ludus Performance", icon: Activity, adminOnly: true },
+      { href: "/admin/app-logs", label: "Application Logs", icon: ScrollText, adminOnly: true },
     ],
   },
   {
@@ -110,7 +113,7 @@ export function Sidebar() {
   const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   const [goadEnabled, setGoadEnabled] = useState(true)
   const [logoKey, setLogoKey] = useState(0)
-  const { ranges, selectedRangeId, selectRange, loading: rangesLoading } = useRange()
+  const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
 
   useEffect(() => {
@@ -158,10 +161,10 @@ export function Sidebar() {
     return () => window.removeEventListener("logo-updated", handler)
   }, [])
 
-  // Close range dropdown when collapsing
+  // Close range dropdown when collapsing or when range selection is locked
   useEffect(() => {
-    if (collapsed) setRangeDropdownOpen(false)
-  }, [collapsed])
+    if (collapsed || rangeSelectionLocked) setRangeDropdownOpen(false)
+  }, [collapsed, rangeSelectionLocked])
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -229,9 +232,15 @@ export function Sidebar() {
             ) : (
               <div className="relative">
                 <button
-                  onClick={() => setRangeDropdownOpen((o) => !o)}
-                  className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium
-                             bg-sidebar-accent/50 hover:bg-sidebar-accent text-sidebar-foreground transition-colors"
+                  onClick={() => !rangeSelectionLocked && setRangeDropdownOpen((o) => !o)}
+                  disabled={rangeSelectionLocked}
+                  title={rangeSelectionLocked ? "Testing operation in progress — range locked" : undefined}
+                  className={cn(
+                    "w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    rangeSelectionLocked
+                      ? "cursor-not-allowed opacity-70 bg-sidebar-accent/30 text-sidebar-foreground/70"
+                      : "bg-sidebar-accent/50 hover:bg-sidebar-accent text-sidebar-foreground",
+                  )}
                 >
                   <Server className="h-4 w-4 text-primary flex-shrink-0" />
                   <span className="flex-1 text-left truncate font-mono text-xs">
@@ -241,21 +250,36 @@ export function Sidebar() {
                 </button>
                 {rangeDropdownOpen && (
                   <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-md border border-sidebar-border bg-sidebar shadow-lg py-1 max-h-48 overflow-y-auto">
-                    {ranges.map((r) => (
+                    {ranges.map((r) => {
+                      const rangeSwitchBlocked = rangeSelectionLocked && r.rangeID !== selectedRangeId
+                      return (
                       <button
                         key={r.rangeID}
-                        onClick={() => { selectRange(r.rangeID); setRangeDropdownOpen(false) }}
+                        type="button"
+                        disabled={rangeSwitchBlocked}
+                        onClick={() => {
+                          if (rangeSwitchBlocked) return
+                          selectRange(r.rangeID)
+                          setRangeDropdownOpen(false)
+                        }}
+                        title={
+                          rangeSwitchBlocked
+                            ? "Testing operation in progress — wait before switching ranges"
+                            : undefined
+                        }
                         className={cn(
                           "w-full flex items-center gap-2 px-3 py-1.5 text-xs font-mono transition-colors",
+                          rangeSwitchBlocked && "cursor-not-allowed opacity-50",
                           r.rangeID === selectedRangeId
                             ? "bg-primary/10 text-primary"
-                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground",
+                          rangeSwitchBlocked && r.rangeID !== selectedRangeId && "hover:bg-transparent hover:text-sidebar-foreground/70",
                         )}
                       >
                         <span className="flex-1 text-left truncate">{r.rangeID}</span>
                         <Badge variant="secondary" className="text-[10px] px-1 py-0">{r.accessType}</Badge>
                       </button>
-                    ))}
+                    )})}
                   </div>
                 )}
               </div>

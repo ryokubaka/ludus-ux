@@ -24,7 +24,11 @@ export default function Error({
             <AlertTriangle className="h-7 w-7 text-red-400" />
           </div>
           <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
-          <p className="text-sm text-muted-foreground mb-1">{error.message}</p>
+          <p className="text-sm text-muted-foreground mb-1">
+            {process.env.NODE_ENV === "production"
+              ? "An unexpected error occurred. Please try again."
+              : error.message}
+          </p>
           {error.digest && (
             <code className="text-xs text-muted-foreground/60 mt-1 mb-4">{error.digest}</code>
           )}

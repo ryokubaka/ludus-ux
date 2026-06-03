@@ -383,6 +383,45 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON deploy_handoffs(instance_id);
       `)
     },
+
+    // v12 — Application + auth event log (admin viewer at /admin/app-logs).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lux_app_logs (
+          id        TEXT    NOT NULL PRIMARY KEY,
+          ts        INTEGER NOT NULL,
+          category  TEXT    NOT NULL,
+          level     TEXT    NOT NULL DEFAULT 'info',
+          event     TEXT    NOT NULL,
+          outcome   TEXT,
+          username  TEXT,
+          ip        TEXT,
+          detail    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_app_logs_ts ON lux_app_logs(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_lux_app_logs_category ON lux_app_logs(category, ts DESC);
+      `)
+    },
+
+    // v13 — Persist testing-op ansible log markers across container restarts.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS range_ops (
+          id          TEXT    PRIMARY KEY,
+          rangeId     TEXT    NOT NULL,
+          username    TEXT    NOT NULL,
+          opType      TEXT    NOT NULL,
+          status      TEXT    NOT NULL DEFAULT 'pending',
+          startedAt   INTEGER NOT NULL,
+          completedAt INTEGER,
+          expectedTestingEnabled INTEGER NOT NULL DEFAULT 0
+        );
+      `)
+      const cols = db.prepare("PRAGMA table_info(range_ops)").all() as { name: string }[]
+      if (!cols.some((c) => c.name === "logMarkerJson")) {
+        db.exec(`ALTER TABLE range_ops ADD COLUMN logMarkerJson TEXT`)
+      }
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

@@ -9,10 +9,12 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -57,9 +59,11 @@ export async function PUT(request: NextRequest) {
       `pvesh create /nodes/${node}/qemu/${proxmoxId}/status/${action}`,
     )
 
+    logLuxRouteAction(request, session, { detail: `${action} proxmoxId=${proxmoxId}` })
     return NextResponse.json({ ok: true })
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Operation failed" })
+    return NextResponse.json({ error: logAndSafeError("admin/vm", err, "Operation failed") }, { status: 500 })
   }
 }
 
@@ -113,8 +117,10 @@ export async function DELETE(request: NextRequest) {
       `pvesh delete /nodes/${node}/qemu/${proxmoxId} --skiplock 1`,
     )
 
+    logLuxRouteAction(request, session, { detail: `delete proxmoxId=${proxmoxId}` })
     return NextResponse.json({ ok: true })
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Operation failed" })
+    return NextResponse.json({ error: logAndSafeError("admin/vm", err, "Operation failed") }, { status: 500 })
   }
 }

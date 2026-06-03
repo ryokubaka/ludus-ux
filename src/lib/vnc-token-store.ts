@@ -10,6 +10,8 @@
 import { randomUUID } from "crypto"
 
 export interface VncSession {
+  /** LUX session owner — token is bound to this user */
+  username: string
   pveHost: string
   wsPath: string
   port: string
@@ -27,6 +29,7 @@ export interface VncSession {
 
 interface StoredSession extends VncSession {
   expires: number
+  consumed: boolean
 }
 
 // Attach to global so both esbuild-bundled server and Next.js route bundles
@@ -50,10 +53,25 @@ if (typeof timer.unref === "function") timer.unref()
 
 export function storeVncSession(session: VncSession): string {
   const token = randomUUID()
-  store.set(token, { ...session, expires: Date.now() + TTL_MS })
+  store.set(token, { ...session, expires: Date.now() + TTL_MS, consumed: false })
   return token
 }
 
+
+export function consumeVncSession(token: string): VncSession | null {
+  const s = store.get(token)
+  if (!s) return null
+  if (s.consumed || s.expires < Date.now()) {
+    store.delete(token)
+    return null
+  }
+  s.consumed = true
+  store.delete(token)
+  const { expires: _e, consumed: _c, ...session } = s
+  return session
+}
+
+/** @deprecated Prefer consumeVncSession for one-time use */
 export function getVncSession(token: string): VncSession | null {
   const s = store.get(token)
   if (!s) return null

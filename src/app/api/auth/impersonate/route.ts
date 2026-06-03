@@ -15,6 +15,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest, setSessionCookie } from "@/lib/session"
+import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { logAppEvent } from "@/lib/app-log"
 
 export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)
@@ -77,6 +79,11 @@ export async function POST(request: NextRequest) {
   }
   const response = NextResponse.json({ ok: true })
   await setSessionCookie(response, updated)
+  logAppEvent("impersonate_start", `Managing as ${ludusPrincipal}`, {
+    username: session.username,
+    ip: clientIpFromRequest(request),
+    outcome: "success",
+  })
   return response
 }
 
@@ -95,5 +102,10 @@ export async function DELETE(request: NextRequest) {
   } = session
   const response = NextResponse.json({ ok: true })
   await setSessionCookie(response, clean)
+  logAppEvent("impersonate_stop", "Impersonation ended", {
+    username: session.username,
+    ip: clientIpFromRequest(request),
+    outcome: "success",
+  })
   return response
 }

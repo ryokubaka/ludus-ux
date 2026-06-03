@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { insertVmOperation, listVmOperations } from "@/lib/vm-operation-log"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -98,11 +99,13 @@ export async function POST(request: NextRequest) {
       detail: typeof body.detail === "string" ? body.detail : null,
     })
   } catch (err) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Log write failed" })
     return NextResponse.json(
       { error: `Log write failed: ${(err as Error).message}` },
       { status: 500 },
     )
   }
 
+  logLuxRouteAction(request, session, { detail: `${kind} vmId=${vmId ?? "?"}` })
   return NextResponse.json({ ok: true })
 }

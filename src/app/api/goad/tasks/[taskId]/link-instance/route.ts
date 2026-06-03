@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { updateTaskInstance } from "@/lib/goad-task-store"
 import { getSessionFromRequest } from "@/lib/session"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -31,8 +32,10 @@ export async function POST(
 
   const ok = updateTaskInstance(taskId, instanceId)
   if (!ok) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Task not found" })
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }
 
+  logLuxRouteAction(request, session, { detail: `taskId=${taskId} instanceId=${instanceId}` })
   return NextResponse.json({ ok: true, taskId, instanceId })
 }

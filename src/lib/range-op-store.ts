@@ -38,6 +38,13 @@ function ensureRangeOpsTable() {
 export type RangeOpType    = "testing_start" | "testing_stop"
 export type RangeOpStatus  = "pending" | "running" | "completed" | "error"
 
+/** Ansible log anchor captured when a testing op starts (persisted in SQLite). */
+export type RangeOpLogMarker = {
+  cappedLength: number
+  sshFileBytes: number | null
+  tailAnchor: string
+}
+
 export interface RangeOp {
   id: string
   rangeId: string
@@ -102,4 +109,32 @@ export function getActiveRangeOp(rangeId: string, username: string): RangeOp | n
 export function pruneOldRangeOps() {
   ensureRangeOpsTable()
   getDb().prepare(`DELETE FROM range_ops WHERE startedAt < ?`).run(Date.now() - TTL_MS)
+}
+
+export function saveRangeOpLogMarker(opId: string, marker: RangeOpLogMarker): void {
+  ensureRangeOpsTable()
+  getDb()
+    .prepare(`UPDATE range_ops SET logMarkerJson = ? WHERE id = ?`)
+    .run(JSON.stringify(marker), opId)
+}
+
+export function loadRangeOpLogMarker(opId: string): RangeOpLogMarker | null {
+  ensureRangeOpsTable()
+  const row = getDb()
+    .prepare(`SELECT logMarkerJson FROM range_ops WHERE id = ?`)
+    .get(opId) as { logMarkerJson?: string | null } | undefined
+  if (!row?.logMarkerJson) return null
+  try {
+    const parsed = JSON.parse(row.logMarkerJson) as RangeOpLogMarker
+    if (
+      typeof parsed.cappedLength === "number" &&
+      typeof parsed.tailAnchor === "string" &&
+      (parsed.sshFileBytes === null || typeof parsed.sshFileBytes === "number")
+    ) {
+      return parsed
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
 }

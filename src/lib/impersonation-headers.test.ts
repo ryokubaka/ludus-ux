@@ -10,10 +10,7 @@ describe("impersonation-headers", () => {
 
   beforeEach(() => {
     Object.keys(mem).forEach((k) => delete mem[k])
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: {
-        sessionStorage: {
+    const storage = {
           getItem: (k: string) => (k in mem ? mem[k] : null),
           setItem: (k: string, v: string) => {
             mem[k] = v
@@ -24,13 +21,17 @@ describe("impersonation-headers", () => {
           clear: () => {
             Object.keys(mem).forEach((k) => delete mem[k])
           },
-        },
-      },
+        }
+    Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: storage })
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { sessionStorage: storage },
     })
   })
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "window")
+    Reflect.deleteProperty(globalThis, "sessionStorage")
   })
 
   it("reads only X-Impersonate-As from sessionStorage (apiKey is not exposed)", () => {

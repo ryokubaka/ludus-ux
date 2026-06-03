@@ -22,6 +22,7 @@ import {
   pendingNetworkJsonPath,
   readUnlinkPendingNetworkSnapshot,
 } from "@/lib/goad-pending-network-fs"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -67,9 +68,11 @@ export async function POST(
     )
   } catch (err) {
     console.error("[pending-network] write failed:", err)
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Write failed" })
     return NextResponse.json({ error: "Write failed" }, { status: 500 })
   }
 
+  logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} store` })
   return NextResponse.json({ ok: true })
 }
 
@@ -101,5 +104,6 @@ export async function DELETE(
   const { instanceId } = await params
   const filePath = pendingNetworkJsonPath(instanceId)
   try { fs.unlinkSync(filePath) } catch { /* file may not exist */ }
+  logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} discard` })
   return NextResponse.json({ ok: true })
 }

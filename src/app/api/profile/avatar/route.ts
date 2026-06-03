@@ -7,8 +7,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { DATA_DIR } from "@/lib/db"
+import { detectImageType, sanitizeUsername } from "@/lib/safe-filename"
 import fs from "fs"
 import path from "path"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -33,7 +35,10 @@ export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
-  const username = request.nextUrl.searchParams.get("u") ?? session.username
+  const rawUser = request.nextUrl.searchParams.get("u") ?? session.username
+  const username = sanitizeUsername(rawUser)
+  if (!username) return NextResponse.json({ error: "Invalid username" }, { status: 400 })
+
   const found = findAvatar(username)
   if (!found) return NextResponse.json({ error: "No avatar" }, { status: 404 })
 
@@ -56,23 +61,25 @@ export async function POST(request: NextRequest) {
 
   const file = formData.get("avatar") as File | null
   if (!file || file.size === 0) return NextResponse.json({ error: "No file provided" }, { status: 400 })
-
-  const ext = VALID_TYPES[file.type]
-  if (!ext) return NextResponse.json({ error: "File must be JPEG, PNG, WebP, or GIF" }, { status: 415 })
   if (file.size > MAX_SIZE) return NextResponse.json({ error: "File exceeds 4 MB limit" }, { status: 413 })
+
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const detected = detectImageType(buffer)
+  if (!detected) {
+    return NextResponse.json({ error: "File must be JPEG, PNG, WebP, or GIF" }, { status: 415 })
+  }
 
   fs.mkdirSync(AVATARS_DIR, { recursive: true })
 
-  // Remove any existing avatar for this user
   for (const e of Object.values(VALID_TYPES)) {
     const old = path.join(AVATARS_DIR, `${session.username}.${e}`)
     if (fs.existsSync(old)) fs.unlinkSync(old)
   }
 
-  const dest = path.join(AVATARS_DIR, `${session.username}.${ext}`)
-  const buffer = Buffer.from(await file.arrayBuffer())
+  const dest = path.join(AVATARS_DIR, `${session.username}.${detected.ext}`)
   fs.writeFileSync(dest, buffer)
 
+  logLuxRouteAction(request, session)
   return NextResponse.json({ ok: true })
 }
 
@@ -84,5 +91,6 @@ export async function DELETE(request: NextRequest) {
     const p = path.join(AVATARS_DIR, `${session.username}.${e}`)
     if (fs.existsSync(p)) fs.unlinkSync(p)
   }
+  logLuxRouteAction(request, session)
   return NextResponse.json({ ok: true })
 }

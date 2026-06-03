@@ -7,12 +7,14 @@
  * then uses root SSH + chpasswd to apply the change.
  */
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -68,8 +70,10 @@ export async function POST(request: NextRequest) {
       `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
     )
   } catch (err) {
-    return NextResponse.json({ error: `Failed to change password: ${(err as Error).message}` }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Failed to change password" })
+    return NextResponse.json({ error: logAndSafeError("change-password", err, "Failed to change password") }, { status: 500 })
   }
 
+  logLuxRouteAction(request, session)
   return NextResponse.json({ success: true })
 }

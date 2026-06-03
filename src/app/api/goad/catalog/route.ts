@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { discoverGoadCatalog, invalidateCatalogCache, isGoadConfigured } from "@/lib/goad-ssh"
 import { getSessionFromRequest } from "@/lib/session"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 async function getCreds(request: NextRequest) {
   const session = await getSessionFromRequest(request)
@@ -39,7 +40,13 @@ export async function GET(request: NextRequest) {
 
 /** POST with no body invalidates the server-side cache and re-fetches. */
 export async function POST(request: NextRequest) {
+  const session = await getSessionFromRequest(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
   if (!isGoadConfigured()) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "GOAD not configured" })
     return NextResponse.json({ configured: false }, { status: 400 })
   }
 
@@ -47,8 +54,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const catalog = await discoverGoadCatalog(await getCreds(request))
+    logLuxRouteAction(request, session)
     return NextResponse.json(catalog)
   } catch (err) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Refresh failed" })
     return NextResponse.json(
       { error: `Refresh failed: ${(err as Error).message}` },
       { status: 500 }

@@ -20,10 +20,12 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership, removeOwnership } from "@/lib/range-ownership-store"
 import { getAdminData, bustAdminCache } from "@/lib/admin-data"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -72,6 +74,7 @@ export async function POST(request: NextRequest) {
     res.error.toLowerCase().includes("already has access")
 
   if (res.error && !alreadyOwned) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: res.error })
     return NextResponse.json({ error: res.error }, { status: res.status || 500 })
   }
 
@@ -81,6 +84,7 @@ export async function POST(request: NextRequest) {
   // Bust server cache so next GET reflects the new assignment
   bustAdminCache()
 
+  logLuxRouteAction(request, session, { detail: `rangeID=${rangeID} userID=${userID}` })
   return NextResponse.json({
     ok: true,
     confirmed: alreadyOwned,
@@ -107,5 +111,6 @@ export async function DELETE(request: NextRequest) {
   removeOwnership(body.rangeID)
   bustAdminCache()
 
+  logLuxRouteAction(request, session, { detail: `rangeID=${body.rangeID}` })
   return NextResponse.json({ ok: true })
 }

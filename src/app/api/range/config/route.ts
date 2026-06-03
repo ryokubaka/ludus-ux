@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
+import { logAndSafeError } from "@/lib/safe-client-error"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSessionFromRequest } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 120
@@ -53,7 +55,7 @@ export async function GET(request: NextRequest) {
     }
     return NextResponse.json(data)
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: logAndSafeError("range/config", err, "Request failed") }, { status: 500 })
   }
 }
 
@@ -65,6 +67,7 @@ export async function PUT(request: NextRequest) {
 
   const body = await request.json().catch(() => null)
   if (!body?.config) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Missing config" })
     return NextResponse.json({ error: "Missing 'config' in request body" }, { status: 400 })
   }
 
@@ -91,10 +94,13 @@ export async function PUT(request: NextRequest) {
     })
     const data = await res.json().catch(() => null)
     if (!res.ok) {
+      logLuxRouteAction(request, session, { outcome: "failure", detail: data?.error || `HTTP ${res.status}` })
       return NextResponse.json({ error: data?.error || `HTTP ${res.status}` }, { status: res.status })
     }
+    logLuxRouteAction(request, session, { detail: rangeId ? `rangeID=${rangeId}` : undefined })
     return NextResponse.json(data)
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Request failed" })
+    return NextResponse.json({ error: logAndSafeError("range/config", err, "Request failed") }, { status: 500 })
   }
 }

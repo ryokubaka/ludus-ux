@@ -10,11 +10,14 @@
  */
 
 import { NextRequest } from "next/server"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { getSessionFromRequest } from "@/lib/session"
 import { POST as abortPost } from "../abort/route"
 
 export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
+  const session = await getSessionFromRequest(request)
   // Buffer the body so we can hand a fresh request to the new route without
   // streaming + duplex concerns. The old force-state body shape ({ rangeId,
   // apiKey }) is a strict subset of the new route's body shape so no
@@ -26,5 +29,12 @@ export async function POST(request: NextRequest) {
     headers: request.headers,
     body: rawBody,
   })
-  return abortPost(forwarded)
+  const response = await abortPost(forwarded)
+  if (session) {
+    logLuxRouteAction(request, session, {
+      outcome: response.ok ? "success" : "failure",
+      detail: response.ok ? undefined : `HTTP ${response.status}`,
+    })
+  }
+  return response
 }

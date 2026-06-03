@@ -1,7 +1,7 @@
 "use client"
 
 import type { ReactNode, RefObject, KeyboardEvent } from "react"
-import { Pause, Play, ChevronsDown, WrapText, Sun, Moon, Search, Copy, Download, Trash2, ChevronUp, ChevronDown, X, RefreshCw } from "lucide-react"
+import { Pause, Play, ChevronsDown, WrapText, Sun, Moon, Search, Copy, Download, Trash2, ChevronUp, ChevronDown, X, RefreshCw, ArrowDownAZ, ArrowUpAZ } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -36,6 +36,8 @@ export interface LogDockToolbarProps {
   refreshLoading?: boolean
   /** Content rendered on the left side (line count, live badge, mac dots, …). */
   leftSlot?: ReactNode
+  sortOrder?: "asc" | "desc"
+  onSortOrderToggle?: () => void
   className?: string
 }
 
@@ -129,6 +131,8 @@ export function LogDockToolbar({
   onRefresh,
   refreshLoading,
   leftSlot,
+  sortOrder,
+  onSortOrderToggle,
   className,
 }: LogDockToolbarProps) {
   const dark = theme === "dark"
@@ -190,6 +194,18 @@ export function LogDockToolbar({
             className={iconCls}
           >
             <RefreshCw className={cn("h-3.5 w-3.5", refreshLoading && "animate-spin")} />
+          </Button>
+        )}
+
+        {onSortOrderToggle && (
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onSortOrderToggle}
+            title={sortOrder === "desc" ? "Newest first — click for oldest first" : "Oldest first — click for newest first"}
+            className={sortOrder === "desc" ? (dark ? "text-blue-400" : "text-blue-600") : iconCls}
+          >
+            {sortOrder === "desc" ? <ArrowDownAZ className="h-3.5 w-3.5" /> : <ArrowUpAZ className="h-3.5 w-3.5" />}
           </Button>
         )}
 

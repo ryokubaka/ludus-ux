@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { ArrowDown } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { ArrowDown, ArrowUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
 import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
@@ -31,6 +31,12 @@ interface LogViewerProps {
   liveLabel?: string
   /** Download filename prefix (without extension). */
   downloadFilename?: string
+  /** Fill parent flex column (scroll inside pane). */
+  fillHeight?: boolean
+  /** Display order; desc = newest line at top (live stream follows top). */
+  sortOrder?: "asc" | "desc"
+  /** Toggle asc/desc when set. */
+  onSortOrderToggle?: () => void
 }
 
 const BOTTOM_THRESHOLD = 80
@@ -46,12 +52,16 @@ export function LogViewer({
   live = false,
   liveLabel,
   downloadFilename = "ludus-deploy",
+  fillHeight = false,
+  sortOrder = "asc",
+  onSortOrderToggle,
 }: LogViewerProps) {
   const containerRef     = useRef<HTMLDivElement>(null)
-  const userScrolledUpRef = useRef(false)
+  const userScrolledAwayRef = useRef(false)
   const prevScrollTopRef  = useRef(0)
   const prevLinesLenRef   = useRef(0)
   const [showJumpBtn, setShowJumpBtn] = useState(false)
+  const newestFirst = sortOrder === "desc"
 
   // ── Toolbar state ─────────────────────────────────────────────────────────
   const [localAutoScroll, setLocalAutoScroll] = useState(parentAutoScroll !== false)
@@ -64,7 +74,12 @@ export function LogViewer({
   // ── Pause ─────────────────────────────────────────────────────────────────
   const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
 
-  // ── Search (operates on the frozen/display view) ──────────────────────────
+  const visibleLines = useMemo(
+    () => (newestFirst ? [...displayLines].reverse() : displayLines),
+    [displayLines, newestFirst],
+  )
+
+  // ── Search (operates on the visible order) ────────────────────────────────
   const {
     searchOpen,
     searchQuery,
@@ -78,18 +93,37 @@ export function LogViewer({
     navigateMatch,
     toggleSearch,
     handleSearchKeyDown,
-  } = useLogSearch(displayLines)
+  } = useLogSearch(visibleLines)
+
+  const scrollToLiveEdge = () => {
+    const el = containerRef.current
+    if (!el) return
+    el.scrollTop = newestFirst ? 0 : el.scrollHeight
+    prevScrollTopRef.current = el.scrollTop
+    userScrolledAwayRef.current = false
+    setShowJumpBtn(false)
+  }
+
+  const isNearLiveEdge = (el: HTMLDivElement) =>
+    newestFirst
+      ? el.scrollTop < BOTTOM_THRESHOLD
+      : el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 
   // ── Auto-scroll new lines ─────────────────────────────────────────────────
+  useEffect(() => {
+    scrollToLiveEdge()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newestFirst])
+
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
-    const hasNew = displayLines.length > prevLinesLenRef.current
-    prevLinesLenRef.current = displayLines.length
+    const hasNew = visibleLines.length > prevLinesLenRef.current
+    prevLinesLenRef.current = visibleLines.length
 
-    if (displayLines.length === 0) {
-      userScrolledUpRef.current = false
+    if (visibleLines.length === 0) {
+      userScrolledAwayRef.current = false
       prevScrollTopRef.current  = 0
       setShowJumpBtn(false)
       return
@@ -100,34 +134,25 @@ export function LogViewer({
       return
     }
 
-    if (!userScrolledUpRef.current) {
-      el.scrollTop = el.scrollHeight
-      prevScrollTopRef.current = el.scrollTop
+    if (!userScrolledAwayRef.current) {
+      scrollToLiveEdge()
     } else if (hasNew) {
       setShowJumpBtn(true)
     }
-  }, [displayLines, effectiveAutoScroll])
+  }, [visibleLines, effectiveAutoScroll, newestFirst])
 
   const handleScroll = () => {
     const el = containerRef.current
     if (!el) return
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
-    if (isNearBottom) {
-      userScrolledUpRef.current = false
+    if (isNearLiveEdge(el)) {
+      userScrolledAwayRef.current = false
       setShowJumpBtn(false)
+    } else if (newestFirst) {
+      if (el.scrollTop > prevScrollTopRef.current) userScrolledAwayRef.current = true
     } else if (el.scrollTop < prevScrollTopRef.current) {
-      userScrolledUpRef.current = true
+      userScrolledAwayRef.current = true
     }
     prevScrollTopRef.current = el.scrollTop
-  }
-
-  const scrollToBottom = () => {
-    const el = containerRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    prevScrollTopRef.current   = el.scrollTop
-    userScrolledUpRef.current  = false
-    setShowJumpBtn(false)
   }
 
   // ── Left slot content ─────────────────────────────────────────────────────
@@ -150,13 +175,20 @@ export function LogViewer({
   )
 
   return (
-    <div className={cn("rounded-lg border overflow-hidden", dark ? "border-zinc-800" : "border-gray-200", className)}>
+    <div
+      className={cn(
+        "rounded-lg border overflow-hidden",
+        dark ? "border-zinc-800" : "border-gray-200",
+        fillHeight && "flex flex-col flex-1 min-h-0 h-full",
+        className,
+      )}
+    >
       <LogDockToolbar
         lines={lines}
         downloadFilename={downloadFilename}
         paused={paused}
         onPause={() => pause(lines.length)}
-        onResume={() => { resume(); scrollToBottom() }}
+        onResume={() => { resume(); scrollToLiveEdge() }}
         autoScroll={localAutoScroll}
         onAutoScrollToggle={() => setLocalAutoScroll(v => !v)}
         showAutoScroll={parentAutoScroll !== false}
@@ -171,6 +203,8 @@ export function LogViewer({
         onClear={onClear ? () => { resume(); onClear() } : undefined}
         onRefresh={onRefresh}
         refreshLoading={refreshLoading}
+        sortOrder={sortOrder}
+        onSortOrderToggle={onSortOrderToggle}
         leftSlot={leftSlot}
       />
 
@@ -188,7 +222,7 @@ export function LogViewer({
         />
       )}
 
-      <div className="relative">
+      <div className={cn("relative", fillHeight && "flex flex-col flex-1 min-h-0")}>
         <div
           ref={containerRef}
           onScroll={handleScroll}
@@ -196,13 +230,14 @@ export function LogViewer({
             "p-4 overflow-y-auto font-mono leading-relaxed",
             dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
+            fillHeight && "flex-1 min-h-0",
           )}
-          style={{ maxHeight, fontSize: `${fontSize}px` }}
+          style={fillHeight ? { fontSize: `${fontSize}px` } : { maxHeight, fontSize: `${fontSize}px` }}
         >
-          {displayLines.length === 0 ? (
+          {visibleLines.length === 0 ? (
             <p className="italic text-gray-600">No logs yet…</p>
           ) : (
-            displayLines.map((line, i) => {
+            visibleLines.map((line, i) => {
               const isErrorRole = /^\[ERROR\]\s/.test(line)
               const normalized = stripStreamRolePrefix(line)
               const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
@@ -248,16 +283,17 @@ export function LogViewer({
 
         {showJumpBtn && (
           <button
-            onClick={scrollToBottom}
+            onClick={scrollToLiveEdge}
             className={cn(
-              "absolute bottom-3 right-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full",
+              "absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full",
               "text-xs font-mono shadow-lg transition-colors z-10",
+              newestFirst ? "top-3 right-3" : "bottom-3 right-3",
               dark
                 ? "bg-primary/90 text-primary-foreground hover:bg-primary"
                 : "bg-gray-700/90 text-white hover:bg-gray-600",
             )}
           >
-            <ArrowDown className="h-3 w-3" />
+            {newestFirst ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
             new logs
           </button>
         )}

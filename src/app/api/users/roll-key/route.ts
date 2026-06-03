@@ -18,6 +18,7 @@ import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const maxDuration = 600
 
@@ -70,6 +71,7 @@ export async function POST(request: NextRequest) {
   )
 
   if (ludusResult.error) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: ludusResult.error })
     return NextResponse.json(
       { error: `Ludus key reset failed: ${ludusResult.error}` },
       { status: 502 }
@@ -78,6 +80,7 @@ export async function POST(request: NextRequest) {
 
   const newKey = extractKey(ludusResult.data)
   if (!newKey) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Empty API key from Ludus" })
     return NextResponse.json(
       { error: "Ludus returned an empty API key — check the ROOT API key and server logs." },
       { status: 502 }
@@ -154,5 +157,6 @@ export async function POST(request: NextRequest) {
       "SSH not configured (LUDUS_SSH_HOST and root SSH password or private key required) — bashrc not updated"
   }
 
+  logLuxRouteAction(request, session, { detail: `userId=${userId} bashrcUpdated=${bashrcUpdated}` })
   return NextResponse.json({ newKey, bashrcUpdated, bashrcError })
 }

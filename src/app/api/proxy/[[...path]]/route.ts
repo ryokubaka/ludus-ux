@@ -3,6 +3,13 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
 import { getSessionFromRequest } from "@/lib/session"
+import {
+  effectiveUsernameFromRequest,
+  logLuxUserAction,
+  ludusProxyEvent,
+} from "@/lib/lux-api-audit"
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
 /** Parse the request body for mutating methods; returns undefined for GET/HEAD. */
 async function parseRequestBody(request: NextRequest): Promise<unknown> {
@@ -68,13 +75,51 @@ async function handler(
         useAdmin && isConnectionError
           ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
           : result.error
+      if (MUTATING_METHODS.has(request.method)) {
+        const username = effectiveUsernameFromRequest(request, session)
+        const detailParts = [`${request.method} ${fullPath}`]
+        if (useAdmin) detailParts.push("admin=1")
+        if (userOverride) detailParts.push(`as=${userOverride}`)
+        detailParts.push(String(errorMessage).slice(0, 160))
+        logLuxUserAction(
+          request,
+          username,
+          ludusProxyEvent(request.method, path),
+          detailParts.join(" "),
+          "failure",
+        )
+      }
       return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
+    }
+
+    if (MUTATING_METHODS.has(request.method)) {
+      const username = effectiveUsernameFromRequest(request, session)
+      const detailParts = [`${request.method} ${fullPath}`]
+      if (useAdmin) detailParts.push("admin=1")
+      if (userOverride) detailParts.push(`as=${userOverride}`)
+      logLuxUserAction(
+        request,
+        username,
+        ludusProxyEvent(request.method, path),
+        detailParts.join(" "),
+        "success",
+      )
     }
 
     return NextResponse.json(result.data, { status: result.status || 200 })
   } catch (err) {
     // Log full details server-side only; don't leak exception messages to the client.
     console.error("[proxy] Unexpected error:", err instanceof Error ? err.message : String(err))
+    if (MUTATING_METHODS.has(request.method)) {
+      const username = effectiveUsernameFromRequest(request, session)
+      logLuxUserAction(
+        request,
+        username,
+        ludusProxyEvent(request.method, path),
+        `${request.method} ${fullPath} internal error`,
+        "failure",
+      )
+    }
     return NextResponse.json({ error: "Internal proxy error" }, { status: 500 })
   }
 }

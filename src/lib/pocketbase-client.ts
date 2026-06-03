@@ -530,6 +530,62 @@ export async function setPbRangeState(
   }
 }
 
+/**
+ * Forces a Ludus range's `testingEnabled` flag directly in PocketBase.
+ *
+ * Last-resort when Ludus testing Ansible finished but PocketBase never flipped
+ * (known Ludus/PB sync bug). Same pattern as `setPbRangeState`.
+ */
+export async function setPbTestingEnabled(
+  rangeId: string,
+  enabled: boolean,
+): Promise<string | null> {
+  try {
+    const token = await getToken()
+    if (!token) return "PocketBase authentication failed — check LUDUS_ROOT_API_KEY"
+
+    const settings = getSettings()
+    const base = settings.ludusUrl.replace(/\/$/, "")
+
+    const searchUrl = new URL(`${base}/api/collections/ranges/records`)
+    searchUrl.searchParams.set("filter", `rangeID = "${escapePbFilterLiteral(rangeId)}"`)
+    searchUrl.searchParams.set("perPage", "1")
+
+    const searchRes = await ludusHttpsFetch(searchUrl.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
+    if (!searchRes.ok) {
+      if (searchRes.status === 401) bustPbTokenCache()
+      return `PocketBase range lookup failed: HTTP ${searchRes.status}`
+    }
+
+    const searchBody = await searchRes.json() as { items?: Array<{ id: string }> }
+    const record = searchBody.items?.[0]
+    if (!record?.id) return `Range "${rangeId}" not found in PocketBase`
+
+    const patchRes = await ludusHttpsFetch(`${base}/api/collections/ranges/records/${record.id}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ testingEnabled: enabled }),
+      cache: "no-store",
+    })
+
+    if (!patchRes.ok) {
+      if (patchRes.status === 401) bustPbTokenCache()
+      const errBody = await patchRes.json().catch(() => ({})) as { message?: string }
+      return `PocketBase PATCH failed: HTTP ${patchRes.status} ${errBody.message ?? ""}`
+    }
+
+    return null
+  } catch (err) {
+    return `PocketBase error: ${(err as Error).message}`
+  }
+}
+
 /** Whether a `logs` row points at this Ludus user (relation id or userID string). */
 function logRowReferencesUser(row: Row, pbUserRecordId: string, ludusUserID: string): boolean {
   const rel = row.user ?? row.owner

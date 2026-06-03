@@ -49,7 +49,12 @@ const IS_SECURE_CONTEXT =
 const SESSION_COOKIE = IS_SECURE_CONTEXT ? "__Host-ludus_session" : "ludus_session"
 const LEGACY_SESSION_COOKIE = "ludus_session"
 
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
+function sessionTtlMs(): number {
+  const hours = Number(process.env.SESSION_MAX_AGE_HOURS ?? "8")
+  if (!Number.isFinite(hours) || hours <= 0) return 8 * 60 * 60 * 1000
+  return Math.min(hours, 8) * 60 * 60 * 1000
+}
+
 const SALT = new TextEncoder().encode("ludus-ux-session-salt-v1")
 
 function getSecret(): string {
@@ -146,7 +151,7 @@ export async function decryptSession(token: string): Promise<SessionData | null>
     const data = JSON.parse(new TextDecoder().decode(decrypted)) as SessionData
 
     // Reject expired sessions
-    if (Date.now() - new Date(data.loginAt).getTime() > SESSION_TTL_MS) {
+    if (Date.now() - new Date(data.loginAt).getTime() > sessionTtlMs()) {
       return null
     }
     return data
@@ -202,7 +207,7 @@ export async function setSessionCookie(
     // The __Host- prefix already provides origin binding; Lax handles UX.
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_TTL_MS / 1000,
+    maxAge: sessionTtlMs() / 1000,
     secure: IS_SECURE_CONTEXT,
   })
 

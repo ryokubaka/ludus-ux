@@ -24,6 +24,7 @@ import { getSessionFromRequest } from "@/lib/session"
 import { sshExec, isGoadConfigured, workspaceSshExecPlan } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -198,6 +199,7 @@ export async function POST(
   try {
     const { stdout, stderr, code } = await sshExec(plan.command, plan.creds)
     if (code !== 0) {
+      logLuxRouteAction(request, session, { outcome: "failure", detail: `SSH exit ${code}` })
       return NextResponse.json(
         { error: `SSH script failed (exit ${code}): ${(stderr || stdout).slice(0, 500)}` },
         { status: 500 },
@@ -214,11 +216,13 @@ export async function POST(
     try {
       parsed = JSON.parse(line) as typeof parsed
     } catch {
+      logLuxRouteAction(request, session, { outcome: "failure", detail: "Unexpected script output" })
       return NextResponse.json(
         { error: "Unexpected script output", raw: stdout.slice(0, 400) },
         { status: 500 },
       )
     }
+    logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} extension=${extensionName}` })
     return NextResponse.json({
       ok: parsed.ok ?? true,
       removedFromInstance: parsed.removedFromInstance ?? false,
@@ -227,6 +231,7 @@ export async function POST(
       errors: parsed.errors ?? [],
     })
   } catch (err) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "remove-extension failed" })
     return NextResponse.json(
       { error: `remove-extension failed: ${(err as Error).message}` },
       { status: 500 },

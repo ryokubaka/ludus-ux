@@ -16,6 +16,9 @@ export interface RangeContextValue {
   loading: boolean
   /** True during any accessible-ranges fetch (initial or background). */
   rangesFetching: boolean
+  /** When true, selectRange ignores clicks on ranges other than the current one. */
+  rangeSelectionLocked: boolean
+  setRangeSelectionLocked: (locked: boolean) => void
   selectRange: (rangeId: string) => void
   refreshRanges: () => Promise<void>
 }
@@ -25,6 +28,8 @@ const RangeContext = createContext<RangeContextValue>({
   selectedRangeId: null,
   loading: true,
   rangesFetching: false,
+  rangeSelectionLocked: false,
+  setRangeSelectionLocked: () => {},
   selectRange: () => {},
   refreshRanges: async () => {},
 })
@@ -57,6 +62,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   /** Storage + login mirror — query key must not lag `useEffectiveScopeTag` after impersonation. */
   const rangesScopeTag = readClientEffectiveScopeTagSync()
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
+  const [rangeSelectionLocked, setRangeSelectionLocked] = useState(false)
 
   const { data: ranges = [], isLoading, isFetching: rangesFetching, status } = useQuery({
     queryKey: queryKeys.accessibleRangesList(rangesScopeTag),
@@ -102,10 +108,13 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   }, [ranges, isLoading, status, selectedRangeId])
 
   const selectRange = useCallback((rangeId: string) => {
-    setSelectedRangeId(rangeId)
-    sessionStorage.setItem(STORAGE_KEY, rangeId)
-    window.dispatchEvent(new Event("range-changed"))
-  }, [])
+    setSelectedRangeId((current) => {
+      if (rangeSelectionLocked && rangeId !== current) return current
+      sessionStorage.setItem(STORAGE_KEY, rangeId)
+      window.dispatchEvent(new Event("range-changed"))
+      return rangeId
+    })
+  }, [rangeSelectionLocked])
 
   const refreshRanges = useCallback(async () => {
     // Invalidate every scoped copy of the accessible-ranges query — a single
@@ -131,6 +140,8 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
         selectedRangeId,
         loading: isLoading,
         rangesFetching,
+        rangeSelectionLocked,
+        setRangeSelectionLocked,
         selectRange,
         refreshRanges,
       }}

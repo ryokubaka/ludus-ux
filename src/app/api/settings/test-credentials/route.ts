@@ -18,6 +18,7 @@ import {
   getResolvedPrivateKeyPath,
   probeSshKeyMount,
 } from "@/lib/root-ssh-auth"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -202,5 +203,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  logLuxRouteAction(request, session, {
+    detail: `rootSsh=${rootSsh.ok} adminApi=${adminApi.ok}`,
+  })
   return NextResponse.json({ rootSsh, adminApi, keyProbe })
 }

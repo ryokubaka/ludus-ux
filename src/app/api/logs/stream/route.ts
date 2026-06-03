@@ -8,6 +8,7 @@ import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
 import { createDeployLogDedupe } from "@/lib/deploy-log-sse-dedupe"
+import { readLudusAnsibleLogMtimeMs } from "@/lib/goad-ludus-reconcile"
 import {
   augmentLudusDeployHistoryLines,
   deployLogLineHasLeadingWallTimestamp,
@@ -171,7 +172,12 @@ export async function GET(request: NextRequest) {
                 newLines.length > 1 &&
                 newLines.every((l) => !deployLogLineHasLeadingWallTimestamp(l))
               ) {
-                const t1 = Date.now()
+                const rid = rangeId || rangeIdParam || ""
+                let t1 = Date.now()
+                if (rid) {
+                  const mtime = await readLudusAnsibleLogMtimeMs(rid)
+                  if (mtime != null) t1 = mtime
+                }
                 const t0 = t1 - Math.min(6 * 60 * 60 * 1000, Math.max(60_000, newLines.length * 2000))
                 ludusEmit = augmentLudusDeployHistoryLines(
                   newLines,

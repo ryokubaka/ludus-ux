@@ -43,21 +43,7 @@ import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 import { cn } from "@/lib/utils"
-import dynamic from "next/dynamic"
-import { useShellSession } from "@/components/providers/shell-session-provider"
-
-const LudusPerformanceTab = dynamic(
-  () =>
-    import("@/components/settings/ludus-performance-tab").then((m) => ({
-      default: m.LudusPerformanceTab,
-    })),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="text-muted-foreground text-sm py-8 text-center">Loading performance…</div>
-    ),
-  },
-)
+import { useResolvedSession } from "@/hooks/use-resolved-session"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -671,9 +657,9 @@ function SettingsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
-  const shell = useShellSession()
-  const session: SessionInfo | null = shell
-    ? { username: shell.username, isAdmin: shell.isAdmin }
+  const resolved = useResolvedSession()
+  const session: SessionInfo | null = resolved
+    ? { username: resolved.username, isAdmin: resolved.isAdmin }
     : null
 
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -715,7 +701,6 @@ function SettingsContent() {
     () => [
       { value: "general", label: "General" },
       { value: "ssh", label: "SSH & GOAD" },
-      { value: "ludus-performance", label: "Ludus Performance" },
       ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
       { value: "about", label: "About" },
     ],
@@ -723,6 +708,13 @@ function SettingsContent() {
   )
 
   const activeTabRaw = searchParams.get("tab") ?? "general"
+
+  useEffect(() => {
+    if (activeTabRaw === "ludus-performance") {
+      router.replace("/admin/performance")
+    }
+  }, [activeTabRaw, router])
+
   const activeTab = tabs.some((t) => t.value === activeTabRaw) ? activeTabRaw : "general"
 
   useEffect(() => {
@@ -858,6 +850,15 @@ function SettingsContent() {
           <p className="text-sm text-muted-foreground mt-0.5">Configure LUX connection, integrations, and preferences</p>
         </div>
       </div>
+
+      {session && !session.isAdmin && (
+        <Alert>
+          <ShieldAlert className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            Admin permissions are required to edit these fields. If your role recently changed, refresh this page or log out and back in.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Tabs
         value={activeTab}
@@ -1121,11 +1122,6 @@ function SettingsContent() {
               </Button>
             </div>
           )}
-        </TabsContent>
-
-        {/* ── Ludus Performance (Proxmox nodes) ─────────────────────────── */}
-        <TabsContent value="ludus-performance" className="space-y-4 mt-0">
-          <LudusPerformanceTab />
         </TabsContent>
 
         {/* ── Branding ────────────────────────────────────────────────── */}

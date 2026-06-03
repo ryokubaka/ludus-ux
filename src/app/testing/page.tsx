@@ -338,6 +338,7 @@ export default function TestingPage() {
     ranges: contextRanges,   // RangeAccessEntry[] — same list as the sidebar
     selectedRangeId,         // string | null — driven by sidebar & local selector
     selectRange,             // updates global context + sessionStorage
+    setRangeSelectionLocked,
     loading: rangesLoading,
   } = useRange()
   const scopeTag = useEffectiveScopeTag()
@@ -350,7 +351,7 @@ export default function TestingPage() {
       queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID),
       queryFn: () => fetchPbStatusForRange(r.rangeID),
       enabled: !rangesLoading && !!r.rangeID,
-      staleTime: STALE.short,
+      staleTime: STALE.realtime,
     })),
   })
 
@@ -359,9 +360,28 @@ export default function TestingPage() {
   const selectedRangeIdRef = useRef<string | null>(null)
   useEffect(() => { selectedRangeIdRef.current = selectedRangeId }, [selectedRangeId])
 
-  // ── Per-range status ──────────────────────────────────────────────────────
-  const [status, setStatus] = useState<RangeObject | null>(null)
-  const [statusLoading, setStatusLoading] = useState(false)
+  // ── Per-range status (from dot queries — single source of truth) ────────
+  const selectedRangeIdx = useMemo(
+    () => contextRanges.findIndex((r) => r.rangeID === selectedRangeId),
+    [contextRanges, selectedRangeId],
+  )
+  const selectedPbQuery = selectedRangeIdx >= 0 ? testingDotQueries[selectedRangeIdx] : undefined
+  const status = selectedPbQuery?.data ?? null
+  const statusLoading = selectedPbQuery?.isFetching ?? false
+
+  const refreshRangeStatus = useCallback(
+    (rangeId: string) =>
+      queryClient.invalidateQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
+    [queryClient, scopeTag],
+  )
+
+  const refreshAllRangeStatusDots = useCallback(() => {
+    for (const r of contextRanges) {
+      if (r.rangeID) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID) })
+      }
+    }
+  }, [contextRanges, queryClient, scopeTag])
   const [toggling, setToggling] = useState(false)
 
   // ── Allowed domains (fetched via dedicated endpoint) ─────────────────────
@@ -491,7 +511,7 @@ export default function TestingPage() {
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
 
   // Ref for tracking activeOp transitions — declared here, effect added below
-  // (after fetchStatus is defined) to avoid "used before declaration" errors.
+  // (after refreshRangeStatus is defined) to avoid "used before declaration" errors.
   const prevActiveOpRef = useRef(activeOp)
   const lastOpErrorToastIdRef = useRef<string | null>(null)
 
@@ -500,8 +520,18 @@ export default function TestingPage() {
   const isDeploying  = rangeState === "DEPLOYING" || rangeState === "WAITING"
   const isEnabled    = status?.testingEnabled ?? false
   const opInProgress = !!activeOp && (activeOp.status === "pending" || activeOp.status === "running")
+  const testingToggleInProgress =
+    toggling ||
+    (opInProgress &&
+      !!activeOp &&
+      (activeOp.opType === "testing_start" || activeOp.opType === "testing_stop"))
   // True while we should lock the button and show progress UI
   const isInProgress = toggling || opInProgress || isDeploying || opInitialising
+
+  useEffect(() => {
+    setRangeSelectionLocked(testingToggleInProgress)
+    return () => setRangeSelectionLocked(false)
+  }, [testingToggleInProgress, setRangeSelectionLocked])
 
   // Elapsed-time ticker — updates every second while an op is in-flight so the
   // UI shows "Xm Ys" rather than a static "waiting…" message.
@@ -534,41 +564,6 @@ export default function TestingPage() {
 
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
-
-  /**
-   * Fetch range status — PocketBase first, Ludus API as fallback.
-   *
-   * PocketBase is the authoritative store for testingEnabled and rangeState.
-   * Going there directly avoids Ludus caching delays that caused the status
-   * to appear "stuck" after a testing-mode toggle completed.
-   */
-  const fetchStatus = useCallback(async (rangeId?: string) => {
-    setStatusLoading(true)
-    try {
-      const url = rangeId
-        ? `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`
-        : "/api/range/pb-status"
-      const res = await fetch(url, { headers: { ...getImpersonationHeaders() } })
-
-      if (res.ok) {
-        const data: RangeObject = await res.json()
-        if (!rangeId || selectedRangeIdRef.current === rangeId) {
-          setStatus(data)
-        }
-      } else {
-        // PocketBase route failed — fall back to Ludus API
-        const result = await ludusApi.getRangeStatus(rangeId)
-        if (result.data && (!rangeId || selectedRangeIdRef.current === rangeId)) {
-          setStatus(result.data)
-        }
-      }
-    } catch {
-      // Non-fatal; keep showing the last known status
-    } finally {
-      setStatusLoading(false)
-    }
-  }, [])
-
   // When activeOp transitions from a set value to null (meaning the op just
   // completed and getActiveRangeOp no longer returns it), refresh the range
   // status immediately so isEnabled / button labels update without a manual refresh.
@@ -576,10 +571,10 @@ export default function TestingPage() {
     const prev = prevActiveOpRef.current
     prevActiveOpRef.current = activeOp
     if (prev && !activeOp && selectedRangeId) {
-      fetchStatus(selectedRangeId)
+      void refreshRangeStatus(selectedRangeId)
       void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
     }
-  }, [activeOp, selectedRangeId, fetchStatus, queryClient, scopeTag])
+  }, [activeOp, selectedRangeId, refreshRangeStatus, queryClient, scopeTag])
 
   /**
    * Poll the server for the current DB op for `rangeId`.
@@ -616,9 +611,8 @@ export default function TestingPage() {
 
       if (op.status === "completed" || op.status === "error") {
         // Op finished — refresh range status so button label / badge updates
-        await fetchStatus(rangeId)
-        // Refresh per-range dots (testingEnabled / DEPLOYING) for all ranges in the selector
-        await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
+        await refreshRangeStatus(rangeId)
+        refreshAllRangeStatusDots()
         void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
       } else {
         // Op still in flight — ensure the log stream is running so the user
@@ -632,7 +626,7 @@ export default function TestingPage() {
       setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
-  }, [fetchStatus, queryClient, toast, scopeTag])
+  }, [refreshRangeStatus, refreshAllRangeStatusDots, queryClient, toast, scopeTag])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
@@ -703,11 +697,10 @@ export default function TestingPage() {
     return () => abortRef.current?.abort()
   }, [])
 
-  // When selected range changes: reset all per-range UI state, then load
-  // the live status, allowed domains, and any active DB op simultaneously.
+  // When selected range changes: reset per-range UI state, then load allowed
+  // domains and any active DB op. PB status comes from testingDotQueries cache.
   useEffect(() => {
     if (!selectedRangeId) return
-    setStatus(null)
     setActiveOp(null)
     setLogLines([])
     setShowLogs(false)
@@ -716,11 +709,11 @@ export default function TestingPage() {
     abortRef.current?.abort()
     lastOpErrorToastIdRef.current = null
 
-    fetchStatus(selectedRangeId)
+    void refreshRangeStatus(selectedRangeId)
     refreshAllowedDomains(selectedRangeId)
     setOpInitialising(true)
     pollOp(selectedRangeId)
-  }, [selectedRangeId, fetchStatus, refreshAllowedDomains, pollOp])
+  }, [selectedRangeId, refreshRangeStatus, refreshAllowedDomains, pollOp])
 
   // When an op is in progress, always show the log panel so the user sees progress.
   useEffect(() => {
@@ -816,8 +809,8 @@ export default function TestingPage() {
           setToggling(false)
           setOpInitialising(false)
           lastOpErrorToastIdRef.current = null
-          await Promise.all([pollOp(rangeId), fetchStatus(rangeId)])
-          await queryClient.invalidateQueries({ queryKey: ["range", "pb-status-dot"] })
+          await Promise.all([pollOp(rangeId), refreshRangeStatus(rangeId)])
+          await refreshAllRangeStatusDots()
           toast({
             title: "UI unlocked",
             description:
@@ -1042,26 +1035,35 @@ export default function TestingPage() {
           <Loader2 className="h-4 w-4 animate-spin" /> Loading ranges…
         </div>
       ) : contextRanges.length > 1 && (
-        <div className="flex flex-wrap gap-2">
-          {contextRanges.map((r, i) => {
-            const isSelected = r.rangeID === selectedRangeId
-            // Selected pill: `status` (authoritative for the open card). Others: per-range PB query.
-            const otherEntry = isSelected ? null : testingDotQueries[i]?.data
-            const showTestingDot   = isSelected ? isEnabled   : (otherEntry?.testingEnabled === true)
-            const showDeployingDot = isSelected ? isDeploying : (
-              otherEntry?.rangeState === "DEPLOYING" || otherEntry?.rangeState === "WAITING"
-            )
-            return (
-              <button
-                key={r.rangeID}
-                onClick={() => selectRange(r.rangeID)}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
-                  isSelected
-                    ? "border-primary/60 bg-primary/10 text-primary"
-                    : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                )}
-              >
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {contextRanges.map((r, i) => {
+              const isSelected = r.rangeID === selectedRangeId
+              const rangeSwitchBlocked = testingToggleInProgress && !isSelected
+              const dotEntry = testingDotQueries[i]?.data
+              const showTestingDot = dotEntry?.testingEnabled === true
+              const showDeployingDot =
+                dotEntry?.rangeState === "DEPLOYING" || dotEntry?.rangeState === "WAITING"
+              return (
+                <button
+                  key={r.rangeID}
+                  type="button"
+                  disabled={rangeSwitchBlocked}
+                  onClick={() => selectRange(r.rangeID)}
+                  title={
+                    rangeSwitchBlocked
+                      ? "Testing start/stop in progress — wait before switching ranges"
+                      : undefined
+                  }
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-full border text-sm font-mono transition-colors",
+                    rangeSwitchBlocked && "cursor-not-allowed opacity-50",
+                    isSelected
+                      ? "border-primary/60 bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground",
+                    rangeSwitchBlocked && !isSelected && "hover:border-border hover:text-muted-foreground",
+                  )}
+                >
                 <Server className="h-3.5 w-3.5" />
                 {r.rangeID}
                 {showTestingDot && (
@@ -1073,6 +1075,12 @@ export default function TestingPage() {
               </button>
             )
           })}
+          </div>
+          {testingToggleInProgress && (
+            <p className="text-xs text-muted-foreground">
+              Testing start/stop in progress — range selection is locked until it finishes.
+            </p>
+          )}
         </div>
       )}
 
@@ -1171,7 +1179,7 @@ export default function TestingPage() {
                     ? "Stop Testing (Revert VMs)"
                     : "Start Testing (Snapshot VMs)"}
                 </Button>
-                <Button variant="ghost" onClick={() => fetchStatus(selectedRangeId ?? undefined)} disabled={statusLoading} title="Refresh">
+                <Button variant="ghost" onClick={() => selectedRangeId && refreshRangeStatus(selectedRangeId)} disabled={statusLoading} title="Refresh">
                   <RefreshCw className={cn("h-4 w-4", statusLoading && "animate-spin")} />
                 </Button>
               </div>

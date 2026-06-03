@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { deletePbLogsForLudusUser } from "@/lib/pocketbase-client"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
@@ -24,7 +25,9 @@ export async function POST(request: NextRequest) {
 
   const { deleted, error } = await deletePbLogsForLudusUser(userId)
   if (error) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: error })
     return NextResponse.json({ error, deleted }, { status: 502 })
   }
+  logLuxRouteAction(request, session, { detail: `userId=${userId} deleted=${deleted}` })
   return NextResponse.json({ deleted })
 }

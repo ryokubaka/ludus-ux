@@ -46,6 +46,8 @@ import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS, filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
+import { clearRangeVmsAndWait } from "@/lib/wait-range-vms-cleared"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -163,7 +165,7 @@ function ludusWizardInstallArgs(
 ): string {
   if (exts.length === 0) {
     return mode.kind === "existing"
-      ? `-l ${shellQuote(selectedLab)} -p ludus -m local -i ${shellQuote(mode.instanceId)} -t install`
+      ? `--repl "use ${shellQuote(mode.instanceId)};update_instance_files;install"`
       : `-l ${shellQuote(selectedLab)} -p ludus -m local -t install`
   }
   const extList = exts.join(" ")
@@ -175,7 +177,9 @@ function ludusWizardInstallArgs(
   ].join(";")
 
   if (mode.kind === "existing") {
-    const head = `unload;use ${mode.instanceId};set_extensions ${extList}`
+    // instance.json is synced via refresh-workspace API before GOAD runs; REPL then
+    // reloads the instance and update_instance_files regenerates config.yml + inventories.
+    const head = `unload;use ${mode.instanceId};set_extensions ${extList};update_instance_files`
     const tail = mode.useDecomposedExtensionProvisioning ? postWorkspaceInstall : "install"
     return `--repl "${head};${tail}"`
   }
@@ -286,6 +290,17 @@ export default function NewGoadInstancePage() {
   // a stale closure — same pattern as goad/[id]/page.tsx.
   const goadTaskIdRef = useRef<string | null>(null)
   goadTaskIdRef.current = goadTaskId
+
+  /** Wait for execute SSE to emit [TASKID] so redirect can pass ?goadTaskId= for log resume. */
+  const waitForGoadTaskId = async (maxMs = 5_000): Promise<string | null> => {
+    const deadline = Date.now() + maxMs
+    while (Date.now() < deadline) {
+      const tid = goadTaskIdRef.current?.trim()
+      if (tid) return tid
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    return goadTaskIdRef.current?.trim() ?? null
+  }
 
   const toggleLudusDeployTag = useCallback((tag: string) => {
     setSelectedLudusDeployTags((prev) =>
@@ -566,20 +581,56 @@ export default function NewGoadInstancePage() {
         if (hRes?.ok) handoffId = (await hRes.json()).handoffId ?? null
       }
 
-      // [P2] Background VM drain — fire-and-forget the delete call so we don't
-      // block GOAD startup. GOAD's own `provide` step handles the clean slate;
-      // any lingering VMs are treated as stale by Proxmox and overwritten.
+      // Drain VMs before GOAD — Ludus dynamic inventory fails if ansible runs
+      // while Proxmox VMs are still being destroyed (403 / empty inventory).
       setClearingRange(true)
-      ;(async () => {
-        try {
-          const preClear = await ludusApi.getRangeStatus(targetRangeId)
-          const ips =
-            preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
-          await ludusApi.deleteRangeVMs(targetRangeId)
-          if (ips.length > 0) void pruneKnownHosts(ips)
-        } catch { /* Non-fatal — GOAD will handle remaining VMs */ }
+      try {
+        const preClear = await ludusApi.getRangeStatus(targetRangeId)
+        const ips =
+          preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
+        const cleared = await clearRangeVmsAndWait(targetRangeId)
+        if (!cleared.ok) {
+          if (
+            tryToastLudusSlowHttpError({
+              toast,
+              error: cleared.error,
+              slowTitle: "Slow response from Ludus",
+              onSlow: () => void refreshRanges(),
+            })
+          ) {
+            return
+          }
+          toast({
+            variant: "destructive",
+            title: "Could not clear range VMs",
+            description: cleared.error,
+          })
+          return
+        }
+        if (ips.length > 0) void pruneKnownHosts(ips)
+      } finally {
         setClearingRange(false)
-      })()
+      }
+
+      // Sync instance.json extensions + drop stale inventories before GOAD regen.
+      const refreshRes = await fetch(
+        `/api/goad/instances/${encodeURIComponent(existingId)}/refresh-workspace`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", ...impHeaders },
+          body: JSON.stringify({ extensions: exts }),
+        },
+      )
+      if (!refreshRes.ok) {
+        const refreshErr = await refreshRes.json().catch(() => ({}))
+        toast({
+          variant: "destructive",
+          title: "Could not refresh GOAD workspace",
+          description: (refreshErr as { error?: string }).error ?? `HTTP ${refreshRes.status}`,
+        })
+        return
+      }
 
       // 2. Run GOAD: one REPL session — decomposed `provide` + `provision_lab` +
       // `provision_extension` per ext when instance extensions match wizard (else `install`).
@@ -596,18 +647,20 @@ export default function NewGoadInstancePage() {
         extensions: exts,
         argsHead: args.slice(0, 240),
       })
-      run(args, undefined, impersonation ? { username: impersonation.username } : undefined, rangeId ?? undefined, ludusDeployTagsOpt)
+      void run(
+        args,
+        existingId,
+        impersonation ? { username: impersonation.username } : undefined,
+        rangeId ?? undefined,
+        ludusDeployTagsOpt,
+      )
 
-      // [P1] Redirect immediately — the instance page's resume logic will pick up
-      // the running GOAD stream when it mounts. No need to wait for [TASKID].
-      //
+      const taskIdForRedirect = await waitForGoadTaskId()
+
       // [P6] Fire-and-forget the server-side linkage calls. The handoff route
       // already persisted the mapping so these are best-effort metadata updates.
       void (async () => {
-        // Wait a few seconds for [TASKID] to arrive so we can PATCH the handoff;
-        // this is non-blocking relative to the redirect below.
-        await new Promise((r) => setTimeout(r, 3_000))
-        const taskId = goadTaskIdRef.current
+        const taskId = goadTaskIdRef.current ?? taskIdForRedirect
         if (taskId) {
           if (handoffId) {
             fetch("/api/goad/deploy-handoff", {
@@ -636,7 +689,10 @@ export default function NewGoadInstancePage() {
 
       selectRange(targetRangeId)
       void refreshRanges()
-      router.push(`/goad/${encodeURIComponent(existingId)}?tab=deploy`)
+      const taskQ = taskIdForRedirect
+        ? `&goadTaskId=${encodeURIComponent(taskIdForRedirect)}`
+        : ""
+      router.push(`/goad/${encodeURIComponent(existingId)}?tab=deploy${taskQ}`)
 
     } else {
       // ── Fresh install path ───────────────────────────────────────────────────
@@ -656,20 +712,36 @@ export default function NewGoadInstancePage() {
         if (hRes?.ok) handoffId = (await hRes.json()).handoffId ?? null
       }
 
-      // [P2] Background VM drain — same reasoning as reuse path.
       if (rangeMode === "existing" && rangeId) {
         const targetRangeId = rangeId
         setClearingRange(true)
-        ;(async () => {
-          try {
-            const preClear = await ludusApi.getRangeStatus(targetRangeId)
-            const ips =
-              preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
-            await ludusApi.deleteRangeVMs(targetRangeId)
-            if (ips.length > 0) void pruneKnownHosts(ips)
-          } catch { /* proceed */ }
+        try {
+          const preClear = await ludusApi.getRangeStatus(targetRangeId)
+          const ips =
+            preClear.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
+          const cleared = await clearRangeVmsAndWait(targetRangeId)
+          if (!cleared.ok) {
+            if (
+              tryToastLudusSlowHttpError({
+                toast,
+                error: cleared.error,
+                slowTitle: "Slow response from Ludus",
+                onSlow: () => void refreshRanges(),
+              })
+            ) {
+              return
+            }
+            toast({
+              variant: "destructive",
+              title: "Could not clear range VMs",
+              description: cleared.error,
+            })
+            return
+          }
+          if (ips.length > 0) void pruneKnownHosts(ips)
+        } finally {
           setClearingRange(false)
-        })()
+        }
       }
 
       const args = ludusWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
@@ -760,7 +832,10 @@ export default function NewGoadInstancePage() {
               }
               if (capturedRangeId) selectRange(capturedRangeId)
               void refreshRanges()
-              router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy`)
+              const taskQ = taskId
+                ? `&goadTaskId=${encodeURIComponent(taskId)}`
+                : ""
+              router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy${taskQ}`)
             }
           } catch { /* retry */ }
         }

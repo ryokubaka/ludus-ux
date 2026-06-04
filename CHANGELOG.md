@@ -15,6 +15,15 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.0.6] - 2026-06-04
+
+**LUX**
+- [Fix] **GOAD deploy (overwrite existing range)** — Wait for Ludus VM destroy to finish before starting GOAD so dynamic inventory does not fail mid-teardown (stuck deploy after VM wipe).
+- [Fix] **GOAD deploy (overwrite existing range)** — Regenerate workspace `config.yml` and inventory files before Provide/Install when reusing an existing GOAD instance (`update_instance_files` REPL + `refresh-workspace` API to sync `instance.json` extensions).
+- [Fix] **GOAD deploy logs** — Pass `instanceId` into execute, `?goadTaskId=` on redirect, and retry task resume on the instance page so the GOAD log panel streams without a manual refresh.
+
+---
+
 ## [1.0.5] — 2026-06-02
 
 **LUX**

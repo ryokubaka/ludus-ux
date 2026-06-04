@@ -621,33 +621,47 @@ function GoadInstancePage() {
   // don't need to be in the dep list.
   }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Server-side resume: on mount, query /api/goad/tasks for any running task on
-  // this instance and call resumeTask() so GOAD logs are visible across browsers,
-  // incognito sessions, and admin impersonation without any browser-local state.
+  // Server-side resume: on mount, reconnect GOAD task SSE so logs show after
+  // redirect from goad/new (execute stream is abandoned on navigation).
   useEffect(() => {
     if (!instanceId) return
     let cancelled = false
     void (async () => {
       try {
-        // Short wait so React can finish its initial render pass; if taskId is
-        // already set (e.g. from a same-tab run that never unmounted) we skip.
         await new Promise((r) => setTimeout(r, 50))
-        if (cancelled) return
-        if (taskIdRef.current) return
-        const res = await fetch("/api/goad/tasks", {
-          credentials: "include",
-          headers: impersonationHeaders(),
-        })
-        if (!res.ok || cancelled) return
-        const data = await res.json() as { tasks: GoadTaskForCorrelation[] }
-        const running = (data.tasks ?? []).find(
-          (t) => t.instanceId === instanceId && t.status === "running"
-        )
-        if (!running || cancelled) return
-        // Flag whether this task should switch to the Deploy tab so the
-        // auto-tab effect can act on it when isRunning becomes true.
-        resumedAsDeployRef.current = isDeployActionCommand(running.command)
-        await resumeTask(running.id)
+        if (cancelled || taskIdRef.current) return
+
+        const urlTaskId = new URLSearchParams(window.location.search)
+          .get("goadTaskId")
+          ?.trim()
+        if (urlTaskId) {
+          resumedAsDeployRef.current = true
+          await resumeTask(urlTaskId)
+          return
+        }
+
+        const findRunning = async (): Promise<GoadTaskForCorrelation | undefined> => {
+          const res = await fetch("/api/goad/tasks", {
+            credentials: "include",
+            headers: impersonationHeaders(),
+          })
+          if (!res.ok) return undefined
+          const data = (await res.json()) as { tasks: GoadTaskForCorrelation[] }
+          return (data.tasks ?? []).find(
+            (t) => t.instanceId === instanceId && t.status === "running",
+          )
+        }
+
+        const deadline = Date.now() + 20_000
+        while (Date.now() < deadline && !cancelled && !taskIdRef.current) {
+          const running = await findRunning()
+          if (running) {
+            resumedAsDeployRef.current = isDeployActionCommand(running.command)
+            await resumeTask(running.id)
+            return
+          }
+          await new Promise((r) => setTimeout(r, 500))
+        }
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
@@ -1436,7 +1450,7 @@ function GoadInstancePage() {
     confirm("Provide (create Ludus infrastructure)?", async () => {
       const rangeId = await ensureRangeIsolation()
       if (!rangeId) return
-      await runAction("provide", `--repl "use ${instanceId};provide"`)
+      await runAction("provide", `--repl "use ${instanceId};update_instance_files;provide"`)
     })
   const handleProvisionLab = () =>
     confirm("Run full Ansible provisioning?", () =>
@@ -1460,7 +1474,7 @@ function GoadInstancePage() {
         if (!rangeId) return
         await runAction(
           "install",
-          `--repl "use ${instanceId};provide;provision_lab"`,
+          `--repl "use ${instanceId};update_instance_files;provide;provision_lab"`,
         )
       },
     )

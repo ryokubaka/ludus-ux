@@ -43,7 +43,7 @@ const diagLastAt = new Map<string, number>()
 const THROTTLE_MS = 30_000
 /** Weighted score after last PLAY RECAP in the same buffer (GOAD log). */
 const MIN_STUCK_SIGNAL_SCORE = 14
-/** Standalone deploy-poll lines in the GOAD task log (string from goad-mod ludus.py). */
+/** Standalone deploy-poll lines in the GOAD task log (string from GOAD ludus.py). */
 const MIN_DEPLOY_POLL_LINES = 14
 /** When recap exists only in Ludus `/range/logs`, fewer GOAD-only poll lines suffice. */
 const MIN_DEPLOY_POLL_LINES_LUDUS_RECAP = 8

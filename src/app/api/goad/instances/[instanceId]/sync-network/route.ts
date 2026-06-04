@@ -3,7 +3,7 @@
  *
  * Injects the caller-supplied `network:` block into the GOAD **instance**
  * Ludus config on the server — primarily `workspace/<id>/provider/config.yml`
- * (GOAD / goad-mod: `GoadPath.get_instance_provider_path`). Some trees still
+ * (GOAD: `GoadPath.get_instance_provider_path`). Some trees still
  * use `workspace/<id>/providers/ludus/config.yml`; we update whichever file
  * exists (prefer `provider/config.yml` when both exist).
  *

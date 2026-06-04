@@ -1004,7 +1004,7 @@ function SettingsContent() {
                   GOAD Installation Path
                   <span className="ml-2 text-xs text-muted-foreground font-normal">GOAD_PATH</span>
                 </Label>
-                <Input id="goad-path" value={draft?.goadPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, goadPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/goad-mod" />
+                <Input id="goad-path" value={draft?.goadPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, goadPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/GOAD" />
               </div>
 
               <div className="border-t border-border pt-4 space-y-3">

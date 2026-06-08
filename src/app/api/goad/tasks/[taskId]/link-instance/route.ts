@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { updateTaskInstance } from "@/lib/goad-task-store"
-import { getSessionFromRequest } from "@/lib/session"
+import { getTask, updateTaskInstance } from "@/lib/goad-task-store"
+import { assertGoadTaskAccess } from "@/lib/goad-task-api"
+import { resolveSession } from "@/lib/session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
@@ -17,7 +18,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ taskId: string }> }
 ) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -29,6 +30,15 @@ export async function POST(
   if (!instanceId) {
     return NextResponse.json({ error: "instanceId is required" }, { status: 400 })
   }
+
+  const task = getTask(taskId)
+  if (!task) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: "Task not found" })
+    return NextResponse.json({ error: "Task not found" }, { status: 404 })
+  }
+
+  const denied = assertGoadTaskAccess(session, request, task)
+  if (denied) return denied
 
   const ok = updateTaskInstance(taskId, instanceId)
   if (!ok) {

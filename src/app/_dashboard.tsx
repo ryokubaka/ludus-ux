@@ -69,6 +69,7 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import {
   clearRangeAborting,
@@ -404,6 +405,14 @@ export function DashboardPageClient() {
           toast({ variant: "destructive", title: "Failed to load log", description: result.error })
         }
       }
+      if (row?.goadTask) {
+        const goadLines = await fetchGoadTaskLogLines(row.goadTask.id, getImpersonationHeaders())
+        if (goadLines.length > 0) {
+          if (lines.length > 0) lines.push("")
+          lines.push("--- GOAD ---")
+          lines.push(...goadLines)
+        }
+      }
       setDeployHistoryLines(lines)
       setDeployHistoryDetailLoading(false)
     },
@@ -505,7 +514,7 @@ export function DashboardPageClient() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
     }, 2000)
     return () => clearInterval(id)
-  }, [aborting, selectedRangeId, queryClient])
+  }, [aborting, selectedRangeId, queryClient, scopeTag])
 
   // ── Stream completion → refresh data and hide logs ─────────────────────────
   useEffect(() => {

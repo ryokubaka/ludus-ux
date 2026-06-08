@@ -62,7 +62,8 @@ The GOAD log stream (`/api/goad/tasks/:taskId/stream`) replays all existing log 
 
 - **nginx edge in Compose** — TLS on host **:443**; app container speaks HTTP only on the internal network (`TRUST_PROXY_TLS` preserves secure cookies).
 - **No external database** — SQLite under `data/` is the only persistence layer
-- **Session-encrypted credentials** — User SSH/PAM password and impersonation API key in an `httpOnly` AES-256-GCM encrypted cookie; never in `sessionStorage`
+- **Session credential vault** — Cookie holds opaque `sessionId` + non-secret metadata only (`httpOnly`, AES-256-GCM). API keys and SSH passwords live encrypted in SQLite (`lux_session_credentials`). Legacy cookies with embedded secrets are migrated to the vault on first `resolveSession` / `/api/auth/session` hit.
+- **Single-process stores** — VNC tokens, rate limits, and GOAD SSE fan-out use in-memory maps. Safe for the default single-container deploy; multi-replica scaling would need Redis or sticky sessions.
 - **Admin credential hygiene** — Root password, root API key, and stored SSH passwords are not returned to non-admin clients; impersonation API key is not exposed to client-side JavaScript
 - **SSE** — Deployment and GOAD logs stream over Server-Sent Events; task list changes are also pushed via a lightweight `/api/goad/tasks/events` stream
 - **Task durability** — GOAD task IDs, API keys, and deploy handoff context are persisted to SQLite so workflows survive container restarts

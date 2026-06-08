@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest, type SessionData } from "@/lib/session"
+import { resolveSession, type ResolvedSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { proxmoxLogin, proxmoxGetNodeForVmid, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
 import { storeVncSession } from "@/lib/vnc-token-store"
@@ -10,7 +10,7 @@ import type { UserObject } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
-async function resolveSessionProxmoxUser(session: SessionData): Promise<string> {
+async function resolveSessionProxmoxUser(session: ResolvedSession): Promise<string> {
   const result = await ludusRequest<UserObject | UserObject[]>("/user", { apiKey: session.apiKey })
   if (result.error || result.status !== 200) {
     throw new Error(`Failed to resolve logged-in user's Proxmox username from Ludus API (HTTP ${result.status}): ${result.error || "unknown error"}`)
@@ -23,7 +23,7 @@ async function resolveSessionProxmoxUser(session: SessionData): Promise<string> 
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const vmId = request.nextUrl.searchParams.get("vmId")

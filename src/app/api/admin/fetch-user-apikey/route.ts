@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
-import { sshExec } from "@/lib/goad-ssh"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
+import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
 
 export const dynamic = "force-dynamic"
 
@@ -13,38 +13,19 @@ export const dynamic = "force-dynamic"
  * Admin-only endpoint.
  */
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
 
   const { searchParams } = new URL(request.url)
-  const username = searchParams.get("username")
-  if (!username || !/^[a-zA-Z0-9_.-]+$/.test(username)) {
+  const username = searchParams.get("username")?.trim() ?? ""
+  if (!username) {
     return NextResponse.json({ error: "Valid username required" }, { status: 400 })
   }
 
-  try {
-    // Extract LUDUS_API_KEY from the user's .bashrc via root SSH.
-    // Uses grep -oP (Perl regex) with \K to return only the value part.
-    // Handles both:  export LUDUS_API_KEY=VALUE  and  LUDUS_API_KEY=VALUE
-    // Also handles single-quoted values:  export LUDUS_API_KEY='VALUE'
-    const cmd = [
-      `grep -E '^[[:space:]]*(export[[:space:]]+)?LUDUS_API_KEY=' /home/${username}/.bashrc 2>/dev/null`,
-      `tail -1`,
-      `grep -oP "LUDUS_API_KEY=['\"]?\\K[^'\"\\s]+"`,
-    ].join(" | ")
-
-    const { stdout, code } = await sshExec(cmd)
-
-    const apiKey = stdout.trim()
-    if (code !== 0 || !apiKey) {
-      return NextResponse.json({ apiKey: null, message: "Key not found in ~/.bashrc" })
-    }
-
-    return NextResponse.json({ apiKey })
-  } catch (err) {
-    console.error("fetch-user-apikey error:", err)
-    return NextResponse.json({ apiKey: null, message: "SSH error reading ~/.bashrc" })
+  const { apiKey, message } = await readUserApiKeyFromBashrc(username)
+  if (!apiKey) {
+    return NextResponse.json({ apiKey: null, message: message ?? "Key not found in ~/.bashrc" })
   }
+
+  return finishAdminResponse(NextResponse.json({ apiKey }), admin)
 }

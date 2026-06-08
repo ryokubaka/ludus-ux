@@ -5,7 +5,7 @@ const nextConfig = {
   productionBrowserSourceMaps: false,
   serverExternalPackages: ["ssh2", "better-sqlite3"],
   eslint: {
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: false,
   },
   typescript: {
     ignoreBuildErrors: false,
@@ -18,6 +18,10 @@ const nextConfig = {
       }
       config.externals.push("ssh2")
     }
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings || []),
+      { module: /[\\/]src[\\/]lib[\\/]db\.ts/, message: /Critical dependency/ },
+    ]
     return config
   },
   async headers() {

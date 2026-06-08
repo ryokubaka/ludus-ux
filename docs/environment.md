@@ -47,7 +47,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `DISABLE_HTTPS` | When `true`, Node does not terminate TLS (normal with bundled nginx). |
 | `TRUST_PROXY_TLS` | When `true`, treat the deployment as HTTPS for cookies/HSTS while Node listens on HTTP (required behind nginx). |
 | `TLS_HOSTNAME` | Optional CN/SAN hint when nginx auto-generates the edge certificate |
-| `LUDUS_TLS_INSECURE` | When `true`, Node accepts invalid TLS certificates for outbound HTTPS/WSS to Ludus, PocketBase, and Proxmox (typical lab self-signed). **Unset or `false` in production** and use a proper CA or mount `NODE_EXTRA_CA_CERTS`. Compose defaults to `true` for convenience. |
+| `LUDUS_TLS_INSECURE` | When `true`, Node accepts invalid TLS certificates for outbound HTTPS/WSS to Ludus, PocketBase, and Proxmox (typical lab self-signed). Compose defaults to `true`; set `LUDUS_TLS_INSECURE=false` in `.env` for self-signed Ludus/PVE lab installs. |
 
 **Production:** set a strong **`APP_SECRET`** (32+ random characters, not a placeholder). The app refuses to start in `NODE_ENV=production` if `APP_SECRET` is missing, too short, or matches documented example values.
 

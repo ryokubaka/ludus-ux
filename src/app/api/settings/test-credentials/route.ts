@@ -9,7 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { resolveLudusAdminApiBase } from "@/lib/ludus-client"
@@ -48,7 +48,7 @@ function mergeTestSettings(base: RuntimeSettings, body: Body): RuntimeSettings {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session?.isAdmin) {
     return NextResponse.json({ error: "Admin privileges required" }, { status: 403 })
   }

@@ -23,7 +23,7 @@
 
 import "server-only"
 import { QueryClient, dehydrate } from "@tanstack/react-query"
-import type { SessionData } from "@/lib/session"
+import type { ResolvedSession } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { SWRCache } from "@/lib/server-cache"
 import { getAdminDataCached } from "@/lib/admin-data"
@@ -50,7 +50,7 @@ const versionCache = new SWRCache<unknown>(5 * 60_000)
  *
  * Respects impersonation via the session cookie.
  */
-export async function prefetchGlobal(session: SessionData | null) {
+export async function prefetchGlobal(session: ResolvedSession | null) {
   const queryClient = new QueryClient()
   try {
     if (!session) return dehydrate(queryClient)
@@ -88,7 +88,7 @@ export async function prefetchGlobal(session: SessionData | null) {
  * getAdminDataCached() is non-blocking: reads the SWR cache and triggers a
  * background revalidation, never waiting for the Ludus API.
  */
-export async function prefetchAdminData(session: SessionData | null) {
+export async function prefetchAdminData(session: ResolvedSession | null) {
   const queryClient = new QueryClient()
   try {
     if (!session?.isAdmin) return dehydrate(queryClient)

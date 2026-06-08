@@ -26,6 +26,10 @@
 import fs from "fs"
 import path from "path"
 import { getDb, taskLogPath, legacyTaskLogPath, TASKS_LOG_DIR } from "./db"
+import {
+  decryptGoadTaskSecret,
+  encryptGoadTaskSecret,
+} from "./goad-task-secret-at-rest"
 import { prefixGoadTaskLogLineWithTimestamp } from "./log-line-timestamp"
 
 export type TaskStatus = "running" | "completed" | "error" | "aborted"
@@ -75,6 +79,13 @@ const taskOrder: string[] = []
 
 // ── Startup hydration ─────────────────────────────────────────────────────────
 
+/** Skip DB hydration during `next build` — no runtime APP_SECRET / volume yet. */
+function shouldHydrateTaskStoreOnImport(): boolean {
+  if (process.env.NEXT_PHASE === "phase-production-build") return false
+  if (process.env.npm_lifecycle_event === "build") return false
+  return true
+}
+
 function hydrateFromDb(): void {
   try {
     fs.mkdirSync(TASKS_LOG_DIR, { recursive: true })
@@ -111,12 +122,18 @@ function hydrateFromDb(): void {
       .all(MAX_TASKS) as Row[]
 
     for (const row of rows) {
+      const ludusApiKey = decryptGoadTaskSecret(row.ludus_api_key)
+      if (row.ludus_api_key?.trim() && !ludusApiKey) {
+        console.warn(
+          `[task-store] could not decrypt ludus_api_key for task ${row.id} (check APP_SECRET)`,
+        )
+      }
       const task: GoadTask = {
         id: row.id,
         command: row.command,
         instanceId: row.instance_id ?? undefined,
         username: row.username ?? undefined,
-        ludusApiKey: row.ludus_api_key ?? undefined,
+        ludusApiKey,
         status: row.status as TaskStatus,
         startedAt: row.started_at,
         endedAt: row.ended_at ?? undefined,
@@ -212,7 +229,9 @@ function hydrateFromDb(): void {
   }
 }
 
-hydrateFromDb()
+if (shouldHydrateTaskStoreOnImport()) {
+  hydrateFromDb()
+}
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -264,6 +283,23 @@ function evictOldestIfNeeded(): void {
 
 // ── Task lifecycle ────────────────────────────────────────────────────────────
 
+/** Owner Ludus API key for reconcile — memory first, then encrypted SQLite row. */
+export function resolveTaskLudusApiKey(taskId: string): string | undefined {
+  const entry = taskMap.get(taskId)
+  const cached = entry?.task.ludusApiKey?.trim()
+  if (cached) return cached
+  try {
+    const row = getDb()
+      .prepare(`SELECT ludus_api_key FROM goad_tasks WHERE id = ?`)
+      .get(taskId) as { ludus_api_key: string | null } | undefined
+    const key = decryptGoadTaskSecret(row?.ludus_api_key)
+    if (key && entry) entry.task.ludusApiKey = key
+    return key
+  } catch {
+    return undefined
+  }
+}
+
 export function createTask(
   command: string,
   instanceId?: string,
@@ -290,7 +326,14 @@ export function createTask(
         `INSERT INTO goad_tasks (id, command, instance_id, username, status, started_at, line_count, ludus_api_key)
          VALUES (?, ?, ?, ?, 'running', ?, 0, ?)`
       )
-      .run(id, command, instanceId ?? null, username ?? null, now, task.ludusApiKey ?? null)
+      .run(
+        id,
+        command,
+        instanceId ?? null,
+        username ?? null,
+        now,
+        encryptGoadTaskSecret(task.ludusApiKey),
+      )
   } catch (err) {
     console.error("[task-store] createTask DB write failed:", err)
   }
@@ -352,7 +395,7 @@ export function appendLine(taskId: string, line: string): string | undefined {
       instanceId: entry.task.instanceId,
       status: entry.task.status,
       logText: tail.join("\n"),
-      ludusApiKey: entry.task.ludusApiKey,
+      ludusApiKey: resolveTaskLudusApiKey(taskId),
     }
     void import("./goad-ludus-reconcile")
       .then((m) => m.tryReconcileStuckDeploySnapshot(snap))
@@ -414,9 +457,70 @@ export function abortTask(taskId: string): void {
   completeTask(taskId, -1, "aborted")
 }
 
+type TaskDbRow = {
+  id: string
+  command: string
+  instance_id: string | null
+  username: string | null
+  status: string
+  started_at: number
+  ended_at: number | null
+  exit_code: number | null
+  line_count: number
+  phase: string | null
+  has_network_rules: number
+  ludus_api_key: string | null
+}
+
+function entryFromDbRow(row: TaskDbRow): TaskEntry {
+  const ludusApiKey = decryptGoadTaskSecret(row.ludus_api_key)
+  const task: GoadTask = {
+    id: row.id,
+    command: row.command,
+    instanceId: row.instance_id ?? undefined,
+    username: row.username ?? undefined,
+    ludusApiKey,
+    status: row.status as TaskStatus,
+    startedAt: row.started_at,
+    endedAt: row.ended_at ?? undefined,
+    exitCode: row.exit_code ?? undefined,
+    lines: [],
+    lineCount: row.line_count,
+    phase: (row.phase as "network-deploy" | null) ?? null,
+    hasNetworkRules: row.has_network_rules === 1,
+  }
+  return {
+    task,
+    lineSubscribers: new Set(),
+    closeSubscribers: new Set(),
+    linesLoaded: false,
+  }
+}
+
+/** Load one task from SQLite when absent from memory (navigation / new worker). */
+export function hydrateTaskFromDbIfMissing(taskId: string): boolean {
+  if (taskMap.has(taskId)) return true
+  try {
+    const row = getDb()
+      .prepare(
+        `SELECT id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count, phase, has_network_rules, ludus_api_key
+         FROM goad_tasks WHERE id = ?`,
+      )
+      .get(taskId) as TaskDbRow | undefined
+    if (!row) return false
+    taskMap.set(taskId, entryFromDbRow(row))
+    if (!taskOrder.includes(taskId)) taskOrder.push(taskId)
+    return true
+  } catch (err) {
+    console.error("[task-store] hydrateTaskFromDbIfMissing failed:", err)
+    return false
+  }
+}
+
 // ── Queries ───────────────────────────────────────────────────────────────────
 
 export function getTask(taskId: string): GoadTask | null {
+  hydrateTaskFromDbIfMissing(taskId)
   const entry = taskMap.get(taskId)
   if (!entry) return null
   loadLinesFromFile(entry)
@@ -538,6 +642,7 @@ export function subscribeToTask(
   onLine: LineSubscriber,
   onClose: CloseSubscriber
 ): () => void {
+  hydrateTaskFromDbIfMissing(taskId)
   const entry = taskMap.get(taskId)
   if (!entry) {
     onClose(null)

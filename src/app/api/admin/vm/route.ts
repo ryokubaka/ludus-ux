@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { getSessionFromRequest } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
@@ -20,10 +20,9 @@ export const dynamic = "force-dynamic"
 
 /** PUT ?proxmoxId=<id>&action=start|stop  — power control via pvesh */
 export async function PUT(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   const proxmoxId = request.nextUrl.searchParams.get("proxmoxId")
   const action    = request.nextUrl.searchParams.get("action")
@@ -60,7 +59,7 @@ export async function PUT(request: NextRequest) {
     )
 
     logLuxRouteAction(request, session, { detail: `${action} proxmoxId=${proxmoxId}` })
-    return NextResponse.json({ ok: true })
+    return finishAdminResponse(NextResponse.json({ ok: true }), admin)
   } catch (err) {
     logLuxRouteAction(request, session, { outcome: "failure", detail: "Operation failed" })
     return NextResponse.json({ error: logAndSafeError("admin/vm", err, "Operation failed") }, { status: 500 })
@@ -68,10 +67,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   const proxmoxId = request.nextUrl.searchParams.get("proxmoxId")
   if (!proxmoxId || isNaN(Number(proxmoxId))) {
@@ -118,7 +116,7 @@ export async function DELETE(request: NextRequest) {
     )
 
     logLuxRouteAction(request, session, { detail: `delete proxmoxId=${proxmoxId}` })
-    return NextResponse.json({ ok: true })
+    return finishAdminResponse(NextResponse.json({ ok: true }), admin)
   } catch (err) {
     logLuxRouteAction(request, session, { outcome: "failure", detail: "Operation failed" })
     return NextResponse.json({ error: logAndSafeError("admin/vm", err, "Operation failed") }, { status: 500 })

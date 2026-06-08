@@ -289,18 +289,28 @@ export async function readLudusAnsibleLogSuffixFromByteOffset(
 }
 
 
+async function sshAnsibleLogWithDiag(rangeId: string, reasonKey: string, reasonMsg: string): Promise<string | null> {
+  const viaSsh = await readLudusAnsibleLogViaSsh(rangeId)
+  if (viaSsh) {
+    diagThrottled(reasonKey, reasonMsg, 600_000)
+  }
+  return viaSsh
+}
+
 /** Tail of Ludus deploy text — Ludus HTTP `/range/logs` or SSH ansible.log (PLAY RECAP). */
 export async function readLudusRangeLogsForReconcile(
   rangeId: string,
   opts?: { taskLudusApiKey?: string },
 ): Promise<string | null> {
   const settings = getSettings()
-  const apiKey = (settings.rootApiKey ?? "").trim()
+  const rootKey = (settings.rootApiKey ?? "").trim()
   const taskKey = opts?.taskLudusApiKey?.trim() ?? ""
 
   const path = `/range/logs?rangeID=${encodeURIComponent(rangeId)}`
 
-  // Match `api/logs/stream`: main Ludus URL + user's Ludus API key (not root PB password).
+  // Match `api/logs/stream`: main Ludus URL + range owner's Ludus user API key.
+  // When present, never fall through to LUDUS_ROOT_API_KEY — that is the PB admin
+  // password and is not a valid Ludus v2 X-API-KEY for /range/logs.
   if (taskKey) {
     const resTask = await ludusGet<{ result?: string }>(path, {
       apiKey: taskKey,
@@ -312,13 +322,42 @@ export async function readLudusRangeLogsForReconcile(
       if (typeof rawT === "string" && rawT.length) {
         return capLudusLogTail(rawT)
       }
+      return sshAnsibleLogWithDiag(
+        rangeId,
+        `logs-ssh-empty-http-${rangeId}`,
+        `reconcile: Ludus /range/logs empty for rangeId=${rangeId}; using SSH ansible.log`,
+      )
     }
+    if (resTask.status === 401 || resTask.status === 403) {
+      diagThrottled(
+        `logs-owner-auth-${rangeId}`,
+        `GET /range/logs failed with range owner's API key for rangeId=${rangeId}: HTTP ${resTask.status} ${resTask.error ?? ""}`.trim(),
+        120_000,
+      )
+      return readLudusAnsibleLogViaSsh(rangeId)
+    }
+    diagThrottled(
+      `logs-owner-http-${rangeId}`,
+      `GET /range/logs (owner key) failed for rangeId=${rangeId}: HTTP ${resTask.status} ${resTask.error ?? ""}`.trim(),
+      120_000,
+    )
+    return sshAnsibleLogWithDiag(
+      rangeId,
+      `logs-ssh-ok-${rangeId}`,
+      `reconcile: Ludus /range/logs unavailable; using SSH ansible.log for PLAY RECAP (rangeId=${rangeId})`,
+    )
   }
 
-  if (apiKey) {
+  diagThrottled(
+    `logs-no-owner-key-${rangeId}`,
+    `reconcile: no Ludus user API key on GOAD task for rangeId=${rangeId} — /range/logs needs the range owner's key (same as Range Logs stream)`,
+    300_000,
+  )
+
+  if (rootKey) {
     const fetchLogs = (useAdmin: boolean) =>
       ludusGet<{ result?: string }>(path, {
-        apiKey,
+        apiKey: rootKey,
         useAdminEndpoint: useAdmin,
         timeout: 45_000,
       })
@@ -336,28 +375,26 @@ export async function readLudusRangeLogsForReconcile(
     if (res.status >= 200 && res.status < 300) {
       const raw = res.data?.result
       if (typeof raw === "string" && raw.length) return capLudusLogTail(raw)
-    } else {
-      const authHint =
-        res.status === 401 || res.status === 403
-          ? " — /range/logs expects the range owner's Ludus user API key (same as Range Logs stream). `LUDUS_ROOT_API_KEY` is the PB admin password for PocketBase patches, not always valid as X-API-KEY on v2."
-          : ""
+    } else if (res.status === 401 || res.status === 403) {
       diagThrottled(
         `logs-http-${rangeId}`,
-        `GET /range/logs failed for rangeId=${rangeId}: HTTP ${res.status} ${res.error ?? ""}${authHint}`.trim(),
+        `GET /range/logs failed for rangeId=${rangeId}: HTTP ${res.status} ${res.error ?? ""} — LUDUS_ROOT_API_KEY is the PB admin password, not a Ludus v2 X-API-KEY. Store the task owner's Ludus user API key on the GOAD task instead.`.trim(),
+        120_000,
+      )
+    } else {
+      diagThrottled(
+        `logs-http-${rangeId}`,
+        `GET /range/logs failed for rangeId=${rangeId}: HTTP ${res.status} ${res.error ?? ""}`.trim(),
         120_000,
       )
     }
   }
 
-  const viaSsh = await readLudusAnsibleLogViaSsh(rangeId)
-  if (viaSsh) {
-    diagThrottled(
-      `logs-ssh-ok-${rangeId}`,
-      `reconcile: Ludus /range/logs unavailable or empty; using SSH ansible.log for PLAY RECAP (rangeId=${rangeId})`,
-      600_000,
-    )
-  }
-  return viaSsh
+  return sshAnsibleLogWithDiag(
+    rangeId,
+    `logs-ssh-ok-${rangeId}`,
+    `reconcile: Ludus /range/logs unavailable or empty; using SSH ansible.log for PLAY RECAP (rangeId=${rangeId})`,
+  )
 }
 
 export async function tryReconcileStuckDeploySnapshot(args: {

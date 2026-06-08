@@ -63,12 +63,20 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   const rangesScopeTag = readClientEffectiveScopeTagSync()
   const [selectedRangeId, setSelectedRangeId] = useState<string | null>(null)
   const [rangeSelectionLocked, setRangeSelectionLocked] = useState(false)
+  const [tabVisible, setTabVisible] = useState(true)
+
+  useEffect(() => {
+    const onVisibility = () => setTabVisible(document.visibilityState === "visible")
+    onVisibility()
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => document.removeEventListener("visibilitychange", onVisibility)
+  }, [])
 
   const { data: ranges = [], isLoading, isFetching: rangesFetching, status } = useQuery({
     queryKey: queryKeys.accessibleRangesList(rangesScopeTag),
     queryFn: fetchAccessibleRanges,
     staleTime: STALE.acl,
-    refetchInterval: 45_000,
+    refetchInterval: tabVisible ? 45_000 : 60_000,
     refetchIntervalInBackground: false,
   })
 

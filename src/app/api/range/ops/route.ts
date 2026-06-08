@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { ludusRequest } from "@/lib/ludus-client"
 import { fetchPbRangeStatus } from "@/lib/pocketbase-client"
 import {
@@ -177,7 +177,7 @@ async function checkCompletion(
 export async function GET(request: NextRequest) {
   try { pruneOldRangeOps() } catch {}
 
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")
@@ -195,7 +195,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try { pruneOldRangeOps() } catch {}
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   let body: { rangeId?: string; opType?: string; dismissStuckOp?: boolean }

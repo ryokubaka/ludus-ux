@@ -17,7 +17,7 @@ describe("clearRangeVmsAndWait", () => {
 
   it("skips delete when range already has no VMs", async () => {
     vi.mocked(ludusApi.getRangeStatus).mockResolvedValue({
-      data: { VMs: [] },
+      data: { VMs: [] } as never,
       status: 200,
     })
     const result = await clearRangeVmsAndWait("lab-range")
@@ -27,9 +27,9 @@ describe("clearRangeVmsAndWait", () => {
 
   it("deletes and polls until VM list is empty", async () => {
     vi.mocked(ludusApi.getRangeStatus)
-      .mockResolvedValueOnce({ data: { VMs: [{}, {}] }, status: 200 })
-      .mockResolvedValueOnce({ data: { VMs: [{}] }, status: 200 })
-      .mockResolvedValueOnce({ data: { VMs: [] }, status: 200 })
+      .mockResolvedValueOnce({ data: { VMs: [{}, {}] } as never, status: 200 })
+      .mockResolvedValueOnce({ data: { VMs: [{}] } as never, status: 200 })
+      .mockResolvedValueOnce({ data: { VMs: [] } as never, status: 200 })
     vi.mocked(ludusApi.deleteRangeVMs).mockResolvedValue({ status: 201 })
 
     const result = await clearRangeVmsAndWait("lab-range", { pollMs: 1, maxWaitMs: 5_000 })

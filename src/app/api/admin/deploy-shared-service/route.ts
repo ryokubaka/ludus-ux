@@ -16,17 +16,16 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: { service?: string; rangeId?: string }
   try { body = await request.json() } catch { body = {} }
@@ -80,14 +79,17 @@ export async function POST(request: NextRequest) {
   }
 
   logLuxRouteAction(request, session, { detail: `service=${service}${rangeId ? ` rangeId=${rangeId}` : ""}` })
-  return NextResponse.json({
-    ok: true,
-    service,
-    debug: {
-      ludusPath,
-      ludusBody,
-      adminUser: session.username,
-      ludusResponse: result.data,
-    },
-  })
+  return finishAdminResponse(
+    NextResponse.json({
+      ok: true,
+      service,
+      debug: {
+        ludusPath,
+        ludusBody,
+        adminUser: session.username,
+        ludusResponse: result.data,
+      },
+    }),
+    admin,
+  )
 }

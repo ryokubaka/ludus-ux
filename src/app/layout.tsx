@@ -6,7 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { QueryProvider } from "@/components/providers/query-provider"
 import { HydrationBoundary } from "@tanstack/react-query"
 import { prefetchGlobal } from "@/lib/server-prefetch"
-import { getSession } from "@/lib/session"
+import { getSession, resolveSessionFromCookies } from "@/lib/session"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 
 export const metadata: Metadata = {
@@ -25,7 +25,8 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession()
-  const dehydratedState = await prefetchGlobal(session)
+  const resolved = await resolveSessionFromCookies()
+  const dehydratedState = await prefetchGlobal(resolved)
   const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"
   const shellSession = session
     ? {

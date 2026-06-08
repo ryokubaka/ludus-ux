@@ -22,6 +22,7 @@ import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
 import type { LogHistoryEntry } from "@/lib/types"
 import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
@@ -134,6 +135,14 @@ export default function LogsPage() {
         )
       } else if (result.error && deployIds.length === 1) {
         toast({ variant: "destructive", title: "Failed to load log", description: result.error })
+      }
+    }
+    if (row?.goadTask) {
+      const goadLines = await fetchGoadTaskLogLines(row.goadTask.id, getImpersonationHeaders())
+      if (goadLines.length > 0) {
+        if (lines.length > 0) lines.push("")
+        lines.push("--- GOAD ---")
+        lines.push(...goadLines)
       }
     }
     setHistoryLines(lines)

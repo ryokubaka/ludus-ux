@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { clearSessionCookie, getSessionFromRequest } from "@/lib/session"
+import { getSessionFromRequest } from "@/lib/session-edge"
+import { clearSessionWithCredentials } from "@/lib/session-node"
 import { clientIpFromRequest, logSecurityAudit } from "@/lib/security-audit-log"
 
 export async function POST(request: NextRequest) {
@@ -9,6 +10,6 @@ export async function POST(request: NextRequest) {
     logSecurityAudit("logout", "success", { user: session.username, ip })
   }
   const response = NextResponse.json({ success: true })
-  clearSessionCookie(response)
+  clearSessionWithCredentials(response, session?.sessionId)
   return response
 }

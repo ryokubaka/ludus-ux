@@ -45,7 +45,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingUsername, setPendingUsername] = useState("")
-  const [pendingPassword, setPendingPassword] = useState("")
+  const [continuationToken, setContinuationToken] = useState("")
 
   // If already logged in, skip to dashboard
   useEffect(() => {
@@ -77,7 +77,8 @@ export default function LoginPage() {
       if (data.needsApiKey) {
         // SSH auth succeeded but key missing from .bashrc, or existing key is stale
         setPendingUsername(username.trim())
-        setPendingPassword(password)
+        setContinuationToken(data.continuationToken || "")
+        setPassword("")
         setStep("set-api-key")
         if (data.staleKey) {
           setError("Your API key in ~/.bashrc is invalid or expired. Enter your current Ludus API key below.")
@@ -106,8 +107,7 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: pendingUsername,
-          password: pendingPassword,
+          continuationToken,
           apiKey: apiKey.trim(),
         }),
       })
@@ -290,7 +290,12 @@ export default function LoginPage() {
                     <Button
                       type="button"
                       variant="ghost"
-                      onClick={() => { setStep("credentials"); setError(null) }}
+                      onClick={() => {
+                        setStep("credentials")
+                        setError(null)
+                        setContinuationToken("")
+                        setApiKey("")
+                      }}
                       disabled={loading}
                       className="flex-1"
                     >

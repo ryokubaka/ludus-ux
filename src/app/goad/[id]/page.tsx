@@ -93,6 +93,7 @@ import {
   correlateHistoryEntries,
   aggregateDeployStatuses,
 } from "@/lib/goad-deploy-history-correlation"
+import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import {
   extractNetworkSection,
   applyNetworkSection,
@@ -989,10 +990,7 @@ function GoadInstancePage() {
 
     if (entry.goadTask) {
       promises.push(
-        fetch(`/api/goad/tasks/${entry.goadTask.id}`).then(async (r) => {
-          if (!r.ok) return
-          const task = await r.json()
-          const lines: string[] = task.lines ?? []
+        fetchGoadTaskLogLines(entry.goadTask.id, impersonationHeaders()).then((lines) => {
           setHistoryGoadLines(lines)
         }),
       )
@@ -1000,7 +998,7 @@ function GoadInstancePage() {
 
     await Promise.allSettled(promises)
     setHistoryDetailLoading(false)
-  }, [instance?.ludusRangeId])
+  }, [instance?.ludusRangeId, impersonationHeaders])
 
   const clearHistorySelection = useCallback(() => {
     setSelectedHistoryEntry(null)

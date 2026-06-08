@@ -78,6 +78,10 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
   // Prefer in-memory apiKey, fall back to the persisted handoff record so
   // the workflow survives a container restart between task start and completion.
   let key = ludusApiKey?.trim()
+  if (!key) {
+    const { resolveTaskLudusApiKey } = await import("./goad-task-store")
+    key = resolveTaskLudusApiKey(taskId)
+  }
   let resolvedRangeId = getInstanceRangeLocal(instanceId)?.trim()
 
   if (!key || !resolvedRangeId) {

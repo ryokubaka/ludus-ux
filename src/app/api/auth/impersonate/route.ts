@@ -1,44 +1,42 @@
 /**
  * /api/auth/impersonate
  *
- * Manages impersonation state inside the encrypted session cookie so the
- * server knows which user is being impersonated on every request — including
- * SSR prefetch and the API proxy.  This replaces the previous sessionStorage-
- * only approach that broke on page refresh (server couldn't see it).
- *
- * POST  body:
- *   - Preferred: { ludusPrincipal, ludusUserId, sshLogin, apiKey }
- *   - Legacy: { username, apiKey } — sets all identities to `username`.
- * DELETE                     — exit impersonation
- * GET                        — return current impersonation state
+ * Manages impersonation state: metadata in the slim session cookie,
+ * target API key in the server-side credential vault.
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest, setSessionCookie } from "@/lib/session"
+import {
+  clearSessionImpersonation,
+  resolveSession,
+  updateSessionImpersonation,
+} from "@/lib/session"
+import { ludusRequest } from "@/lib/ludus-client"
+import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
-  const p =
-    !!(session.impersonationApiKey && session.impersonationUserId?.trim())
+  const impersonating = !!(
+    session.impersonationUserId?.trim() && session.impersonationApiKey?.trim()
+  )
   return NextResponse.json({
-    impersonating: p,
-    /** Ludus `name` (or legacy single username) — X-Impersonate-As. */
-    username: session.impersonationUserId ?? null,
-    ludusUserId: session.impersonationLudusUserId ?? null,
-    sshLogin: session.impersonationSshLogin ?? null,
+    impersonating,
+    username: impersonating ? session.impersonationUserId! : null,
+    ludusUserId: impersonating ? session.impersonationLudusUserId ?? null : null,
+    sshLogin: impersonating ? session.impersonationSshLogin ?? null : null,
   })
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: {
     apiKey?: string
@@ -57,8 +55,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "apiKey required" }, { status: 400 })
   }
 
-  const ludusPrincipal =
-    (body.ludusPrincipal ?? body.username)?.trim() || ""
+  const ludusPrincipal = (body.ludusPrincipal ?? body.username)?.trim() || ""
   if (!ludusPrincipal) {
     return NextResponse.json(
       { error: "ludusPrincipal or username required" },
@@ -67,41 +64,71 @@ export async function POST(request: NextRequest) {
   }
 
   const ludusUserId = (body.ludusUserId ?? body.username)?.trim() || ludusPrincipal
-  const sshLogin =
-    (body.sshLogin ?? body.username)?.trim() || ludusPrincipal
+  const sshLogin = (body.sshLogin ?? body.username)?.trim() || ludusPrincipal
 
-  const updated = {
-    ...session,
-    impersonationApiKey: body.apiKey,
-    impersonationUserId: ludusPrincipal,
-    impersonationLudusUserId: ludusUserId,
-    impersonationSshLogin: sshLogin,
+  const ludusResult = await ludusRequest<unknown>("/user", { apiKey: body.apiKey })
+  if (ludusResult.error || ludusResult.status !== 200) {
+    logAppEvent("impersonate_start", "Invalid apiKey for impersonation", {
+      username: session.username,
+      ip: clientIpFromRequest(request),
+      outcome: "failure",
+    })
+    return NextResponse.json({ error: "API key is invalid" }, { status: 400 })
   }
+  const profile = ludusCallerFromGetUser(ludusResult.data, ludusPrincipal)
+  if (!profile) {
+    return NextResponse.json({ error: "Could not resolve Ludus user for apiKey" }, { status: 400 })
+  }
+  const fields = profile.user
+  const resolvedPrincipal = (fields.name ?? "").trim() || fields.userID
+  const resolvedSsh = (fields.proxmoxUsername ?? "").trim() || sshLogin
+  if (
+    resolvedPrincipal.toLowerCase() !== ludusPrincipal.toLowerCase() &&
+    (fields.userID ?? "").trim().toLowerCase() !== ludusPrincipal.toLowerCase()
+  ) {
+    logAppEvent("impersonate_start", "apiKey does not match ludusPrincipal", {
+      username: session.username,
+      ip: clientIpFromRequest(request),
+      outcome: "failure",
+    })
+    return NextResponse.json({ error: "API key does not match the selected user" }, { status: 400 })
+  }
+
   const response = NextResponse.json({ ok: true })
-  await setSessionCookie(response, updated)
+  try {
+    await updateSessionImpersonation(response, session, {
+      impersonationApiKey: body.apiKey,
+      impersonationUserId: ludusPrincipal,
+      impersonationLudusUserId: ludusUserId || fields.userID,
+      impersonationSshLogin: resolvedSsh || sshLogin,
+    })
+  } catch (err) {
+    logAppEvent("impersonate_start", "Failed to persist impersonation credentials", {
+      username: session.username,
+      ip: clientIpFromRequest(request),
+      outcome: "failure",
+    })
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to start impersonation" },
+      { status: 500 },
+    )
+  }
   logAppEvent("impersonate_start", `Managing as ${ludusPrincipal}`, {
     username: session.username,
     ip: clientIpFromRequest(request),
     outcome: "success",
   })
-  return response
+  return finishAdminResponse(response, admin)
 }
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const {
-    impersonationApiKey: _k,
-    impersonationUserId: _u,
-    impersonationLudusUserId: _x,
-    impersonationSshLogin: _s,
-    ...clean
-  } = session
   const response = NextResponse.json({ ok: true })
-  await setSessionCookie(response, clean)
+  await clearSessionImpersonation(response, session)
   logAppEvent("impersonate_stop", "Impersonation ended", {
     username: session.username,
     ip: clientIpFromRequest(request),

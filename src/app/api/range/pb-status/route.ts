@@ -15,7 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import {
   enrichRangesWithPbRecords,
   fetchPbRangeStatus,
@@ -69,7 +69,7 @@ function getEffectiveKeys(
 // ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import {
   effectiveUsernameFromRequest,
   logLuxUserAction,
@@ -25,7 +25,7 @@ async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path?: string[] }> }
 ) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -53,7 +53,12 @@ async function handler(
   const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
   // In Ludus v2, the ROOT API key is only for PocketBase internal operations.
   // All admin API calls (port 8081) use the logged-in admin's own API key.
-  const effectiveApiKey = impersonateApiKey || session.apiKey
+  // X-Ludus-User (admin fetch-as-user) must use the admin key + X-Impersonate-User,
+  // not an active dashboard impersonation vault key.
+  const effectiveApiKey =
+    userOverride && session.isAdmin
+      ? session.apiKey
+      : impersonateApiKey || session.apiKey
 
   try {
     const body = await parseRequestBody(request)

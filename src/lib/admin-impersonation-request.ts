@@ -3,12 +3,10 @@ import type { SessionData } from "@/lib/session"
 
 type SessionImpersonationPick = Pick<
   SessionData,
-  | "isAdmin"
-  | "impersonationApiKey"
-  | "impersonationUserId"
-  | "impersonationLudusUserId"
-  | "impersonationSshLogin"
->
+  "isAdmin" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+> & {
+  impersonationApiKey?: string
+}
 
 /** Resolved cookie-backed impersonation (admin + target API key present). */
 export type ResolvedAdminImpersonation = {

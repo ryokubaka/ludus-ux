@@ -4,14 +4,36 @@ All notable changes to Ludus UX (LUX) will be documented in this file.
 
 Each bullet uses a single tag:
 
- - **[Add]** - New capability
- - **[Fix]** - Bug or wrong behavior
- - **[Improve]** - UX polish or refactor without a new feature
- - **[Perf]** - Performance improvement
- - **[Security]** - Security fix
- - **[Docs]** - Documentation improvement
- - **[Remove]** - Removed capability
- - **[Breaking]** - Breaking change
+- **[Add]** — New capability
+- **[Fix]** — Bug or wrong behavior
+- **[Improve]** — UX polish or refactor without a new feature
+- **[Perf]** — Performance improvement
+- **[Security]** — Security fix
+- **[Docs]** — Documentation improvement
+- **[Remove]** — Removed capability
+- **[Breaking]** — Breaking change
+
+---
+
+## [1.0.7] - 2026-06-08
+
+**LUX**
+- [Security] **GOAD task API** — GET no longer returns `ludusApiKey` or log `lines`; list and detail share a public DTO. PATCH `/api/goad/tasks/[taskId]` and POST `link-instance` enforce task ownership (same as GET/stop/stream).
+- [Security] **GOAD task secrets** — `goad_tasks.ludus_api_key` encrypted at rest in SQLite (migration v14).
+- [Security] **Session vault** — API key, SSH password, and impersonation key moved server-side; cookie holds opaque `sessionId` only (migration v15). Edge middleware uses a SQLite-free session layer so the app stays healthy behind nginx.
+- [Security] **Login** — Step two uses a one-time server continuation token so the SSH password is not re-sent from the browser; login blocked over plain HTTP in production. TLS/certificate failures surface as connection errors instead of a false “stale ~/.bashrc API key” prompt.
+- [Security] **Admin gate** — Admin mutations re-validate `isAdmin` against Ludus live; impersonation POST validates `apiKey` matches the principal.
+- [Security] **Deploy log SSE** — Errors sanitized via `safeClientError` in production.
+- [Improve] **Settings secrets** — PBKDF2 (`enc:v2:`) with backward-compatible `enc:v1:` decrypt.
+- [Perf] **Deploy log SSE** — Adaptive poll backoff (2s → 5s → 10s when idle); optional `LOG_STREAM_MAX_MS` cap.
+- [Perf] **Range list** — Polling slows to 60s when the browser tab is hidden.
+- [Improve] **`/api/logo`** — Public for favicon; `global-error.tsx` root fallback added.
+- [Fix] **GOAD reconcile logs** — `/range/logs` no longer retries with `LUDUS_ROOT_API_KEY` when the task owner's Ludus user API key is set; empty HTTP body during deploy uses SSH `ansible.log` instead of spurious root-key 401 warnings.
+- [Fix] **Admin impersonation** — `setSessionCookie` no longer re-writes vault secrets into the cookie (which wiped `impersonationApiKey` on the next request); proxy and prefetch again scope Ludus calls to the impersonated user.
+- [Fix] **Users → WireGuard** — Admin download for another user reads their `LUDUS_API_KEY` from `~/.bashrc` and calls Ludus as them (`GET /api/admin/user-wireguard`); Ludus `/user/wireguard` is scoped to the caller's API key, not `X-Impersonate-User`.
+- [Improve] **Build** — ESLint runs during production builds (`eslint.ignoreDuringBuilds: false`).
+- [Add] **Tests** — Unit coverage for GOAD ACL DTO, `requireAdmin`, session vault, and at-rest encryption; Playwright smoke for GOAD task ACL, auth gates, login UI, and public health/logo routes.
+- [Docs] **Architecture & environment** — Session vault, TLS policy, and single-instance constraints documented.
 
 ---
 

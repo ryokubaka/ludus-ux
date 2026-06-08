@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import { discoverGoadCatalog, invalidateCatalogCache, isGoadConfigured } from "@/lib/goad-ssh"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 async function getCreds(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   return session?.sshPassword
     ? { username: session.username, password: session.sshPassword }
     : undefined
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
 
 /** POST with no body invalidates the server-side cache and re-fetches. */
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }

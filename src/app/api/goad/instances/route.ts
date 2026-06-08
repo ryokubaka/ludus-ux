@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-request"
 
 // Must be dynamic: reads env vars + SSH at runtime.
@@ -8,7 +8,7 @@ import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-req
 export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   const result = await fetchGoadInstancesForRequest(request, session)
 
   if (!result.configured) {

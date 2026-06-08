@@ -10,13 +10,13 @@
  */
 
 import { NextRequest } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { subscribeToTaskStatusEvents } from "@/lib/goad-task-store"
 
 export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return new Response("data: [ERROR] Not authenticated\n\n", {
       status: 401,

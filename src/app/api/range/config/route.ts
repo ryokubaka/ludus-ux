@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -28,7 +28,7 @@ function buildLudusUrl(path: string, useAdmin: boolean): string {
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }

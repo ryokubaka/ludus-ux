@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { streamGoadCommand, isGoadConfigured, readGoadRangeId } from "@/lib/goad-ssh"
 import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
 
   if (!session) {
     return new Response("data: [ERROR] Not authenticated\n\n", {

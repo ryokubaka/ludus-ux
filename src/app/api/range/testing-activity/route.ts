@@ -20,7 +20,6 @@ function isAllowlistTestingOpType(s: string): s is "testing_allow_add" | "testin
 function getEffective(
   request: NextRequest,
   session: {
-    apiKey: string
     username: string
     isAdmin: boolean
     impersonationApiKey?: string

@@ -20,7 +20,7 @@ const SKIP_LOG_PATH_PREFIXES = [
 
 type SessionLike = {
   username: string
-  apiKey: string
+  apiKey?: string
   isAdmin: boolean
   impersonationApiKey?: string
   impersonationUserId?: string

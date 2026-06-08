@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import { abortTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
@@ -18,7 +18,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ taskId: string }> }
 ) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }

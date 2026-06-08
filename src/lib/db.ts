@@ -30,6 +30,7 @@
 import fs from "fs"
 import path from "path"
 import type BetterSqlite3 from "better-sqlite3"
+import { encryptGoadTaskSecret, isGoadTaskSecretEncrypted } from "./goad-task-secret-at-rest"
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data")
 export const TASKS_LOG_DIR = path.join(DATA_DIR, "tasks")
@@ -421,6 +422,52 @@ function runMigrations(db: BetterSqlite3.Database): void {
       if (!cols.some((c) => c.name === "logMarkerJson")) {
         db.exec(`ALTER TABLE range_ops ADD COLUMN logMarkerJson TEXT`)
       }
+    },
+
+    // v14 — Encrypt goad_tasks.ludus_api_key at rest (plaintext → enc:v1:).
+    (db) => {
+      const rows = db
+        .prepare(
+          `SELECT id, ludus_api_key FROM goad_tasks
+           WHERE ludus_api_key IS NOT NULL AND ludus_api_key != ''`,
+        )
+        .all() as { id: string; ludus_api_key: string }[]
+      const update = db.prepare(`UPDATE goad_tasks SET ludus_api_key = ? WHERE id = ?`)
+      for (const row of rows) {
+        if (isGoadTaskSecretEncrypted(row.ludus_api_key)) continue
+        const enc = encryptGoadTaskSecret(row.ludus_api_key)
+        if (enc) update.run(enc, row.id)
+      }
+    },
+
+    // v15 — Server-side session credential vault (secrets out of cookie).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lux_session_credentials (
+          session_id   TEXT    PRIMARY KEY,
+          username     TEXT    NOT NULL,
+          payload_enc  TEXT    NOT NULL,
+          expires_at   INTEGER NOT NULL,
+          created_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_session_credentials_expires
+          ON lux_session_credentials(expires_at);
+      `)
+    },
+
+    // v16 — Short-lived login step-2 tokens (SSH password not re-sent from browser).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS lux_login_continuations (
+          token         TEXT    PRIMARY KEY,
+          username      TEXT    NOT NULL,
+          password_enc  TEXT    NOT NULL,
+          expires_at    INTEGER NOT NULL,
+          created_at    INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_lux_login_continuations_expires
+          ON lux_login_continuations(expires_at);
+      `)
     },
   ]
 

@@ -32,7 +32,6 @@ const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 function getEffective(
   request: NextRequest,
   session: {
-    apiKey: string
     username: string
     isAdmin: boolean
     impersonationApiKey?: string

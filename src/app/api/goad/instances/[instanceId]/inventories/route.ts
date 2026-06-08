@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getInstanceInventories, isGoadConfigured } from "@/lib/goad-ssh"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
@@ -21,7 +21,7 @@ export async function GET(
     return NextResponse.json({ error: "Missing instance ID" }, { status: 400 })
   }
 
-  const session = await getSessionFromRequest(_request)
+  const session = await resolveSession(_request)
   const creds = session?.sshPassword
     ? { username: session.username, password: session.sshPassword }
     : undefined

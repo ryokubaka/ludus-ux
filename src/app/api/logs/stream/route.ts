@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
@@ -13,6 +13,7 @@ import {
   augmentLudusDeployHistoryLines,
   deployLogLineHasLeadingWallTimestamp,
 } from "@/lib/log-line-timestamp"
+import { safeClientError } from "@/lib/safe-client-error"
 
 export const dynamic = "force-dynamic"
 
@@ -40,7 +41,7 @@ async function readGoadLog(
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return new Response("data: [ERROR] Not authenticated\n\n", { status: 401 })
   }
@@ -96,7 +97,8 @@ export async function GET(request: NextRequest) {
         let lastGoadCount = 0
         let firstPoll = true
         let rangeId = rangeIdParam || ""
-        let maxPolls = 900  // 30 min hard ceiling
+        const streamMaxMs = Number(process.env.LOG_STREAM_MAX_MS ?? String(30 * 60 * 1000))
+        const streamDeadline = Date.now() + (Number.isFinite(streamMaxMs) && streamMaxMs > 0 ? streamMaxMs : 30 * 60 * 1000)
         let pollIdx = 0
         let streamDone = false
 
@@ -138,7 +140,13 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        while (maxPolls-- > 0) {
+        const pollIntervalMs = (idleMs: number): number => {
+          if (idleMs < 60_000) return 2000
+          if (idleMs < 5 * 60_000) return 5000
+          return 10_000
+        }
+
+        while (Date.now() < streamDeadline) {
           pollIdx++
           if (request.signal.aborted) {
             await tryEmitTerminalDone("request-aborted")
@@ -193,7 +201,7 @@ export async function GET(request: NextRequest) {
               if (newLines.length > 0) lastActivityAt = Date.now()
             }
           } else if (result.error) {
-            send("ERROR", result.error, pollStamp)
+            send("ERROR", safeClientError(result.error, "Failed to fetch range logs"), pollStamp)
             break
           }
 
@@ -293,11 +301,12 @@ export async function GET(request: NextRequest) {
             }
           }
 
-          await new Promise((r) => setTimeout(r, 2000))
+          const idleMs = Date.now() - lastActivityAt
+          await new Promise((r) => setTimeout(r, pollIntervalMs(idleMs)))
         }
         await tryEmitTerminalDone("after-loop")
       } catch (err) {
-        send("ERROR", `Stream error: ${(err as Error).message}`, getCachedLudusWallHmsOrUtc())
+        send("ERROR", safeClientError(err, "Stream error"), getCachedLudusWallHmsOrUtc())
       } finally {
         try { controller.close() } catch { /* already closed */ }
       }

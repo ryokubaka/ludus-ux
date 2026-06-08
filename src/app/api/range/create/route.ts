@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { bustAdminCache } from "@/lib/admin-data"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
@@ -28,7 +28,7 @@ export const dynamic = "force-dynamic"
  * forwards that to Ludus `/ranges/create` + assign — never trusts a login name as `userID`.
  */
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }

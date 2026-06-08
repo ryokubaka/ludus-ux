@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { subscribeToTask, getTask } from "@/lib/goad-task-store"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
 export const dynamic = "force-dynamic"
@@ -13,7 +13,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ taskId: string }> }
 ) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return new Response("data: [ERROR] Not authenticated\n\n", {
       status: 401,

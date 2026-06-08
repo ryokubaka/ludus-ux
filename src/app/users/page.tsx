@@ -414,21 +414,48 @@ export default function UsersPage() {
   }
 
   // ── WireGuard ──────────────────────────────────────────────────────────────
-  const handleGetWireguard = async (userId: string) => {
-    const result = await ludusApi.getUserWireguard(userId)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
-    } else {
-      const data = result.data as { result?: { wireGuardConfig?: string } } | string
-      const content = typeof data === "string"
-        ? data
-        : (data as { result?: { wireGuardConfig?: string } })?.result?.wireGuardConfig || ""
+  const handleGetWireguard = async (user: UserObject) => {
+    const fields = ludusImpersonationFields(user)
+    try {
+      const res = await fetch(
+        `/api/admin/user-wireguard?username=${encodeURIComponent(fields.sshLogin)}`,
+        { credentials: "include" },
+      )
+      const data = (await res.json()) as {
+        error?: string
+        result?: { wireGuardConfig?: string }
+      }
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title: "WireGuard",
+          description: data.error ?? `HTTP ${res.status}`,
+        })
+        return
+      }
+      const content = data.result?.wireGuardConfig?.trim() ?? ""
+      if (!content) {
+        toast({
+          variant: "destructive",
+          title: "WireGuard",
+          description: "Empty configuration from server",
+        })
+        return
+      }
       const blob = new Blob([content], { type: "text/plain" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
-      a.href = url; a.download = `${userId}-wireguard.conf`; a.click()
+      a.href = url
+      a.download = `${user.userID}-wireguard.conf`
+      a.click()
       URL.revokeObjectURL(url)
       toast({ title: "WireGuard config downloaded" })
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "WireGuard",
+        description: (err as Error).message,
+      })
     }
   }
 
@@ -563,7 +590,7 @@ export default function UsersPage() {
                               size="sm"
                               variant="outline"
                               className="h-7 gap-1.5 border-blue-500/40 text-blue-400 hover:bg-blue-500/10 text-xs whitespace-nowrap"
-                              onClick={() => void handleGetWireguard(user.userID)}
+                              onClick={() => void handleGetWireguard(user)}
                               title="Download WireGuard client configuration"
                             >
                               <Download className="h-3 w-3 shrink-0" />

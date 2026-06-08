@@ -57,7 +57,7 @@ export async function saveImpersonation(data: {
     STORAGE_KEY,
     JSON.stringify({ username: data.ludusPrincipal }),
   )
-  await fetch("/api/auth/impersonate", {
+  const res = await fetch("/api/auth/impersonate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -66,7 +66,12 @@ export async function saveImpersonation(data: {
       sshLogin: data.sshLogin,
       apiKey: data.apiKey,
     }),
-  }).catch(() => { /* non-fatal — cookie update is best-effort */ })
+  })
+  if (!res.ok) {
+    sessionStorage.removeItem(STORAGE_KEY)
+    const err = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(err.error || "Failed to start impersonation")
+  }
   window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
 }
 

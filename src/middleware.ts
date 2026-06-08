@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { getSessionFromRequest } from "@/lib/session-edge"
 
 // Paths that are always public
 const PUBLIC_PREFIXES = [
@@ -7,6 +7,7 @@ const PUBLIC_PREFIXES = [
   "/api/auth/login",
   "/api/auth/logout",
   "/api/health",
+  "/api/logo",
   "/_next",
   "/favicon",
 ]

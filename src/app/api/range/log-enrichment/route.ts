@@ -11,7 +11,6 @@ import { pruneLuxRangeLogMarkers, listLuxTestingEvents, listLuxDeployTagRuns } f
 function getEffective(
   request: NextRequest,
   session: {
-    apiKey: string
     username: string
     isAdmin: boolean
     impersonationApiKey?: string

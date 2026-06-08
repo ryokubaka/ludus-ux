@@ -4,7 +4,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { ludusGet } from "@/lib/ludus-client"
 import type { GoadInstance, RangeObject } from "@/lib/types"
 import { getAllInstanceRangesLocal } from "@/lib/goad-instance-range-store"
-import type { SessionData } from "@/lib/session"
+import type { ResolvedSession } from "@/lib/session"
 
 export type GoadInstancesForRequestResult =
   | { configured: false; message: string }
@@ -17,7 +17,7 @@ export type GoadInstancesForRequestResult =
  */
 export async function fetchGoadInstancesForRequest(
   request: NextRequest,
-  session: SessionData | null,
+  session: ResolvedSession | null,
 ): Promise<GoadInstancesForRequestResult> {
   if (!isGoadConfigured()) {
     return {

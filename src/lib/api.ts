@@ -470,8 +470,8 @@ export const ludusApi = {
   addCollection: (name: string, version?: string) =>
     post("/ansible/collection", { collection: name, ...(version ? { version } : {}) }),
 
-  // Wireguard — GET /user/wireguard
-  getUserWireguard: (_userId?: string) =>
+  // Wireguard — GET /user/wireguard (session / impersonation vault key)
+  getUserWireguard: () =>
     get<{ result: { wireGuardConfig: string } }>("/user/wireguard"),
 
   // Range power actions — PUT /range/poweron|poweroff with {"machines": [...names]}

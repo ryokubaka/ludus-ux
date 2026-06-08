@@ -8,7 +8,7 @@
  */
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
@@ -19,7 +19,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const body = await request.json().catch(() => ({})) as {

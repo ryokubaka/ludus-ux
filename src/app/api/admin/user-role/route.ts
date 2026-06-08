@@ -11,7 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { setPbUserAdmin } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
@@ -20,10 +20,9 @@ import { logAppEvent } from "@/lib/app-log"
 export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: { userID?: string; isAdmin?: boolean }
   try { body = await request.json() } catch { body = {} }
@@ -57,5 +56,5 @@ export async function POST(request: NextRequest) {
     outcome: "success",
   })
 
-  return NextResponse.json({ ok: true, userID, isAdmin })
+  return finishAdminResponse(NextResponse.json({ ok: true, userID, isAdmin }), admin)
 }

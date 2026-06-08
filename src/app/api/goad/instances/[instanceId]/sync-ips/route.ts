@@ -22,7 +22,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
@@ -37,7 +37,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ instanceId: string }> }
 ) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }

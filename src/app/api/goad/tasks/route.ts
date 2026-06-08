@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { listTasks } from "@/lib/goad-task-store"
-import { getSessionFromRequest } from "@/lib/session"
+import { toPublicGoadTask } from "@/lib/goad-task-api"
+import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
 export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -17,17 +18,6 @@ export async function GET(request: NextRequest) {
   // Show only the current user's tasks (always filtered — never return all tasks).
   const filtered = all.filter((t) => !t.username || t.username === myUsername)
 
-  const tasks = filtered.map((t) => ({
-    id: t.id,
-    command: t.command,
-    instanceId: t.instanceId,
-    status: t.status,
-    startedAt: t.startedAt,
-    endedAt: t.endedAt,
-    exitCode: t.exitCode,
-    lineCount: t.lineCount,
-    phase: t.phase ?? null,
-    hasNetworkRules: t.hasNetworkRules ?? false,
-  }))
+  const tasks = filtered.map(toPublicGoadTask)
   return NextResponse.json({ tasks })
 }

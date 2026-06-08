@@ -339,8 +339,11 @@ export function workspaceSshExecPlan(
   request: NextRequest,
   session: Pick<
     SessionData,
-    "isAdmin" | "username" | "sshPassword" | "impersonationApiKey" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
-  >,
+    "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+  > & {
+    sshPassword?: string
+    impersonationApiKey?: string
+  },
   innerCommand: string,
   rootCreds: SSHCreds | undefined,
   userCreds: SSHCreds | undefined,

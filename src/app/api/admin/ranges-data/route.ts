@@ -21,7 +21,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership, removeOwnership } from "@/lib/range-ownership-store"
 import { getAdminData, bustAdminCache } from "@/lib/admin-data"
@@ -32,7 +33,7 @@ export const dynamic = "force-dynamic"
 // ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session?.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
@@ -51,10 +52,9 @@ export async function GET(request: NextRequest) {
 // ── POST — assign a range to a user ─────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: { rangeID?: string; userID?: string }
   try { body = await request.json() } catch { body = {} }
@@ -85,21 +85,23 @@ export async function POST(request: NextRequest) {
   bustAdminCache()
 
   logLuxRouteAction(request, session, { detail: `rangeID=${rangeID} userID=${userID}` })
-  return NextResponse.json({
-    ok: true,
-    confirmed: alreadyOwned,
-    rangeID,
-    userID,
-  })
+  return finishAdminResponse(
+    NextResponse.json({
+      ok: true,
+      confirmed: alreadyOwned,
+      rangeID,
+      userID,
+    }),
+    admin,
+  )
 }
 
 // ── DELETE — remove stored ownership (used when a range is deleted) ──────────
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: { rangeID?: string }
   try { body = await request.json() } catch { body = {} }
@@ -112,5 +114,5 @@ export async function DELETE(request: NextRequest) {
   bustAdminCache()
 
   logLuxRouteAction(request, session, { detail: `rangeID=${body.rangeID}` })
-  return NextResponse.json({ ok: true })
+  return finishAdminResponse(NextResponse.json({ ok: true }), admin)
 }

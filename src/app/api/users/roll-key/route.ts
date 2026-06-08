@@ -12,6 +12,7 @@
  */
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
@@ -56,9 +57,9 @@ export async function POST(request: NextRequest) {
 
   const settings = getSettings()
 
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin privileges required to roll another user's key" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const adminSession = admin.session
 
   // ── Step 1: Reset the key via Ludus API ─────────────────────────────────────
   // GET /user/apikey?userID=USERID on port 8080.
@@ -67,11 +68,11 @@ export async function POST(request: NextRequest) {
   // Docs: https://api-docs.ludus.cloud/reset-and-retrieve-the-ludus-api-key-for-a-user-24251977e0
   const ludusResult = await ludusGet<{ result: { apiKey: string; userID: string } }>(
     `/user/apikey?userID=${encodeURIComponent(userId)}`,
-    { apiKey: session.apiKey, timeout: LUDUS_USER_PROVISION_TIMEOUT_MS },
+    { apiKey: adminSession.apiKey, timeout: LUDUS_USER_PROVISION_TIMEOUT_MS },
   )
 
   if (ludusResult.error) {
-    logLuxRouteAction(request, session, { outcome: "failure", detail: ludusResult.error })
+    logLuxRouteAction(request, adminSession, { outcome: "failure", detail: ludusResult.error })
     return NextResponse.json(
       { error: `Ludus key reset failed: ${ludusResult.error}` },
       { status: 502 }
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
 
   const newKey = extractKey(ludusResult.data)
   if (!newKey) {
-    logLuxRouteAction(request, session, { outcome: "failure", detail: "Empty API key from Ludus" })
+    logLuxRouteAction(request, adminSession, { outcome: "failure", detail: "Empty API key from Ludus" })
     return NextResponse.json(
       { error: "Ludus returned an empty API key — check the ROOT API key and server logs." },
       { status: 502 }
@@ -100,7 +101,7 @@ export async function POST(request: NextRequest) {
       let linuxUser = userId.toLowerCase()
       try {
         const userListResult = await ludusRequest<UserObject[]>("/user/all", {
-          apiKey: session.apiKey,
+          apiKey: adminSession.apiKey,
           useAdminEndpoint: true,
           timeout: LUDUS_USER_PROVISION_TIMEOUT_MS,
         })
@@ -157,6 +158,9 @@ export async function POST(request: NextRequest) {
       "SSH not configured (LUDUS_SSH_HOST and root SSH password or private key required) — bashrc not updated"
   }
 
-  logLuxRouteAction(request, session, { detail: `userId=${userId} bashrcUpdated=${bashrcUpdated}` })
-  return NextResponse.json({ newKey, bashrcUpdated, bashrcError })
+  logLuxRouteAction(request, adminSession, { detail: `userId=${userId} bashrcUpdated=${bashrcUpdated}` })
+  return finishAdminResponse(
+    NextResponse.json({ newKey, bashrcUpdated, bashrcError }),
+    admin,
+  )
 }

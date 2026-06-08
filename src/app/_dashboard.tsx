@@ -514,7 +514,7 @@ export function DashboardPageClient() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
     }, 2000)
     return () => clearInterval(id)
-  }, [aborting, selectedRangeId, queryClient])
+  }, [aborting, selectedRangeId, queryClient, scopeTag])
 
   // ── Stream completion → refresh data and hide logs ─────────────────────────
   useEffect(() => {

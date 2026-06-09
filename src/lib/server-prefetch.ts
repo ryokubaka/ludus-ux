@@ -1,101 +1,534 @@
 /**
+
  * Server-only prefetch utilities for TanStack Query + Next.js App Router.
+
  *
- * DESIGN: Every function here is non-blocking.
+
+ * DESIGN: Non-blocking peek via in-process SWRCache (L1) backed by Next
+
+ * `"use cache"` (L2) in cached-ludus-fetch.ts for cross-worker consistency.
+
  *
- * Each function reads from an in-process SWR cache and returns whatever data
- * is available right now.  If the cache is warm (fresh or stale), the data is
- * injected into the HydrationBoundary so the client renders instantly.  If the
- * cache is cold (first-ever request after a container start), the function
- * returns an empty dehydrated state — the client falls back to its own
- * client-side fetch and shows a loading state.
- *
- * In both cases, a background revalidation is triggered so the next request
- * gets up-to-date cached data.
- *
- * Result: HTML delivery is NEVER blocked by a live Ludus API call.
- * Only the very first request after a cold container start may show a loading
- * state; every subsequent request renders with cached data.
- *
- * Query keys include the same `scopeTag` the browser uses (login|view) so
- * HydrationBoundary lines up with client TanStack keys.
+
+ * Query keys include the same `scopeTag` the browser uses (login|view).
+
  */
+
+
 
 import "server-only"
+
 import { QueryClient, dehydrate } from "@tanstack/react-query"
+
 import type { ResolvedSession } from "@/lib/session"
-import { ludusRequest } from "@/lib/ludus-client"
+
 import { SWRCache } from "@/lib/server-cache"
-import { getAdminDataCached } from "@/lib/admin-data"
+
+import type { AdminData } from "@/lib/admin-data"
+
 import { queryKeys } from "@/lib/query-keys"
-import type { RangeAccessEntry } from "@/lib/types"
-import { extractArray } from "@/lib/utils"
+
+import type {
+
+  AnsibleItem,
+
+  BlueprintListItem,
+
+  GroupObject,
+
+  LogHistoryEntry,
+
+  RangeAccessEntry,
+
+  TemplateObject,
+
+  UserObject,
+
+  RangeObject,
+
+} from "@/lib/types"
+
+import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+
+import type { SnapshotsViewData } from "@/lib/snapshots-view-data"
+
+import {
+
+  readSelectedRangeCookie,
+
+  resolveSelectedRangeId,
+
+} from "@/lib/selected-range-cookie"
+
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 
-// ── Module-level SWR caches (persist across requests in the same process) ──
+import {
 
-/** Accessible ranges per effective API key (30 s TTL) */
+  cachedAccessibleRanges,
+
+  cachedAnsible,
+
+  cachedAdminData,
+
+  cachedBlueprints,
+
+  cachedGroups,
+
+  cachedLudusVersion,
+
+  cachedRangeLogEnrichmentForSession,
+
+  cachedRangeConfig,
+
+  cachedRangeLogHistory,
+
+  cachedRangeStatus,
+
+  cachedSnapshotsView,
+
+  cachedTemplates,
+
+  cachedUsers,
+
+} from "@/lib/cached-ludus-fetch"
+
+// ── L1 SWR caches (non-blocking peek; fetchers populate L2 via cached-ludus-fetch) ──
+
+
+
 const rangesCache = new SWRCache<RangeAccessEntry[]>(30_000)
 
-/** Ludus server version (rarely changes — 5 min TTL) */
 const versionCache = new SWRCache<unknown>(5 * 60_000)
 
-// ── Prefetch functions ───────────────────────────────────────────────────────
+const usersCache = new SWRCache<{ users: UserObject[]; rangeMap: Record<string, string[]> }>(60_000)
 
-/**
- * Global prefetch — injected into the root layout, benefits every page.
- * Serves:
- *   - Accessible ranges  (drives the sidebar range selector + range context)
- *   - Ludus version      (shown in the dashboard stats card)
- *
- * Respects impersonation via the session cookie.
- */
+const templatesCache = new SWRCache<TemplateObject[]>(60_000)
+
+const groupsCache = new SWRCache<GroupObject[]>(60_000)
+
+const blueprintsCache = new SWRCache<BlueprintListItem[]>(60_000)
+
+const ansibleCache = new SWRCache<AnsibleItem[]>(60_000)
+const adminDataCache = new SWRCache<AdminData>(30_000)
+
+const rangeStatusCache = new SWRCache<RangeObject | null>(15_000)
+
+const rangeLogHistoryCache = new SWRCache<LogHistoryEntry[]>(30_000)
+
+const rangeLogEnrichmentCache = new SWRCache<RangeLogMarkerEnrichment>(30_000)
+
+const snapshotsViewCache = new SWRCache<SnapshotsViewData>(60_000)
+
+const rangeConfigCache = new SWRCache<string | null>(30_000)
+
+
+
+export type RangePrefetchSlice = "status" | "logHistory" | "logEnrichment" | "snapshots" | "config"
+
+
+
+function rangeCacheKey(apiKey: string, rangeId: string): string {
+
+  return `${apiKey}:${rangeId}`
+
+}
+
+
+
+async function peekAccessibleRanges(
+
+  session: ResolvedSession,
+
+): Promise<RangeAccessEntry[] | null> {
+
+  const scopeTag = effectiveScopeTagFromSession(session)
+
+  const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+  return rangesCache.peek(effectiveApiKey, () => cachedAccessibleRanges(effectiveApiKey, scopeTag))
+
+}
+
+
+
+async function resolvePrefetchRangeId(session: ResolvedSession): Promise<string | null> {
+
+  const accessible = await peekAccessibleRanges(session)
+
+  const cookie = await readSelectedRangeCookie()
+
+  return resolveSelectedRangeId(session, cookie, accessible)
+
+}
+
+
+
 export async function prefetchGlobal(session: ResolvedSession | null) {
+
   const queryClient = new QueryClient()
+
   try {
+
     if (!session) return dehydrate(queryClient)
 
+
+
     const scopeTag = effectiveScopeTagFromSession(session)
+
     const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
     const isImpersonating = !!session.impersonationUserId
 
-    // peek() is synchronous: returns from cache or null (never awaits Ludus)
-    const ranges = rangesCache.peek(
-      effectiveApiKey,
-      () => ludusRequest<unknown>("/ranges/accessible", { apiKey: effectiveApiKey })
-        .then((r) => {
-          const list = extractArray<RangeAccessEntry>(r.data)
-          return [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))
-        }),
+
+
+    const ranges = rangesCache.peek(effectiveApiKey, () =>
+
+      cachedAccessibleRanges(effectiveApiKey, scopeTag),
+
     )
 
+
+
     const version = !isImpersonating
-      ? versionCache.peek(
-          "global",
-          () => ludusRequest<unknown>("/version", { apiKey: session.apiKey })
-            .then((r) => r.data ?? null),
-        )
+
+      ? versionCache.peek("global", () => cachedLudusVersion(session.apiKey, scopeTag))
+
       : null
 
+
+
     if (ranges) queryClient.setQueryData(queryKeys.accessibleRangesList(scopeTag), ranges)
+
     if (version) queryClient.setQueryData(queryKeys.version(scopeTag), version)
+
   } catch { /* best-effort */ }
+
   return dehydrate(queryClient)
+
 }
 
-/**
- * Admin page prefetch — the heaviest page.
- * getAdminDataCached() is non-blocking: reads the SWR cache and triggers a
- * background revalidation, never waiting for the Ludus API.
- */
+
+
 export async function prefetchAdminData(session: ResolvedSession | null) {
+
   const queryClient = new QueryClient()
+
   try {
+
     if (!session?.isAdmin) return dehydrate(queryClient)
 
+
+
     const scopeTag = effectiveScopeTagFromSession(session)
-    const data = getAdminDataCached(session.apiKey)
+
+    const data = adminDataCache.peek(`${session.apiKey}:${scopeTag}`, () =>
+      cachedAdminData(session.apiKey, scopeTag),
+    )
+
     if (data) queryClient.setQueryData(queryKeys.adminRangesData(scopeTag), data)
+
   } catch { /* best-effort */ }
+
   return dehydrate(queryClient)
+
 }
+
+
+
+export async function prefetchUsersData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session?.isAdmin) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const data = usersCache.peek(session.apiKey, () => cachedUsers(session.apiKey, scopeTag))
+
+    if (data) queryClient.setQueryData(queryKeys.users(scopeTag), data)
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchTemplatesData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    const templates = templatesCache.peek(effectiveApiKey, () =>
+
+      cachedTemplates(effectiveApiKey, scopeTag),
+
+    )
+
+    if (templates) queryClient.setQueryData(queryKeys.templates(scopeTag), templates)
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchGroupsData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    const groups = groupsCache.peek(effectiveApiKey, () =>
+
+      cachedGroups(effectiveApiKey, scopeTag),
+
+    )
+
+    if (groups) queryClient.setQueryData(queryKeys.groups(scopeTag), groups)
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchBlueprintsData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    const blueprints = blueprintsCache.peek(effectiveApiKey, () =>
+
+      cachedBlueprints(effectiveApiKey, scopeTag),
+
+    )
+
+    if (blueprints) queryClient.setQueryData(queryKeys.blueprints(scopeTag), blueprints)
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchAnsibleData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    const ansible = ansibleCache.peek(effectiveApiKey, () =>
+
+      cachedAnsible(effectiveApiKey, scopeTag),
+
+    )
+
+    if (ansible) queryClient.setQueryData(queryKeys.ansible(scopeTag), ansible)
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchRangePageData(
+
+  session: ResolvedSession | null,
+
+  slices: RangePrefetchSlice[],
+
+) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session || slices.length === 0) return dehydrate(queryClient)
+
+
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    const rangeId = await resolvePrefetchRangeId(session)
+
+    if (!rangeId) return dehydrate(queryClient)
+
+
+
+    const cacheKey = rangeCacheKey(effectiveApiKey, rangeId)
+
+    const enrichmentKey = `${scopeTag}:${rangeId}`
+
+
+
+    if (slices.includes("status")) {
+
+      const status = rangeStatusCache.peek(cacheKey, () =>
+
+        cachedRangeStatus(effectiveApiKey, scopeTag, rangeId),
+
+      )
+
+      if (status) queryClient.setQueryData(queryKeys.rangeStatus(scopeTag, rangeId), status)
+
+    }
+
+
+
+    if (slices.includes("logHistory")) {
+
+      const history = rangeLogHistoryCache.peek(cacheKey, () =>
+
+        cachedRangeLogHistory(effectiveApiKey, scopeTag, rangeId),
+
+      )
+
+      if (history) queryClient.setQueryData(queryKeys.rangeLogHistory(scopeTag, rangeId), history)
+
+    }
+
+
+
+    if (slices.includes("logEnrichment")) {
+
+      const enrichment = rangeLogEnrichmentCache.peek(enrichmentKey, () =>
+
+        cachedRangeLogEnrichmentForSession(session, scopeTag, rangeId),
+
+      )
+
+      if (enrichment) {
+
+        queryClient.setQueryData(queryKeys.rangeLogEnrichment(scopeTag, rangeId), enrichment)
+
+      }
+
+    }
+
+
+
+    if (slices.includes("snapshots")) {
+
+      const snapshots = snapshotsViewCache.peek(cacheKey, () =>
+
+        cachedSnapshotsView(effectiveApiKey, scopeTag, rangeId),
+
+      )
+
+      if (snapshots) queryClient.setQueryData(queryKeys.snapshots(scopeTag, rangeId), snapshots)
+
+    }
+
+
+
+    if (slices.includes("config")) {
+
+      const yaml = rangeConfigCache.peek(cacheKey, () =>
+
+        cachedRangeConfig(effectiveApiKey, scopeTag, rangeId),
+
+      )
+
+      if (yaml != null) queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, rangeId), yaml)
+
+    }
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
+
+}
+
+
+
+export async function prefetchDashboardData(session: ResolvedSession | null) {
+
+  return prefetchRangePageData(session, ["status", "logHistory", "logEnrichment"])
+
+}
+
+
+
+export async function prefetchLogsData(session: ResolvedSession | null) {
+
+  return prefetchRangePageData(session, ["logHistory", "logEnrichment"])
+
+}
+
+
+
+export async function prefetchSnapshotsData(session: ResolvedSession | null) {
+
+  return prefetchRangePageData(session, ["snapshots"])
+
+}
+
+
+
+/** Testing page — same range-scoped log data as /logs. */
+
+export async function prefetchTestingData(session: ResolvedSession | null) {
+
+  return prefetchRangePageData(session, ["logHistory", "logEnrichment"])
+
+}
+
+
+
+export async function prefetchRangeConfigData(session: ResolvedSession | null) {
+
+  return prefetchRangePageData(session, ["config", "status"])
+
+}
+
+

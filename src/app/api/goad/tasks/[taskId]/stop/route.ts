@@ -5,7 +5,6 @@ import { abortTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 /**
  * POST /api/goad/tasks/[taskId]/stop

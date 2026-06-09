@@ -4,7 +4,6 @@ import { toPublicGoadTask } from "@/lib/goad-task-api"
 import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
-export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)

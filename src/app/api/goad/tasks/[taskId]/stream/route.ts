@@ -3,7 +3,6 @@ import { subscribeToTask, getTask } from "@/lib/goad-task-store"
 import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 
-export const dynamic = "force-dynamic"
 
 /**
  * SSE endpoint that replays all existing lines for a task, then streams

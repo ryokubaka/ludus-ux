@@ -24,7 +24,6 @@ import {
 } from "@/lib/goad-pending-network-fs"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 const LUX_CONSUME_PENDING_BODY_KEY = "__luxConsumePendingNetwork"
 

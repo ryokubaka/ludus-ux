@@ -48,7 +48,7 @@ export interface LogDockSearchBarProps {
   currentMatchIdx: number
   navigateMatch: (dir: 1 | -1) => void
   onClose: () => void
-  searchInputRef: RefObject<HTMLInputElement>
+  searchInputRef: RefObject<HTMLInputElement | null>
   handleSearchKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   theme: LogDockTheme
 }
@@ -66,7 +66,7 @@ export function LogDockSearchBar({
 }: LogDockSearchBarProps) {
   const dark = theme === "dark"
   return (
-    <div className={cn("px-3 pb-2 flex items-center gap-2", dark ? "bg-gray-900" : "bg-gray-100")}>
+    <div className={cn("px-3 pb-2 flex items-center gap-2", dark ? "bg-muted" : "bg-card")}>
       <div className="relative flex-1">
         <input
           ref={searchInputRef}
@@ -79,8 +79,8 @@ export function LogDockSearchBar({
           className={cn(
             "w-full text-xs font-mono px-2 py-1 rounded border focus:outline-none pr-6",
             dark
-              ? "bg-gray-800 text-gray-200 border-gray-600 focus:border-gray-400"
-              : "bg-white text-gray-800 border-gray-300 focus:border-gray-500",
+              ? "bg-background text-foreground border-border focus:border-ring"
+              : "bg-card text-foreground border-border focus:border-ring",
           )}
         />
         {searchQuery && (
@@ -88,7 +88,7 @@ export function LogDockSearchBar({
             onClick={() => { setSearchQuery(""); onClose() }}
             className={cn(
               "absolute right-1.5 top-1/2 -translate-y-1/2",
-              dark ? "text-gray-400 hover:text-gray-200" : "text-gray-400 hover:text-gray-700",
+              dark ? "text-muted-foreground hover:text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
             <X className="h-3 w-3" />
@@ -96,7 +96,7 @@ export function LogDockSearchBar({
         )}
       </div>
       {searchQuery && (
-        <span className="text-xs text-gray-500 font-mono whitespace-nowrap">
+        <span className="text-xs text-muted-foreground font-mono whitespace-nowrap">
           {matchIndices.length === 0 ? "No results" : `${currentMatchIdx + 1} / ${matchIndices.length}`}
         </span>
       )}
@@ -155,14 +155,14 @@ export function LogDockToolbar({
   const canDecrease = sizeIdx > 0
   const canIncrease = sizeIdx < LOG_FONT_SIZES.length - 1
 
-  const iconCls = dark ? "text-gray-400" : "text-gray-600"
-  const activeCls = dark ? "text-yellow-400" : "text-yellow-600"
+  const iconCls = "text-muted-foreground"
+  const activeCls = dark ? "text-status-warning" : "text-yellow-600"
 
   return (
     <div
       className={cn(
         "flex items-center justify-between px-3 py-1.5 border-b",
-        dark ? "bg-gray-900 border-gray-700" : "bg-gray-100 border-gray-200",
+        dark ? "bg-muted border-border" : "bg-card border-border",
         className,
       )}
     >
@@ -203,7 +203,7 @@ export function LogDockToolbar({
             variant="ghost"
             onClick={onSortOrderToggle}
             title={sortOrder === "desc" ? "Newest first — click for oldest first" : "Oldest first — click for newest first"}
-            className={sortOrder === "desc" ? (dark ? "text-blue-400" : "text-blue-600") : iconCls}
+            className={sortOrder === "desc" ? (dark ? "text-status-info" : "text-blue-600") : iconCls}
           >
             {sortOrder === "desc" ? <ArrowDownAZ className="h-3.5 w-3.5" /> : <ArrowUpAZ className="h-3.5 w-3.5" />}
           </Button>
@@ -216,7 +216,7 @@ export function LogDockToolbar({
             variant="ghost"
             onClick={onAutoScrollToggle}
             title={autoScroll ? "Auto-scroll on — click to disable" : "Auto-scroll off — click to enable"}
-            className={autoScroll ? (dark ? "text-green-400" : "text-green-600") : "text-muted-foreground/40"}
+            className={autoScroll ? (dark ? "text-status-success" : "text-green-600") : "text-muted-foreground/40"}
           >
             <ChevronsDown className="h-3.5 w-3.5" />
           </Button>
@@ -257,7 +257,7 @@ export function LogDockToolbar({
           variant="ghost"
           onClick={onWrapToggle}
           title={wrap ? "Word wrap on — click to disable" : "Word wrap off — click to enable"}
-          className={wrap ? (dark ? "text-blue-400" : "text-blue-600") : "text-muted-foreground/40"}
+          className={wrap ? (dark ? "text-status-info" : "text-blue-600") : "text-muted-foreground/40"}
         >
           <WrapText className="h-3.5 w-3.5" />
         </Button>

@@ -16,7 +16,6 @@ import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 /** PUT ?proxmoxId=<id>&action=start|stop  — power control via pvesh */
 export async function PUT(request: NextRequest) {

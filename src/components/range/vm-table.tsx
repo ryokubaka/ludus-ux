@@ -235,7 +235,7 @@ export function VMTable({
         <div className="flex items-center gap-2 p-3 mb-2 bg-muted/50 rounded-lg border border-border">
           <span className="text-sm text-muted-foreground">{selectedVMs.size} selected</span>
           <div className="flex gap-2 ml-auto">
-            <Button size="sm" variant="outline" className="gap-1 text-green-400 border-green-400/30"
+            <Button size="sm" variant="outline" className="gap-1 text-status-success border-status-success/30"
               disabled={selectedArray.some((n) => loadingVMs.has(n))}
               onClick={() => handlePower(selectedArray, "on")}>
               {selectedArray.some((n) => loadingVMs.has(n) && pendingPowerAction.get(n) === "on")
@@ -318,15 +318,15 @@ export function VMTable({
                       <div className="flex items-center gap-1.5">
                         {powerLoading ? (
                           <>
-                            <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
-                            <span className="text-xs text-amber-400">
+                            <Loader2 className="h-3 w-3 animate-spin text-status-warning" />
+                            <span className="text-xs text-status-warning">
                               {pendingAction === "on" ? "Starting…" : "Stopping…"}
                             </span>
                           </>
                         ) : (
                           <>
-                            <Circle className={cn("h-2 w-2 fill-current", running ? "text-green-400" : "text-red-400")} />
-                            <span className={cn("text-xs", running ? "text-green-400" : "text-red-400")}>
+                            <Circle className={cn("h-2 w-2 fill-current", running ? "text-status-success" : "text-status-error")} />
+                            <span className={cn("text-xs", running ? "text-status-success" : "text-status-error")}>
                               {running ? "Running" : "Stopped"}
                             </span>
                           </>
@@ -387,7 +387,7 @@ export function VMTable({
                                 >
                                   {isDownloading
                                     ? <Loader2 className="h-3 w-3 animate-spin" />
-                                    : <Download className="h-3 w-3 text-cyan-400" />}
+                                    : <Download className="h-3 w-3 text-primary" />}
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent>{running ? "Download .vv (virt-viewer / SPICE)" : "Power on first"}</TooltipContent>
@@ -404,8 +404,8 @@ export function VMTable({
                               disabled={powerLoading || running}
                               onClick={() => handlePower([name], "on")}>
                               {powerLoading && pendingAction === "on"
-                                ? <Loader2 className="h-3 w-3 animate-spin text-green-400" />
-                                : <Power className="h-3 w-3 text-green-400" />}
+                                ? <Loader2 className="h-3 w-3 animate-spin text-status-success" />
+                                : <Power className="h-3 w-3 text-status-success" />}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>Power On</TooltipContent>
@@ -416,8 +416,8 @@ export function VMTable({
                               disabled={powerLoading || !running}
                               onClick={() => handlePower([name], "off")}>
                               {powerLoading && pendingAction === "off"
-                                ? <Loader2 className="h-3 w-3 animate-spin text-red-400" />
-                                : <PowerOff className="h-3 w-3 text-red-400" />}
+                                ? <Loader2 className="h-3 w-3 animate-spin text-status-error" />
+                                : <PowerOff className="h-3 w-3 text-status-error" />}
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>Power Off</TooltipContent>

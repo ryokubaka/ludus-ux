@@ -24,6 +24,9 @@ export interface NetworkConfig {
   rules?: NetworkRule[]
 }
 
+/** Parsed `network:` block from range-config YAML (may include Ludus-specific keys). */
+export type NetworkSnapshot = NetworkConfig & Record<string, unknown>
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Parse a raw vlan value from YAML (may be a number or a string keyword). */
@@ -150,13 +153,13 @@ export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): stri
  * Snapshot the full `network:` object from range-config YAML (defaults + rules).
  * Returns null if missing, non-object, or unparseable.
  */
-export function extractNetworkSection(yamlText: string): Record<string, unknown> | null {
+export function extractNetworkSection(yamlText: string): NetworkSnapshot | null {
   try {
     const doc = yaml.load(yamlText) as Record<string, unknown> | null
     if (!doc || typeof doc !== "object") return null
     const network = doc.network
     if (!network || typeof network !== "object" || Array.isArray(network)) return null
-    return structuredClone(network) as Record<string, unknown>
+    return structuredClone(network) as NetworkSnapshot
   } catch {
     return null
   }
@@ -166,7 +169,7 @@ export function extractNetworkSection(yamlText: string): Record<string, unknown>
  * Replace `network:` in YAML with the given snapshot (typically restored after GOAD).
  * If `network` is null, returns `yamlText` unchanged.
  */
-export function applyNetworkSection(yamlText: string, network: Record<string, unknown> | null): string {
+export function applyNetworkSection(yamlText: string, network: NetworkSnapshot | null): string {
   if (network == null) return yamlText
   let doc: Record<string, unknown>
   try {
@@ -267,14 +270,14 @@ export function removeExtensionVmsFromRangeConfig(
 }
 
 /** True when `network.rules` is a non-empty array (explicit firewall rows). */
-export function hasNetworkRules(snapshot: Record<string, unknown> | null): boolean {
+export function hasNetworkRules(snapshot: NetworkSnapshot | null): boolean {
   if (!snapshot) return false
   const rules = snapshot.rules
   return Array.isArray(rules) && rules.length > 0
 }
 
 /** True when the captured `network:` object has any keys beyond an empty stub (rules, VLANs, dns, etc.). */
-export function networkSnapshotNeedsRedeploy(snapshot: Record<string, unknown> | null): boolean {
+export function networkSnapshotNeedsRedeploy(snapshot: NetworkSnapshot | null): boolean {
   if (!snapshot || typeof snapshot !== "object") return false
   if (hasNetworkRules(snapshot)) return true
   const keys = Object.keys(snapshot).filter((k) => !k.startsWith("_"))
@@ -289,7 +292,7 @@ export function networkSnapshotNeedsRedeploy(snapshot: Record<string, unknown> |
  */
 export function networkSectionEqual(
   yamlText: string,
-  snapshot: Record<string, unknown>,
+  snapshot: NetworkSnapshot,
 ): boolean {
   try {
     const doc = yaml.load(yamlText) as Record<string, unknown> | null

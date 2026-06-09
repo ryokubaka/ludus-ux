@@ -15,7 +15,6 @@ import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
 
-export const dynamic = "force-dynamic"
 
 export interface SharedAdminVM {
   vmid: number

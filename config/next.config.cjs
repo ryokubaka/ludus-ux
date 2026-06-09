@@ -3,10 +3,8 @@ const nextConfig = {
   output: "standalone",
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
+  cacheComponents: true,
   serverExternalPackages: ["ssh2", "better-sqlite3"],
-  eslint: {
-    ignoreDuringBuilds: false,
-  },
   typescript: {
     ignoreBuildErrors: false,
   },

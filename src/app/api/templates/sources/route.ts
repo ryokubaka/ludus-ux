@@ -12,7 +12,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 
-export const dynamic = "force-dynamic"
 
 const BADSL_PROJECT = "badsectorlabs%2Fludus"
 const BADSL_REF     = "main"

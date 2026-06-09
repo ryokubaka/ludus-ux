@@ -1,21 +1,21 @@
 {
   "name": "ludus-ux",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
     "copy:monaco": "node scripts/copy-monaco.js",
-    "dev": "npm run copy:monaco && next dev",
-    "build": "npm run copy:monaco && next build",
+    "dev": "npm run copy:monaco && next dev --webpack",
+    "build": "npm run copy:monaco && next build --webpack",
     "start": "next start -p 3000",
     "lint": "eslint .",
     "lint:types": "tsc --noEmit",
+    "postinstall": "npm rebuild better-sqlite3 || true",
     "test:unit": "vitest run -c config/vitest.config.ts",
     "test:e2e": "playwright test -c config/playwright.config.ts",
     "test:perf": "playwright test -c config/playwright.config.ts e2e/perf-refresh.spec.ts"
   },
   "dependencies": {
-    "@hookform/resolvers": "^3.3.4",
     "@monaco-editor/react": "^4.6.0",
     "@radix-ui/react-accordion": "^1.1.2",
     "@radix-ui/react-alert-dialog": "^1.0.5",
@@ -40,17 +40,15 @@
     "js-yaml": "^4.1.0",
     "lucide-react": "^0.400.0",
     "monaco-editor": "^0.46.0",
-    "next": "15.5.18",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-hook-form": "^7.51.3",
+    "next": "^16.2.7",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.12.7",
     "ssh2": "^1.15.0",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
-    "ws": "^8.21.0",
-    "zod": "^3.23.8"
+    "ws": "^8.21.0"
   },
   "overrides": {
     "rimraf": "^5.0.10",
@@ -58,25 +56,28 @@
     "cross-spawn": ">=7.0.5",
     "glob": ">=10.5.0",
     "tar": ">=7.5.11",
-    "brace-expansion": ">=5.0.6",
+    "@eslint/config-array": {
+      "minimatch": {
+        "brace-expansion": "1.1.12"
+      }
+    },
     "next": {
       "postcss": "8.5.10"
     }
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3.3.5",
     "@playwright/test": "^1.51.1",
     "@tanstack/react-query-devtools": "^5.91.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/ssh2": "^1.11.19",
     "@types/ws": "^8.5.13",
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",
-    "eslint-config-next": "15.5.18",
+    "eslint-config-next": "^16.2.7",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.3.0",
     "typescript": "^5",

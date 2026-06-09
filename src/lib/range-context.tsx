@@ -8,6 +8,7 @@ import { STALE } from "./query-client"
 import { extractArray } from "./utils"
 import { readClientEffectiveScopeTagSync } from "./effective-scope"
 import { readImpersonationHeadersFromSessionStorage } from "./impersonation-headers"
+import { syncSelectedRangeCookie } from "./sync-selected-range-cookie"
 
 export interface RangeContextValue {
   ranges: RangeAccessEntry[]
@@ -93,6 +94,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
       if (status === "success") {
         setSelectedRangeId(null)
         sessionStorage.removeItem(STORAGE_KEY)
+        syncSelectedRangeCookie(null)
       }
       return
     }
@@ -102,23 +104,28 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     if (selectedRangeId && ranges.some((r) => r.rangeID === selectedRangeId)) {
       if (saved !== selectedRangeId) {
         sessionStorage.setItem(STORAGE_KEY, selectedRangeId)
+        syncSelectedRangeCookie(selectedRangeId)
       }
       return
     }
 
     if (saved && ranges.some((r) => r.rangeID === saved)) {
       setSelectedRangeId(saved)
+      syncSelectedRangeCookie(saved)
       return
     }
 
-    setSelectedRangeId(ranges[0].rangeID)
-    sessionStorage.setItem(STORAGE_KEY, ranges[0].rangeID)
+    const first = ranges[0].rangeID
+    setSelectedRangeId(first)
+    sessionStorage.setItem(STORAGE_KEY, first)
+    syncSelectedRangeCookie(first)
   }, [ranges, isLoading, status, selectedRangeId])
 
   const selectRange = useCallback((rangeId: string) => {
     setSelectedRangeId((current) => {
       if (rangeSelectionLocked && rangeId !== current) return current
       sessionStorage.setItem(STORAGE_KEY, rangeId)
+      syncSelectedRangeCookie(rangeId)
       window.dispatchEvent(new Event("range-changed"))
       return rangeId
     })
@@ -135,6 +142,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     const handler = () => {
       setSelectedRangeId(null)
       sessionStorage.removeItem(STORAGE_KEY)
+      syncSelectedRangeCookie(null)
       void queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
     }
     window.addEventListener("impersonation-changed", handler)

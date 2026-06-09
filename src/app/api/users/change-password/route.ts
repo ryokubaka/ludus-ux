@@ -22,7 +22,6 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 export const maxDuration = 600
 
-export const dynamic = "force-dynamic"
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))

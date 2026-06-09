@@ -1,0 +1,76 @@
+---
+description: Ludus UX — Next.js 16 app conventions, SSR prefetch, and Ludus API patterns
+globs:
+  - "gitlab/ludus-ux/**"
+alwaysApply: false
+---
+
+# Ludus UX
+
+Next.js 16 App Router + TanStack Query cyber-range UI. Runs in Docker (`docker compose`); use container for build/test when host lacks Node.
+
+## Architecture
+
+- **Auth boundary:** `src/proxy.ts` (Next 16; not `middleware.ts`) — session gate + CSP/security headers
+- **Session:** opaque cookie + server vault; `getLayoutSession()` must call `markRouteDynamic()` under `cacheComponents`
+- **Scope:** TanStack keys use `effectiveScopeTag` (`login|view`) — never bleed impersonation caches
+- **SSR prefetch:** `src/lib/server-prefetch.ts` — non-blocking `SWRCache.peek()` → `HydrationBoundary` on page routes
+- **SSH ops:** root key via `proxmox-ssh` + `getSettings()`; quote full remote paths in shell commands
+
+## Page pattern (data-heavy routes)
+
+```tsx
+export default async function SomePage() {
+  const { resolved } = await getLayoutSession()
+  const dehydratedState = await prefetchSomeData(resolved)
+  return (
+    <HydrationBoundary state={dehydratedState}>
+      <SomePageClient />
+    </HydrationBoundary>
+  )
+}
+```
+
+Prefetched today: dashboard, users, templates, groups, blueprints, ansible, logs, snapshots, testing, range/config, admin (+ global ranges/version in layout).
+
+GOAD instance page remains client-fetched (SSH/stream heavy); action logic in `src/hooks/use-goad-run-action.ts` + `use-goad-instance-action-handlers.ts`.
+
+## Ludus list responses
+
+Use `extractArray` or `parseLudusGroupList` from `@/lib/utils` — Ludus may wrap arrays in `{ result }`, `{ groups }`, etc.
+
+## Cache layer
+
+- `cacheComponents: true` in `config/next.config.cjs`
+- Static: `getCachedLuxVersion()` uses `"use cache"` + `cacheLife("days")`
+- Dynamic Ludus: `SWRCache` L1 peek + `"use cache"` L2 in `cached-ludus-fetch.ts` (`cacheTag` + `cacheLife({ revalidate: N })`)
+- Invalidation: `ludus-cache-revalidate.ts` + `ludus-proxy-cache-invalidate.ts` on successful `/api/proxy` mutations (`revalidateTag(tag, 'max')`)
+- Range selection: `sessionStorage` + httpOnly `__Host-lux_selected_range` (scope-tagged JSON); sync via `syncSelectedRangeCookie()` + `POST /api/session/selected-range`
+- Range-scoped prefetch: `prefetchDashboardData` / `prefetchLogsData` / `prefetchSnapshotsData` in `server-prefetch.ts`
+
+## GOAD instance page
+
+- Orchestrator: `src/app/goad/[id]/goad-instance/goad-instance-page.tsx` (~1.2k lines — streams, deep-links, data fetch)
+- Actions: `useGoadRunAction` + `useGoadInstanceActionHandlers` in `src/hooks/`
+- Tabs: typed props in `src/components/goad/goad-instance-tabs/*` — **no shared React context**; pass explicit props per tab
+- Tab utils: `src/components/goad/goad-instance-tab-utils.ts` (`normalizeGoadInstanceTab`, `checkTemplates`, …)
+- E2E: `e2e/goad-instance-tabs.spec.ts` + `e2e/helpers/goad.ts` (API-resolve instance, then tab/deep-link asserts)
+
+## LogViewer
+
+Prefer `LogViewerCompound.Root|Toolbar|Search|Body` at call sites. `LogViewer` wrapper remains for backward compat.
+
+## Build & verify
+
+- `npm run build` / `dev` use `--webpack` (ssh2 + Monaco externals)
+- Unit: `npm run test:unit` (112+ tests)
+- E2E: `PLAYWRIGHT_BASE_URL=https://localhost npm run test:e2e` — use `PW_CHANNEL=chrome` if bundled Chromium missing
+- Docker: `docker compose build ludus-ux && docker compose up -d ludus-ux`
+- Impersonation: `node scripts/verify-impersonation-ssh.mjs <user> [impersonated]`
+
+## Do not
+
+- Split GOAD tabs via implicit context — prior crash was missing context vars; use typed tab props
+- Use `shellQuote(homeDir) + "/.file"` — quote the full path
+- Pass raw API keys into `"use cache"` function arguments — use `ludusCachePartition()` / scope tags
+- Commit secrets, `.env`, or SSH keys

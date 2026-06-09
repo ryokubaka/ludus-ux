@@ -3,7 +3,6 @@ import { resolveSession } from "@/lib/session"
 import { getInstanceIdForRange } from "@/lib/goad-instance-range-store"
 import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-request"
 
-export const dynamic = "force-dynamic"
 
 /**
  * GET /api/goad/by-range?rangeId=...

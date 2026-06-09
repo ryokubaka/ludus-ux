@@ -154,11 +154,11 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
         <div className="w-3 h-3 rounded-full bg-green-500/80" />
       </div>
       {paused ? (
-        <span className="text-yellow-400 font-mono text-xs ml-1">
+        <span className="text-status-warning font-mono text-xs ml-1">
           Paused · {frozenAt} / {lines.length}
         </span>
       ) : (
-        <span className={cn("text-xs font-mono ml-1", dark ? "text-gray-400" : "text-black")}>
+        <span className={cn("text-xs font-mono ml-1", dark ? "text-muted-foreground" : "text-black")}>
           {label ?? "GOAD terminal"}
         </span>
       )}
@@ -170,7 +170,7 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
       {/* Terminal header chrome */}
       <div className={cn(
         "border rounded-t-lg border-b-0 flex-shrink-0",
-        dark ? "bg-black border-zinc-800" : "bg-gray-100 border-gray-200",
+        dark ? "bg-black border-zinc-800" : "bg-card border-border",
       )}>
         <LogDockToolbar
           lines={lines}
@@ -216,7 +216,7 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
           onScroll={handleScroll}
           className={cn(
             "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1 min-w-0 w-full",
-            dark ? "border-zinc-800 border-t-0" : "border-gray-200",
+            dark ? "border-zinc-800 border-t-0" : "border-border",
             dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           )}
@@ -241,7 +241,7 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
 
                 const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
                 const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
-                const highlightCls = isCurrent ? "bg-yellow-400/40" : isMatch ? "bg-yellow-500/20" : ""
+                const highlightCls = isCurrent ? "bg-status-warning/40" : isMatch ? "bg-status-warning/20" : ""
                 const refCallback  = isMatch
                   ? (el: HTMLDivElement | null) => {
                       if (el) matchLineRefsRef.current.set(i, el)
@@ -268,7 +268,7 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
                 }
                 const normalized = stripStreamRolePrefix(clean)
                 const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
-                const bodyCls = isErrorRole ? "text-red-400" : getLineClass(body, theme)
+                const bodyCls = isErrorRole ? "text-status-error" : getLineClass(body, theme)
                 return (
                   <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0 break-words")}>
                     {wallTs ? (

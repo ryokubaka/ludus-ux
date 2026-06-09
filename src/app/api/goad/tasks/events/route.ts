@@ -13,7 +13,6 @@ import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { subscribeToTaskStatusEvents } from "@/lib/goad-task-store"
 
-export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)

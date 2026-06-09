@@ -28,7 +28,6 @@ import { setOwnership, removeOwnership } from "@/lib/range-ownership-store"
 import { getAdminData, bustAdminCache } from "@/lib/admin-data"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 // ── GET ──────────────────────────────────────────────────────────────────────
 

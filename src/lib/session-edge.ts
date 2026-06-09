@@ -1,5 +1,5 @@
 /**
- * Edge-safe session cookie crypto (middleware + auth gate).
+ * Edge-safe session cookie crypto (proxy + auth gate).
  * No SQLite — credential vault lives in session-node.ts.
  */
 

@@ -195,6 +195,7 @@ export default function LoginPage() {
                       />
                       <button
                         type="button"
+                        aria-label={showPassword ? "Hide SSH password" : "Show SSH password"}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowPassword(!showPassword)}
                       >
@@ -231,7 +232,7 @@ export default function LoginPage() {
             <>
               <CardHeader className="pb-4">
                 <div className="flex items-center gap-2 mb-1">
-                  <CheckCircle2 className="h-5 w-5 text-green-400" />
+                  <CheckCircle2 className="h-5 w-5 text-status-success" />
                   <CardTitle className="text-lg">SSH Connected</CardTitle>
                 </div>
                 <CardDescription>
@@ -273,6 +274,7 @@ export default function LoginPage() {
                       />
                       <button
                         type="button"
+                        aria-label={showApiKey ? "Hide API key" : "Show API key"}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                         onClick={() => setShowApiKey(!showApiKey)}
                       >

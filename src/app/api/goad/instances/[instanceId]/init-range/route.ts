@@ -25,7 +25,6 @@ import { bustAdminCache } from "@/lib/admin-data"
 import { setOwnership } from "@/lib/range-ownership-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 function deriveRangeInfo(instanceId: string, username: string): { rangeId: string; name: string } {
   const user = username.toLowerCase().replace(/[^a-z0-9]/g, "")

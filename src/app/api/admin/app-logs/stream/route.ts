@@ -6,8 +6,6 @@ import { NextRequest } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { formatAppLogLine, queryAppLogs, subscribeAppLogEvents } from "@/lib/app-log"
 
-export const dynamic = "force-dynamic"
-export const runtime = "nodejs"
 
 export async function GET(request: NextRequest) {
   const session = await getSessionFromRequest(request)

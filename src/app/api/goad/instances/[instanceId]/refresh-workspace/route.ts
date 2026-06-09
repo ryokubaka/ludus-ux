@@ -18,7 +18,6 @@ import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 const REFRESH_WORKSPACE_PY = `
 import json, os, sys, base64

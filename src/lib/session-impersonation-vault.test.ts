@@ -1,6 +1,7 @@
 import fs from "fs"
 import path from "path"
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
+import { resetDbForTests } from "./db"
 import { createSessionCredentials } from "./session-credential-store"
 import { resolveSessionPayload } from "./session-node"
 
@@ -11,6 +12,7 @@ describe("resolveSessionPayload impersonation vault", () => {
   const prevData = process.env.DATA_DIR
 
   beforeEach(() => {
+    resetDbForTests()
     process.env.APP_SECRET = "test-app-secret-for-unit-tests"
     fs.mkdirSync(TEST_DATA, { recursive: true })
     process.env.DATA_DIR = TEST_DATA

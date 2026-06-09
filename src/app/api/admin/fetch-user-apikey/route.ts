@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
+import { markRouteDynamic } from "@/lib/mark-route-dynamic"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
 
-export const dynamic = "force-dynamic"
 
 /**
  * GET /api/admin/fetch-user-apikey?username=xxx
@@ -13,19 +13,23 @@ export const dynamic = "force-dynamic"
  * Admin-only endpoint.
  */
 export async function GET(request: NextRequest) {
+  await markRouteDynamic()
   const admin = await requireAdmin(request)
   if (!admin.ok) return admin.response
 
   const { searchParams } = new URL(request.url)
   const username = searchParams.get("username")?.trim() ?? ""
+  const ludusUserId = searchParams.get("userId")?.trim() ?? ""
   if (!username) {
     return NextResponse.json({ error: "Valid username required" }, { status: 400 })
   }
 
-  const { apiKey, message } = await readUserApiKeyFromBashrc(username)
+  const { apiKey, message } = await readUserApiKeyFromBashrc(username, { ludusUserId })
   if (!apiKey) {
     return NextResponse.json({ apiKey: null, message: message ?? "Key not found in ~/.bashrc" })
   }
 
-  return finishAdminResponse(NextResponse.json({ apiKey }), admin)
+  const response = NextResponse.json({ apiKey })
+  response.headers.set("Cache-Control", "no-store, private")
+  return finishAdminResponse(response, admin)
 }

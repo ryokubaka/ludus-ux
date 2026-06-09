@@ -6,7 +6,6 @@ import { sshExec } from "@/lib/proxmox-ssh"
 import { hasSshExecAuth } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 interface SpiceTicket {
   type?: string

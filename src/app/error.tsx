@@ -20,8 +20,8 @@ export default function Error({
     <div className="flex items-center justify-center min-h-[400px]">
       <Card className="max-w-md w-full">
         <CardContent className="flex flex-col items-center py-12 text-center">
-          <div className="h-14 w-14 rounded-full bg-red-500/20 flex items-center justify-center mb-4">
-            <AlertTriangle className="h-7 w-7 text-red-400" />
+          <div className="h-14 w-14 rounded-full bg-status-error/20 flex items-center justify-center mb-4">
+            <AlertTriangle className="h-7 w-7 text-status-error" />
           </div>
           <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
           <p className="text-sm text-muted-foreground mb-1">

@@ -8,6 +8,7 @@ import {
   logLuxUserAction,
   ludusProxyEvent,
 } from "@/lib/lux-api-audit"
+import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -109,6 +110,7 @@ async function handler(
         detailParts.join(" "),
         "success",
       )
+      revalidateAfterLudusProxyMutation(request.method, path, session)
     }
 
     return NextResponse.json(result.data, { status: result.status || 200 })

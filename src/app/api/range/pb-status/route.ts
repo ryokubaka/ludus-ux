@@ -24,7 +24,6 @@ import {
 import type { RangeObject } from "@/lib/types"
 import { ludusRequest } from "@/lib/ludus-client"
 
-export const dynamic = "force-dynamic"
 
 /** Normalize Ludus GET /range body (single object, array, or { result }). */
 function ludusRangeListFromResponse(data: unknown): RangeObject[] {

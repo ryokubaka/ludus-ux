@@ -44,7 +44,7 @@ export function ConfirmBar({ pending, onConfirm, onCancel, className, scope }: C
         className ?? "",
       ].join(" ")}
     >
-      <AlertTriangle className="h-3.5 w-3.5 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <AlertTriangle className="h-3.5 w-3.5 text-status-warning flex-shrink-0 mt-0.5" />
       <span className="text-xs text-yellow-300 flex-1 min-w-0 whitespace-pre-line">{pending.label}</span>
       <div className="flex shrink-0 gap-2 self-start">
         <Button size="sm" variant="default" onClick={onConfirm}>

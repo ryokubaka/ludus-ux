@@ -5,7 +5,6 @@ import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-req
 // Must be dynamic: reads env vars + SSH at runtime.
 // Without this Next.js pre-renders at build time (when LUDUS_SSH_HOST is unset)
 // and serves a stale { configured: false } response for every subsequent request.
-export const dynamic = "force-dynamic"
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)

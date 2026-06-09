@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server"
 import { getInstanceInventories, isGoadConfigured } from "@/lib/goad-ssh"
 import { resolveSession } from "@/lib/session"
 
-export const dynamic = "force-dynamic"
 
 export async function GET(
   _request: NextRequest,

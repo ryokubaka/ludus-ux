@@ -17,7 +17,6 @@ import { bustAdminCache } from "@/lib/admin-data"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const admin = await requireAdmin(request)

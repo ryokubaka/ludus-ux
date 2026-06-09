@@ -1,13 +1,6 @@
 import type { Metadata } from "next"
 import "./globals.css"
-import { AppShell } from "@/components/layout/app-shell"
-import { Toaster } from "@/components/ui/toaster"
-import { TooltipProvider } from "@/components/ui/tooltip"
-import { QueryProvider } from "@/components/providers/query-provider"
-import { HydrationBoundary } from "@tanstack/react-query"
-import { prefetchGlobal } from "@/lib/server-prefetch"
-import { getSession, resolveSessionFromCookies } from "@/lib/session"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { AuthenticatedRoot } from "@/components/layout/authenticated-root"
 
 export const metadata: Metadata = {
   title: "Ludus UX - Cyber Range User eXperience",
@@ -23,30 +16,11 @@ export const metadata: Metadata = {
   },
 }
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const session = await getSession()
-  const resolved = await resolveSessionFromCookies()
-  const dehydratedState = await prefetchGlobal(resolved)
-  const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"
-  const shellSession = session
-    ? {
-        username: session.username,
-        isAdmin: session.isAdmin,
-        impersonationUserId: session.impersonationUserId ?? null,
-      }
-    : null
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
       <body className="font-sans antialiased">
-        <QueryProvider initialScopeTag={initialScopeTag} shellSession={shellSession}>
-          <HydrationBoundary state={dehydratedState}>
-            <TooltipProvider>
-              <AppShell>{children}</AppShell>
-              <Toaster />
-            </TooltipProvider>
-          </HydrationBoundary>
-        </QueryProvider>
+        <AuthenticatedRoot>{children}</AuthenticatedRoot>
       </body>
     </html>
   )

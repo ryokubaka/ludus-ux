@@ -398,14 +398,24 @@ export function AdminPageClient() {
     setFetchingKey(true)
     try {
       const res = await fetch(
-        `/api/admin/fetch-user-apikey?username=${encodeURIComponent(fields.sshLogin)}`,
+        `/api/admin/fetch-user-apikey?username=${encodeURIComponent(fields.sshLogin)}&userId=${encodeURIComponent(fields.ludusUserId)}`,
+        { cache: "no-store", credentials: "same-origin" },
       )
       const data = await res.json()
-      if (data.apiKey) {
+      if (res.ok && data.apiKey) {
         await saveImpersonation({ ...fields, apiKey: data.apiKey })
         toast({ title: `Now managing as ${displayName}` })
         router.push("/")
         return
+      }
+      if (!res.ok) {
+        const err = (data as { error?: string }).error ?? `Server returned ${res.status}`
+        toast({ variant: "destructive", title: "Could not auto-fetch API key", description: err })
+        return
+      }
+      const msg = (data as { message?: string }).message
+      if (msg) {
+        toast({ variant: "destructive", title: "Could not auto-read ~/.bashrc", description: msg })
       }
     } catch {
       // SSH error — fall through to manual dialog
@@ -525,9 +535,9 @@ export function AdminPageClient() {
       <div className="grid grid-cols-4 gap-4">
         {[
           { label: "Total Ranges", value: ranges.length, icon: <Server className="h-4 w-4 text-primary" /> },
-          { label: "Deployed", value: deployedRanges, icon: <CheckCircle2 className="h-4 w-4 text-green-400" /> },
-          { label: "Deploying", value: deployingRanges, icon: <Activity className="h-4 w-4 text-yellow-400 animate-pulse" /> },
-          { label: "Total VMs", value: totalVMs, icon: <Server className="h-4 w-4 text-blue-400" /> },
+          { label: "Deployed", value: deployedRanges, icon: <CheckCircle2 className="h-4 w-4 text-status-success" /> },
+          { label: "Deploying", value: deployingRanges, icon: <Activity className="h-4 w-4 text-status-warning animate-pulse" /> },
+          { label: "Total VMs", value: totalVMs, icon: <Server className="h-4 w-4 text-status-info" /> },
         ].map(({ label, value, icon }) => (
           <Card key={label} className="glass-card">
             <CardContent className="p-4">
@@ -571,7 +581,7 @@ export function AdminPageClient() {
                   key: "nexus" as const,
                   label: "Nexus Cache",
                   description: "Caches packages, ISOs, and apt/yum repos to speed up all range deployments.",
-                  icon: <Database className="h-5 w-5 text-blue-400 shrink-0" />,
+                  icon: <Database className="h-5 w-5 text-status-info shrink-0" />,
                   vms: nexusVMs,
                 },
                 {
@@ -629,7 +639,7 @@ export function AdminPageClient() {
                           <span
                             className={cn(
                               "h-1.5 w-1.5 rounded-full shrink-0",
-                              poweredOn ? "bg-green-400" : "bg-zinc-500",
+                              poweredOn ? "bg-status-success" : "bg-zinc-500",
                             )}
                           />
                           {/* VM info */}
@@ -643,7 +653,7 @@ export function AdminPageClient() {
                             {poweredOn ? (
                               <Button
                                 size="icon-sm" variant="ghost"
-                                className="h-6 w-6 text-muted-foreground hover:text-yellow-400"
+                                className="h-6 w-6 text-muted-foreground hover:text-status-warning"
                                 disabled={!!loadingAction}
                                 title="Power off"
                                 onClick={() => handleVmPower(vm, "stop")}
@@ -655,7 +665,7 @@ export function AdminPageClient() {
                             ) : (
                               <Button
                                 size="icon-sm" variant="ghost"
-                                className="h-6 w-6 text-muted-foreground hover:text-green-400"
+                                className="h-6 w-6 text-muted-foreground hover:text-status-success"
                                 disabled={!!loadingAction}
                                 title="Power on"
                                 onClick={() => handleVmPower(vm, "start")}
@@ -678,7 +688,7 @@ export function AdminPageClient() {
                             {/* Delete */}
                             <Button
                               size="icon-sm" variant="ghost"
-                              className="h-6 w-6 text-muted-foreground hover:text-red-400"
+                              className="h-6 w-6 text-muted-foreground hover:text-status-error"
                               disabled={!!loadingAction}
                               title="Delete VM from Proxmox"
                               onClick={() => handleVmDelete(vm)}
@@ -845,7 +855,7 @@ export function AdminPageClient() {
                         <td className="p-3 text-xs text-muted-foreground">{totalUserVMs || "—"}</td>
                         <td className="p-3">
                           {totalUserVMs > 0 ? (
-                            <span className={cn("text-xs font-medium", totalRunning > 0 ? "text-green-400" : "text-muted-foreground")}>
+                            <span className={cn("text-xs font-medium", totalRunning > 0 ? "text-status-success" : "text-muted-foreground")}>
                               {totalRunning} / {totalUserVMs}
                             </span>
                           ) : <span className="text-xs text-muted-foreground">—</span>}
@@ -894,7 +904,7 @@ export function AdminPageClient() {
                               <td className="p-3 text-xs text-muted-foreground">{vmCount}</td>
                               <td className="p-3">
                                 {vmCount > 0 ? (
-                                  <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-green-400" : "text-muted-foreground")}>
+                                  <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-status-success" : "text-muted-foreground")}>
                                     {runningVMs} / {vmCount}
                                   </span>
                                 ) : <span className="text-xs text-muted-foreground">—</span>}
@@ -909,7 +919,7 @@ export function AdminPageClient() {
                               <td className="p-2 text-right">
                                 {rangeDeleteInFlight === range.rangeID ? (
                                   <span
-                                    className="inline-flex items-center gap-1 justify-end text-[10px] text-amber-400 tabular-nums"
+                                    className="inline-flex items-center gap-1 justify-end text-[10px] text-status-warning tabular-nums"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
@@ -917,7 +927,7 @@ export function AdminPageClient() {
                                   </span>
                                 ) : deletingRange === range.rangeID ? (
                                   <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                                    <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
+                                    <span className="text-[10px] text-status-error whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
                                     <Input
                                       value={deleteConfirmText}
                                       onChange={(e) => setDeleteConfirmText(e.target.value)}
@@ -952,7 +962,7 @@ export function AdminPageClient() {
                                         <Button
                                           size="icon-sm"
                                           variant="ghost"
-                                          className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                          className="h-6 w-6 text-status-error/50 hover:text-status-error hover:bg-status-error/10"
                                           disabled={!!rangeDeleteInFlight}
                                           onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
                                         >
@@ -975,7 +985,7 @@ export function AdminPageClient() {
                   {/* Unclaimed ranges — no owner known; show Assign button */}
                   {unclaimedRanges.length > 0 && (
                     <tr className="border-b border-border/50 bg-yellow-500/5">
-                      <td colSpan={9} className="px-3 py-1.5 text-[10px] text-yellow-500 uppercase tracking-wider font-semibold">
+                      <td colSpan={9} className="px-3 py-1.5 text-[10px] text-status-warning uppercase tracking-wider font-semibold">
                         Unassigned ranges — use the Assign button to link them to a user
                       </td>
                     </tr>
@@ -1009,7 +1019,7 @@ export function AdminPageClient() {
                               <Button
                                 size="icon-sm"
                                 variant="ghost"
-                                className="h-7 w-7 text-green-400 hover:text-green-300"
+                                className="h-7 w-7 text-status-success hover:text-green-300"
                                 disabled={!assignTarget || assignInProgress}
                                 onClick={() => handleAssign(range.rangeID, assignTarget)}
                               >
@@ -1028,7 +1038,7 @@ export function AdminPageClient() {
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 gap-1.5 border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/10 text-xs whitespace-nowrap"
+                              className="h-7 gap-1.5 border-yellow-500/40 text-status-warning hover:bg-yellow-500/10 text-xs whitespace-nowrap"
                               onClick={() => { setAssigningRange(range.rangeID); setAssignTarget("") }}
                             >
                               <UserCog className="h-3 w-3" />
@@ -1038,8 +1048,8 @@ export function AdminPageClient() {
                         </td>
                         <td className="p-3" colSpan={1}>
                           <div className="flex items-center gap-1.5">
-                            <Server className="h-3.5 w-3.5 text-yellow-500 flex-shrink-0" />
-                            <code className="font-mono text-xs text-yellow-400">{range.rangeID}</code>
+                            <Server className="h-3.5 w-3.5 text-status-warning flex-shrink-0" />
+                            <code className="font-mono text-xs text-status-warning">{range.rangeID}</code>
                             {ipPrefix !== "—" && <code className="text-[10px] text-muted-foreground font-mono">{ipPrefix}</code>}
                           </div>
                         </td>
@@ -1052,7 +1062,7 @@ export function AdminPageClient() {
                         <td className="p-3 text-xs text-muted-foreground">{vmCount}</td>
                         <td className="p-3">
                           {vmCount > 0
-                            ? <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-green-400" : "text-muted-foreground")}>{runningVMs} / {vmCount}</span>
+                            ? <span className={cn("text-xs font-medium", runningVMs > 0 ? "text-status-success" : "text-muted-foreground")}>{runningVMs} / {vmCount}</span>
                             : <span className="text-xs text-muted-foreground">—</span>}
                         </td>
                         <td className="p-3">
@@ -1064,13 +1074,13 @@ export function AdminPageClient() {
                         {/* Delete range */}
                         <td className="p-2 text-right">
                           {rangeDeleteInFlight === range.rangeID ? (
-                            <span className="inline-flex items-center gap-1 justify-end text-[10px] text-amber-400">
+                            <span className="inline-flex items-center gap-1 justify-end text-[10px] text-status-warning">
                               <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
                               Deleting…
                             </span>
                           ) : deletingRange === range.rangeID ? (
                             <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                              <span className="text-[10px] text-red-400 whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
+                              <span className="text-[10px] text-status-error whitespace-nowrap">Type&nbsp;<code className="font-mono">{range.rangeID}</code>&nbsp;to confirm:</span>
                               <Input
                                 value={deleteConfirmText}
                                 onChange={(e) => setDeleteConfirmText(e.target.value)}
@@ -1105,7 +1115,7 @@ export function AdminPageClient() {
                                   <Button
                                     size="icon-sm"
                                     variant="ghost"
-                                    className="h-6 w-6 text-red-400/50 hover:text-red-400 hover:bg-red-400/10"
+                                    className="h-6 w-6 text-status-error/50 hover:text-status-error hover:bg-status-error/10"
                                     disabled={!!rangeDeleteInFlight}
                                     onClick={(e) => { e.stopPropagation(); setDeletingRange(range.rangeID); setDeleteConfirmText("") }}
                                   >

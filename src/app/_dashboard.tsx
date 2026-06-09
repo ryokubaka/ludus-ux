@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { VMTable } from "@/components/range/vm-table"
-import { LogViewer } from "@/components/range/log-viewer"
+import { LogViewer, LogViewerCompound } from "@/components/range/log-viewer"
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
 import { timeAgo, cn, extractArray, getRangeStateBadge } from "@/lib/utils"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
@@ -1060,24 +1060,24 @@ export function DashboardPageClient() {
             ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             : <Badge className={cn("text-xs", getRangeStateBadge(rangeState))}>{rangeState}</Badge>}
         />
-        <StatCard title="Total VMs" icon={<Server className="h-4 w-4 text-blue-400" />}
+        <StatCard title="Total VMs" icon={<Server className="h-4 w-4 text-status-info" />}
           value={isLoading ? "—" : String(allVMs.length)} />
-        <StatCard title="Running" icon={<CheckCircle2 className="h-4 w-4 text-green-400" />}
+        <StatCard title="Running" icon={<CheckCircle2 className="h-4 w-4 text-status-success" />}
           value={isLoading ? "—" : String(runningVMs)}
           subtext={allVMs.length > 0 ? `${Math.round((runningVMs / allVMs.length) * 100)}% online` : undefined}
         />
-        <StatCard title="Ludus Version" icon={<Layers className="h-4 w-4 text-cyan-400" />}
+        <StatCard title="Ludus Version" icon={<Layers className="h-4 w-4 text-primary" />}
           value={isLoading ? "—" : (version ? (version.split(" ").pop() || "—") : "—")}
           subtext={version ? version.replace(/\s+\S+$/, "") : "Not connected"}
         />
       </div>
 
       {/* ── WireGuard — account-wide VPN (same profile for all accessible ranges) ── */}
-      <Card className="border-blue-500/25 bg-blue-500/[0.06]">
+      <Card className="border-status-info/25 bg-blue-500/[0.06]">
         <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="space-y-1.5 min-w-0">
             <h3 className="text-sm font-semibold flex items-center gap-2">
-              <Wifi className="h-4 w-4 text-blue-400 shrink-0" />
+              <Wifi className="h-4 w-4 text-status-info shrink-0" />
               WireGuard VPN
             </h3>
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -1149,7 +1149,7 @@ export function DashboardPageClient() {
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-muted-foreground">
-                        <span className="text-green-400 font-medium">{running}</span>
+                        <span className="text-status-success font-medium">{running}</span>
                         <span> / {vms.length} running</span>
                       </span>
                       <Badge className={cn("text-xs", getRangeStateBadge(state))}>{state}</Badge>
@@ -1165,7 +1165,7 @@ export function DashboardPageClient() {
                       )}
                       {rangeDataUpdatedAt > 0 && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Wifi className={cn("h-3 w-3", dashboardDataSyncing ? "text-yellow-400 animate-pulse" : "text-green-400")} />
+                          <Wifi className={cn("h-3 w-3", dashboardDataSyncing ? "text-status-warning animate-pulse" : "text-status-success")} />
                           {new Date(rangeDataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </div>
                       )}
@@ -1215,14 +1215,14 @@ export function DashboardPageClient() {
                     )}
                     <Button variant="outline" onClick={() => handlePowerAll("on")} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
                       {powerAllPending === "on"
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-green-400" />
-                        : <Power className="h-3.5 w-3.5 text-green-400" />}
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-status-success" />
+                        : <Power className="h-3.5 w-3.5 text-status-success" />}
                       {powerAllPending === "on" ? "Powering on…" : "All On"}
                     </Button>
                     <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
                       {powerAllPending === "off"
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-red-400" />
-                        : <PowerOff className="h-3.5 w-3.5 text-red-400" />}
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-status-error" />
+                        : <PowerOff className="h-3.5 w-3.5 text-status-error" />}
                       {powerAllPending === "off" ? "Powering off…" : "All Off"}
                     </Button>
                     <Button
@@ -1252,7 +1252,7 @@ export function DashboardPageClient() {
                       <Link href={`/goad/${encodeURIComponent(goadInstanceForRange)}`}>
                         <Button
                           variant="outline"
-                          className="gap-1.5 border-amber-500/40 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                          className="gap-1.5 border-status-warning/40 text-amber-300 hover:bg-status-warning/10 hover:text-amber-200"
                         >
                           <Puzzle className="h-3.5 w-3.5" /> GOAD Instance
                         </Button>
@@ -1277,7 +1277,7 @@ export function DashboardPageClient() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1.5 text-amber-400/90 hover:text-amber-300 border-amber-500/40 hover:bg-amber-500/10"
+                      className="gap-1.5 text-status-warning/90 hover:text-amber-300 border-status-warning/40 hover:bg-status-warning/10"
                       disabled={
                         !!pendingAction ||
                         state === "DEPLOYING" ||
@@ -1305,7 +1305,7 @@ export function DashboardPageClient() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="gap-1.5 text-red-400/70 hover:text-red-400 hover:bg-red-400/10 border border-transparent hover:border-red-400/30"
+                      className="gap-1.5 text-status-error/70 hover:text-status-error hover:bg-status-error/10 border border-transparent hover:border-status-error/30"
                       disabled={
                         !!pendingAction ||
                         state === "DEPLOYING" ||
@@ -1347,15 +1347,15 @@ export function DashboardPageClient() {
                       ? `GOAD action is running (${activeGoadKind}). The Ludus range deploy is also still in progress.`
                       : `GOAD action is still running (${activeGoadKind}). The Ludus range deploy has finished; the GOAD container is still applying Ansible.`
                     return (
-                      <Alert className="border-amber-500/30 bg-amber-500/[0.06]">
-                        <Puzzle className="h-4 w-4 text-amber-400" />
+                      <Alert className="border-status-warning/30 bg-amber-500/[0.06]">
+                        <Puzzle className="h-4 w-4 text-status-warning" />
                         <AlertDescription className="flex items-center justify-between gap-3">
                           <div className="min-w-0 space-y-0.5">
                             <p className="text-xs font-medium">{headline}</p>
                             <p className="text-[11px] text-muted-foreground">
                               Started {timeAgo(activeGoadTask.startedAt)}
                               {goadElapsed && (
-                                <> · <span className="font-mono text-amber-400/80">{goadElapsed}</span></>
+                                <> · <span className="font-mono text-status-warning/80">{goadElapsed}</span></>
                               )}
                               {" · "}
                               {activeGoadTask.lineCount.toLocaleString()} log lines
@@ -1380,19 +1380,19 @@ export function DashboardPageClient() {
                       deploy is in progress after a GOAD action completed. */}
                   {!activeGoadTask && latestGoadTask?.phase === "network-deploy" && goadInstanceForRange && (
                     <Alert className="border-blue-500/30 bg-blue-500/[0.06]">
-                      <Shield className="h-4 w-4 text-blue-400" />
+                      <Shield className="h-4 w-4 text-status-info" />
                       <AlertDescription className="flex items-center justify-between gap-3">
                         <div className="min-w-0 space-y-1">
                           <p className="text-xs font-medium">
                             Firewall redeploy running (post-GOAD {goadTaskShortKind(latestGoadTask.command).toLowerCase()})
                           </p>
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 text-[11px]">
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-status-success/30 bg-status-success/10 text-status-success text-[11px]">
                               <Check className="h-2.5 w-2.5" />
                               Step 1 — GOAD done
                             </span>
                             <span className="text-muted-foreground/60 text-[11px]">→</span>
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-300 text-[11px] animate-pulse">
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded border border-status-info/40 bg-status-info/10 text-status-info text-[11px] animate-pulse">
                               <Loader2 className="h-2.5 w-2.5 animate-spin" />
                               Step 2 — Firewall redeploy running
                             </span>
@@ -1415,11 +1415,11 @@ export function DashboardPageClient() {
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                          <Activity className={cn("h-3.5 w-3.5", isStreaming && "animate-pulse text-green-400")} />
+                          <Activity className={cn("h-3.5 w-3.5", isStreaming && "animate-pulse text-status-success")} />
                           Deploy Logs
                           {isStreaming && <Badge variant="success" className="text-xs">Live</Badge>}
                           {rangeElapsed && (
-                            <span className="font-mono text-[11px] text-green-400/80 border border-green-500/20 bg-green-500/5 px-1.5 py-0.5 rounded">
+                            <span className="font-mono text-[11px] text-status-success/80 border border-status-success/20 bg-status-success/5 px-1.5 py-0.5 rounded">
                               {rangeElapsed}
                             </span>
                           )}
@@ -1428,7 +1428,7 @@ export function DashboardPageClient() {
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <LogViewer
+                      <LogViewerCompound.Root
                         lines={logLines}
                         onClear={clearLogs}
                         maxHeight="300px"
@@ -1437,7 +1437,11 @@ export function DashboardPageClient() {
                         onRefresh={selectedRangeId?.trim() ? handleRefreshDeployLogs : undefined}
                         refreshLoading={deployLogRefreshBusy}
                         downloadFilename={`ludus-deploy-${(selectedRangeId ?? "range").replace(/[^a-zA-Z0-9_-]+/g, "_")}`}
-                      />
+                      >
+                        <LogViewerCompound.Toolbar />
+                        <LogViewerCompound.Search />
+                        <LogViewerCompound.Body />
+                      </LogViewerCompound.Root>
                     </div>
                   )}
 
@@ -1588,7 +1592,7 @@ export function DashboardPageClient() {
 
                   {!showLogs && (deploying || state === "DEPLOYING") && (
                     <Button size="sm" variant="ghost" onClick={() => setShowLogs(true)} className="gap-1.5 text-xs">
-                      <Activity className="h-3.5 w-3.5 animate-pulse text-green-400" />
+                      <Activity className="h-3.5 w-3.5 animate-pulse text-status-success" />
                       Show deploy logs
                     </Button>
                   )}

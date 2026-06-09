@@ -28,7 +28,6 @@ import { getSettings } from "@/lib/settings-store"
 import { getDb } from "@/lib/db"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(
   request: NextRequest,

@@ -91,6 +91,14 @@ function resolveBetterSqlite3NativePath(): string | undefined {
   return undefined
 }
 
+/** Test-only: close singleton so a new DATA_DIR / fresh DB file can be opened. */
+export function resetDbForTests(): void {
+  if (_db) {
+    _db.close()
+    _db = null
+  }
+}
+
 export function getDb(): BetterSqlite3.Database {
   if (_db) return _db
   fs.mkdirSync(DATA_DIR, { recursive: true })

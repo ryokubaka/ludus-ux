@@ -19,7 +19,6 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 
-export const dynamic = "force-dynamic"
 
 interface RangeData {
   allowedDomains?: string[]

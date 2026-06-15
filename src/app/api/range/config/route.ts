@@ -5,7 +5,6 @@ import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 export const maxDuration = 120
 
 /**

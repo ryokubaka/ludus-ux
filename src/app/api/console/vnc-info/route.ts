@@ -8,7 +8,6 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 
-export const dynamic = "force-dynamic"
 
 async function resolveSessionProxmoxUser(session: ResolvedSession): Promise<string> {
   const result = await ludusRequest<UserObject | UserObject[]>("/user", { apiKey: session.apiKey })

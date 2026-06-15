@@ -24,6 +24,8 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    // Optional: PW_CHANNEL=chrome|msedge when bundled Chromium is not installed
+    ...(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL as "chrome" | "msedge" } : {}),
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 })

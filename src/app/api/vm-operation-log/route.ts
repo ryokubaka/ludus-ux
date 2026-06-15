@@ -4,7 +4,6 @@ import { insertVmOperation, listVmOperations } from "@/lib/vm-operation-log"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 /**
  * GET /api/vm-operation-log?rangeId=…&instanceId=…&limit=…

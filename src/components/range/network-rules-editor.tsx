@@ -33,9 +33,9 @@ function ActionBadge({ action }: { action: RuleAction }) {
       variant="outline"
       className={cn(
         "font-mono text-xs",
-        action === "ACCEPT" && "border-green-500 text-green-400",
-        action === "REJECT" && "border-red-500 text-red-400",
-        action === "DROP" && "border-orange-500 text-orange-400"
+        action === "ACCEPT" && "border-green-500 text-status-success",
+        action === "REJECT" && "border-red-500 text-status-error",
+        action === "DROP" && "border-orange-500 text-status-aborted"
       )}
     >
       {action}
@@ -45,7 +45,7 @@ function ActionBadge({ action }: { action: RuleAction }) {
 
 function VlanDisplay({ vlan }: { vlan: VlanValue }) {
   if (typeof vlan === "number") return <span className="font-mono text-primary">VLAN {vlan}</span>
-  return <span className="font-mono text-yellow-400">{vlan}</span>
+  return <span className="font-mono text-status-warning">{vlan}</span>
 }
 
 /** Human-readable label for a VlanValue */
@@ -458,7 +458,7 @@ export function NetworkRulesEditor({
           <p className="text-sm">No custom firewall rules — Ludus defaults apply.</p>
           <p className="text-xs">
             Default: all inter-VLAN and external traffic is{" "}
-            <span className="text-green-400 font-mono">ACCEPT</span>
+            <span className="text-status-success font-mono">ACCEPT</span>
           </p>
         </div>
       ) : (

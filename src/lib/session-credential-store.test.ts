@@ -2,6 +2,7 @@ import crypto from "crypto"
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import fs from "fs"
 import path from "path"
+import { resetDbForTests } from "./db"
 import {
   createSessionCredentials,
   deleteSessionCredentials,
@@ -16,6 +17,7 @@ describe("session-credential-store", () => {
   const prevData = process.env.DATA_DIR
 
   beforeEach(() => {
+    resetDbForTests()
     process.env.APP_SECRET = "test-app-secret-for-unit-tests"
     fs.mkdirSync(TEST_DATA, { recursive: true })
     process.env.DATA_DIR = TEST_DATA

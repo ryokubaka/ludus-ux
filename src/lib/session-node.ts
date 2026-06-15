@@ -1,6 +1,7 @@
 import "server-only"
 
 import { NextRequest, NextResponse } from "next/server"
+import { markRouteDynamic } from "@/lib/mark-route-dynamic"
 import {
   clearSessionCookie,
   decryptCookiePayload,
@@ -19,6 +20,7 @@ import {
   getSessionCredentials,
   updateSessionCredentials,
 } from "./session-credential-store"
+import { clearSelectedRangeCookie } from "./selected-range-cookie"
 
 function sessionRemainingTtlMs(loginAt: string): number {
   const elapsed = Date.now() - new Date(loginAt).getTime()
@@ -62,6 +64,7 @@ export async function maybeMigrateSessionCookie(
 }
 
 export async function resolveSession(request: NextRequest): Promise<ResolvedSession | null> {
+  await markRouteDynamic()
   const token = await readCookieToken(request)
   if (!token) return null
   const payload = await decryptCookiePayload(token)
@@ -154,4 +157,5 @@ export function clearSessionWithCredentials(
 ): void {
   if (sessionId) deleteSessionCredentials(sessionId)
   clearSessionCookie(response)
+  clearSelectedRangeCookie(response)
 }

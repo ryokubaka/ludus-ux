@@ -16,7 +16,6 @@ import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const session = await resolveSession(request)

@@ -5,28 +5,28 @@ describe("getAnsibleLineClass", () => {
   it("colors changed lines yellow even when JSON contains failed false", () => {
     const line =
       'changed: [dc03] => {"changed": true, "failed": false, "warnings": ["x"]}'
-    expect(getAnsibleLineClass(line)).toBe("text-yellow-400")
+    expect(getAnsibleLineClass(line)).toBe("text-status-warning")
   })
 
   it("does not paint benign JSON debug lines red", () => {
     const line =
       'ok: [srv02] => {"changed": false, "exists": false, "failed": false, "failed_when_result": false}'
-    expect(getAnsibleLineClass(line)).toBe("text-green-400")
+    expect(getAnsibleLineClass(line)).toBe("text-status-success")
   })
 
   it("still marks explicit JSON failure", () => {
-    expect(getAnsibleLineClass('fatal: [h] => {"failed": true}')).toBe("text-red-500 font-bold")
-    expect(getAnsibleLineClass('ok: [h] => {"msg": "x", "failed": true}')).toBe("text-green-400")
+    expect(getAnsibleLineClass('fatal: [h] => {"failed": true}')).toBe("text-status-error font-bold")
+    expect(getAnsibleLineClass('ok: [h] => {"msg": "x", "failed": true}')).toBe("text-status-success")
     // "failed": true with ok: prefix — ok wins (task returned structured ok with failure flag)
     const fatalJson = '"failed": true'
-    expect(getAnsibleLineClass(`some line ${fatalJson}`)).toBe("text-red-400")
+    expect(getAnsibleLineClass(`some line ${fatalJson}`)).toBe("text-status-error")
   })
 
   it("marks Ansible FAILED! and fatal", () => {
-    expect(getAnsibleLineClass("fatal: [x]: FAILED! => {}")).toBe("text-red-500 font-bold")
+    expect(getAnsibleLineClass("fatal: [x]: FAILED! => {}")).toBe("text-status-error font-bold")
   })
 
   it("PLAY RECAP stats lines use dedicated parser elsewhere", () => {
-    expect(getAnsibleLineClass("host : ok=1 changed=0 unreachable=0 failed=0")).toBe("text-gray-300")
+    expect(getAnsibleLineClass("host : ok=1 changed=0 unreachable=0 failed=0")).toBe("text-foreground")
   })
 })

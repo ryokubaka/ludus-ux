@@ -107,7 +107,7 @@ export function VmOperationLogList({
                 <Icon
                   className={cn(
                     "h-4 w-4 flex-shrink-0 mt-0.5",
-                    entry.kind === "destroy_vm" ? "text-red-400/80" : "text-amber-400/80",
+                    entry.kind === "destroy_vm" ? "text-status-error/80" : "text-status-warning/80",
                   )}
                 />
                 <div className="flex-1 min-w-0 space-y-1">

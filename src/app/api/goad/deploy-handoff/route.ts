@@ -23,7 +23,6 @@ import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { writePendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)

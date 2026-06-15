@@ -11,7 +11,6 @@ import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   if (!isGoadConfigured()) {

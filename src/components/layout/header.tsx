@@ -110,7 +110,7 @@ export function Header() {
       )}
     >
       <div className="flex-1">
-        <h1 className="text-base font-semibold text-foreground">{pageInfo.title}</h1>
+        <h2 className="text-base font-semibold text-foreground">{pageInfo.title}</h2>
         <p className="text-xs text-muted-foreground">{pageInfo.description}</p>
       </div>
 
@@ -175,7 +175,7 @@ export function Header() {
               <DropdownMenuSeparator />
 
               <DropdownMenuItem
-                className="text-red-400 focus:text-red-400 cursor-pointer gap-2"
+                className="text-status-error focus:text-status-error cursor-pointer gap-2"
                 onClick={handleLogout}
               >
                 <LogOut className="h-3.5 w-3.5" />

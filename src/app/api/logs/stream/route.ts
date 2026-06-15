@@ -15,7 +15,6 @@ import {
 } from "@/lib/log-line-timestamp"
 import { safeClientError } from "@/lib/safe-client-error"
 
-export const dynamic = "force-dynamic"
 
 /** Read the GOAD ansible log (SSH-based). Returns new lines since lastLineCount. */
 async function readGoadLog(

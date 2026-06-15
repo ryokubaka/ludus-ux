@@ -3,6 +3,7 @@ import { logAndSafeError } from "@/lib/safe-client-error"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { bustAdminCache } from "@/lib/admin-data"
+import { revalidateLudusResource } from "@/lib/ludus-cache-revalidate"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { getSettings } from "@/lib/settings-store"
@@ -19,7 +20,6 @@ type CreateRangeBody = {
   [key: string]: unknown
 }
 
-export const dynamic = "force-dynamic"
 
 /**
  * POST /api/range/create
@@ -113,6 +113,7 @@ export async function POST(request: NextRequest) {
     if (!assignRes.error || alreadyOwned) {
       setOwnership(body.rangeID, pbId, session.username)
       bustAdminCache()
+      revalidateLudusResource("ranges")
     }
 
     logAppEvent("range_create", `rangeID=${body.rangeID}`, {

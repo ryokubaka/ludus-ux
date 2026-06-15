@@ -14,7 +14,6 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { getSessionFromRequest } from "@/lib/session"
 import { POST as abortPost } from "../abort/route"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)

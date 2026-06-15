@@ -14,64 +14,47 @@ import {
   type LogFontSize,
   DEFAULT_FONT_SIZE,
 } from "./log-dock-toolbar"
+import {
+  LogViewerProvider,
+  useLogViewer,
+  type LogViewerConfig,
+  type LogViewerContextValue,
+} from "./log-viewer-context"
 
-interface LogViewerProps {
-  lines: string[]
-  onClear?: () => void
-  /** Reconnect / refetch log stream (toolbar: after pause, before scroll-to-bottom). */
-  onRefresh?: () => void
-  refreshLoading?: boolean
-  /** When true, auto-scroll follows new lines. When false (static history view), auto-scroll controls are hidden. */
-  autoScroll?: boolean
-  className?: string
-  maxHeight?: string
-  /** Show a live pulse indicator in the toolbar. */
-  live?: boolean
-  /** Label shown next to the live indicator (e.g. "Range Logs"). */
-  liveLabel?: string
-  /** Download filename prefix (without extension). */
-  downloadFilename?: string
-  /** Fill parent flex column (scroll inside pane). */
-  fillHeight?: boolean
-  /** Display order; desc = newest line at top (live stream follows top). */
-  sortOrder?: "asc" | "desc"
-  /** Toggle asc/desc when set. */
-  onSortOrderToggle?: () => void
-}
+export type LogViewerProps = LogViewerConfig
 
 const BOTTOM_THRESHOLD = 80
 
-export function LogViewer({
-  lines,
-  onClear,
-  onRefresh,
-  refreshLoading,
-  autoScroll: parentAutoScroll = true,
-  className,
-  maxHeight = "400px",
-  live = false,
-  liveLabel,
-  downloadFilename = "ludus-deploy",
-  fillHeight = false,
-  sortOrder = "asc",
-  onSortOrderToggle,
-}: LogViewerProps) {
-  const containerRef     = useRef<HTMLDivElement>(null)
+function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
+  const {
+    lines,
+    onClear,
+    onRefresh,
+    refreshLoading,
+    autoScroll: parentAutoScroll = true,
+    className,
+    maxHeight = "400px",
+    live = false,
+    liveLabel,
+    downloadFilename = "ludus-deploy",
+    fillHeight = false,
+    sortOrder = "asc",
+    onSortOrderToggle,
+  } = config
+
+  const containerRef = useRef<HTMLDivElement>(null)
   const userScrolledAwayRef = useRef(false)
-  const prevScrollTopRef  = useRef(0)
-  const prevLinesLenRef   = useRef(0)
+  const prevScrollTopRef = useRef(0)
+  const prevLinesLenRef = useRef(0)
   const [showJumpBtn, setShowJumpBtn] = useState(false)
   const newestFirst = sortOrder === "desc"
 
-  // ── Toolbar state ─────────────────────────────────────────────────────────
   const [localAutoScroll, setLocalAutoScroll] = useState(parentAutoScroll !== false)
-  const [fontSize, setFontSize]   = useState<LogFontSize>(DEFAULT_FONT_SIZE)
-  const [wrap, setWrap]           = useState(true)
-  const [theme, setTheme]         = useState<LogDockTheme>("dark")
+  const [fontSize, setFontSize] = useState<LogFontSize>(DEFAULT_FONT_SIZE)
+  const [wrap, setWrap] = useState(true)
+  const [theme, setTheme] = useState<LogDockTheme>("dark")
 
   const effectiveAutoScroll = parentAutoScroll !== false && localAutoScroll
-
-  // ── Pause ─────────────────────────────────────────────────────────────────
   const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
 
   const visibleLines = useMemo(
@@ -79,7 +62,6 @@ export function LogViewer({
     [displayLines, newestFirst],
   )
 
-  // ── Search (operates on the visible order) ────────────────────────────────
   const {
     searchOpen,
     searchQuery,
@@ -109,7 +91,6 @@ export function LogViewer({
       ? el.scrollTop < BOTTOM_THRESHOLD
       : el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 
-  // ── Auto-scroll new lines ─────────────────────────────────────────────────
   useEffect(() => {
     scrollToLiveEdge()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,7 +105,7 @@ export function LogViewer({
 
     if (visibleLines.length === 0) {
       userScrolledAwayRef.current = false
-      prevScrollTopRef.current  = 0
+      prevScrollTopRef.current = 0
       setShowJumpBtn(false)
       return
     }
@@ -155,149 +136,298 @@ export function LogViewer({
     prevScrollTopRef.current = el.scrollTop
   }
 
-  // ── Left slot content ─────────────────────────────────────────────────────
   const dark = theme === "dark"
   const leftSlot = paused ? (
-    <span className="text-yellow-400 font-mono text-xs">
+    <span className="text-status-warning font-mono text-xs">
       Paused · {frozenAt} / {lines.length} lines
     </span>
   ) : live ? (
     <span className="flex items-center gap-1.5 text-xs font-mono">
-      <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />
-      <span className={dark ? "text-green-400" : "text-green-600"}>
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-status-success animate-pulse" />
+      <span className={dark ? "text-status-success" : "text-green-600"}>
         {liveLabel ? `${liveLabel} · ` : ""}{lines.length} lines
       </span>
     </span>
   ) : (
-    <span className={cn("text-xs font-mono", dark ? "text-gray-400" : "text-black")}>
+    <span className={cn("text-xs font-mono", dark ? "text-muted-foreground" : "text-black")}>
       {lines.length} lines
     </span>
   )
 
+  return {
+    lines,
+    onClear,
+    onRefresh,
+    refreshLoading,
+    autoScroll: parentAutoScroll,
+    className,
+    maxHeight,
+    live,
+    liveLabel,
+    downloadFilename,
+    fillHeight,
+    sortOrder,
+    onSortOrderToggle,
+    containerRef,
+    userScrolledAwayRef,
+    prevScrollTopRef,
+    prevLinesLenRef,
+    showJumpBtn,
+    setShowJumpBtn,
+    newestFirst,
+    localAutoScroll,
+    setLocalAutoScroll,
+    fontSize,
+    setFontSize,
+    wrap,
+    setWrap,
+    theme,
+    setTheme,
+    effectiveAutoScroll,
+    displayLines,
+    paused,
+    frozenAt,
+    pause,
+    resume,
+    visibleLines,
+    searchOpen,
+    searchQuery,
+    setSearchQuery,
+    setSearchOpen,
+    currentMatchIdx,
+    matchIndices,
+    matchSet,
+    searchInputRef,
+    matchLineRefsRef,
+    navigateMatch,
+    toggleSearch,
+    handleSearchKeyDown,
+    scrollToLiveEdge,
+    handleScroll,
+    dark,
+    leftSlot,
+  }
+}
+
+function LogViewerRoot({ children, ...config }: LogViewerConfig & { children: React.ReactNode }) {
+  const value = useLogViewerRuntime(config)
+  const { className, fillHeight, dark } = value
+
   return (
-    <div
-      className={cn(
-        "rounded-lg border overflow-hidden",
-        dark ? "border-zinc-800" : "border-gray-200",
-        fillHeight && "flex flex-col flex-1 min-h-0 h-full",
-        className,
-      )}
-    >
-      <LogDockToolbar
-        lines={lines}
-        downloadFilename={downloadFilename}
-        paused={paused}
-        onPause={() => pause(lines.length)}
-        onResume={() => { resume(); scrollToLiveEdge() }}
-        autoScroll={localAutoScroll}
-        onAutoScrollToggle={() => setLocalAutoScroll(v => !v)}
-        showAutoScroll={parentAutoScroll !== false}
-        fontSize={fontSize}
-        onFontSizeChange={setFontSize}
-        wrap={wrap}
-        onWrapToggle={() => setWrap(v => !v)}
-        theme={theme}
-        onThemeToggle={() => setTheme(t => t === "dark" ? "light" : "dark")}
-        searchOpen={searchOpen}
-        onSearchToggle={toggleSearch}
-        onClear={onClear ? () => { resume(); onClear() } : undefined}
-        onRefresh={onRefresh}
-        refreshLoading={refreshLoading}
-        sortOrder={sortOrder}
-        onSortOrderToggle={onSortOrderToggle}
-        leftSlot={leftSlot}
-      />
+    <LogViewerProvider value={value}>
+      <div
+        className={cn(
+          "rounded-lg border overflow-hidden",
+          dark ? "border-zinc-800" : "border-border",
+          fillHeight && "flex flex-col flex-1 min-h-0 h-full",
+          className,
+        )}
+      >
+        {children}
+      </div>
+    </LogViewerProvider>
+  )
+}
 
-      {searchOpen && (
-        <LogDockSearchBar
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          matchIndices={matchIndices}
-          currentMatchIdx={currentMatchIdx}
-          navigateMatch={navigateMatch}
-          onClose={() => setSearchOpen(false)}
-          searchInputRef={searchInputRef}
-          handleSearchKeyDown={handleSearchKeyDown}
-          theme={theme}
-        />
-      )}
+function LogViewerToolbar() {
+  const {
+    lines,
+    downloadFilename,
+    paused,
+    pause,
+    resume,
+    scrollToLiveEdge,
+    localAutoScroll,
+    setLocalAutoScroll,
+    autoScroll: parentAutoScroll,
+    fontSize,
+    setFontSize,
+    wrap,
+    setWrap,
+    theme,
+    setTheme,
+    searchOpen,
+    toggleSearch,
+    onClear,
+    resume: resumeLines,
+    onRefresh,
+    refreshLoading,
+    sortOrder,
+    onSortOrderToggle,
+    leftSlot,
+  } = useLogViewer()
 
-      <div className={cn("relative", fillHeight && "flex flex-col flex-1 min-h-0")}>
-        <div
-          ref={containerRef}
-          onScroll={handleScroll}
-          className={cn(
-            "p-4 overflow-y-auto font-mono leading-relaxed",
-            dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
-            wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
-            fillHeight && "flex-1 min-h-0",
-          )}
-          style={fillHeight ? { fontSize: `${fontSize}px` } : { maxHeight, fontSize: `${fontSize}px` }}
-        >
-          {visibleLines.length === 0 ? (
-            <p className="italic text-gray-600">No logs yet…</p>
-          ) : (
-            visibleLines.map((line, i) => {
-              const isErrorRole = /^\[ERROR\]\s/.test(line)
-              const normalized = stripStreamRolePrefix(line)
-              const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
+  return (
+    <LogDockToolbar
+      lines={lines}
+      downloadFilename={downloadFilename}
+      paused={paused}
+      onPause={() => pause(lines.length)}
+      onResume={() => { resume(); scrollToLiveEdge() }}
+      autoScroll={localAutoScroll}
+      onAutoScrollToggle={() => setLocalAutoScroll((v) => !v)}
+      showAutoScroll={parentAutoScroll !== false}
+      fontSize={fontSize}
+      onFontSizeChange={setFontSize}
+      wrap={wrap}
+      onWrapToggle={() => setWrap((v) => !v)}
+      theme={theme}
+      onThemeToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+      searchOpen={searchOpen}
+      onSearchToggle={toggleSearch}
+      onClear={onClear ? () => { resumeLines(); onClear() } : undefined}
+      onRefresh={onRefresh}
+      refreshLoading={refreshLoading}
+      sortOrder={sortOrder}
+      onSortOrderToggle={onSortOrderToggle}
+      leftSlot={leftSlot}
+    />
+  )
+}
 
-              const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
-              const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
-              const highlightCls = isCurrent ? "bg-yellow-400/40" : isMatch ? "bg-yellow-500/20" : ""
-              const refCallback  = isMatch
-                ? (el: HTMLDivElement | null) => {
-                    if (el) matchLineRefsRef.current.set(i, el)
-                    else matchLineRefsRef.current.delete(i)
-                  }
-                : undefined
+function LogViewerSearch() {
+  const {
+    searchOpen,
+    searchQuery,
+    setSearchQuery,
+    matchIndices,
+    currentMatchIdx,
+    navigateMatch,
+    setSearchOpen,
+    searchInputRef,
+    handleSearchKeyDown,
+    theme,
+  } = useLogViewer()
 
-              const bodyCls = isErrorRole ? "text-red-400" : getAnsibleLineClass(body, theme)
+  if (!searchOpen) return null
 
-              return (
-                <div
-                  key={i}
-                  ref={refCallback}
-                  className={cn("log-line", highlightCls)}
-                >
-                  {wallTs ? (
-                    <>
-                      <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
-                      <span> </span>
-                    </>
-                  ) : null}
-                  {isRecapStatsLine(body) ? (
-                    <span className="min-w-0">
-                      {parseRecapStats(body, theme).map((seg, j) => (
-                        <span key={j} className={seg.cls}>{seg.text}</span>
-                      ))}
-                    </span>
-                  ) : (
-                    <span className={cn("min-w-0", bodyCls)}>{body}</span>
-                  )}
-                </div>
-              )
-            })
-          )}
-        </div>
+  return (
+    <LogDockSearchBar
+      searchQuery={searchQuery}
+      setSearchQuery={setSearchQuery}
+      matchIndices={matchIndices}
+      currentMatchIdx={currentMatchIdx}
+      navigateMatch={navigateMatch}
+      onClose={() => setSearchOpen(false)}
+      searchInputRef={searchInputRef}
+      handleSearchKeyDown={handleSearchKeyDown}
+      theme={theme}
+    />
+  )
+}
 
-        {showJumpBtn && (
-          <button
-            onClick={scrollToLiveEdge}
-            className={cn(
-              "absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full",
-              "text-xs font-mono shadow-lg transition-colors z-10",
-              newestFirst ? "top-3 right-3" : "bottom-3 right-3",
-              dark
-                ? "bg-primary/90 text-primary-foreground hover:bg-primary"
-                : "bg-gray-700/90 text-white hover:bg-gray-600",
-            )}
-          >
-            {newestFirst ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
-            new logs
-          </button>
+function LogViewerBody() {
+  const {
+    visibleLines,
+    containerRef,
+    handleScroll,
+    fillHeight,
+    maxHeight,
+    fontSize,
+    wrap,
+    dark,
+    searchQuery,
+    matchSet,
+    matchIndices,
+    currentMatchIdx,
+    matchLineRefsRef,
+    theme,
+    showJumpBtn,
+    scrollToLiveEdge,
+    newestFirst,
+  } = useLogViewer()
+
+  return (
+    <div className={cn("relative", fillHeight && "flex flex-col flex-1 min-h-0")}>
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className={cn(
+          "p-4 overflow-y-auto font-mono leading-relaxed",
+          dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
+          wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
+          fillHeight && "flex-1 min-h-0",
+        )}
+        style={fillHeight ? { fontSize: `${fontSize}px` } : { maxHeight, fontSize: `${fontSize}px` }}
+      >
+        {visibleLines.length === 0 ? (
+          <p className="italic text-gray-600">No logs yet…</p>
+        ) : (
+          visibleLines.map((line, i) => {
+            const isErrorRole = /^\[ERROR\]\s/.test(line)
+            const normalized = stripStreamRolePrefix(line)
+            const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
+
+            const isMatch = searchQuery.trim() !== "" && matchSet.has(i)
+            const isCurrent = isMatch && matchIndices[currentMatchIdx] === i
+            const highlightCls = isCurrent ? "bg-status-warning/40" : isMatch ? "bg-status-warning/20" : ""
+            const refCallback = isMatch
+              ? (el: HTMLDivElement | null) => {
+                  if (el) matchLineRefsRef.current.set(i, el)
+                  else matchLineRefsRef.current.delete(i)
+                }
+              : undefined
+
+            const bodyCls = isErrorRole ? "text-status-error" : getAnsibleLineClass(body, theme)
+
+            return (
+              <div key={i} ref={refCallback} className={cn("log-line", highlightCls)}>
+                {wallTs ? (
+                  <>
+                    <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
+                    <span> </span>
+                  </>
+                ) : null}
+                {isRecapStatsLine(body) ? (
+                  <span className="min-w-0">
+                    {parseRecapStats(body, theme).map((seg, j) => (
+                      <span key={j} className={seg.cls}>{seg.text}</span>
+                    ))}
+                  </span>
+                ) : (
+                  <span className={cn("min-w-0", bodyCls)}>{body}</span>
+                )}
+              </div>
+            )
+          })
         )}
       </div>
+
+      {showJumpBtn && (
+        <button
+          onClick={scrollToLiveEdge}
+          className={cn(
+            "absolute flex items-center gap-1.5 px-2.5 py-1 rounded-full",
+            "text-xs font-mono shadow-lg transition-colors z-10",
+            newestFirst ? "top-3 right-3" : "bottom-3 right-3",
+            dark
+              ? "bg-primary/90 text-primary-foreground hover:bg-primary"
+              : "bg-gray-700/90 text-white hover:bg-gray-600",
+          )}
+        >
+          {newestFirst ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+          new logs
+        </button>
+      )}
     </div>
+  )
+}
+
+/** Compound API — compose toolbar/search/body slots explicitly when needed. */
+export const LogViewerCompound = {
+  Root: LogViewerRoot,
+  Toolbar: LogViewerToolbar,
+  Search: LogViewerSearch,
+  Body: LogViewerBody,
+}
+
+/** Default all-in-one viewer (backward compatible). */
+export function LogViewer(props: LogViewerProps) {
+  return (
+    <LogViewerRoot {...props}>
+      <LogViewerToolbar />
+      <LogViewerSearch />
+      <LogViewerBody />
+    </LogViewerRoot>
   )
 }

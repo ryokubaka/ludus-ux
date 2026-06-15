@@ -64,17 +64,38 @@ export function extractArray<T>(data: unknown): T[] {
   return []
 }
 
+/** Ludus group list — array, `{ result }`, `{ groups }`, `{ items }`, or single row. */
+export function parseLudusGroupList<T extends object>(data: unknown): T[] {
+  if (data == null) return []
+  if (Array.isArray(data)) return data as T[]
+  if (typeof data === "object" && data !== null) {
+    if ("result" in data) {
+      const inner = (data as { result: unknown }).result
+      if (Array.isArray(inner)) return inner as T[]
+      if (inner && typeof inner === "object") return [inner as T]
+      return []
+    }
+    if ("groups" in data && Array.isArray((data as { groups: unknown }).groups)) {
+      return (data as { groups: T[] }).groups
+    }
+    if ("items" in data && Array.isArray((data as { items: unknown }).items)) {
+      return (data as { items: T[] }).items
+    }
+  }
+  return []
+}
+
 export function getRangeStateBadge(state: string): string {
   switch (state) {
     case "SUCCESS":
-      return "bg-green-500/20 text-green-400 border-green-500/30";
+      return "bg-status-success/20 text-status-success border-status-success/30";
     case "DEPLOYING":
-      return "bg-yellow-500/20 text-yellow-400 border-yellow-500/30";
+      return "bg-status-warning/20 text-status-warning border-status-warning/30";
     case "ERROR":
-      return "bg-red-500/20 text-red-400 border-red-500/30";
+      return "bg-status-error/20 text-status-error border-status-error/30";
     case "ABORTED":
-      return "bg-orange-500/20 text-orange-400 border-orange-500/30";
+      return "bg-status-aborted/20 text-status-aborted border-status-aborted/30";
     default:
-      return "bg-gray-500/20 text-gray-400 border-gray-500/30";
+      return "bg-status-neutral/20 text-status-neutral border-status-neutral/30";
   }
 }

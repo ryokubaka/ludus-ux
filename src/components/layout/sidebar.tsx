@@ -232,6 +232,14 @@ export function Sidebar() {
             ) : (
               <div className="relative">
                 <button
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded={rangeDropdownOpen}
+                  aria-label={
+                    selectedRangeId
+                      ? `Active range: ${selectedRangeId}. Change range`
+                      : "Select active range"
+                  }
                   onClick={() => !rangeSelectionLocked && setRangeDropdownOpen((o) => !o)}
                   disabled={rangeSelectionLocked}
                   title={rangeSelectionLocked ? "Testing operation in progress — range locked" : undefined}
@@ -249,13 +257,19 @@ export function Sidebar() {
                   <ChevronRight className={cn("h-3 w-3 transition-transform", rangeDropdownOpen && "rotate-90")} />
                 </button>
                 {rangeDropdownOpen && (
-                  <div className="absolute left-0 right-0 top-full mt-1 z-50 rounded-md border border-sidebar-border bg-sidebar shadow-lg py-1 max-h-48 overflow-y-auto">
+                  <div
+                    role="listbox"
+                    aria-label="Available ranges"
+                    className="absolute left-0 right-0 top-full mt-1 z-50 rounded-md border border-sidebar-border bg-sidebar shadow-lg py-1 max-h-48 overflow-y-auto"
+                  >
                     {ranges.map((r) => {
                       const rangeSwitchBlocked = rangeSelectionLocked && r.rangeID !== selectedRangeId
                       return (
                       <button
                         key={r.rangeID}
                         type="button"
+                        role="option"
+                        aria-selected={r.rangeID === selectedRangeId}
                         disabled={rangeSwitchBlocked}
                         onClick={() => {
                           if (rangeSwitchBlocked) return

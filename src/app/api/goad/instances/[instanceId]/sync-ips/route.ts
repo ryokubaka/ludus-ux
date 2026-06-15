@@ -31,7 +31,6 @@ import { getSettings } from "@/lib/settings-store"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(
   request: NextRequest,

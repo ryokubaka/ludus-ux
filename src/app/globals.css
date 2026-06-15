@@ -32,6 +32,23 @@
     --sidebar-accent-foreground: 210 40% 96%;
     --sidebar-border: 217 33% 14%;
     --sidebar-ring: 199 89% 48%;
+    --status-success: 142 71% 45%;
+    --status-warning: 45 93% 47%;
+    --status-error: 0 63% 48%;
+    --status-aborted: 25 95% 53%;
+    --status-neutral: 215 16% 47%;
+    --status-info: 217 91% 60%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

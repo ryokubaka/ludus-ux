@@ -20,7 +20,6 @@ import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const admin = await requireAdmin(request)

@@ -1,6 +1,13 @@
 /** Tab classification for Ludus range deploy vs GOAD-terminal-only actions. */
 export const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
 export const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
+export const RANGE_YAML_TOUCHING_ACTIONS = new Set([
+  "provide",
+  "install",
+  "install-extension",
+  "provision-lab",
+  "provision-extension",
+])
 
 export const GOAD_INSTANCE_TAB_IDS = new Set([
   "deploy",

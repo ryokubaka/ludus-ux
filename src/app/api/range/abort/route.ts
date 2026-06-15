@@ -43,7 +43,6 @@ import { setPbRangeState } from "@/lib/pocketbase-client"
 import type { RangeObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 /** Terminal Ludus range states — reaching any of these means the abort landed. */
 const TERMINAL_STATES = new Set([

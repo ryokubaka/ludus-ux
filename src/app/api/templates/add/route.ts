@@ -34,7 +34,6 @@ import { getSessionFromRequest } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 interface TemplateSpec {
   name:    string

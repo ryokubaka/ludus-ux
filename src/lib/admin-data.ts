@@ -34,11 +34,13 @@ export interface AdminData {
 }
 
 import { SWRCache } from "@/lib/server-cache"
+import { revalidateLudusAdminMutation } from "@/lib/ludus-cache-revalidate"
 
 const _swrCache = new SWRCache<AdminData>(30_000)
 
 export function bustAdminCache(): void {
   _swrCache.invalidate()
+  revalidateLudusAdminMutation()
 }
 
 // ── Ownership resolution (shared by both paths) ───────────────────────────────
@@ -177,7 +179,8 @@ async function buildAdminDataFromApi(apiKey: string): Promise<AdminData> {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-async function buildAdminData(apiKey: string): Promise<AdminData> {
+/** Ludus/PocketBase admin payload — used by `cachedAdminData` (`"use cache"`) and API routes. */
+export async function buildAdminData(apiKey: string): Promise<AdminData> {
   // Fast path: PocketBase for ownership/users + parallel Ludus API for VM status.
   // Falls back automatically to the Ludus API if PocketBase is unavailable or
   // LUDUS_ROOT_API_KEY is not configured.
@@ -202,5 +205,5 @@ export async function getAdminData(apiKey: string): Promise<AdminData> {
  * Triggers a background revalidation when the cache is stale or empty.
  */
 export function getAdminDataCached(apiKey: string): AdminData | null {
-  return _swrCache.peek("admin", () => buildAdminData(apiKey))
+  return _swrCache.peek(`admin:${apiKey}`, () => buildAdminData(apiKey))
 }

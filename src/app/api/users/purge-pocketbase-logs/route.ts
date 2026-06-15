@@ -10,7 +10,6 @@ import { getSessionFromRequest } from "@/lib/session"
 import { deletePbLogsForLudusUser } from "@/lib/pocketbase-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)

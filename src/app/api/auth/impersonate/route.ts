@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { markRouteDynamic } from "@/lib/mark-route-dynamic"
 import {
   clearSessionImpersonation,
   resolveSession,
@@ -16,8 +17,10 @@ import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
+import { clearSelectedRangeCookie } from "@/lib/selected-range-cookie"
 
 export async function GET(request: NextRequest) {
+  await markRouteDynamic()
   const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -34,6 +37,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  await markRouteDynamic()
   const admin = await requireAdmin(request)
   if (!admin.ok) return admin.response
   const { session } = admin
@@ -95,6 +99,7 @@ export async function POST(request: NextRequest) {
   }
 
   const response = NextResponse.json({ ok: true })
+  clearSelectedRangeCookie(response)
   try {
     await updateSessionImpersonation(response, session, {
       impersonationApiKey: body.apiKey,
@@ -122,12 +127,14 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  await markRouteDynamic()
   const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
   const response = NextResponse.json({ ok: true })
+  clearSelectedRangeCookie(response)
   await clearSessionImpersonation(response, session)
   logAppEvent("impersonate_stop", "Impersonation ended", {
     username: session.username,

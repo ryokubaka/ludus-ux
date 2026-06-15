@@ -3,7 +3,6 @@ import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
 
-export const dynamic = "force-dynamic"
 
 /**
  * GET /api/admin/user-wireguard?username=xxx

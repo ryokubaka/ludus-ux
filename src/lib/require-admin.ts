@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { markRouteDynamic } from "@/lib/mark-route-dynamic"
 import {
   resolveSession,
   setSessionCookie,
@@ -24,6 +25,7 @@ export async function requireAdmin(
   request: NextRequest,
   options?: { liveCheck?: boolean },
 ): Promise<RequireAdminResult> {
+  await markRouteDynamic()
   const resolved = await resolveSession(request)
   if (!resolved) {
     return { ok: false, response: NextResponse.json({ error: "Not authenticated" }, { status: 401 }) }

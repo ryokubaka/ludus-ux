@@ -15,6 +15,26 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.0] — 2026-06-09
+
+**LUX**
+- [Add] **Next.js 16** — Upgraded to Next 16.2.7 and React 19; enabled `cacheComponents` with `AuthenticatedRoot` Suspense boundary and server-side LUX version cache on Settings.
+- [Add] **SSR prefetch** — TanStack `HydrationBoundary` + non-blocking server prefetch on Users, Templates, Groups, Blueprints, Ansible, Dashboard, Logs, Snapshots, Testing, and Range Config pages (accessible ranges and version still prefetched globally in the root layout).
+- [Add] **Selected range cookie** — httpOnly `__Host-lux_selected_range` mirrors sidebar selection (scope-tagged) via `POST /api/session/selected-range` so range-scoped pages can prefetch the correct range on first paint.
+- [Add] **Ludus data cache** — `"use cache"` L2 layer (`cached-ludus-fetch.ts`) behind in-process SWR peek; `revalidateTag(tag, 'max')` invalidation on admin/range mutations and Ludus proxy writes (`ludus-cache-revalidate.ts`, `ludus-proxy-cache-invalidate.ts`).
+- [Add] **Impersonation verify script** — `scripts/verify-impersonation-ssh.mjs` ships in the Docker image for live bashrc API-key reads (no manual UI retest).
+- [Add] **LogViewer compound API** — `LogViewerCompound.Root|Toolbar|Search|Body` for composable log panes; adopted on Dashboard, Range Logs, Admin → Application Logs, Templates, Testing, and Range Config.
+- [Add] **E2E** — GOAD task ACL unauthenticated (`e2e/goad-task-acl.spec.ts`); deploy tab smoke (`e2e/goad-instance-deploy.spec.ts`); Extensions/History tabs with auth (`e2e/goad-instance-tabs.spec.ts`).
+- [Add] **Tests** — Unit coverage for bashrc API-key parsing, selected-range cookie resolution, Ludus group list parsing, snapshots view grouping, and Ludus proxy cache invalidation (112 tests).
+- [Improve] **GOAD instance page** — Six typed tab modules (`goad-instance-tabs/*`), shell components (header, action bar, reassign dialog, tab triggers), and action hooks (`use-goad-run-action`, `use-goad-instance-action-handlers`); orchestrator ~1.2k lines (down from ~2.8k).
+- [Improve] **Next 16 proxy** — Renamed `middleware.ts` → `proxy.ts` and `middleware()` → `proxy()` per Next 16 network-boundary convention (auth gate + security headers unchanged).
+- [Improve] **Cache Components hygiene** — `markRouteDynamic()` in `getLayoutSession` and `requireAdminPage` before cookie reads under `cacheComponents`; `cached-lux-version` uses stable `cacheLife` import.
+- [Improve] **Shared parsers** — `parseLudusGroupList`, `buildSnapshotsViewData`, and `NetworkSnapshot` type for Ludus list/YAML/network handling.
+- [Improve] **Impersonation UX** — Toast surfaces server `message` when auto-fetch of `~/.bashrc` API key fails; range cookie cleared on impersonate start/stop and logout.
+- [Perf] **Cold-start SSR** — Warm Ludus cache entries shared across Next workers; proxy mutations bust groups/blueprints/templates/ansible/ranges tags so the next navigation reflects Ludus writes without a hard refresh.
+
+---
+
 ## [1.0.7] - 2026-06-08
 
 **LUX**

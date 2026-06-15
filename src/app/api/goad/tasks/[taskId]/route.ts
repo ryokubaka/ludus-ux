@@ -4,7 +4,6 @@ import { assertGoadTaskAccess, toGoadTaskDetail } from "@/lib/goad-task-api"
 import { resolveSession } from "@/lib/session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function GET(
   request: NextRequest,

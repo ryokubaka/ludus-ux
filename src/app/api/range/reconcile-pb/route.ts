@@ -12,7 +12,6 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { reconcilePbAfterFollowOnLudusDeploy } from "@/lib/goad-ludus-reconcile"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 export async function POST(request: NextRequest) {
   const session = await resolveSession(request)

@@ -19,7 +19,6 @@ import { getSettings } from "@/lib/settings-store"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { RangeObject } from "@/lib/types"
 
-export const dynamic = "force-dynamic"
 
 function ludusRangeListFromResponse(data: unknown): RangeObject[] {
   if (data == null) return []

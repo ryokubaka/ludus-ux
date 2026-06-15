@@ -20,7 +20,6 @@ import {
 } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 type Body = Partial<{
   ludusUrl: string

@@ -12,7 +12,6 @@ import fs from "fs"
 import path from "path"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-export const dynamic = "force-dynamic"
 
 const AVATARS_DIR = path.join(DATA_DIR, "avatars")
 const MAX_SIZE = 4 * 1024 * 1024 // 4 MB

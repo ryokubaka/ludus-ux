@@ -33,12 +33,12 @@ function renderInline(text: string) {
 }
 
 const sectionColors: Record<string, string> = {
-  Added: "text-green-400",
-  Fixed: "text-blue-400",
-  Changed: "text-yellow-400",
-  Security: "text-red-400",
+  Added: "text-status-success",
+  Fixed: "text-status-info",
+  Changed: "text-status-warning",
+  Security: "text-status-error",
   LUX: "text-primary",
-  GOAD: "text-orange-400",
+  GOAD: "text-status-aborted",
 }
 
 interface ChangelogDialogProps {

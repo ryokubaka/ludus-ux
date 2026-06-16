@@ -28,11 +28,12 @@ import { recordLuxTestingOpTerminal } from "@/lib/range-testing-audit"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import {
   TESTING_OP_MIN_AGE_MS,
-  bestEffortSyncPbTestingEnabled,
   clearTestingOpLogMarker,
+  delayMs,
   ludusApiTestingEnabled,
   noteTestingOpLogMarker,
   readTestingOpLogSlice,
+  syncPbTestingEnabledWithRetries,
   testingOpLogSliceProvesComplete,
 } from "@/lib/testing-mode-pb-reconcile"
 import { readLudusRangeLogsForReconcile } from "@/lib/goad-ludus-reconcile"
@@ -71,13 +72,13 @@ function forgetTestingStopRetry(opId: string) {
 
 type OpCtx = { effectiveApiKey: string; ludusUserOverride?: string }
 
-function completeTestingOpSuccess(
+async function completeTestingOpSuccess(
   op: RangeOp,
   ctx: OpCtx,
   pbPatchReason: string,
-) {
+): Promise<void> {
   const expectedBool = op.expectedTestingEnabled === 1
-  void bestEffortSyncPbTestingEnabled(op.rangeId, expectedBool, pbPatchReason)
+  await syncPbTestingEnabledWithRetries(op.rangeId, expectedBool, pbPatchReason)
   forgetTestingStopRetry(op.id)
   completeRangeOp(op.id, true)
   recordLuxTestingOpTerminal(op, true, {
@@ -102,6 +103,7 @@ async function checkCompletion(
   op: RangeOp,
   ctx: OpCtx,
   rangeId: string,
+  opts?: { skipMinAge?: boolean },
 ): Promise<RangeOp> {
   if (op.status === "completed" || op.status === "error") return op
 
@@ -112,10 +114,9 @@ async function checkCompletion(
     return { ...op, status: "running" }
   }
 
-  // Timeout — last chance via ansible log (not PB-only).
   if (op.status === "running" && Date.now() - op.startedAt > TESTING_OP_MAX_AGE_MS) {
     if (await ansibleProvesOpComplete(op, ctx, { skipMinAge: true })) {
-      completeTestingOpSuccess(op, ctx, `op ${op.opType} timeout (ansible complete)`)
+      await completeTestingOpSuccess(op, ctx, `op ${op.opType} timeout (ansible complete)`)
       return { ...op, status: "completed" }
     }
     forgetTestingStopRetry(op.id)
@@ -132,12 +133,17 @@ async function checkCompletion(
     const testingEnabled = pbStatus?.testingEnabled
 
     if (testingEnabled === expectedBool) {
-      completeTestingOpSuccess(op, ctx, `op ${op.opType} (PB matched)`)
+      forgetTestingStopRetry(op.id)
+      completeRangeOp(op.id, true)
+      recordLuxTestingOpTerminal(op, true, {
+        apiKey: ctx.effectiveApiKey,
+        userOverride: ctx.ludusUserOverride,
+      })
       return { ...op, status: "completed" }
     }
 
-    if (await ansibleProvesOpComplete(op, ctx)) {
-      completeTestingOpSuccess(op, ctx, `op ${op.opType} (ansible since op start)`)
+    if (await ansibleProvesOpComplete(op, ctx, opts)) {
+      await completeTestingOpSuccess(op, ctx, `op ${op.opType} (ansible since op start)`)
       return { ...op, status: "completed" }
     }
 
@@ -147,7 +153,7 @@ async function checkCompletion(
       ctx.ludusUserOverride,
     )
     if (ludusFlag === expectedBool) {
-      completeTestingOpSuccess(op, ctx, `op ${op.opType} (Ludus API matched)`)
+      await completeTestingOpSuccess(op, ctx, `op ${op.opType} (Ludus API matched)`)
       return { ...op, status: "completed" }
     }
 
@@ -262,6 +268,19 @@ export async function POST(request: NextRequest) {
   }
 
   markRangeOpRunning(op.id)
+
+  const runningOp = { ...op, status: "running" as const }
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const completedOp = await checkCompletion(runningOp, ctx, rangeId, { skipMinAge: true })
+    if (completedOp.status === "completed") {
+      logLuxRouteAction(request, session, {
+        detail: `${opType} rangeId=${rangeId} (completed on PUT return, attempt ${attempt + 1})`,
+      })
+      return NextResponse.json({ op: completedOp })
+    }
+    if (attempt < 5) await delayMs(2000)
+  }
+
   logLuxRouteAction(request, session, { detail: `${opType} rangeId=${rangeId}` })
   return NextResponse.json({ op: { ...op, status: "running" } })
 }

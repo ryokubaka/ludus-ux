@@ -15,9 +15,9 @@ describe("user-bashrc-apikey", () => {
   })
 
   it("parses keys with percent signs from bashrc export lines", () => {
-    const line = "export LUDUS_API_KEY=humnoi.IHYCTP4G_ilTUNr%1H_%ProP%E0ROD78c%-t8sY2"
+    const line = "export LUDUS_API_KEY=testuser.SAMPLE_ilTUNr%1H_%ProP%E0ROD78c%-t8sY2"
     expect(parseLudusApiKeyFromBashrcLine(line)).toBe(
-      "humnoi.IHYCTP4G_ilTUNr%1H_%ProP%E0ROD78c%-t8sY2",
+      "testuser.SAMPLE_ilTUNr%1H_%ProP%E0ROD78c%-t8sY2",
     )
   })
 })

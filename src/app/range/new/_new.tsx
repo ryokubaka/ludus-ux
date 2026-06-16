@@ -32,8 +32,12 @@ import {
   Info,
   FileCode2,
   Shield,
+  Package,
 } from "lucide-react"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
+import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
+import { applyBlueprintToRange } from "@/lib/blueprint-apply"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
@@ -41,7 +45,7 @@ import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { cn, extractArray } from "@/lib/utils"
-import type { TemplateObject, RangeObject } from "@/lib/types"
+import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
 import { LUDUS_DEPLOY_TAGS as ALL_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS as TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
@@ -51,6 +55,7 @@ import { LUDUS_DEPLOY_TAGS as ALL_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS as TAG_DES
 // their config method, making the divergent paths immediately obvious.
 const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Network Rules", "Deploy Tags", "Review & Deploy"]
 const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & Deploy"]
+const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "Review & Deploy"]
 
 // ── Step → path mapping ────────────────────────────────────────────────────────
 // step 0 : Select Range          (shared)
@@ -194,7 +199,7 @@ export function NewRangePageClient() {
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
   // null = not yet chosen; "wizard" or "yaml" after step 1 is committed.
-  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | null>(null)
+  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | "blueprint" | null>(null)
 
   // ── Step 0: Range selection ──────────────────────────────────────────────────
   const [mode, setMode] = useState<"existing" | "new">("existing")
@@ -234,6 +239,14 @@ export function NewRangePageClient() {
   // For new ranges, starts empty so the user types/pastes.
   const [yamlConfig, setYamlConfig] = useState("")
 
+  // ── Blueprint step 2 ───────────────────────────────────────────────────────
+  const [blueprints, setBlueprints] = useState<BlueprintListItem[]>([])
+  const [blueprintsLoading, setBlueprintsLoading] = useState(false)
+  const [selectedBlueprintId, setSelectedBlueprintId] = useState("")
+  const [blueprintPreviewYaml, setBlueprintPreviewYaml] = useState("")
+  const [loadingBlueprintPreview, setLoadingBlueprintPreview] = useState(false)
+  const [blueprintDepsReady, setBlueprintDepsReady] = useState(false)
+
   // ── Shared deploy state ──────────────────────────────────────────────────────
   const [deploying, setDeploying] = useState(false)
   const [deployResult, setDeployResult] = useState<"success" | "error" | null>(null)
@@ -271,6 +284,43 @@ export function NewRangePageClient() {
       .catch(() => { /* timeout or network — keep client-side estimate from getRanges */ })
       .finally(() => clearTimeout(ipPlanTimeout))
   }, [])
+
+  useEffect(() => {
+    if (configMethod !== "blueprint" || step < 2) return
+    setBlueprintsLoading(true)
+    ludusApi.listBlueprints()
+      .then((res) => {
+        const list = extractArray<BlueprintListItem>(res.data as unknown)
+          .sort((a, b) => (a.id || a.blueprintID || "").localeCompare(b.id || b.blueprintID || ""))
+        setBlueprints(list)
+      })
+      .finally(() => setBlueprintsLoading(false))
+  }, [configMethod, step])
+
+  useEffect(() => {
+    if (configMethod !== "blueprint" || !selectedBlueprintId) {
+      setBlueprintPreviewYaml("")
+      return
+    }
+    setLoadingBlueprintPreview(true)
+    ludusApi.getBlueprintConfig(selectedBlueprintId)
+      .then((res) => {
+        if (res.error || !res.data) {
+          setBlueprintPreviewYaml("")
+          return
+        }
+        const raw = res.data as unknown
+        const yaml =
+          (raw as { result?: string })?.result ??
+          (typeof raw === "string" ? raw : JSON.stringify(raw, null, 2))
+        setBlueprintPreviewYaml(yaml)
+      })
+      .finally(() => setLoadingBlueprintPreview(false))
+  }, [configMethod, selectedBlueprintId])
+
+  useEffect(() => {
+    setBlueprintDepsReady(false)
+  }, [selectedBlueprintId])
 
   const usedVlans = useMemo(() => {
     const vlans = new Set<number>()
@@ -429,7 +479,7 @@ export function NewRangePageClient() {
 
   // ── Step 1 → Step 2: config method picker ────────────────────────────────────
 
-  const pickConfigMethod = (method: "wizard" | "yaml") => {
+  const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint") => {
     setConfigMethod(method)
     setStep(2)
   }
@@ -510,10 +560,71 @@ export function NewRangePageClient() {
         setDeployStatus("Uploading configuration…")
       }
 
-      const configRes = await ludusApi.setRangeConfig(configToUpload, effectiveRangeId || undefined)
-      if (configRes.error) {
-        toast({ title: "Config upload failed", description: configRes.error, variant: "destructive" })
-        setDeploying(false); setDeployStatus(""); return
+      if (configMethod === "blueprint") {
+        if (!selectedBlueprintId) {
+          toast({ title: "No blueprint selected", variant: "destructive" })
+          setDeploying(false)
+          setDeployStatus("")
+          return
+        }
+        if (!blueprintDepsReady) {
+          try {
+            const depCheck = await checkBlueprintDependencies(selectedBlueprintId)
+            if (!depCheck.ready) {
+              toast({
+                title: "Missing Ansible dependencies",
+                description: "Install required roles and collections before deploying.",
+                variant: "destructive",
+              })
+              setDeploying(false)
+              setDeployStatus("")
+              return
+            }
+          } catch (err) {
+            toast({
+              title: "Could not verify dependencies",
+              description: err instanceof Error ? err.message : String(err),
+              variant: "destructive",
+            })
+            setDeploying(false)
+            setDeployStatus("")
+            return
+          }
+        }
+        setDeployStatus("Applying blueprint…")
+        const applyRes = await applyBlueprintToRange(selectedBlueprintId, effectiveRangeId || "")
+        if (!applyRes.ok) {
+          if (
+            tryToastLudusSlowHttpError({
+              toast,
+              error: applyRes.error ?? "Apply failed",
+              slowTitle: "Slow response from Ludus",
+              onSlow: () => {
+                void refreshRanges()
+                if (effectiveRangeId) {
+                  void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, effectiveRangeId) })
+                }
+              },
+            })
+          ) {
+            setDeployResult("error")
+            setDeploying(false)
+            setDeployStatus("")
+            return
+          }
+          toast({ title: "Blueprint apply failed", description: applyRes.error ?? "Apply failed", variant: "destructive" })
+          setDeploying(false)
+          setDeployStatus("")
+          return
+        }
+      } else {
+        const configRes = await ludusApi.setRangeConfig(configToUpload, effectiveRangeId || undefined)
+        if (configRes.error) {
+          toast({ title: "Config upload failed", description: configRes.error, variant: "destructive" })
+          setDeploying(false)
+          setDeployStatus("")
+          return
+        }
       }
 
       setDeployStatus("Starting deployment…")
@@ -564,10 +675,19 @@ export function NewRangePageClient() {
   const rangeIdConflict = mode === "new" && !!rangeId && usedRangeIds.has(rangeId)
 
   // Display steps switch the moment configMethod is committed.
-  const displaySteps = configMethod === "yaml" ? YAML_STEPS : WIZARD_STEPS
+  const displaySteps =
+    configMethod === "yaml"
+      ? YAML_STEPS
+      : configMethod === "blueprint"
+        ? BLUEPRINT_STEPS
+        : WIZARD_STEPS
 
-  // Back-step for wizard Review & Deploy vs YAML Review & Deploy
-  const reviewBackStep = configMethod === "yaml" ? 2 : 5
+  const reviewBackStep =
+    configMethod === "yaml" || configMethod === "blueprint" ? 2 : 5
+
+  const selectedBlueprint = blueprints.find(
+    (bp) => (bp.id || bp.blueprintID) === selectedBlueprintId,
+  )
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -754,7 +874,7 @@ export function NewRangePageClient() {
             <code className="font-mono text-primary text-xs">{effectiveRangeId || "your range"}</code>?
           </p>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Wizard option */}
             <button
               onClick={() => pickConfigMethod("wizard")}
@@ -812,11 +932,97 @@ export function NewRangePageClient() {
                 )}
               </div>
             </button>
+
+            {/* Blueprint option */}
+            <button
+              onClick={() => pickConfigMethod("blueprint")}
+              className="text-left p-5 rounded-xl border-2 border-border hover:border-emerald-500/60 hover:bg-emerald-500/5 transition-all space-y-3 group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-500/20 transition-colors">
+                  <Package className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">From Blueprint</p>
+                  <p className="text-[10px] text-muted-foreground">Community or installed</p>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Pick a Ludus blueprint (including source blueprints like GOAD). Applies the saved range
+                config, then deploys — install blueprints from the Blueprints page first if needed.
+              </p>
+              <div className="flex flex-wrap gap-1">
+                <Badge variant="secondary" className="text-[10px] border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10">
+                  Apply + deploy
+                </Badge>
+              </div>
+            </button>
           </div>
 
           <div className="flex justify-start">
             <Button variant="ghost" onClick={() => setStep(0)}>
               <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 2 (Blueprint): Choose blueprint ─────────────────────────────── */}
+      {step === 2 && configMethod === "blueprint" && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader><CardTitle className="text-sm">Available Blueprints</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              {blueprintsLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : blueprints.length === 0 ? (
+                <div className="text-center py-6 space-y-2">
+                  <p className="text-sm text-muted-foreground">No blueprints available for your account.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Install community blueprints from{" "}
+                    <Link href="/blueprints" className="text-primary underline">Blueprints → Add from Source</Link>
+                    {" "}first, then return here.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-2 max-h-96 overflow-y-auto">
+                  {blueprints.map((bp) => {
+                    const bpId = bp.id || bp.blueprintID || ""
+                    return (
+                      <button
+                        key={bpId}
+                        type="button"
+                        onClick={() => setSelectedBlueprintId(bpId)}
+                        className={cn(
+                          "text-left p-3 rounded-lg border-2 transition-all",
+                          selectedBlueprintId === bpId
+                            ? "border-emerald-500 bg-emerald-500/10"
+                            : "border-border hover:border-emerald-500/50",
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <code className="font-mono text-sm text-primary">{bpId}</code>
+                          {selectedBlueprintId === bpId && <Check className="h-4 w-4 text-emerald-600" />}
+                        </div>
+                        {bp.name && <p className="text-sm mt-1">{bp.name}</p>}
+                        {bp.description && (
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{bp.description}</p>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          <div className="flex justify-between">
+            <Button variant="ghost" onClick={() => setStep(1)}>
+              <ChevronLeft className="h-4 w-4" /> Back
+            </Button>
+            <Button onClick={() => setStep(3)} disabled={!selectedBlueprintId || blueprintsLoading}>
+              Next <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -1100,8 +1306,9 @@ export function NewRangePageClient() {
         </div>
       )}
 
-      {/* ── Review & Deploy (Wizard: step 6 / YAML: step 3) ─────────────────── */}
-      {((step === 6 && configMethod === "wizard") || (step === 3 && configMethod === "yaml")) && (
+      {/* ── Review & Deploy (Wizard: step 6 / YAML or Blueprint: step 3) ───── */}
+      {((step === 6 && configMethod === "wizard") ||
+        (step === 3 && (configMethod === "yaml" || configMethod === "blueprint"))) && (
         <div className="space-y-4">
           <Card>
             <CardHeader><CardTitle className="text-sm">Deployment Summary</CardTitle></CardHeader>
@@ -1147,6 +1354,18 @@ export function NewRangePageClient() {
                     </p>
                   </div>
                 )}
+                {configMethod === "blueprint" && (
+                  <div className="col-span-2">
+                    <span className="text-xs text-muted-foreground">Blueprint</span>
+                    <p className="flex items-center gap-1.5 font-mono text-sm text-primary">
+                      <Package className="h-3.5 w-3.5" />
+                      {selectedBlueprintId}
+                    </p>
+                    {selectedBlueprint?.name && (
+                      <p className="text-xs text-muted-foreground mt-0.5">{selectedBlueprint.name}</p>
+                    )}
+                  </div>
+                )}
                 {configMethod === "wizard" && selectedTags.length > 0 && (
                   <div className="col-span-2">
                     <span className="text-xs text-muted-foreground">Tags</span>
@@ -1165,7 +1384,11 @@ export function NewRangePageClient() {
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">
-                  {configMethod === "yaml" ? "YAML Configuration" : "Generated Configuration"}
+                  {configMethod === "yaml"
+                    ? "YAML Configuration"
+                    : configMethod === "blueprint"
+                      ? "Blueprint Configuration Preview"
+                      : "Generated Configuration"}
                 </CardTitle>
                 {configMethod === "wizard" && (
                   <Button variant="ghost" size="sm" asChild>
@@ -1177,12 +1400,27 @@ export function NewRangePageClient() {
                     Edit YAML
                   </Button>
                 )}
+                {configMethod === "blueprint" && (
+                  <Button variant="ghost" size="sm" onClick={() => setStep(2)}>
+                    Change Blueprint
+                  </Button>
+                )}
               </div>
             </CardHeader>
             <CardContent>
-              <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
-                {configMethod === "yaml" ? yamlConfig : wizardYaml}
-              </pre>
+              {configMethod === "blueprint" && loadingBlueprintPreview ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
+                  {configMethod === "yaml"
+                    ? yamlConfig
+                    : configMethod === "blueprint"
+                      ? blueprintPreviewYaml || "(Preview unavailable — blueprint will still be applied on deploy.)"
+                      : wizardYaml}
+                </pre>
+              )}
             </CardContent>
           </Card>
 
@@ -1201,14 +1439,24 @@ export function NewRangePageClient() {
             </Alert>
           )}
 
+          {configMethod === "blueprint" && selectedBlueprintId && (
+            <BlueprintDependenciesPanel
+              blueprintId={selectedBlueprintId}
+              onReadyChange={setBlueprintDepsReady}
+            />
+          )}
+
           <Alert variant="warning">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="text-xs">
               {configMethod === "wizard"
                 ? <>This will upload the configuration and start deploying {vms.length} VMs to range{" "}
                     <strong>{effectiveRangeId || "default"}</strong>.</>
-                : <>This will upload the YAML configuration and start deploying to range{" "}
-                    <strong>{effectiveRangeId || "default"}</strong>.</>}
+                : configMethod === "blueprint"
+                  ? <>This will apply blueprint <strong className="font-mono">{selectedBlueprintId}</strong> and
+                      start deploying to range <strong>{effectiveRangeId || "default"}</strong>.</>
+                  : <>This will upload the YAML configuration and start deploying to range{" "}
+                      <strong>{effectiveRangeId || "default"}</strong>.</>}
             </AlertDescription>
           </Alert>
 
@@ -1225,7 +1473,11 @@ export function NewRangePageClient() {
               )}
               <Button
                 onClick={handleDeploy}
-                disabled={deploying || (configMethod === "yaml" && !yamlConfig.trim())}
+                disabled={
+                  deploying ||
+                  (configMethod === "yaml" && !yamlConfig.trim()) ||
+                  (configMethod === "blueprint" && (!selectedBlueprintId || !blueprintDepsReady))
+                }
                 className="min-w-36"
               >
                 {deploying

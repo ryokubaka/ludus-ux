@@ -14,12 +14,12 @@ TASK [Create new clean snapshot] ***********************************************
 changed: [localhost] => (item=136)
 PLAY [Block VMs from accessing the internet when testing undefined or block_internet is true] ***
 TASK [Remove the default external rule] ****************************************
-changed: [smeowden-GOAD-Mini-router-debian11-x64]
+changed: [labuser-GOAD-Mini-router-debian11-x64]
 TASK [Flush the LUDUS_TESTING table to remove any user defined rules now that testing is done] ***
-skipping: [smeowden-GOAD-Mini-router-debian11-x64]
+skipping: [labuser-GOAD-Mini-router-debian11-x64]
 PLAY RECAP *********************************************************************
 localhost                  : ok=14   changed=3    unreachable=0    failed=0    skipped=3    rescued=0    ignored=1
-smeowden-GOAD-Mini-router-debian11-x64 : ok=12   changed=4    unreachable=0    failed=0    skipped=27   rescued=0    ignored=0
+labuser-GOAD-Mini-router-debian11-x64 : ok=12   changed=4    unreachable=0    failed=0    skipped=27   rescued=0    ignored=0
 `
 
 const TESTING_STOP_LOG_TAIL = `
@@ -33,17 +33,17 @@ localhost                  : ok=8   changed=2    unreachable=0    failed=0    sk
 const TESTING_STOP_MULTihost_LOG = `
 PLAY [Revert VMs to ludus_automated_clean_snapshot] ****************************
 PLAY RECAP *********************************************************************
-despacito-GOAD-DC01 : ok=6   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
-despacito-router-debian11-x64 : ok=4   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+rangea-GOAD-DC01 : ok=6   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+rangea-router-debian11-x64 : ok=4   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
 `
 
 /** GOAD-style stop: allow subnet + filtering rules, no explicit Revert VM task line. */
 const GOAD_STOP_ALLOW_SUBNET_LOG = `
 PLAY [Allow the test range subnet to access the internet] **********************
 TASK [Set filtering rules (now without the domain)] ****************************
-changed: [despacito-router-debian11-x64]
+changed: [rangea-router-debian11-x64]
 PLAY RECAP *********************************************************************
-despacito-router-debian11-x64 : ok=4   changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+rangea-router-debian11-x64 : ok=4   changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
 localhost                  : ok=2   changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
 `
 
@@ -105,5 +105,22 @@ localhost : ok=1 changed=0 unreachable=0 failed=1 skipped=0 rescued=0 ignored=0
       tailAnchor: "",
     }
     expect(testingOpLogSliceProvesComplete("testing_start", sliceCappedLogSinceMarkerForTest(staleFullLog, marker))).toBe(false)
+  })
+
+  it("prefers cappedLength over misleading tail anchor match", () => {
+    const sharedMiddle =
+      "PLAY [Block VMs from accessing the internet when testing undefined or block_internet is true] ***\n" +
+      "TASK [Remove the default external rule] ****************************************\n" +
+      "z".repeat(400)
+    const preOp = `${sharedMiddle}${TESTING_START_LOG_TAIL.trim()}`
+    const marker: TestingOpLogMarker = {
+      cappedLength: preOp.length,
+      sshFileBytes: null,
+      tailAnchor: preOp.slice(-8192),
+    }
+    const afterOp = `${preOp}\n${sharedMiddle}\nPLAY RECAP *********************************************************************\nlocalhost : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0`
+    const slice = sliceCappedLogSinceMarkerForTest(afterOp, marker)
+    expect(slice).toBe(afterOp.slice(preOp.length))
+    expect(testingOpLogSliceProvesComplete("testing_start", slice)).toBe(false)
   })
 })

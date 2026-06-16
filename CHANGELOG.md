@@ -15,7 +15,18 @@ Each bullet uses a single tag:
 
 ---
 
-## [1.1.0] — 2026-06-09
+---
+
+## [1.1.1] - 2026-06-15
+
+**LUX**
+- [Fix] **Testing Mode** — Start/stop no longer stuck on "Starting…" when ansible finished but Ludus/PocketBase lagged: SSH-first op-scoped log slice (2 MB), capped-length slicing before tail-anchor (avoids false matches on repeated ansible output), POST completion retries after PUT returns, and awaited PocketBase `testingEnabled` sync with backoff before the op is marked complete.
+- [Fix] **Templates** — Official add-from-source catalog now pulls from GitHub [`badsectorlabs/ludus-source-bsl`](https://github.com/badsectorlabs/ludus-source-bsl) (replacing the retired GitLab `badsectorlabs/ludus` repo); shared `template-repo-client` handles GitLab and GitHub tree/raw APIs for list and add flows.
+- [Add] **Blueprints** — Add from Source installs from [`badsectorlabs/ludus-source-bsl/blueprints`](https://github.com/badsectorlabs/ludus-source-bsl/tree/main/blueprints) via Ludus Sources when available, else `POST /blueprints` / from-range config upload from fetched YAML.
+- [Add] **Deploy New Range** — Config method **From Blueprint** applies an installed or source blueprint then deploys.
+- [Add] **Blueprints** — Apply dialog and range wizard **From Blueprint** check Ansible roles/collections against `GET /ansible`, list missing deps, and offer **Install dependencies** (`POST /blueprints/{id}/install` with per-item fallback).
+
+## [1.1.0] - 2026-06-09
 
 **LUX**
 - [Add] **Next.js 16** — Upgraded to Next 16.2.7 and React 19; enabled `cacheComponents` with `AuthenticatedRoot` Suspense boundary and server-side LUX version cache on Settings.
@@ -32,6 +43,7 @@ Each bullet uses a single tag:
 - [Improve] **Shared parsers** — `parseLudusGroupList`, `buildSnapshotsViewData`, and `NetworkSnapshot` type for Ludus list/YAML/network handling.
 - [Improve] **Impersonation UX** — Toast surfaces server `message` when auto-fetch of `~/.bashrc` API key fails; range cookie cleared on impersonate start/stop and logout.
 - [Perf] **Cold-start SSR** — Warm Ludus cache entries shared across Next workers; proxy mutations bust groups/blueprints/templates/ansible/ranges tags so the next navigation reflects Ludus writes without a hard refresh.
+- [Fix] **CI lint** — Scoped npm `brace-expansion` override to `@eslint/config-array` so `npm run lint` no longer hits ESLint 9 circular-config validation on GitHub Actions.
 
 ---
 

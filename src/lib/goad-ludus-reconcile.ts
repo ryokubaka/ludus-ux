@@ -268,19 +268,21 @@ export async function readLudusAnsibleLogByteLength(rangeId: string): Promise<nu
 export async function readLudusAnsibleLogSuffixFromByteOffset(
   rangeId: string,
   byteOffset: number,
+  opts?: { maxBytes?: number },
 ): Promise<string | null> {
   const logPath = ludusAnsibleLogPath(rangeId)
   if (!logPath) return null
   const settings = getSettings()
   if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
   const start = Math.max(1, Math.floor(byteOffset) + 1)
+  const maxBytes = Math.min(Math.max(opts?.maxBytes ?? 524_288, 64_000), 4_194_304)
   try {
     const content = await sshExec(
       settings.sshHost,
       settings.sshPort,
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
-      `tail -c +${start} "${logPath}" 2>/dev/null | head -c 524288 || true`,
+      `tail -c +${start} "${logPath}" 2>/dev/null | head -c ${maxBytes} || true`,
     )
     return content.trim() ? content : null
   } catch {

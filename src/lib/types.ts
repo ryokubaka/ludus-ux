@@ -173,6 +173,35 @@ export interface SnapshotCreatePayload {
 // ── Blueprints ────────────────────────────────────────────────────────────────
 
 /** v2 blueprint list item — returned by GET /blueprints */
+/** GET /blueprints/{blueprintID} — full record plus requirements_yaml when available. */
+export interface BlueprintDetail {
+  sourceBlueprintID?: string
+  name?: string
+  description?: string
+  version?: string
+  authors?: string[]
+  homepage?: string
+  license?: string
+  tags?: string[]
+  min_ludus_version?: string
+  requirements_yaml?: string
+}
+
+export interface BlueprintAnsibleInstallResult {
+  name?: string
+  version?: string
+  ok?: boolean
+  error?: string
+  type?: "role" | "collection" | string
+}
+
+export interface BlueprintInstallDepsResponse {
+  result?: string
+  blueprintID?: string
+  error?: string
+  ansibleResults?: BlueprintAnsibleInstallResult[]
+}
+
 export interface BlueprintListItem {
   id: string
   blueprintID?: string

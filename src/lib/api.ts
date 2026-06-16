@@ -534,7 +534,17 @@ export const ludusApi = {
     name?: string
     description?: string
   }) => post("/blueprints/from-range", body),
+  getBlueprintDetail: (id: string) =>
+    get<import("./types").BlueprintDetail>(`/blueprints/${encodeURIComponent(id)}`),
   getBlueprintConfig: (id: string) => get<{ result: string }>(`/blueprints/${id}/config`),
+  installBlueprintDependencies: (
+    id: string,
+    body?: { global?: boolean; forceRoles?: boolean },
+  ) =>
+    post<import("./types").BlueprintInstallDepsResponse>(
+      `/blueprints/${encodeURIComponent(id)}/install`,
+      body ?? { forceRoles: true },
+    ),
   /** Ludus expects JSON `{ config: "<yaml string>" }`. */
   updateBlueprintConfig: (id: string, config: string) =>
     put(`/blueprints/${id}/config`, { config }),

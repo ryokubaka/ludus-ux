@@ -54,8 +54,8 @@ interface SourceTemplate {
 }
 
 const BUILTIN_SOURCE = {
-  label: "badsectorlabs/ludus (official)",
-  url:   "https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates",
+  label: "badsectorlabs/ludus-source-bsl (official)",
+  url:   "https://github.com/badsectorlabs/ludus-source-bsl/tree/main/templates",
   value: "badsectorlabs",
 }
 
@@ -190,7 +190,7 @@ function AddFromSource({ installedNames, onAdded }: {
                         : "border-border bg-transparent text-muted-foreground hover:border-primary/50"
                     )}
                   >
-                    {v === "badsectorlabs" ? "badsectorlabs/ludus (official)" : "Custom GitLab repo"}
+                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom GitLab repo"}
                   </button>
                 ))}
               </div>
@@ -204,7 +204,7 @@ function AddFromSource({ installedNames, onAdded }: {
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
               >
                 <ExternalLink className="h-3 w-3" />
-                View on GitLab
+                View on GitHub
               </a>
             )}
           </div>

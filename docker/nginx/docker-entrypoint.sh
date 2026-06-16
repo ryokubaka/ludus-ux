@@ -60,4 +60,21 @@ else
     echo "[nginx-entrypoint] Using existing TLS files at $CERT"
 fi
 
+UPSTREAM_HOST="${LUX_UPSTREAM_HOST:-ludus-ux}"
+UPSTREAM_WAIT_SECS="${LUX_UPSTREAM_WAIT_SECS:-120}"
+_waited=0
+while ! getent hosts "$UPSTREAM_HOST" >/dev/null 2>&1; do
+    if [ "$_waited" -ge "$UPSTREAM_WAIT_SECS" ]; then
+        echo "[nginx-entrypoint] ERROR: upstream host '$UPSTREAM_HOST' not resolvable after ${UPSTREAM_WAIT_SECS}s"
+        echo "[nginx-entrypoint] Ensure 'docker compose up' started ludus-ux on the same network (not only 'docker compose run')."
+        exit 1
+    fi
+    if [ "$_waited" -eq 0 ]; then
+        echo "[nginx-entrypoint] Waiting for upstream DNS: $UPSTREAM_HOST …"
+    fi
+    sleep 1
+    _waited=$((_waited + 1))
+done
+echo "[nginx-entrypoint] Upstream $UPSTREAM_HOST is resolvable; starting nginx"
+
 exec nginx -g "daemon off;"

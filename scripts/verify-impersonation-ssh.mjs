@@ -3,7 +3,7 @@
  * Live check: root SSH + ~/.bashrc LUDUS_API_KEY read (same path as impersonation).
  * Self-contained — runs in production container without TS sources.
  *
- *   docker compose exec ludus-ux node scripts/verify-impersonation-ssh.mjs humnoi adminuser
+ *   docker compose exec ludus-ux node scripts/verify-impersonation-ssh.mjs testuser adminuser
  */
 import fs from "node:fs"
 import path from "node:path"

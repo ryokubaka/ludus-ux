@@ -1,10 +1,11 @@
 "use client"
 
-import { useState, useMemo, useLayoutEffect } from "react"
+import { useState, useMemo, useLayoutEffect, useCallback } from "react"
+import { useRouter } from "next/navigation"
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -41,6 +42,15 @@ import {
   Crown,
   Users,
   FileCode,
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  ExternalLink,
+  AlertTriangle,
+  Check,
+  XCircle,
+  Download,
+  CheckCircle2,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import type {
@@ -58,6 +68,8 @@ import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
+import { applyBlueprintToRange } from "@/lib/blueprint-apply"
 
 /** Ludus sometimes returns `{ result: [...] }`, a single row, or a bare array. */
 function asObjectArray<T>(data: unknown): T[] {
@@ -154,7 +166,355 @@ function viewerMayUseBlueprint(bp: BlueprintListItem, gate: BlueprintListGate): 
   return false
 }
 
+interface SourceBlueprint {
+  name: string
+  path: string
+  files: string[]
+  apiBase: string
+  ref: string
+}
+
+const BUILTIN_BLUEPRINT_SOURCE = {
+  label: "badsectorlabs/ludus-source-bsl (official)",
+  url: "https://github.com/badsectorlabs/ludus-source-bsl/tree/main/blueprints",
+  value: "badsectorlabs",
+}
+
+function buildInstalledBlueprintIds(blueprints: BlueprintListItem[]): Set<string> {
+  const installedIds = new Set<string>()
+  for (const bp of blueprints) {
+    const id = bp.id || bp.blueprintID || ""
+    if (!id) continue
+    installedIds.add(id)
+    const slash = id.lastIndexOf("/")
+    if (slash >= 0) installedIds.add(id.slice(slash + 1))
+  }
+  return installedIds
+}
+
+function AddBlueprintsFromSource({ installedIds, onAdded }: {
+  installedIds: Set<string>
+  onAdded: () => void
+}) {
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [sourceValue, setSourceValue] = useState("badsectorlabs")
+  const [customRepoUrl, setCustomRepoUrl] = useState("")
+  const [customPath, setCustomPath] = useState("blueprints")
+  const [customRef, setCustomRef] = useState("main")
+  const [sourceBlueprints, setSourceBlueprints] = useState<SourceBlueprint[]>([])
+  const [loadingSource, setLoadingSource] = useState(false)
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [adding, setAdding] = useState(false)
+  const [addResults, setAddResults] = useState<{ name: string; success: boolean; message: string }[]>([])
+
+  const fetchSource = useCallback(async () => {
+    setLoadingSource(true)
+    setSourceError(null)
+    setSourceBlueprints([])
+    setSelected(new Set())
+    setAddResults([])
+    try {
+      const params = new URLSearchParams({ source: sourceValue })
+      if (sourceValue === "custom" && customRepoUrl) {
+        let apiBase = customRepoUrl
+        const glMatch = customRepoUrl.match(/^https:\/\/gitlab\.com\/([^/]+\/[^/]+?)(?:\/|$)/)
+        if (glMatch) {
+          apiBase = `https://gitlab.com/api/v4/projects/${encodeURIComponent(glMatch[1])}/repository`
+        }
+        params.set("source", "custom")
+        params.set("repoUrl", apiBase)
+        params.set("path", customPath)
+        params.set("ref", customRef)
+      }
+      const res = await fetch(`/api/blueprints/sources?${params}`)
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setSourceBlueprints(data.blueprints ?? [])
+    } catch (err) {
+      setSourceError((err as Error).message)
+    } finally {
+      setLoadingSource(false)
+    }
+  }, [sourceValue, customRepoUrl, customPath, customRef])
+
+  const toggleSelect = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const handleAdd = async () => {
+    if (selected.size === 0) return
+    setAdding(true)
+    setAddResults([])
+    try {
+      const gitUrl =
+        sourceValue === "badsectorlabs"
+          ? "https://github.com/badsectorlabs/ludus-source-bsl"
+          : (() => {
+              if (!customRepoUrl) return undefined
+              const glMatch = customRepoUrl.match(/^https:\/\/gitlab\.com\/([^/]+\/[^/]+?)(?:\/|$)/)
+              if (glMatch) return `https://gitlab.com/${glMatch[1]}`
+              return customRepoUrl.replace(/\/$/, "")
+            })()
+
+      const toAdd = sourceBlueprints
+        .filter((b) => selected.has(b.name))
+        .map(({ name, path, apiBase, ref }) => ({
+          name,
+          path,
+          apiBase,
+          ref: ref || customRef,
+          gitUrl,
+        }))
+
+      const res = await fetch("/api/blueprints/import-from-source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blueprints: toAdd }),
+      })
+      const data = await res.json()
+      const results: { name: string; success: boolean; message: string }[] = data.results ?? []
+      setAddResults(results)
+
+      const ok = results.filter((r) => r.success).length
+      const err = results.filter((r) => !r.success).length
+      if (ok > 0) {
+        toast({
+          title: `${ok} blueprint${ok > 1 ? "s" : ""} installed`,
+          description: "Install Ansible dependencies from the blueprint Apply dialog before deploying.",
+        })
+      }
+      if (err > 0) {
+        toast({
+          variant: "destructive",
+          title: `${err} blueprint${err > 1 ? "s" : ""} failed`,
+          description: "See details below.",
+        })
+      }
+      if (ok > 0) {
+        setSelected(new Set())
+        onAdded()
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Import failed", description: (err as Error).message })
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const available = sourceBlueprints.filter((b) => !installedIds.has(b.name))
+  const alreadyIn = sourceBlueprints.filter((b) => installedIds.has(b.name))
+
+  return (
+    <Card>
+      <button className="w-full text-left" onClick={() => setOpen((o) => !o)}>
+        <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
+          <CardTitle className="text-sm flex items-center gap-2">
+            {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            <GitBranch className="h-4 w-4 text-primary" />
+            Add Blueprints from Source
+            <span className="text-xs text-muted-foreground font-normal">
+              — import community blueprints from ludus-source-bsl
+            </span>
+          </CardTitle>
+        </CardHeader>
+      </button>
+
+      {open && (
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[220px]">
+              <label className="text-xs text-muted-foreground mb-1 block">Source</label>
+              <div className="flex gap-2">
+                {["badsectorlabs", "custom"].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => { setSourceValue(v); setSourceBlueprints([]); setAddResults([]) }}
+                    className={cn(
+                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
+                      sourceValue === v
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50",
+                    )}
+                  >
+                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom GitLab repo"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {sourceValue === "badsectorlabs" && (
+              <a
+                href={BUILTIN_BLUEPRINT_SOURCE.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+              >
+                <ExternalLink className="h-3 w-3" />
+                View on GitHub
+              </a>
+            )}
+          </div>
+
+          {sourceValue === "custom" && (
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-3">
+                <label className="text-xs text-muted-foreground mb-1 block">GitLab repo URL</label>
+                <Input
+                  placeholder="https://gitlab.com/owner/repo"
+                  value={customRepoUrl}
+                  onChange={(e) => setCustomRepoUrl(e.target.value)}
+                  className="text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Blueprints path</label>
+                <Input
+                  placeholder="blueprints"
+                  value={customPath}
+                  onChange={(e) => setCustomPath(e.target.value)}
+                  className="text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Branch / ref</label>
+                <Input
+                  placeholder="main"
+                  value={customRef}
+                  onChange={(e) => setCustomRef(e.target.value)}
+                  className="text-xs font-mono"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => void fetchSource()} disabled={loadingSource}>
+              {loadingSource
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <RefreshCw className="h-3.5 w-3.5" />}
+              {loadingSource ? "Loading…" : "Fetch Available Blueprints"}
+            </Button>
+
+            {sourceBlueprints.length > 0 && (
+              <Button size="sm" onClick={() => void handleAdd()} disabled={selected.size === 0 || adding}>
+                {adding
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Download className="h-3.5 w-3.5" />}
+                {adding ? "Importing…" : `Import Selected (${selected.size})`}
+              </Button>
+            )}
+          </div>
+
+          {sourceError && (
+            <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 rounded px-3 py-2">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {sourceError}
+            </div>
+          )}
+
+          {available.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Available to Import ({available.length})
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {available.map((b) => {
+                  const result = addResults.find((r) => r.name === b.name)
+                  return (
+                    <button
+                      key={b.name}
+                      type="button"
+                      onClick={() => toggleSelect(b.name)}
+                      className={cn(
+                        "text-left rounded-lg border p-3 text-xs transition-colors",
+                        selected.has(b.name)
+                          ? "border-primary bg-primary/10"
+                          : "border-border hover:border-primary/50",
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <input
+                          type="checkbox"
+                          className="rounded shrink-0"
+                          checked={selected.has(b.name)}
+                          onChange={() => toggleSelect(b.name)}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <code className="font-mono font-medium text-primary truncate">{b.name}</code>
+                        {result && (
+                          result.success
+                            ? <Check className="h-3 w-3 text-status-success ml-auto shrink-0" />
+                            : <XCircle className="h-3 w-3 text-destructive ml-auto shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-muted-foreground/70 truncate pl-5">
+                        {b.files.find((f) => f === "blueprint.yml") ?? b.files[0] ?? ""}
+                      </p>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {alreadyIn.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Already in Ludus ({alreadyIn.length})
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {alreadyIn.map((b) => (
+                  <Badge key={b.name} variant="secondary" className="text-xs font-mono gap-1">
+                    <CheckCircle2 className="h-2.5 w-2.5 text-status-success" />
+                    {b.name}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {addResults.length > 0 && (
+            <div className="space-y-1">
+              {addResults.map((r) => (
+                <div
+                  key={r.name}
+                  className={cn(
+                    "flex items-start gap-2 text-xs rounded px-3 py-2",
+                    r.success ? "bg-status-success/10 text-status-success" : "bg-destructive/10 text-destructive",
+                  )}
+                >
+                  {r.success
+                    ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    : <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                  <div>
+                    <span className="font-mono font-medium">{r.name}</span>
+                    {r.message && <span className="ml-2 opacity-80">{r.message}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sourceBlueprints.length === 0 && !loadingSource && !sourceError && (
+            <p className="text-xs text-muted-foreground/60 text-center py-4">
+              Click &quot;Fetch Available Blueprints&quot; to browse blueprints from the selected source.
+            </p>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
 export function BlueprintsPageClient() {
+  const router = useRouter()
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
@@ -171,6 +531,7 @@ export function BlueprintsPageClient() {
   const [unsharingUserId, setUnsharingUserId] = useState<string | null>(null)
   const [unsharingGroupName, setUnsharingGroupName] = useState<string | null>(null)
   const [applyDialogBpId, setApplyDialogBpId] = useState<string | null>(null)
+  const [blueprintDepsReady, setBlueprintDepsReady] = useState(false)
   const [applySubmitting, setApplySubmitting] = useState<"current" | "new" | null>(null)
   const [newRangeName, setNewRangeName] = useState("")
   const [newRangeId, setNewRangeId] = useState("")
@@ -232,6 +593,11 @@ export function BlueprintsPageClient() {
     if (!blueprintGateReady || !blueprintGate) return []
     return blueprints.filter((bp) => viewerMayUseBlueprint(bp, blueprintGate))
   }, [blueprints, blueprintGate, blueprintGateReady])
+
+  const installedBlueprintIds = useMemo(
+    () => buildInstalledBlueprintIds(blueprints),
+    [blueprints],
+  )
 
   const listReady = !loading && blueprintGateReady
 
@@ -471,17 +837,25 @@ export function BlueprintsPageClient() {
 
   const handleApplyToCurrentRange = async () => {
     if (!applyDialogBpId) return
+    if (!blueprintDepsReady) {
+      toast({
+        variant: "destructive",
+        title: "Missing Ansible dependencies",
+        description: "Install required roles and collections before applying this blueprint.",
+      })
+      return
+    }
     if (!selectedRangeId) {
       toast({ variant: "destructive", title: "No range selected", description: "Choose a range in the sidebar first." })
       return
     }
     setApplySubmitting("current")
-    const result = await ludusApi.applyBlueprint(applyDialogBpId, selectedRangeId)
-    if (result.error) {
+    const result = await applyBlueprintToRange(applyDialogBpId, selectedRangeId)
+    if (!result.ok) {
       if (
         tryToastLudusSlowHttpError({
           toast,
-          error: result.error,
+          error: result.error ?? "Apply failed",
           slowTitle: "Slow response from Ludus",
           onSlow: () => {
             void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
@@ -491,7 +865,7 @@ export function BlueprintsPageClient() {
         setApplySubmitting(null)
         return
       }
-      toast({ variant: "destructive", title: "Error", description: result.error })
+      toast({ variant: "destructive", title: "Error", description: result.error ?? "Apply failed" })
     } else {
       toast({ title: "Blueprint applied", description: "Don't forget to deploy your range" })
       setApplyDialogBpId(null)
@@ -502,6 +876,14 @@ export function BlueprintsPageClient() {
 
   const handleApplyToNewRange = async () => {
     if (!applyDialogBpId) return
+    if (!blueprintDepsReady) {
+      toast({
+        variant: "destructive",
+        title: "Missing Ansible dependencies",
+        description: "Install required roles and collections before applying this blueprint.",
+      })
+      return
+    }
     const name = newRangeName.trim()
     const rid = newRangeId.trim()
     if (!name || !rid) {
@@ -515,34 +897,43 @@ export function BlueprintsPageClient() {
       setApplySubmitting(null)
       return
     }
-    const cfg = await ludusApi.getBlueprintConfig(applyDialogBpId)
-    if (cfg.error || !cfg.data) {
+
+    const applied = await applyBlueprintToRange(applyDialogBpId, rid)
+    if (!applied.ok) {
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: applied.error ?? "Apply failed",
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => {
+            void refreshRanges()
+            void queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rid) })
+          },
+        })
+      ) {
+        setApplySubmitting(null)
+        return
+      }
+      await refreshRanges()
+      selectRange(rid)
       toast({
         variant: "destructive",
-        title: "Blueprint config fetch failed",
-        description: typeof cfg.error === "string" ? cfg.error : "Unknown error",
+        title: "Range created but blueprint not applied",
+        description: `${applied.error ?? "Unknown error"} Range "${rid}" exists with the default config — select it in the sidebar and use Apply to current range to retry.`,
       })
       setApplySubmitting(null)
       return
     }
-    const raw = cfg.data as unknown
-    const yaml =
-      (raw as { result?: string })?.result ??
-      (typeof raw === "string" ? raw : JSON.stringify(raw, null, 2))
-    const applied = await ludusApi.setRangeConfig(yaml, rid, true)
-    if (applied.error) {
-      toast({ variant: "destructive", title: "Could not apply config to new range", description: applied.error })
-      setApplySubmitting(null)
-      return
-    }
+
     toast({ title: "Range created", description: "Blueprint config applied. Deploy when ready." })
     setApplyDialogBpId(null)
     setNewRangeName("")
     setNewRangeId("")
     await refreshRanges()
-    selectRange(rid)
     await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rid) })
+    selectRange(rid)
     setApplySubmitting(null)
+    router.push("/")
   }
 
   const handleView = async (id: string) => {
@@ -693,6 +1084,11 @@ export function BlueprintsPageClient() {
         </Button>
       </div>
 
+      <AddBlueprintsFromSource
+        installedIds={installedBlueprintIds}
+        onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag) })}
+      />
+
       {/* Blueprint list */}
       {!listReady ? (
         <div className="flex justify-center py-12">
@@ -703,7 +1099,7 @@ export function BlueprintsPageClient() {
           <CardContent className="flex flex-col items-center py-12 text-muted-foreground">
             <Package className="h-10 w-10 mb-3 opacity-40" />
             <p>No blueprints</p>
-            <p className="text-xs mt-1">Create a blueprint from a range you own or paste YAML</p>
+            <p className="text-xs mt-1">Create from a range, paste YAML, or import from source below</p>
           </CardContent>
         </Card>
       ) : (
@@ -1228,6 +1624,7 @@ export function BlueprintsPageClient() {
               setApplyDialogBpId(null)
               setNewRangeName("")
               setNewRangeId("")
+              setBlueprintDepsReady(false)
             }
           }}
         >
@@ -1239,6 +1636,10 @@ export function BlueprintsPageClient() {
                 Applying overwrites range configuration for the target range; deploy afterward.
               </DialogDescription>
             </DialogHeader>
+            <BlueprintDependenciesPanel
+              blueprintId={applyDialogBpId}
+              onReadyChange={setBlueprintDepsReady}
+            />
             <div className="space-y-4 py-2">
               <div className="rounded-md border border-border p-3 space-y-2">
                 <p className="text-sm font-medium">Current range</p>
@@ -1250,7 +1651,7 @@ export function BlueprintsPageClient() {
                 <Button
                   className="w-full gap-2"
                   onClick={() => void handleApplyToCurrentRange()}
-                  disabled={applySubmitting !== null || !selectedRangeId}
+                  disabled={applySubmitting !== null || !selectedRangeId || !blueprintDepsReady}
                 >
                   {applySubmitting === "current" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1288,7 +1689,12 @@ export function BlueprintsPageClient() {
                   variant="secondary"
                   className="w-full gap-2"
                   onClick={() => void handleApplyToNewRange()}
-                  disabled={applySubmitting !== null || !newRangeName.trim() || !newRangeId.trim()}
+                  disabled={
+                    applySubmitting !== null ||
+                    !newRangeName.trim() ||
+                    !newRangeId.trim() ||
+                    !blueprintDepsReady
+                  }
                 >
                   {applySubmitting === "new" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

@@ -1,23 +1,21 @@
 /**
- * GET  /api/templates/sources?source=badsectorlabs  — list available templates from a source
+ * GET  /api/blueprints/sources?source=badsectorlabs  — list available blueprints from a source
  *
  * Proxies the GitLab/GitHub tree API server-side to avoid CORS issues and to add
  * light response caching.  The default source is the official badsectorlabs
  * ludus-source-bsl repository.  A custom GitLab repo URL can be provided via the
  * `repoUrl` query parameter.
  *
- * Response: { templates: { name: string; files: string[] }[] }
+ * Response: { blueprints: { name: string; files: string[] }[] }
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { isGitHubApiBase, listRepoDirectory } from "@/lib/template-repo-client"
 
+const BADSL_REF = "main"
+const BADSL_BASE = "https://api.github.com/repos/badsectorlabs/ludus-source-bsl"
 
-const BADSL_REF     = "main"
-const BADSL_BASE    = "https://api.github.com/repos/badsectorlabs/ludus-source-bsl"
-
-// Simple in-process cache so repeated UI renders don't hammer GitLab
 interface CacheEntry { data: unknown; ts: number }
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 5 * 60 * 1000
@@ -26,8 +24,6 @@ function repoApiLabel(apiBase: string): string {
   return isGitHubApiBase(apiBase) ? "GitHub" : "GitLab"
 }
 
-/** Fetch a URL with a per-attempt timeout and exponential-backoff retry.
- *  Returns parsed JSON. */
 async function fetchWithRetry<T>(
   task: () => Promise<T>,
   apiLabel: string,
@@ -75,7 +71,6 @@ async function fetchWithRetry<T>(
   throw lastErr
 }
 
-/** Run up to `limit` async tasks concurrently. */
 async function pLimit<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
@@ -106,44 +101,41 @@ async function cachedFetch<T>(key: string, task: () => Promise<T>, apiLabel: str
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
-  const source   = searchParams.get("source")   || "badsectorlabs"
-  const repoUrl  = searchParams.get("repoUrl")  || ""
+  const source = searchParams.get("source") || "badsectorlabs"
+  const repoUrl = searchParams.get("repoUrl") || ""
 
   let apiBase: string
-  let templatesPath: string
+  let blueprintsPath: string
   let ref: string
 
   if (source === "badsectorlabs") {
-    apiBase        = BADSL_BASE
-    templatesPath  = "templates"
-    ref            = BADSL_REF
+    apiBase = BADSL_BASE
+    blueprintsPath = "blueprints"
+    ref = BADSL_REF
   } else if (repoUrl) {
     const safe = assertSafeTemplateRepoUrl(repoUrl)
     if (!safe.ok) {
       return NextResponse.json({ error: safe.error }, { status: 400 })
     }
     apiBase = safe.apiBase
-    templatesPath  = searchParams.get("path") || "templates"
-    ref            = searchParams.get("ref")  || "main"
+    blueprintsPath = searchParams.get("path") || "blueprints"
+    ref = searchParams.get("ref") || "main"
   } else {
     return NextResponse.json({ error: "Unknown source; provide repoUrl" }, { status: 400 })
   }
 
   try {
     const apiLabel = repoApiLabel(apiBase)
-    const cacheKey = `${apiBase}|${templatesPath}|${ref}`
+    const cacheKey = `${apiBase}|${blueprintsPath}|${ref}`
 
-    // List top-level directories inside the templates folder
     const topTree = await cachedFetch(
       cacheKey,
-      () => listRepoDirectory(apiBase, templatesPath, ref),
+      () => listRepoDirectory(apiBase, blueprintsPath, ref),
       apiLabel,
     )
     const dirs = topTree.filter((i) => i.type === "tree")
 
-    // Fetch each directory's file listing concurrently but cap at 5 in-flight
-    // to avoid hammering the host API and triggering rate limits.
-    const templates = await pLimit(
+    const blueprints = await pLimit(
       dirs.map((dir) => async () => {
         const fileTree = await cachedFetch(
           `${cacheKey}|${dir.path}`,
@@ -156,11 +148,11 @@ export async function GET(request: NextRequest) {
       5,
     )
 
-    return NextResponse.json({ templates })
+    return NextResponse.json({ blueprints })
   } catch (err) {
     const msg = (err as Error).message
     return NextResponse.json(
-      { error: `Failed to fetch template source: ${msg}` },
+      { error: `Failed to fetch blueprint source: ${msg}` },
       { status: 502 },
     )
   }

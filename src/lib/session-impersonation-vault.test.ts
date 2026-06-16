@@ -34,14 +34,14 @@ describe("resolveSessionPayload impersonation vault", () => {
     const loginAt = new Date().toISOString()
     createSessionCredentials(
       sessionId,
-      "smeowden",
+      "adminuser",
       { apiKey: "admin-key", impersonationApiKey: "testuser-key" },
       60_000,
     )
 
     const resolved = resolveSessionPayload({
       sessionId,
-      username: "smeowden",
+      username: "adminuser",
       isAdmin: true,
       loginAt,
       impersonationUserId: "testuser",
@@ -60,14 +60,14 @@ describe("resolveSessionPayload impersonation vault", () => {
     const loginAt = new Date().toISOString()
     createSessionCredentials(
       sessionId,
-      "smeowden",
+      "adminuser",
       { apiKey: "admin-key", impersonationApiKey: "testuser-key" },
       60_000,
     )
 
     const resolved = resolveSessionPayload({
       sessionId,
-      username: "smeowden",
+      username: "adminuser",
       isAdmin: true,
       loginAt,
       impersonationUserId: "testuser",

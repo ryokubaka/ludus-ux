@@ -3,7 +3,7 @@
  *
  * Design:
  * - **Ansible log since op start** is the primary completion signal (Ludus/PB often lag).
- * - **PocketBase patch is best-effort** after ansible proves done — never blocks op success.
+ * - **PocketBase patch with retries** after ansible proves done — awaited before op success.
  * - **No passive pb-status reconcile** — status reads must not PATCH PB (avoids fighting in-flight ops).
  */
 
@@ -23,6 +23,12 @@ import { splitLeadingWallTimestamp } from "@/lib/log-line-timestamp"
 export const TESTING_OP_MIN_AGE_MS = 10_000
 
 const TAIL_ANCHOR_CHARS = 8192
+/** SSH suffix read for testing-op completion — must include full snapshot+block+recap runs. */
+const TESTING_OP_SSH_SLICE_BYTES = 2_097_152
+
+export function delayMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 export type TestingOpLogMarker = RangeOpLogMarker
 
@@ -38,7 +44,12 @@ export async function noteTestingOpLogMarker(
   rangeId: string,
 ): Promise<void> {
   const log = cappedLog ?? ""
-  const sshFileBytes = await readLudusAnsibleLogByteLength(rangeId)
+  let sshFileBytes: number | null = null
+  for (let i = 0; i < 3; i++) {
+    sshFileBytes = await readLudusAnsibleLogByteLength(rangeId)
+    if (sshFileBytes != null) break
+    if (i < 2) await delayMs(400)
+  }
   const marker: TestingOpLogMarker = {
     cappedLength: log.length,
     sshFileBytes,
@@ -69,28 +80,67 @@ export async function sliceLogSinceTestingOpMarker(
   const logs = await readLudusRangeLogsForReconcile(rangeId, opts)
   if (!logs?.trim()) {
     if (marker.sshFileBytes != null) {
-      return readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes)
+      return readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes, {
+        maxBytes: TESTING_OP_SSH_SLICE_BYTES,
+      })
     }
     return null
   }
 
-  if (marker.tailAnchor.length >= 128) {
-    const anchorIdx = logs.lastIndexOf(marker.tailAnchor)
-    if (anchorIdx >= 0) {
-      return logs.slice(anchorIdx + marker.tailAnchor.length)
+  let slice: string | null = null
+
+  // Prefer cappedLength when the HTTP tail grew — anchor lastIndexOf can match repeated
+  // ansible boilerplate from an earlier run and drop the new PLAY RECAP from the slice.
+  if (logs.length > marker.cappedLength) {
+    slice = logs.slice(marker.cappedLength)
+  }
+
+  if (!slice?.trim()) {
+    const currentBytes = await readLudusAnsibleLogByteLength(rangeId)
+    if (
+      marker.sshFileBytes != null &&
+      currentBytes != null &&
+      currentBytes > marker.sshFileBytes
+    ) {
+      slice = await readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes, {
+        maxBytes: TESTING_OP_SSH_SLICE_BYTES,
+      })
     }
   }
 
-  if (logs.length > marker.cappedLength) {
-    return logs.slice(marker.cappedLength)
+  if (!slice?.trim() && marker.tailAnchor.length >= 128) {
+    const searchFrom = Math.max(0, marker.cappedLength - marker.tailAnchor.length)
+    const anchorIdx = logs.indexOf(marker.tailAnchor, searchFrom)
+    if (anchorIdx >= 0) {
+      slice = logs.slice(anchorIdx + marker.tailAnchor.length)
+    } else {
+      const lastIdx = logs.lastIndexOf(marker.tailAnchor)
+      if (lastIdx >= searchFrom) {
+        slice = logs.slice(lastIdx + marker.tailAnchor.length)
+      }
+    }
   }
 
-  if (marker.sshFileBytes != null) {
-    const viaSsh = await readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes)
-    if (viaSsh?.trim()) return viaSsh
+  if (!slice?.trim() && marker.sshFileBytes != null) {
+    slice = await readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes, {
+      maxBytes: TESTING_OP_SSH_SLICE_BYTES,
+    })
   }
 
-  return null
+  if (!slice?.trim()) {
+    const currentBytes = await readLudusAnsibleLogByteLength(rangeId)
+    if (
+      currentBytes != null &&
+      marker.sshFileBytes != null &&
+      currentBytes > marker.sshFileBytes
+    ) {
+      slice = await readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes, {
+        maxBytes: TESTING_OP_SSH_SLICE_BYTES,
+      })
+    }
+  }
+
+  return slice?.trim() ? slice : null
 }
 
 export async function readTestingOpLogSlice(
@@ -99,10 +149,18 @@ export async function readTestingOpLogSlice(
   ludusApiKey: string,
 ): Promise<string | null> {
   const marker = getTestingOpLogMarker(opId)
+  if (marker?.sshFileBytes != null) {
+    const currentBytes = await readLudusAnsibleLogByteLength(rangeId)
+    if (currentBytes != null && currentBytes > marker.sshFileBytes) {
+      const viaSsh = await readLudusAnsibleLogSuffixFromByteOffset(rangeId, marker.sshFileBytes, {
+        maxBytes: TESTING_OP_SSH_SLICE_BYTES,
+      })
+      if (viaSsh?.trim()) return viaSsh
+    }
+  }
   if (marker) {
     return sliceLogSinceTestingOpMarker(rangeId, marker, { taskLudusApiKey: ludusApiKey })
   }
-  // No marker — fall back to full tail (container restart before v13 migration).
   return readLudusRangeLogsForReconcile(rangeId, { taskLudusApiKey: ludusApiKey })
 }
 
@@ -186,7 +244,7 @@ export function testingOpLogSliceProvesComplete(
   logSlice: string | null | undefined,
 ): boolean {
   if (!logSlice?.trim()) return false
-  return logSliceProvesOpComplete(opType, logSlice)
+  return logSliceProvesOpComplete(opType, normalizeLogBodies(logSlice))
 }
 
 /** Patch PocketBase after ansible success. Failure is logged only — never fails the op. */
@@ -208,6 +266,25 @@ export async function bestEffortSyncPbTestingEnabled(
   console.warn(
     `[testing-op] ${reason} PB PATCH ok but still testingEnabled=${after?.testingEnabled} for ${rangeId}`,
   )
+  return false
+}
+
+/** Retry PB sync — UI reads PB directly; await before marking op complete. */
+export async function syncPbTestingEnabledWithRetries(
+  rangeId: string,
+  enabled: boolean,
+  reason: string,
+  maxAttempts = 5,
+): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const ok = await bestEffortSyncPbTestingEnabled(
+      rangeId,
+      enabled,
+      `${reason} (attempt ${i + 1}/${maxAttempts})`,
+    )
+    if (ok) return true
+    if (i < maxAttempts - 1) await delayMs(800 * (i + 1))
+  }
   return false
 }
 
@@ -236,10 +313,16 @@ export function sliceCappedLogSinceMarkerForTest(
   logs: string,
   marker: TestingOpLogMarker,
 ): string | null {
-  if (marker.tailAnchor.length >= 128) {
-    const anchorIdx = logs.lastIndexOf(marker.tailAnchor)
-    if (anchorIdx >= 0) return logs.slice(anchorIdx + marker.tailAnchor.length)
+  if (logs.length > marker.cappedLength) {
+    const viaCap = logs.slice(marker.cappedLength)
+    if (viaCap.trim()) return viaCap
   }
-  if (logs.length > marker.cappedLength) return logs.slice(marker.cappedLength)
+  if (marker.tailAnchor.length >= 128) {
+    const searchFrom = Math.max(0, marker.cappedLength - marker.tailAnchor.length)
+    const anchorIdx = logs.indexOf(marker.tailAnchor, searchFrom)
+    if (anchorIdx >= 0) return logs.slice(anchorIdx + marker.tailAnchor.length)
+    const lastIdx = logs.lastIndexOf(marker.tailAnchor)
+    if (lastIdx >= searchFrom) return logs.slice(lastIdx + marker.tailAnchor.length)
+  }
   return null
 }

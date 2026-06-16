@@ -371,14 +371,25 @@ export function TestingPageClient() {
 
   const refreshRangeStatus = useCallback(
     (rangeId: string) =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
+      queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
+    [queryClient, scopeTag],
+  )
+
+  /** Refetch PB toggle state + LUX activity log after a testing op settles. */
+  const refetchTestingPageData = useCallback(
+    async (rangeId: string) => {
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
+        queryClient.refetchQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) }),
+      ])
+    },
     [queryClient, scopeTag],
   )
 
   const refreshAllRangeStatusDots = useCallback(() => {
     for (const r of contextRanges) {
       if (r.rangeID) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID) })
+        void queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID) })
       }
     }
   }, [contextRanges, queryClient, scopeTag])
@@ -494,6 +505,17 @@ export function TestingPageClient() {
   // true while the initial pollOp is in flight (prevents accidental clicks)
   const [opInitialising, setOpInitialising] = useState(false)
 
+  /** Op finished — refetch PB toggle + activity log, then clear local op lock. */
+  const settleTestingOp = useCallback(
+    async (rangeId: string) => {
+      await refetchTestingPageData(rangeId)
+      refreshAllRangeStatusDots()
+      await refreshAllowedDomains(rangeId)
+      setActiveOp(null)
+    },
+    [refetchTestingPageData, refreshAllRangeStatusDots, refreshAllowedDomains],
+  )
+
   // Elapsed-time ticker state (effect is placed after opInProgress is derived below)
   const [elapsedSec, setElapsedSec] = useState(0)
 
@@ -513,7 +535,10 @@ export function TestingPageClient() {
   // Ref for tracking activeOp transitions — declared here, effect added below
   // (after refreshRangeStatus is defined) to avoid "used before declaration" errors.
   const prevActiveOpRef = useRef(activeOp)
+  const activeOpRef = useRef(activeOp)
   const lastOpErrorToastIdRef = useRef<string | null>(null)
+
+  useEffect(() => { activeOpRef.current = activeOp }, [activeOp])
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const rangeState   = status?.rangeState ?? ""
@@ -564,17 +589,16 @@ export function TestingPageClient() {
 
   // ── Fetch helpers ─────────────────────────────────────────────────────────
 
-  // When activeOp transitions from a set value to null (meaning the op just
-  // completed and getActiveRangeOp no longer returns it), refresh the range
-  // status immediately so isEnabled / button labels update without a manual refresh.
+  // When activeOp clears after a terminal op, refetch in case settleTestingOp was skipped.
   useEffect(() => {
     const prev = prevActiveOpRef.current
     prevActiveOpRef.current = activeOp
-    if (prev && !activeOp && selectedRangeId) {
-      void refreshRangeStatus(selectedRangeId)
-      void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, selectedRangeId) })
+    const prevTerminal =
+      prev?.status === "completed" || prev?.status === "error"
+    if (prev && !activeOp && prevTerminal && selectedRangeId) {
+      void refetchTestingPageData(selectedRangeId)
     }
-  }, [activeOp, selectedRangeId, refreshRangeStatus, queryClient, scopeTag])
+  }, [activeOp, selectedRangeId, refetchTestingPageData])
 
   /**
    * Poll the server for the current DB op for `rangeId`.
@@ -592,12 +616,19 @@ export function TestingPageClient() {
       const { op } = await res.json() as { op: typeof activeOp | null }
 
       setOpInitialising(false)
-      setActiveOp(op)
 
       if (!op) {
+        if (
+          activeOpRef.current?.status === "pending" ||
+          activeOpRef.current?.status === "running"
+        ) {
+          await settleTestingOp(rangeId)
+        }
         lastOpErrorToastIdRef.current = null
         return
       }
+
+      setActiveOp(op)
 
       if (op.status === "error" && lastOpErrorToastIdRef.current !== op.id) {
         lastOpErrorToastIdRef.current = op.id
@@ -610,10 +641,7 @@ export function TestingPageClient() {
       }
 
       if (op.status === "completed" || op.status === "error") {
-        // Op finished — refresh range status so button label / badge updates
-        await refreshRangeStatus(rangeId)
-        refreshAllRangeStatusDots()
-        void queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
+        await settleTestingOp(rangeId)
       } else {
         // Op still in flight — ensure the log stream is running so the user
         // sees live output.  Use the ref to avoid circular useCallback deps.
@@ -626,7 +654,7 @@ export function TestingPageClient() {
       setOpInitialising(false)
       // Non-fatal; next poll will retry
     }
-  }, [refreshRangeStatus, refreshAllRangeStatusDots, queryClient, toast, scopeTag])
+  }, [settleTestingOp, toast])
 
   // ── Log streaming ─────────────────────────────────────────────────────────
 
@@ -769,6 +797,20 @@ export function TestingPageClient() {
     setActiveOp(data.op)
     setToggling(false)
 
+    if (data.op?.status === "completed" || data.op?.status === "error") {
+      await settleTestingOp(selectedRangeId)
+      toast({
+        title: data.op.status === "completed"
+          ? (isEnabled ? "Testing mode off" : "Testing mode on")
+          : "Testing operation failed",
+        description: data.op.status === "completed"
+          ? "Range state updated."
+          : "Check Range Logs for details.",
+        variant: data.op.status === "error" ? "destructive" : "default",
+      })
+      return
+    }
+
     toast({
       title: isEnabled ? "Reverting VMs…" : "Snapshotting VMs…",
       description: "Proxmox is working. The UI will watch for completion automatically.",
@@ -809,7 +851,7 @@ export function TestingPageClient() {
           setToggling(false)
           setOpInitialising(false)
           lastOpErrorToastIdRef.current = null
-          await Promise.all([pollOp(rangeId), refreshRangeStatus(rangeId)])
+          await Promise.all([pollOp(rangeId), refetchTestingPageData(rangeId)])
           await refreshAllRangeStatusDots()
           toast({
             title: "UI unlocked",

@@ -6,7 +6,7 @@
  * Workflow:
  *  1. Recursively list ALL files under the template path (blobs only, all
  *     subdirs included via recursive=true + pagination).
- *  2. Fetch each file's raw content from GitLab.
+ *  2. Fetch each file's raw content from the remote repository.
  *  3. Discover the Ludus packer templates directory on the server.
  *  4. Create the full directory tree on the server (iso/, ansible/, etc.).
  *  5. Write each file preserving its relative path within the template.
@@ -18,7 +18,7 @@
  *     templates: {
  *       name: string;          // directory name, used as the template sub-dir
  *       path: string;          // relative path in the repo, e.g. "templates/debian10"
- *       apiBase: string;       // GitLab repository API base URL
+ *       apiBase: string;       // GitLab or GitHub repository API base URL
  *       ref:     string;       // git ref (branch/tag/sha)
  *     }[]
  *   }
@@ -32,6 +32,7 @@ import { logAndSafeError } from "@/lib/safe-client-error"
 import { sshExec } from "@/lib/goad-ssh"
 import { getSessionFromRequest } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
+import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
@@ -40,18 +41,6 @@ interface TemplateSpec {
   path:    string
   apiBase: string
   ref:     string
-}
-
-interface GitLabTreeItem {
-  name: string
-  type: "tree" | "blob"
-  path: string
-}
-
-async function fetchRaw(url: string): Promise<string> {
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`)
-  return res.text()
 }
 
 /** ──────────────────────────────────────────────────────────────────────────
@@ -103,21 +92,6 @@ async function findTemplatesDir(): Promise<string> {
   return cachedTemplatesDir
 }
 
-/** Collect ALL blobs under a GitLab path recursively, handling pagination. */
-async function fetchAllBlobs(apiBase: string, path: string, ref: string): Promise<GitLabTreeItem[]> {
-  const blobs: GitLabTreeItem[] = []
-  let page = 1
-  while (true) {
-    const url = `${apiBase}/tree?path=${encodeURIComponent(path)}&ref=${ref}&per_page=100&recursive=true&page=${page}`
-    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
-    if (!res.ok) throw new Error(`Could not list template tree (HTTP ${res.status})`)
-    const items = (await res.json()) as GitLabTreeItem[]
-    blobs.push(...items.filter((i) => i.type === "blob"))
-    if (items.length < 100) break  // reached the last page
-    page++
-  }
-  return blobs
-}
 
 async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
@@ -129,8 +103,8 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
   const safeApiBase = safe.apiBase
 
   // ── Step 1: Recursively list ALL files in the template directory ──────────
-  // Using recursive=true ensures subdirs like iso/, ansible/, scripts/ are included.
-  const blobs = await fetchAllBlobs(safeApiBase, templatePath, ref)
+  // Using recursive listing ensures subdirs like iso/, ansible/, scripts/ are included.
+  const blobs = await fetchAllRepoBlobs(safeApiBase, templatePath, ref)
 
   if (blobs.length === 0) {
     throw new Error(`No files found in ${templatePath}`)
@@ -145,8 +119,7 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     const relativePath = blob.path.startsWith(prefix)
       ? blob.path.slice(prefix.length)
       : blob.name
-    const rawUrl = `${safeApiBase}/files/${encodeURIComponent(blob.path)}/raw?ref=${ref}`
-    const content = await fetchRaw(rawUrl)
+    const content = await fetchRepoRawFile(safeApiBase, blob.path, ref)
     files.push({ relativePath, b64: Buffer.from(content).toString("base64") })
   }
 

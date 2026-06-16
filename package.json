@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -37,7 +37,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.2.0",
     "lucide-react": "^0.400.0",
     "monaco-editor": "^0.46.0",
     "next": "^16.2.7",
@@ -46,6 +46,7 @@
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.12.7",
     "ssh2": "^1.15.0",
+    "tar": "^7.5.11",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
     "ws": "^8.21.0"
@@ -55,10 +56,9 @@
     "dompurify": ">=3.3.2",
     "cross-spawn": ">=7.0.5",
     "glob": ">=10.5.0",
-    "tar": ">=7.5.11",
     "@eslint/config-array": {
       "minimatch": {
-        "brace-expansion": "1.1.12"
+        "brace-expansion": "1.1.13"
       }
     },
     "next": {
@@ -74,6 +74,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/ssh2": "^1.11.19",
+    "@types/tar": "^6.1.13",
     "@types/ws": "^8.5.13",
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",

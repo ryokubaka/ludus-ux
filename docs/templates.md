@@ -58,7 +58,7 @@ Logs are written under `/opt/ludus/users/<username>/packer/` on the Ludus host.
 
 The collapsible **Add Templates from Source** panel installs template directories that are not bundled with Ludus:
 
-1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom GitLab repo you configure).
+1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom git repo you configure).
 2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files under the server templates directory, runs `ludus templates add -d …`, and registers the template in Ludus.
 
 After a successful add, the template appears as **Not Built** until you run **Build**.

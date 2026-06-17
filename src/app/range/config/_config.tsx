@@ -5,7 +5,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
-import { keepPreviousData } from "@tanstack/react-query"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -121,7 +120,7 @@ export function RangeConfigPageClient() {
   // range reassignment). That 404 is both noisy in devtools and misleading
   // since the user actually has other ranges — the selector just hasn't
   // hydrated yet. Empty-state UI below handles `ranges.length === 0`.
-  const { data: cachedConfig, isLoading: loading } = useQuery({
+  const { data: cachedConfig, isLoading: loading, isFetching } = useQuery({
     queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId),
     queryFn: async () => {
       const result = await ludusApi.getRangeConfig(selectedRangeId ?? undefined)
@@ -133,20 +132,31 @@ export function RangeConfigPageClient() {
     },
     enabled: !!selectedRangeId,
     staleTime: STALE.long,
-    placeholderData: keepPreviousData,
   })
+
+  // Clear editor + deploy UI when switching ranges so keepPreviousData-style stale
+  // YAML from the prior range cannot briefly appear under the new range key.
+  useEffect(() => {
+    lastSyncedRangeRef.current = null
+    setConfig("")
+    setOriginalConfig("")
+    setNetworkRules([])
+    stopStreaming()
+    setDeploying(false)
+    setShowLogs(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRangeId])
 
   // Sync editor ONLY on initial load or when the active range changes.
   // Background refetches must NOT overwrite what the user has typed or already saved —
   // use lastSyncedRangeRef to track which range is currently loaded in the editor.
   useEffect(() => {
-    if (!cachedConfig || typeof cachedConfig !== "string") return
-    const rangeKey = selectedRangeId ?? "default"
-    if (lastSyncedRangeRef.current === rangeKey) return
+    if (!selectedRangeId || !cachedConfig || typeof cachedConfig !== "string") return
+    if (lastSyncedRangeRef.current === selectedRangeId) return
     setConfig(cachedConfig)
     setOriginalConfig(cachedConfig)
     setNetworkRules(extractNetworkRules(cachedConfig))
-    lastSyncedRangeRef.current = rangeKey
+    lastSyncedRangeRef.current = selectedRangeId
   }, [cachedConfig, selectedRangeId])
 
   // On mount: check if a deployment is already running so navigating
@@ -419,8 +429,8 @@ export function RangeConfigPageClient() {
             <Button variant="ghost" size="icon" onClick={() => {
               lastSyncedRangeRef.current = null // allow the incoming data to replace editor content
               queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId) })
-            }} disabled={loading}>
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            }} disabled={isFetching}>
+              <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             </Button>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/50">
@@ -457,7 +467,7 @@ export function RangeConfigPageClient() {
           <CardContent>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {ALL_TAGS.map((tag) => (
-                <div
+                <label
                   key={tag}
                   className={cn(
                     "flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors",
@@ -465,7 +475,6 @@ export function RangeConfigPageClient() {
                       ? "border-primary bg-primary/10"
                       : "border-border hover:border-primary/50"
                   )}
-                  onClick={() => toggleTag(tag)}
                 >
                   <Checkbox
                     checked={selectedTags.includes(tag)}
@@ -478,7 +487,7 @@ export function RangeConfigPageClient() {
                       {TAG_DESCRIPTIONS[tag] || ""}
                     </p>
                   </div>
-                </div>
+                </label>
               ))}
             </div>
             {selectedTags.length > 0 && (

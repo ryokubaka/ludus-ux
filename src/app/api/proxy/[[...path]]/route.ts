@@ -9,6 +9,7 @@ import {
   ludusProxyEvent,
 } from "@/lib/lux-api-audit"
 import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
+import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -32,9 +33,8 @@ async function handler(
   }
 
   const { path: pathSegments } = await params
-  // Build the Ludus API path. Optional catch-all: path may be undefined (root /).
   const segments = pathSegments || []
-  const path = segments.length > 0 ? "/" + segments.join("/") : "/"
+  const path = normalizeLudusProxyPath(segments)
 
   const queryString = request.nextUrl.searchParams.toString()
   const fullPath = queryString ? `${path}?${queryString}` : path

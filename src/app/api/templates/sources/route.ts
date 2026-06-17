@@ -3,7 +3,7 @@
  *
  * Proxies the GitLab/GitHub tree API server-side to avoid CORS issues and to add
  * light response caching.  The default source is the official badsectorlabs
- * ludus-source-bsl repository.  A custom GitLab repo URL can be provided via the
+ * ludus-source-bsl repository.  A custom git repo URL can be provided via the
  * `repoUrl` query parameter.
  *
  * Response: { templates: { name: string; files: string[] }[] }
@@ -11,7 +11,13 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
-import { isGitHubApiBase, listRepoDirectory } from "@/lib/template-repo-client"
+import {
+  fetchLudusTemplateCatalog,
+  fetchLudusTemplateCatalogBySourceId,
+  resolveBadslCatalogMeta,
+} from "@/lib/ludus-source-catalog"
+import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
 
 const BADSL_REF     = "main"
@@ -107,13 +113,18 @@ async function cachedFetch<T>(key: string, task: () => Promise<T>, apiLabel: str
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const source   = searchParams.get("source")   || "badsectorlabs"
+  const sourceId = searchParams.get("sourceId") || ""
   const repoUrl  = searchParams.get("repoUrl")  || ""
 
   let apiBase: string
   let templatesPath: string
   let ref: string
 
-  if (source === "badsectorlabs") {
+  if (source === "registered" && sourceId) {
+    apiBase = BADSL_BASE
+    templatesPath = "templates"
+    ref = searchParams.get("ref") || BADSL_REF
+  } else if (source === "badsectorlabs") {
     apiBase        = BADSL_BASE
     templatesPath  = "templates"
     ref            = BADSL_REF
@@ -130,6 +141,36 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const { apiKey } = await requireSourcesSession(request)
+    if (apiKey) {
+      if (source === "registered" && sourceId) {
+        const ludusTemplates = await fetchLudusTemplateCatalogBySourceId(
+          apiKey,
+          sourceId,
+          ref,
+          apiBase,
+        )
+        if (ludusTemplates && ludusTemplates.length > 0) {
+          return NextResponse.json({
+            templates: ludusTemplates,
+            catalogSource: "ludus",
+            registeredSourceId: sourceId,
+          })
+        }
+      } else {
+        const gitUrl =
+          source === "badsectorlabs"
+            ? resolveBadslCatalogMeta().gitUrl
+            : apiBaseToGitUrl(apiBase)
+        if (gitUrl) {
+          const ludusTemplates = await fetchLudusTemplateCatalog(apiKey, gitUrl, ref, apiBase)
+          if (ludusTemplates && ludusTemplates.length > 0) {
+            return NextResponse.json({ templates: ludusTemplates, catalogSource: "ludus" })
+          }
+        }
+      }
+    }
+
     const apiLabel = repoApiLabel(apiBase)
     const cacheKey = `${apiBase}|${templatesPath}|${ref}`
 
@@ -156,7 +197,7 @@ export async function GET(request: NextRequest) {
       5,
     )
 
-    return NextResponse.json({ templates })
+    return NextResponse.json({ templates, catalogSource: "github" })
   } catch (err) {
     const msg = (err as Error).message
     return NextResponse.json(

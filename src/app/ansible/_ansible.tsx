@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -32,6 +32,13 @@ import type { AnsibleItem } from "@/lib/types"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
+import {
+  ansibleMessageSummary,
+  collectionRemoveUnavailableMessage,
+  isCollectionRemoveMisroute,
+  ludusSupportsCollectionRemove,
+} from "@/lib/ludus-version"
+import { AnsibleAddFromSourcePanel } from "./add-from-source-panel"
 
 export function AnsiblePageClient() {
   const { toast } = useToast()
@@ -57,6 +64,22 @@ export function AnsiblePageClient() {
     },
     staleTime: STALE.long,
   })
+
+  const { data: versionData } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    staleTime: STALE.long,
+  })
+
+  const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
+  const collectionRemoveSupported = useMemo(
+    () => !ludusVersion || ludusSupportsCollectionRemove(ludusVersion),
+    [ludusVersion],
+  )
+  const collectionRemoveKnownUnsupported = Boolean(ludusVersion) && !ludusSupportsCollectionRemove(ludusVersion)
 
   const roles = ansibleData?.roles ?? []
   const collections = ansibleData?.collections ?? []
@@ -165,8 +188,50 @@ export function AnsiblePageClient() {
     setAdding(false)
   }
 
+  const handleRemoveCollection = async (name: string) => {
+    if (collectionRemoveKnownUnsupported) {
+      toast({
+        variant: "destructive",
+        title: "Collection removal unavailable",
+        description: collectionRemoveUnavailableMessage(),
+      })
+      return
+    }
+    if (!confirm(`Remove collection "${name}"?`)) return
+    const result = await ludusApi.removeCollection(name)
+    if (result.error) {
+      if (isCollectionRemoveMisroute(result.error, result.status)) {
+        toast({
+          variant: "destructive",
+          title: "Collection removal unavailable",
+          description: collectionRemoveUnavailableMessage(),
+        })
+        return
+      }
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: result.error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => invalidateAnsible(),
+        })
+      ) {
+        return
+      }
+      toast({
+        variant: "destructive",
+        title: "Error removing collection",
+        description: ansibleMessageSummary(result.error),
+      })
+    } else {
+      toast({ title: "Collection removed" })
+      invalidateAnsible()
+    }
+  }
+
   return (
     <div className="space-y-6">
+      <AnsibleAddFromSourcePanel onChanged={invalidateAnsible} />
       <Tabs defaultValue="roles">
         <div className="flex items-center justify-between">
           <TabsList>
@@ -265,6 +330,14 @@ export function AnsiblePageClient() {
             </Button>
           </div>
 
+          {collectionRemoveKnownUnsupported && (
+            <p className="text-xs text-muted-foreground mb-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+              Collection removal requires Ludus 2.2.0+ (connected server: {ludusVersion}). Upgrade Ludus to uninstall
+              collections from this page, or use{" "}
+              <code className="text-primary">ludus ansible collection rm &lt;fqcn&gt;</code> on the host.
+            </p>
+          )}
+
           {loading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -285,6 +358,9 @@ export function AnsiblePageClient() {
                       <tr className="bg-muted/50 border-b border-border">
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Collection Name</th>
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Version</th>
+                        {collectionRemoveSupported && (
+                          <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
@@ -299,6 +375,13 @@ export function AnsiblePageClient() {
                           <td className="p-3">
                             <code className="font-mono text-xs text-muted-foreground">{cVersion || "latest"}</code>
                           </td>
+                          {collectionRemoveSupported && (
+                            <td className="p-3 text-right">
+                              <Button size="icon-sm" variant="ghost" onClick={() => handleRemoveCollection(cName)}>
+                                <Trash2 className="h-3 w-3 text-status-error" />
+                              </Button>
+                            </td>
+                          )}
                         </tr>
                         )
                       })}

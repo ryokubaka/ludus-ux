@@ -228,10 +228,11 @@ export function GroupsPageClient() {
   )
 
   const { data: pickerUsers = [], isLoading: loadingPickerUsers } = useQuery({
-    queryKey: queryKeys.users(scopeTag),
+    queryKey: ["ludus", "share-picker", scopeTag],
     queryFn: async () => {
-      const r = await ludusApi.listAllUsers().catch(() => ludusApi.listUsers())
-      return asUserObjectArray(r.data)
+      const r = await ludusApi.fetchSharePickerDirectory()
+      if (r.error) throw new Error(r.error)
+      return asUserObjectArray(r.data?.users)
     },
     enabled: !!addUserDialog,
     staleTime: STALE.long,

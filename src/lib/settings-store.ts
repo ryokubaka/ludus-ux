@@ -32,6 +32,10 @@ export interface RuntimeSettings {
   goadEnabled: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
   rootApiKey: string
+  /** Ludus admin user API key for global source blueprint install/share (auto-set on first admin source install). */
+  blueprintOperatorApiKey: string
+  /** Ludus userID of the admin who installed global source blueprints. */
+  blueprintOperatorUserId: string
   /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
   proxmoxSshUser: string
   /** Proxmox/root SSH password — used for VM console (SPICE) access. */
@@ -52,7 +56,11 @@ export interface RuntimeSettings {
 // (cached module state caused stale ludusUrl / admin URL until restart).
 
 /** Keys whose SQLite `value` column stores `enc:v1:` ciphertext (decrypted only server-side). */
-const SETTINGS_SECRET_KEYS: Array<keyof RuntimeSettings> = ["proxmoxSshPassword", "rootApiKey"]
+const SETTINGS_SECRET_KEYS: Array<keyof RuntimeSettings> = [
+  "proxmoxSshPassword",
+  "rootApiKey",
+  "blueprintOperatorApiKey",
+]
 
 function appSecretForSettingsAtRest(): string {
   return process.env.APP_SECRET || "change-me-in-production-32-chars!!"
@@ -67,6 +75,10 @@ function defaults(): RuntimeSettings {
     goadPath: process.env.GOAD_PATH || "/opt/GOAD",
     goadEnabled: process.env.ENABLE_GOAD !== "false",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
+    blueprintOperatorApiKey: normalizeLudusApiKeyInput(
+      process.env.LUX_LUDUS_BLUEPRINT_OPERATOR_API_KEY,
+    ),
+    blueprintOperatorUserId: "",
     proxmoxSshUser: process.env.PROXMOX_SSH_USER || "root",
     proxmoxSshPassword: process.env.PROXMOX_SSH_PASSWORD || "",
     proxmoxSshKeyPath: "",
@@ -83,6 +95,8 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "goadPath",
   "goadEnabled",
   "rootApiKey",
+  "blueprintOperatorApiKey",
+  "blueprintOperatorUserId",
   "proxmoxSshUser",
   "proxmoxSshPassword",
   "proxmoxSshKeyPath",

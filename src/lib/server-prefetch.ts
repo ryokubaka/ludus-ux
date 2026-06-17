@@ -32,8 +32,6 @@ import type {
 
   AnsibleItem,
 
-  BlueprintListItem,
-
   GroupObject,
 
   LogHistoryEntry,
@@ -70,8 +68,6 @@ import {
 
   cachedAdminData,
 
-  cachedBlueprints,
-
   cachedGroups,
 
   cachedLudusVersion,
@@ -92,6 +88,8 @@ import {
 
 } from "@/lib/cached-ludus-fetch"
 
+import { isHttp404Error, listSources } from "@/lib/ludus-source-client"
+
 // ── L1 SWR caches (non-blocking peek; fetchers populate L2 via cached-ludus-fetch) ──
 
 
@@ -105,8 +103,6 @@ const usersCache = new SWRCache<{ users: UserObject[]; rangeMap: Record<string, 
 const templatesCache = new SWRCache<TemplateObject[]>(60_000)
 
 const groupsCache = new SWRCache<GroupObject[]>(60_000)
-
-const blueprintsCache = new SWRCache<BlueprintListItem[]>(60_000)
 
 const ansibleCache = new SWRCache<AnsibleItem[]>(60_000)
 const adminDataCache = new SWRCache<AdminData>(30_000)
@@ -323,25 +319,9 @@ export async function prefetchBlueprintsData(session: ResolvedSession | null) {
 
   const queryClient = new QueryClient()
 
-  try {
-
-    if (!session) return dehydrate(queryClient)
-
-
-
-    const scopeTag = effectiveScopeTagFromSession(session)
-
-    const effectiveApiKey = session.impersonationApiKey || session.apiKey
-
-    const blueprints = blueprintsCache.peek(effectiveApiKey, () =>
-
-      cachedBlueprints(effectiveApiKey, scopeTag),
-
-    )
-
-    if (blueprints) queryClient.setQueryData(queryKeys.blueprints(scopeTag), blueprints)
-
-  } catch { /* best-effort */ }
+  // Blueprint visibility is ACL-driven and changes when admins install/share source
+  // catalogs — skip SSR hydration so the client always fetches live Ludus data.
+  void session
 
   return dehydrate(queryClient)
 
@@ -369,7 +349,12 @@ export async function prefetchAnsibleData(session: ResolvedSession | null) {
 
     )
 
-    if (ansible) queryClient.setQueryData(queryKeys.ansible(scopeTag), ansible)
+    if (ansible) {
+      queryClient.setQueryData(queryKeys.ansible(scopeTag), {
+        roles: ansible.filter((i) => (i.type || i.Type) === "role"),
+        collections: ansible.filter((i) => (i.type || i.Type) === "collection"),
+      })
+    }
 
   } catch { /* best-effort */ }
 
@@ -528,6 +513,40 @@ export async function prefetchTestingData(session: ResolvedSession | null) {
 export async function prefetchRangeConfigData(session: ResolvedSession | null) {
 
   return prefetchRangePageData(session, ["config", "status"])
+
+}
+
+
+
+export async function prefetchSourcesData(session: ResolvedSession | null) {
+
+  const queryClient = new QueryClient()
+
+  try {
+
+    if (!session) return dehydrate(queryClient)
+
+    const scopeTag = effectiveScopeTagFromSession(session)
+
+    const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    try {
+
+      const sources = await listSources(effectiveApiKey)
+
+      queryClient.setQueryData(queryKeys.sources(scopeTag), { sources, available: true })
+
+    } catch (err) {
+
+      if (!isHttp404Error(err)) throw err
+
+      queryClient.setQueryData(queryKeys.sources(scopeTag), { sources: [], available: false })
+
+    }
+
+  } catch { /* best-effort */ }
+
+  return dehydrate(queryClient)
 
 }
 

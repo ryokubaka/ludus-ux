@@ -3,6 +3,7 @@ import "server-only"
 import { createHash } from "crypto"
 import { cacheLife, cacheTag } from "next/cache"
 import { ludusRequest } from "@/lib/ludus-client"
+import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
 import { buildAdminData } from "@/lib/admin-data"
 import { dedupeVMs } from "@/lib/dashboard-vm-merge"
 import {
@@ -91,7 +92,7 @@ export async function cachedBlueprints(apiKey: string, scopeTag: string) {
   tagLudusResource(scopeTag, "blueprints")
   cacheLife({ revalidate: 60 })
   const r = await ludusRequest<unknown>("/blueprints", { apiKey })
-  return extractArray<BlueprintListItem>(r.data)
+  return normalizeBlueprintList(r.data)
 }
 
 export async function cachedAnsible(apiKey: string, scopeTag: string) {

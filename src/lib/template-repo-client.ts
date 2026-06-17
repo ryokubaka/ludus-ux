@@ -31,6 +31,20 @@ export function isGitHubApiBase(apiBase: string): boolean {
   return apiBase.includes("api.github.com/repos/")
 }
 
+/** Map a repository API base URL to a git clone URL for Ludus Sources registration. */
+export function apiBaseToGitUrl(apiBase: string): string | null {
+  if (isGitHubApiBase(apiBase)) {
+    const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)
+    if (match) return `https://github.com/${match[1]}`
+  }
+  const gitlabMatch = /^(https:\/\/[^/]+)\/api\/v4\/projects\/(.+)$/.exec(apiBase.trim())
+  if (gitlabMatch) {
+    const project = decodeURIComponent(gitlabMatch[2])
+    return `${gitlabMatch[1]}/${project}`
+  }
+  return null
+}
+
 /** Raw file URL for GitHub repos (apiBase = https://api.github.com/repos/owner/repo). */
 export function githubRawFileUrl(apiBase: string, path: string, ref: string): string {
   const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)

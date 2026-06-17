@@ -16,6 +16,7 @@ import {
   ludusSnapshotCreateBody,
   snapshotsRangeQuery,
 } from "./ludus-snapshot-payload"
+import { ludusBlueprintPath } from "./blueprint-api-path"
 import {
   readImpersonationHeadersFromSessionStorage,
 } from "./impersonation-headers"
@@ -227,8 +228,43 @@ export const del = <T>(path: string, body?: unknown, opts?: Parameters<typeof ap
 
 // ── Ludus API wrappers (Ludus Server v2.x paths) ─────────────────────────────
 
-/** Same shape as `apiRequest<T>` — short-circuit `{ error, status }` branches still allow `result.data` in callers. */
 type LudusEnvelope<T = unknown> = { data?: T; error?: string; status: number }
+
+async function postBlueprintShare(
+  blueprintId: string,
+  body: { userIDs?: string[]; groupNames?: string[] },
+): Promise<LudusEnvelope<{
+  ok?: boolean
+  success?: string[]
+  errors?: Array<{ item: string; reason: string }>
+  httpError?: string
+}>> {
+  try {
+    const response = await fetch("/api/blueprints/share", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+      body: JSON.stringify({
+        blueprintId,
+        userIDs: body.userIDs ?? [],
+        groupNames: body.groupNames ?? [],
+      }),
+    })
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean
+      success?: string[]
+      errors?: Array<{ item: string; reason: string }>
+      error?: string
+      httpError?: string
+    } | null
+    if (!response.ok) {
+      return { error: data?.error || `HTTP ${response.status}`, status: response.status, data: data ?? undefined }
+    }
+    return { data: data ?? undefined, status: response.status }
+  } catch (err) {
+    return { error: (err as Error).message, status: 0 }
+  }
+}
 
 export const ludusApi = {
   // Version — GET /
@@ -244,6 +280,35 @@ export const ludusApi = {
   // All users — GET /user/all (admin only)
   listAllUsers: () =>
     get<import("./types").UserObject[]>("/user/all"),
+
+  /** Ludus user + group directory for share pickers (server uses admin/operator key when needed). */
+  fetchSharePickerDirectory: async (): Promise<
+    LudusEnvelope<{ users: import("./types").UserObject[]; groups: string[] }>
+  > => {
+    try {
+      const response = await fetch("/api/ludus/share-picker", {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      const data = (await response.json().catch(() => null)) as {
+        users?: import("./types").UserObject[]
+        groups?: string[]
+        error?: string
+      } | null
+      if (!response.ok) {
+        return { error: data?.error || `HTTP ${response.status}`, status: response.status }
+      }
+      return {
+        data: {
+          users: Array.isArray(data?.users) ? data.users : [],
+          groups: Array.isArray(data?.groups) ? data.groups : [],
+        },
+        status: response.status,
+      }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
 
   // Range — GET /range?rangeID=…  (bare GET /range returns 404 on several Ludus v2 builds)
   getRangeStatus: (rangeId?: string): Promise<LudusEnvelope<import("./types").RangeObject>> => {
@@ -466,9 +531,11 @@ export const ludusApi = {
     post("/ansible/role", { role: name, action: "install", ...(version ? { version } : {}) }),
   removeRole: (name: string) =>
     post("/ansible/role", { role: name, action: "remove" }),
-  // Ludus v2 collection endpoint: POST /ansible/collection — field "collection" (no action field)
+  // Ludus 2.2.0+: POST /ansible/collection — action "install" (default) or "remove"
   addCollection: (name: string, version?: string) =>
-    post("/ansible/collection", { collection: name, ...(version ? { version } : {}) }),
+    post("/ansible/collection", { collection: name, action: "install", ...(version ? { version } : {}) }),
+  removeCollection: (name: string) =>
+    post("/ansible/collection", { collection: name, action: "remove" }),
 
   // Wireguard — GET /user/wireguard (session / impersonation vault key)
   getUserWireguard: () =>
@@ -535,38 +602,60 @@ export const ludusApi = {
     description?: string
   }) => post("/blueprints/from-range", body),
   getBlueprintDetail: (id: string) =>
-    get<import("./types").BlueprintDetail>(`/blueprints/${encodeURIComponent(id)}`),
-  getBlueprintConfig: (id: string) => get<{ result: string }>(`/blueprints/${id}/config`),
+    get<import("./types").BlueprintDetail>(ludusBlueprintPath(id)),
+  getBlueprintConfig: (id: string) => get<{ result: string }>(ludusBlueprintPath(id, "config")),
   installBlueprintDependencies: (
     id: string,
     body?: { global?: boolean; forceRoles?: boolean },
   ) =>
     post<import("./types").BlueprintInstallDepsResponse>(
-      `/blueprints/${encodeURIComponent(id)}/install`,
+      ludusBlueprintPath(id, "install"),
       body ?? { forceRoles: true },
     ),
   /** Ludus expects JSON `{ config: "<yaml string>" }`. */
   updateBlueprintConfig: (id: string, config: string) =>
-    put(`/blueprints/${id}/config`, { config }),
+    put(ludusBlueprintPath(id, "config"), { config }),
   applyBlueprint: (id: string, rangeId?: string) => {
     const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
-    return post(`/blueprints/${id}/apply${q}`)
+    return post(`${ludusBlueprintPath(id, "apply")}${q}`)
   },
-  copyBlueprint: (id: string) =>
-    post(`/blueprints/${id}/copy`),
-  deleteBlueprint: (id: string) => del(`/blueprints/${id}`),
+  copyBlueprint: (id: string) => post(ludusBlueprintPath(id, "copy")),
+  deleteBlueprint: async (id: string, aliasIds?: string[]) => {
+    try {
+      const response = await fetch("/api/blueprints/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        credentials: "include",
+        body: JSON.stringify({
+          blueprintId: id,
+          aliasIds: aliasIds?.length ? aliasIds : undefined,
+        }),
+      })
+      const data = (await response.json().catch(() => null)) as {
+        error?: string
+        message?: string
+      } | null
+      if (!response.ok) {
+        return { error: data?.error || `HTTP ${response.status}`, status: response.status }
+      }
+      return { data, status: response.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+  shareBlueprint: postBlueprintShare,
   shareBlueprintWithUsers: (id: string, userIDs: string[]) =>
-    post(`/blueprints/${id}/share/users`, { userIDs }),
+    postBlueprintShare(id, { userIDs }),
   shareBlueprintWithGroups: (id: string, groupNames: string[]) =>
-    post(`/blueprints/${id}/share/groups`, { groupNames }),
+    postBlueprintShare(id, { groupNames }),
   unshareBlueprintFromUsers: (id: string, userIDs: string[]) =>
-    del(`/blueprints/${encodeURIComponent(id)}/share/users`, { userIDs }),
+    del(ludusBlueprintPath(id, "share", "users"), { userIDs }),
   unshareBlueprintFromGroups: (id: string, groupNames: string[]) =>
-    del(`/blueprints/${encodeURIComponent(id)}/share/groups`, { groupNames }),
+    del(ludusBlueprintPath(id, "share", "groups"), { groupNames }),
   getBlueprintAccessUsers: (id: string) =>
-    get<import("./types").BlueprintAccessUserItem[]>(`/blueprints/${id}/access/users`),
+    get<import("./types").BlueprintAccessUserItem[]>(ludusBlueprintPath(id, "access", "users")),
   getBlueprintAccessGroups: (id: string) =>
-    get<import("./types").BlueprintAccessGroupItem[]>(`/blueprints/${id}/access/groups`),
+    get<import("./types").BlueprintAccessGroupItem[]>(ludusBlueprintPath(id, "access", "groups")),
 
   // Users admin — POST /user and DELETE /user/:id
   // These go to the Ludus admin port (8081) using the logged-in admin's own API key.

@@ -2,7 +2,8 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
@@ -16,6 +17,7 @@ import {
   Package,
   Activity,
   Zap,
+  GitBranch,
   Plus,
   Settings,
   Terminal,
@@ -40,6 +42,11 @@ import { useRange } from "@/lib/range-context"
 import { useSidebar } from "@/lib/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
+import { ludusApi } from "@/lib/api"
+import { ludusSupportsSources } from "@/lib/ludus-version"
 
 interface NavItem {
   href: string
@@ -47,6 +54,8 @@ interface NavItem {
   icon: React.FC<React.SVGProps<SVGSVGElement>>
   adminOnly?: boolean
   goadOnly?: boolean
+  /** Ludus 2.2.0+ Sources API — hidden on older servers */
+  ludusSources?: boolean
 }
 
 interface NavGroup {
@@ -70,7 +79,8 @@ const navGroups: NavGroup[] = [
       { href: "/testing", label: "Testing Mode", icon: Shield },
       { href: "/snapshots", label: "Snapshots", icon: Camera },
       { href: "/blueprints", label: "Blueprints", icon: Package },
-      { href: "/ansible", label: "Ansible Roles", icon: Zap },
+      { href: "/sources", label: "Sources", icon: GitBranch, ludusSources: true },
+      { href: "/ansible", label: "Ansible Galaxy", icon: Zap },
       { href: "/logs", label: "Range Logs", icon: ScrollText },
       { href: "/console", label: "Consoles", icon: Monitor },
     ],
@@ -99,11 +109,36 @@ const navGroups: NavGroup[] = [
   },
 ]
 
+function navItemMatches(pathname: string, href: string): boolean {
+  if (href === "/") return pathname === "/"
+  return pathname === href || pathname.startsWith(`${href}/`)
+}
+
+function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null {
+  let best: string | null = null
+  for (const item of items) {
+    if (!navItemMatches(pathname, item.href)) continue
+    if (!best || item.href.length > best.length) best = item.href
+  }
+  return best
+}
+
 const ADMIN_CACHE_KEY = "ludus-sidebar-is-admin"
 const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
 
+function navItemVisible(
+  item: NavItem,
+  ctx: { isAdmin: boolean; goadEnabled: boolean; sourcesSupported: boolean },
+): boolean {
+  if (item.adminOnly && !ctx.isAdmin) return false
+  if (item.goadOnly && !ctx.goadEnabled) return false
+  if (item.ludusSources && !ctx.sourcesSupported) return false
+  return true
+}
+
 export function Sidebar() {
   const pathname = usePathname()
+  const scopeTag = useEffectiveScopeTag()
   const { collapsed, toggle } = useSidebar()
   const shell = useShellSession()
 
@@ -116,29 +151,40 @@ export function Sidebar() {
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
 
-  useEffect(() => {
-    if (shell) {
-      setIsAdmin(shell.isAdmin)
-      try {
-        sessionStorage.setItem(ADMIN_CACHE_KEY, String(shell.isAdmin))
-      } catch { /* ignore */ }
-    }
-  }, [shell])
+  const { data: versionData } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    staleTime: STALE.long,
+  })
+  const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
+  const sourcesSupported = ludusVersion !== "" && ludusSupportsSources(ludusVersion)
+  const navCtx = useMemo(
+    () => ({ isAdmin, goadEnabled, sourcesSupported }),
+    [isAdmin, goadEnabled, sourcesSupported],
+  )
 
   useEffect(() => {
-    if (shell) return
-    const cachedAdmin = sessionStorage.getItem(ADMIN_CACHE_KEY)
-    if (cachedAdmin === "true") setIsAdmin(true)
-
-    fetch("/api/auth/session")
-      .then((r) => r.ok ? r.json() : null)
+    let cancelled = false
+    fetch("/api/auth/session", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        const admin = !!data?.isAdmin
-        setIsAdmin(admin)
-        sessionStorage.setItem(ADMIN_CACHE_KEY, String(admin))
+        if (cancelled) return
+        if (data?.authenticated) {
+          const admin = !!data.isAdmin
+          setIsAdmin(admin)
+          try {
+            sessionStorage.setItem(ADMIN_CACHE_KEY, String(admin))
+          } catch { /* ignore */ }
+        }
       })
       .catch(() => {})
-  }, [shell])
+    return () => {
+      cancelled = true
+    }
+  }, [shell?.username])
 
   useEffect(() => {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
@@ -165,6 +211,13 @@ export function Sidebar() {
   useEffect(() => {
     if (collapsed || rangeSelectionLocked) setRangeDropdownOpen(false)
   }, [collapsed, rangeSelectionLocked])
+
+  const activeNavHref = useMemo(() => {
+    const visible = navGroups.flatMap((group) =>
+      group.items.filter((item) => navItemVisible(item, navCtx)),
+    )
+    return resolveActiveNavHref(pathname, visible)
+  }, [pathname, navCtx])
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -304,9 +357,7 @@ export function Sidebar() {
         {/* Navigation */}
         <nav className={cn("flex-1 overflow-y-auto py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
           {navGroups.map((group) => {
-            const visibleItems = group.items.filter(
-              (item) => (!item.adminOnly || isAdmin) && (!item.goadOnly || goadEnabled)
-            )
+            const visibleItems = group.items.filter((item) => navItemVisible(item, navCtx))
             if (visibleItems.length === 0) return null
 
             return (
@@ -324,10 +375,7 @@ export function Sidebar() {
                 <ul className="space-y-0.5">
                   {visibleItems.map((item) => {
                     const Icon = item.icon
-                    const isActive =
-                      item.href === "/"
-                        ? pathname === "/"
-                        : pathname === item.href || pathname.startsWith(item.href + "/")
+                    const isActive = activeNavHref === item.href
 
                     if (collapsed) {
                       const isConsoles = item.href === "/console"

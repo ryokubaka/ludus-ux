@@ -28,12 +28,20 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import {
+  ensureGitSource,
+  installSourceTemplates,
+  isHttp404Error,
+} from "@/lib/ludus-source-client"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { sshExec } from "@/lib/goad-ssh"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { resolveSession } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
-import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 
 
 interface TemplateSpec {
@@ -195,14 +203,64 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
   return { success: true, message: `Template "${name}" added successfully` }
 }
 
+async function tryInstallTemplatesViaSources(
+  apiKey: string,
+  specs: TemplateSpec[],
+): Promise<Map<string, { success: boolean; message: string }>> {
+  const out = new Map<string, { success: boolean; message: string }>()
+  if (specs.length === 0) return out
+
+  const gitUrl = apiBaseToGitUrl(specs[0].apiBase)
+  if (!gitUrl) return out
+
+  try {
+    const sourceID = await ensureGitSource(apiKey, gitUrl, specs[0].ref || "main")
+    const names = specs.map((s) => s.name)
+    const { warnings, data } = await installSourceTemplates(apiKey, sourceID, names)
+
+    const failed = new Set<string>()
+    for (const t of data?.templateResults ?? []) {
+      if (t.ok === false && t.name) {
+        failed.add(t.name)
+        out.set(t.name, {
+          success: false,
+          message: t.message || `Template "${t.name}" failed via Ludus Sources`,
+        })
+      }
+    }
+    for (const w of warnings) {
+      const m = /Template ([^:]+):/.exec(w)
+      if (m) failed.add(m[1])
+    }
+
+    for (const name of names) {
+      if (out.has(name)) continue
+      if (failed.has(name)) continue
+      out.set(name, {
+        success: true,
+        message: `Template "${name}" installed from Ludus source`,
+      })
+    }
+  } catch (err) {
+    if (!isHttp404Error(err)) {
+      // Sources available but failed — let SSH fallback handle each template
+    }
+  }
+
+  return out
+}
+
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
   if (!session.isAdmin) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
+
+  const effectiveApiKey =
+    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
 
   let body: { templates: TemplateSpec[] }
   try {
@@ -228,15 +286,38 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const results = await Promise.allSettled(
-    templates.map((spec) =>
-      addTemplate(spec)
-        .then((r)  => ({ name: spec.name, ...r }))
+  const byRepo = new Map<string, TemplateSpec[]>()
+  for (const spec of templates) {
+    const key = `${spec.apiBase}|${spec.ref || "main"}`
+    const group = byRepo.get(key) ?? []
+    group.push(spec)
+    byRepo.set(key, group)
+  }
+
+  const sourceResults = new Map<string, { success: boolean; message: string }>()
+  for (const group of byRepo.values()) {
+    const batch = await tryInstallTemplatesViaSources(effectiveApiKey, group)
+    for (const [name, result] of batch) sourceResults.set(name, result)
+  }
+
+  const mapped = await Promise.all(
+    templates.map(async (spec) => {
+      const fromSource = sourceResults.get(spec.name)
+      if (fromSource?.success) {
+        return { name: spec.name, ...fromSource }
+      }
+      return addTemplate(spec)
+        .then((r) => ({ name: spec.name, ...r }))
         .catch((e) => ({ name: spec.name, success: false, message: (e as Error).message }))
-    )
+    }),
   )
 
-  const mapped = results.map((r) => (r.status === "fulfilled" ? r.value : { name: "?", success: false, message: String(r.reason) }))
+  const anyOk = mapped.some((r) => r.success)
+  if (anyOk) {
+    const scopeTag = effectiveScopeTagFromSession(session)
+    revalidateLudusResource("templates")
+    revalidateLudusScopeResource(scopeTag, "templates")
+  }
   const allOk = mapped.every((r) => r.success)
   logLuxRouteAction(request, session, {
     outcome: allOk ? "success" : "failure",

@@ -15,7 +15,23 @@ Each bullet uses a single tag:
 
 ---
 
----
+## [1.1.2] - 2026-06-16
+
+**LUX**
+- [Fix] **Auth** — Sign out then sign in as another user no longer keeps prior username, badge, or role nav; logout clears client caches and uses full reload; login reloads layout with fresh session.
+- [Fix] **Configuration / Deploy New Range / GOAD** — Deploy tag checkboxes now toggle correctly when clicking the checkbox itself (removed double-toggle from parent click + `onCheckedChange`).
+- [Fix] **Range Logs** — Auto-scroll toolbar button no longer disappears on full page refresh; stream start waits for range selection and abort races no longer leave `isStreaming` stuck false.
+- [Fix] **Testing Mode** — Same auto-scroll toolbar visibility fix as Range Logs.
+- [Fix] **Sidebar** — Addressed issue where multiple nav items highlighted (e.g. Ludus Performance no longer also highlights Ranges Overview).
+- [Add] **Blueprints** — Pencil edit on owned blueprints (Monaco YAML editor); source/global installs stay read-only — duplicate first to get an editable copy you own.
+- [Add] **Sources** — New `/sources` page to register, sync, delete (with optional purge), and browse catalog status from Ludus 2.2.0 Sources API; feature-gated when server lacks Sources. Sources nav hidden unless connected Ludus is 2.2.0+ (page still reachable by URL).
+- [Add] **Ansible Galaxy** — Search galaxy.ansible.com and install roles/collections from the UI; results group versions per artifact with expandable list (newest first).
+- [Improve] **Templates / Blueprints** — Add-from-source catalog prefers Ludus-native listing (description, `min_ludus_version`) when Sources API is available; GitHub/GitLab tree fallback unchanged.
+- [Improve] **Templates** — Source catalog distinguishes **Added** (on Ludus, not built) vs **Built**; main list uses same labels.
+- [Improve] **Templates** — Build History moved below Add from Source.
+- [Improve] **Templates** — Starting a build auto-scrolls to live Packer logs.
+- [Improve] **Templates / Blueprints / Ansible** — Add-from-source defaults to registered Ludus sources with auto-fetch; GitHub/custom repo still available.
+- [Improve] **UI** — Expandable section headers vertically centered (previously slightly off-center).
 
 ## [1.1.1] - 2026-06-15
 

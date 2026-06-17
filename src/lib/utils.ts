@@ -64,6 +64,36 @@ export function extractArray<T>(data: unknown): T[] {
   return []
 }
 
+const LUDUS_NESTED_LIST_KEYS = [
+  "result",
+  "sources",
+  "blueprints",
+  "templates",
+  "roles",
+  "collections",
+  "items",
+  "data",
+] as const
+
+/** Unwrap Ludus list payloads — bare arrays, `{ result }`, or typed keys like `{ blueprints }`. */
+export function extractLudusList<T>(data: unknown, extraKeys: string[] = []): T[] {
+  if (data == null) return []
+  if (Array.isArray(data)) return data as T[]
+  if (typeof data !== "object") return []
+
+  const keys = [...extraKeys, ...LUDUS_NESTED_LIST_KEYS]
+  for (const key of keys) {
+    if (!(key in data)) continue
+    const inner = (data as Record<string, unknown>)[key]
+    if (Array.isArray(inner)) return inner as T[]
+    if (inner && typeof inner === "object") {
+      const nested = extractLudusList<T>(inner, extraKeys)
+      if (nested.length > 0) return nested
+    }
+  }
+  return []
+}
+
 /** Ludus group list — array, `{ result }`, `{ groups }`, `{ items }`, or single row. */
 export function parseLudusGroupList<T extends object>(data: unknown): T[] {
   if (data == null) return []

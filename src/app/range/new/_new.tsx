@@ -45,6 +45,8 @@ import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { cn, extractArray } from "@/lib/utils"
+import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
+import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
 import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
@@ -290,7 +292,7 @@ export function NewRangePageClient() {
     setBlueprintsLoading(true)
     ludusApi.listBlueprints()
       .then((res) => {
-        const list = extractArray<BlueprintListItem>(res.data as unknown)
+        const list = normalizeBlueprintList(res.data as unknown)
           .sort((a, b) => (a.id || a.blueprintID || "").localeCompare(b.id || b.blueprintID || ""))
         setBlueprints(list)
       })
@@ -685,9 +687,18 @@ export function NewRangePageClient() {
   const reviewBackStep =
     configMethod === "yaml" || configMethod === "blueprint" ? 2 : 5
 
-  const selectedBlueprint = blueprints.find(
-    (bp) => (bp.id || bp.blueprintID) === selectedBlueprintId,
+  const consolidatedBlueprints = useMemo(
+    () => consolidateBlueprintList(blueprints),
+    [blueprints],
   )
+
+  const selectedBlueprint = useMemo(() => {
+    if (!selectedBlueprintId) return undefined
+    const entry = consolidatedBlueprints.find(
+      (e) => e.primaryId === selectedBlueprintId || e.aliasIds.includes(selectedBlueprintId),
+    )
+    return entry?.blueprint ?? blueprints.find((bp) => (bp.id || bp.blueprintID) === selectedBlueprintId)
+  }, [consolidatedBlueprints, blueprints, selectedBlueprintId])
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -977,7 +988,7 @@ export function NewRangePageClient() {
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
-              ) : blueprints.length === 0 ? (
+              ) : consolidatedBlueprints.length === 0 ? (
                 <div className="text-center py-6 space-y-2">
                   <p className="text-sm text-muted-foreground">No blueprints available for your account.</p>
                   <p className="text-xs text-muted-foreground">
@@ -988,27 +999,36 @@ export function NewRangePageClient() {
                 </div>
               ) : (
                 <div className="grid gap-2 max-h-96 overflow-y-auto">
-                  {blueprints.map((bp) => {
-                    const bpId = bp.id || bp.blueprintID || ""
+                  {consolidatedBlueprints.map((entry) => {
+                    const bpId = entry.primaryId
+                    const selected =
+                      selectedBlueprintId === bpId || entry.aliasIds.includes(selectedBlueprintId)
                     return (
                       <button
-                        key={bpId}
+                        key={entry.typeKey}
                         type="button"
                         onClick={() => setSelectedBlueprintId(bpId)}
                         className={cn(
                           "text-left p-3 rounded-lg border-2 transition-all",
-                          selectedBlueprintId === bpId
+                          selected
                             ? "border-emerald-500 bg-emerald-500/10"
                             : "border-border hover:border-emerald-500/50",
                         )}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <code className="font-mono text-sm text-primary">{bpId}</code>
-                          {selectedBlueprintId === bpId && <Check className="h-4 w-4 text-emerald-600" />}
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <code className="font-mono text-sm text-primary">{entry.typeKey}</code>
+                            <span className="text-sm">{entry.displayName}</span>
+                            {entry.aliasCount > 0 && (
+                              <Badge variant="outline" className="text-[10px]">
+                                +{entry.aliasCount} duplicate install{entry.aliasCount === 1 ? "" : "s"}
+                              </Badge>
+                            )}
+                          </div>
+                          {selected && <Check className="h-4 w-4 text-emerald-600" />}
                         </div>
-                        {bp.name && <p className="text-sm mt-1">{bp.name}</p>}
-                        {bp.description && (
-                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{bp.description}</p>
+                        {entry.description && (
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{entry.description}</p>
                         )}
                       </button>
                     )
@@ -1275,18 +1295,19 @@ export function NewRangePageClient() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
                 {ALL_TAGS.map((tag) => (
-                  <button key={tag}
+                  <label
+                    key={tag}
                     className={cn(
-                      "flex items-center gap-2 p-2 rounded border text-left transition-colors",
+                      "flex items-center gap-2 p-2 rounded border text-left transition-colors cursor-pointer",
                       selectedTags.includes(tag) ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
                     )}
-                    onClick={() => toggleTag(tag)}>
+                  >
                     <Checkbox checked={selectedTags.includes(tag)} onCheckedChange={() => toggleTag(tag)} className="shrink-0" />
                     <div className="min-w-0">
                       <code className="text-xs font-mono text-primary">{tag}</code>
                       <p className="text-[10px] text-muted-foreground truncate">{TAG_DESCRIPTIONS[tag] || ""}</p>
                     </div>
-                  </button>
+                  </label>
                 ))}
               </div>
               {selectedTags.length > 0 && (

@@ -1,7 +1,8 @@
 "use client"
 
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
+import { clearLuxClientAuthState } from "@/lib/client-auth-state"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -26,7 +27,8 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   "/testing": { title: "Testing Mode", description: "Control testing state and firewall rules" },
   "/snapshots": { title: "Snapshots", description: "Create and manage VM snapshots" },
   "/blueprints": { title: "Blueprints", description: "Save, share, and reuse range configurations" },
-  "/ansible": { title: "Ansible Roles", description: "Manage Ansible roles and collections" },
+  "/sources": { title: "Sources", description: "Register git catalogs for blueprints, templates, and Ansible content" },
+  "/ansible": { title: "Ansible Galaxy", description: "Manage Ansible Galaxy roles and collections" },
   "/users": { title: "Users", description: "Manage Ludus users (admin only)" },
   "/groups": { title: "Groups", description: "Manage groups and range access" },
   "/admin": { title: "Ranges Overview", description: "All ranges and shared services (admin only)" },
@@ -45,7 +47,6 @@ interface SessionInfo {
 
 export function Header() {
   const pathname = usePathname()
-  const router = useRouter()
   const shell = useShellSession()
   const [session, setSession] = useState<SessionInfo | null>(() =>
     shell ? { username: shell.username, isAdmin: shell.isAdmin } : null,
@@ -55,19 +56,22 @@ export function Header() {
   const { collapsed } = useSidebar()
 
   useEffect(() => {
-    if (shell) {
-      setSession({ username: shell.username, isAdmin: shell.isAdmin })
-      return
-    }
-    fetch("/api/auth/session")
-      .then((r) => r.ok ? r.json() : null)
+    let cancelled = false
+    fetch("/api/auth/session", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
+        if (cancelled) return
         if (data?.authenticated) {
           setSession({ username: data.username, isAdmin: data.isAdmin })
+        } else {
+          setSession(null)
         }
       })
       .catch(() => {})
-  }, [shell])
+    return () => {
+      cancelled = true
+    }
+  }, [shell?.username])
 
   // Probe for avatar once session is known, and whenever avatarVersion bumps
   useEffect(() => {
@@ -87,9 +91,9 @@ export function Header() {
   }, [])
 
   const handleLogout = async () => {
-    await fetch("/api/auth/logout", { method: "POST" })
-    sessionStorage.clear()
-    router.push("/login")
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+    clearLuxClientAuthState()
+    window.location.assign("/login")
   }
 
   const matchedKey = Object.keys(pageTitles)

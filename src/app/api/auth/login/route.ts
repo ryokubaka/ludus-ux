@@ -29,21 +29,17 @@ const LOGIN_RATE_WINDOW_MS = Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS ?? St
 
 
 async function finishLogin(
-
   response: NextResponse,
-
   args: { username: string; apiKey: string; isAdmin: boolean; sshPassword: string },
-
   ip: string,
-
 ): Promise<NextResponse> {
-
   logSecurityAudit("login", "success", { user: args.username, ip })
-
+  if (args.isAdmin && args.apiKey.trim()) {
+    const { rememberBlueprintOperator } = await import("@/lib/blueprint-global-install")
+    await rememberBlueprintOperator(args.apiKey.trim()).catch(() => {})
+  }
   await establishSession(response, args)
-
   return response
-
 }
 
 

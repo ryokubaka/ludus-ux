@@ -3,7 +3,7 @@
  *
  * Proxies the GitLab/GitHub tree API server-side to avoid CORS issues and to add
  * light response caching.  The default source is the official badsectorlabs
- * ludus-source-bsl repository.  A custom GitLab repo URL can be provided via the
+ * ludus-source-bsl repository.  A custom git repo URL can be provided via the
  * `repoUrl` query parameter.
  *
  * Response: { blueprints: { name: string; files: string[] }[] }
@@ -11,7 +11,14 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
-import { isGitHubApiBase, listRepoDirectory } from "@/lib/template-repo-client"
+import {
+  fetchLudusBlueprintCatalog,
+  fetchLudusBlueprintCatalogBySourceId,
+  enrichBlueprintCatalogEntries,
+  resolveBadslCatalogMeta,
+} from "@/lib/ludus-source-catalog"
+import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
 const BADSL_REF = "main"
 const BADSL_BASE = "https://api.github.com/repos/badsectorlabs/ludus-source-bsl"
@@ -102,13 +109,18 @@ async function cachedFetch<T>(key: string, task: () => Promise<T>, apiLabel: str
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const source = searchParams.get("source") || "badsectorlabs"
+  const sourceId = searchParams.get("sourceId") || ""
   const repoUrl = searchParams.get("repoUrl") || ""
 
   let apiBase: string
   let blueprintsPath: string
   let ref: string
 
-  if (source === "badsectorlabs") {
+  if (source === "registered" && sourceId) {
+    apiBase = BADSL_BASE
+    blueprintsPath = "blueprints"
+    ref = searchParams.get("ref") || BADSL_REF
+  } else if (source === "badsectorlabs") {
     apiBase = BADSL_BASE
     blueprintsPath = "blueprints"
     ref = BADSL_REF
@@ -125,6 +137,36 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const { apiKey } = await requireSourcesSession(request)
+    if (apiKey) {
+      if (source === "registered" && sourceId) {
+        const ludusBlueprints = await fetchLudusBlueprintCatalogBySourceId(
+          apiKey,
+          sourceId,
+          ref,
+          apiBase,
+        )
+        if (ludusBlueprints && ludusBlueprints.length > 0) {
+          return NextResponse.json({
+            blueprints: ludusBlueprints,
+            catalogSource: "ludus",
+            registeredSourceId: sourceId,
+          })
+        }
+      } else {
+        const gitUrl =
+          source === "badsectorlabs"
+            ? resolveBadslCatalogMeta().gitUrl
+            : apiBaseToGitUrl(apiBase)
+        if (gitUrl) {
+          const ludusBlueprints = await fetchLudusBlueprintCatalog(apiKey, gitUrl, ref, apiBase)
+          if (ludusBlueprints && ludusBlueprints.length > 0) {
+            return NextResponse.json({ blueprints: ludusBlueprints, catalogSource: "ludus" })
+          }
+        }
+      }
+    }
+
     const apiLabel = repoApiLabel(apiBase)
     const cacheKey = `${apiBase}|${blueprintsPath}|${ref}`
 
@@ -135,7 +177,7 @@ export async function GET(request: NextRequest) {
     )
     const dirs = topTree.filter((i) => i.type === "tree")
 
-    const blueprints = await pLimit(
+    const rawBlueprints = await pLimit(
       dirs.map((dir) => async () => {
         const fileTree = await cachedFetch(
           `${cacheKey}|${dir.path}`,
@@ -143,12 +185,21 @@ export async function GET(request: NextRequest) {
           apiLabel,
         )
         const files = fileTree.filter((i) => i.type === "blob").map((i) => i.name)
-        return { name: dir.name, path: dir.path, files, ref, apiBase }
+        return {
+          name: dir.name,
+          path: dir.path,
+          files,
+          ref,
+          apiBase,
+          catalogSource: "github" as const,
+        }
       }),
       5,
     )
 
-    return NextResponse.json({ blueprints })
+    const blueprints = await enrichBlueprintCatalogEntries(rawBlueprints)
+
+    return NextResponse.json({ blueprints, catalogSource: "github" })
   } catch (err) {
     const msg = (err as Error).message
     return NextResponse.json(

@@ -22,13 +22,22 @@ import {
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { blueprintInstallNameFromFields, isBlueprintInstallName } from "@/lib/blueprint-api-path"
+import {
+  finalizeGlobalSourceBlueprintInstall,
+  rememberBlueprintOperator,
+  resolveExistingSourceBlueprintInstall,
+  resolveGlobalBlueprintServiceApiKey,
+  resolveGlobalSourceBlueprintInstallApiKey,
+} from "@/lib/blueprint-global-install"
 import { resolveSession } from "@/lib/session"
 import {
-  blueprintPublicId,
   buildLudusApiUrl,
   ensureGitSource,
+  findInstalledBlueprintId,
   gitUrlForBadsectorlabs,
   installSourceBlueprints,
+  listSources,
 } from "@/lib/ludus-source-client"
 import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 
@@ -37,13 +46,22 @@ export const maxDuration = 300
 interface BlueprintSpec {
   name: string
   gitUrl?: string
+  sourceId?: string
   ref?: string
   path?: string
   apiBase?: string
 }
 
-const NAME_RE = /^[a-zA-Z0-9._-]{1,120}$/
 const BADSL_API_BASE = "https://api.github.com/repos/badsectorlabs/ludus-source-bsl"
+
+function normalizeBlueprintSpec(spec: BlueprintSpec): BlueprintSpec {
+  const name = blueprintInstallNameFromFields(spec)
+  return {
+    ...spec,
+    name,
+    path: `blueprints/${name}`,
+  }
+}
 
 function resolveGitUrl(spec: BlueprintSpec): { gitUrl: string; ref: string } {
   if (spec.gitUrl?.trim()) {
@@ -53,6 +71,26 @@ function resolveGitUrl(spec: BlueprintSpec): { gitUrl: string; ref: string } {
     return { gitUrl: gitUrlForBadsectorlabs(), ref: spec.ref?.trim() || "main" }
   }
   throw new Error(`Blueprint "${spec.name}" is missing gitUrl for Ludus source registration`)
+}
+
+async function resolveGitUrlForSpec(
+  spec: BlueprintSpec,
+  apiKey: string,
+): Promise<{ gitUrl: string; ref: string }> {
+  if (spec.gitUrl?.trim()) {
+    return { gitUrl: spec.gitUrl.trim(), ref: spec.ref?.trim() || "main" }
+  }
+  if (spec.sourceId?.trim()) {
+    const sources = await listSources(apiKey)
+    const want = spec.sourceId.trim().toLowerCase()
+    const hit = sources.find(
+      (s) => (s.sourceID || s.id || "").trim().toLowerCase() === want,
+    )
+    if (hit?.url?.trim()) {
+      return { gitUrl: hit.url.trim(), ref: spec.ref?.trim() || hit.ref?.trim() || "main" }
+    }
+  }
+  return resolveGitUrl(spec)
 }
 
 function normalizeApiBase(apiBase: string): string {
@@ -118,10 +156,16 @@ async function importViaSourcesApi(
   spec: BlueprintSpec,
   apiKey: string,
 ): Promise<{ blueprintID: string; message: string }> {
-  const { gitUrl, ref } = resolveGitUrl(spec)
+  const normalized = normalizeBlueprintSpec(spec)
+  const { gitUrl, ref } = await resolveGitUrlForSpec(normalized, apiKey)
   const sourceID = await ensureGitSource(apiKey, gitUrl, ref)
-  const { warnings } = await installSourceBlueprints(apiKey, sourceID, [spec.name])
-  const blueprintID = blueprintPublicId(sourceID, spec.name)
+  const { warnings } = await installSourceBlueprints(apiKey, sourceID, [normalized.name])
+  const blueprintID = await findInstalledBlueprintId(apiKey, normalized.name, sourceID)
+  if (!blueprintID) {
+    throw new Error(
+      `Sources install finished but blueprint "${normalized.name}" is not in GET /blueprints — falling back to direct import`,
+    )
+  }
   let message = `Blueprint "${blueprintID}" installed from Ludus source`
   if (warnings.length > 0) message += `. ${warnings.join("; ")}`
   return { blueprintID, message }
@@ -129,19 +173,69 @@ async function importViaSourcesApi(
 
 async function importBlueprintFromSource(
   spec: BlueprintSpec,
-  apiKey: string,
+  installApiKey: string,
+  viewerApiKey: string,
+  globalLookupApiKey: string,
+  options: { canInstallGlobally: boolean },
 ): Promise<{ success: true; blueprintID?: string; message: string } | { success: false; message: string }> {
-  if (!spec.path || !spec.apiBase || !spec.ref) {
+  const normalized = normalizeBlueprintSpec(spec)
+  if (!normalized.path || !normalized.apiBase || !normalized.ref) {
     return { success: false, message: "Missing repository path metadata for import" }
   }
 
-  const repoPath = { path: spec.path, apiBase: spec.apiBase, ref: spec.ref }
+  const sourceHint = normalized.sourceId?.trim()
+  const existingForViewer = await resolveExistingSourceBlueprintInstall(
+    viewerApiKey,
+    normalized.name,
+    sourceHint,
+  )
+  if (existingForViewer) {
+    return {
+      success: true,
+      blueprintID: existingForViewer,
+      message: `Blueprint "${existingForViewer}" is already available on Ludus`,
+    }
+  }
+
+  const existingGlobal = await resolveExistingSourceBlueprintInstall(
+    globalLookupApiKey,
+    normalized.name,
+    sourceHint,
+  )
+  if (existingGlobal) {
+    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(
+      globalLookupApiKey,
+      existingGlobal,
+    )
+    let message = options.canInstallGlobally
+      ? `Blueprint "${existingGlobal}" is already installed — shared with all users`
+      : `Blueprint "${existingGlobal}" is installed — access synced for all users`
+    if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
+    return { success: true, blueprintID: existingGlobal, message }
+  }
+
+  if (!options.canInstallGlobally) {
+    return {
+      success: false,
+      message:
+        "Community source blueprints must be installed once by a Ludus administrator for all users. Ask an admin to install from Blueprints → Add from Source.",
+    }
+  }
+
+  const repoPath = {
+    path: normalized.path,
+    apiBase: normalized.apiBase,
+    ref: normalized.ref,
+  }
   const failures: string[] = []
 
   // 1. Ludus Sources (git catalog install)
   try {
-    const r = await importViaSourcesApi(spec, apiKey)
-    return { success: true, blueprintID: r.blueprintID, message: r.message }
+    const r = await importViaSourcesApi(normalized, installApiKey)
+    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    let message = r.message
+    if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
+    return { success: true, blueprintID: r.blueprintID, message }
   } catch (err) {
     if (!isHttp404Error(err)) failures.push(`Sources: ${(err as Error).message}`)
     else failures.push("Sources API not available")
@@ -149,30 +243,48 @@ async function importBlueprintFromSource(
 
   let bundle
   try {
-    bundle = await loadBlueprintRepoBundle(spec.apiBase, spec.path, spec.ref, spec.name)
+    bundle = await loadBlueprintRepoBundle(
+      normalized.apiBase,
+      normalized.path,
+      normalized.ref,
+      normalized.name,
+    )
   } catch (err) {
     return { success: false, message: (err as Error).message }
   }
 
   // 2. POST /blueprints with YAML from repo
   try {
-    const r = await createBlueprintFromRepoBundle(apiKey, bundle)
-    return { success: true, blueprintID: r.blueprintID, message: r.message }
+    const r = await createBlueprintFromRepoBundle(installApiKey, bundle)
+    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    let message = r.message
+    if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
+    return { success: true, blueprintID: r.blueprintID, message }
   } catch (err) {
     failures.push(`Create: ${(err as Error).message}`)
   }
 
   // 3. from-range + config upload
   try {
-    const r = await createBlueprintFromRangeBundle(apiKey, bundle)
-    return { success: true, blueprintID: r.blueprintID, message: r.message }
+    const r = await createBlueprintFromRangeBundle(installApiKey, bundle)
+    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    let message = r.message
+    if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
+    return { success: true, blueprintID: r.blueprintID, message }
   } catch (err) {
     failures.push(`From-range: ${(err as Error).message}`)
   }
 
   // 4. tar import
   try {
-    const r = await importViaTarArchive({ ...spec, ...repoPath }, apiKey)
+    const r = await importViaTarArchive({ ...spec, ...repoPath }, installApiKey)
+    const blueprintID = r.blueprintID
+    if (blueprintID) {
+      const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, blueprintID)
+      if (shareWarnings.length > 0) {
+        r.message += `. ${shareWarnings.join("; ")}`
+      }
+    }
     return {
       success: true,
       blueprintID: r.blueprintID,
@@ -207,7 +319,8 @@ export async function POST(request: NextRequest) {
   }
 
   for (const spec of blueprints) {
-    if (!NAME_RE.test(spec.name ?? "")) {
+    const normalized = normalizeBlueprintSpec(spec)
+    if (!isBlueprintInstallName(normalized.name ?? "")) {
       return NextResponse.json(
         {
           error: `Invalid blueprint name "${spec.name}". Use only letters, numbers, hyphens, underscores, and dots.`,
@@ -217,12 +330,27 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const effectiveApiKey =
+  const viewerApiKey =
     resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+  const { apiKey: installApiKey, isAdminInstall } = resolveGlobalSourceBlueprintInstallApiKey(session)
+  const effectiveInstallApiKey =
+    isAdminInstall && installApiKey ? installApiKey : viewerApiKey
+  const globalLookupApiKey =
+    resolveGlobalBlueprintServiceApiKey(session) || effectiveInstallApiKey
+
+  if (isAdminInstall && installApiKey) {
+    await rememberBlueprintOperator(installApiKey)
+  }
 
   const results = await Promise.allSettled(
     blueprints.map((spec) =>
-      importBlueprintFromSource(spec, effectiveApiKey)
+      importBlueprintFromSource(
+        spec,
+        effectiveInstallApiKey,
+        viewerApiKey,
+        globalLookupApiKey,
+        { canInstallGlobally: isAdminInstall },
+      )
         .then((r) => ({
           name: spec.name,
           success: r.success,

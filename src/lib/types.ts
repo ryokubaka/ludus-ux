@@ -209,8 +209,13 @@ export interface BlueprintListItem {
   description?: string
   ownerID?: string
   access?: "admin" | "owner" | "direct" | "group" | string
+  /** Count of directly shared users (derived from Ludus list or access API). */
   sharedUsers?: number
+  /** Ludus v2 may return user IDs in the list payload. */
+  sharedUserIds?: string[]
   sharedGroups?: number
+  sharedGroupNames?: string[]
+  sourceID?: string
   updatedAt?: string
   created?: string
   updated?: string

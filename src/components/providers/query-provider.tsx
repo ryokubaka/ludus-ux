@@ -95,7 +95,7 @@ function QueryPersistenceLayer() {
   return null
 }
 
-export function QueryProvider({
+function QueryProviderMounted({
   children,
   initialScopeTag,
   shellSession,
@@ -118,5 +118,27 @@ export function QueryProvider({
         ) : null}
       </EffectiveScopeProvider>
     </QueryClientProvider>
+  )
+}
+
+export function QueryProvider({
+  children,
+  initialScopeTag,
+  shellSession,
+}: {
+  children: React.ReactNode
+  initialScopeTag: string
+  shellSession: ShellSessionSnapshot | null
+}) {
+  const mountKey = initialScopeTag
+
+  return (
+    <QueryProviderMounted
+      key={mountKey}
+      initialScopeTag={initialScopeTag}
+      shellSession={shellSession}
+    >
+      {children}
+    </QueryProviderMounted>
   )
 }

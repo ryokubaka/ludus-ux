@@ -1341,16 +1341,14 @@ export function NewGoadInstancePageClient() {
                     </p>
                     <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
                       {LUDUS_DEPLOY_TAGS.map((tag) => (
-                        <button
+                        <label
                           key={tag}
-                          type="button"
                           className={cn(
-                            "flex items-center gap-2 p-2 rounded border text-left transition-colors",
+                            "flex items-center gap-2 p-2 rounded border text-left transition-colors cursor-pointer",
                             selectedLudusDeployTags.includes(tag)
                               ? "border-primary bg-primary/10"
                               : "border-border hover:border-primary/50",
                           )}
-                          onClick={() => toggleLudusDeployTag(tag)}
                         >
                           <Checkbox
                             checked={selectedLudusDeployTags.includes(tag)}
@@ -1363,7 +1361,7 @@ export function NewGoadInstancePageClient() {
                               {LUDUS_DEPLOY_TAG_DESCRIPTIONS[tag] || ""}
                             </p>
                           </div>
-                        </button>
+                        </label>
                       ))}
                     </div>
                     {selectedLudusDeployTags.length > 0 && (

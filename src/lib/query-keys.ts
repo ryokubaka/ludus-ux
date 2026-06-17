@@ -40,6 +40,17 @@ export const queryKeys = {
   // ── Ansible ───────────────────────────────────────────────────────────────
   ansible: (scopeTag: string) => sc(scopeTag, ["ansible"]),
 
+  // ── Sources (Ludus 2.2.0+) ────────────────────────────────────────────────
+  sources: (scopeTag: string) => sc(scopeTag, ["sources"]),
+  sourceBlueprints: (scopeTag: string, sourceId: string) =>
+    sc(scopeTag, ["sources", sourceId, "blueprints"]),
+  sourceTemplates: (scopeTag: string, sourceId: string) =>
+    sc(scopeTag, ["sources", sourceId, "templates"]),
+  sourceRoles: (scopeTag: string, sourceId: string) =>
+    sc(scopeTag, ["sources", sourceId, "roles", "catalog"]),
+  sourceCollections: (scopeTag: string, sourceId: string) =>
+    sc(scopeTag, ["sources", sourceId, "collections", "catalog"]),
+
   // ── Blueprints ────────────────────────────────────────────────────────────
   blueprints: (scopeTag: string) => sc(scopeTag, ["blueprints"]),
   blueprintSharing: (scopeTag: string, id: string) => sc(scopeTag, ["blueprints", id, "sharing"]),

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -29,7 +29,6 @@ import {
 type Step = "credentials" | "set-api-key"
 
 export default function LoginPage() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   // Only allow relative paths starting with "/" to prevent open-redirect abuse
   // (e.g. /login?next=//evil.com or /login?next=https://attacker.com).
@@ -50,9 +49,9 @@ export default function LoginPage() {
   // If already logged in, skip to dashboard
   useEffect(() => {
     fetch("/api/auth/session").then((r) => {
-      if (r.ok) router.replace(nextPath)
+      if (r.ok) window.location.assign(nextPath)
     })
-  }, [router, nextPath])
+  }, [nextPath])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -86,8 +85,8 @@ export default function LoginPage() {
         return
       }
 
-      // Fully logged in
-      router.replace(nextPath)
+      // Fully logged in — hard nav so layout/session providers remount for new user
+      window.location.assign(nextPath)
     } catch {
       setError("Network error — could not reach the server")
     } finally {
@@ -118,7 +117,7 @@ export default function LoginPage() {
         return
       }
 
-      router.replace(nextPath)
+      window.location.assign(nextPath)
     } catch {
       setError("Network error")
     } finally {

@@ -2,6 +2,7 @@ import "server-only"
 
 import yaml from "js-yaml"
 import { buildLudusApiUrl } from "@/lib/ludus-source-client"
+import { ludusBlueprintApiPath } from "@/lib/ludus-blueprint-proxy-path"
 import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 
 export interface BlueprintManifest {
@@ -201,7 +202,7 @@ export async function createBlueprintFromRangeBundle(
 
   const id = created.data?.blueprintID || blueprintID
   const updated = await ludusJson<{ result?: string; error?: string }>(
-    `/blueprints/${encodeURIComponent(id)}/config`,
+    ludusBlueprintApiPath(id, "config"),
     apiKey,
     {
       method: "PUT",

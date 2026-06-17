@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from "react"
+import { useState, useEffect, useCallback, useMemo, Fragment, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -42,6 +42,19 @@ import { useToast } from "@/hooks/use-toast"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
+import {
+  buildCatalogTemplatePresenceMap,
+  getCatalogTemplatePresence,
+  type CatalogTemplatePresence,
+} from "@/lib/template-install-match"
+import { SourceCatalogBanner } from "@/components/sources/source-catalog-banner"
+import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
+import {
+  mapRegisteredSources,
+  pickDefaultRegisteredSource,
+  registeredSourceLabel,
+  type RegisteredLudusSource,
+} from "@/lib/registered-ludus-sources"
 
 // ── Template source types ─────────────────────────────────────────────────────
 
@@ -51,6 +64,8 @@ interface SourceTemplate {
   files:   string[]
   apiBase: string
   ref:     string
+  version?: string
+  catalogSource?: "ludus" | "github"
 }
 
 const BUILTIN_SOURCE = {
@@ -61,31 +76,70 @@ const BUILTIN_SOURCE = {
 
 // ── Add from Source panel ─────────────────────────────────────────────────────
 
-function AddFromSource({ installedNames, onAdded }: {
-  installedNames: Set<string>
+function AddFromSource({ templatePresence, onAdded }: {
+  templatePresence: Map<string, CatalogTemplatePresence>
   onAdded: () => void
 }) {
   const { toast } = useToast()
+  const scopeTag = useEffectiveScopeTag()
   const [open,              setOpen]              = useState(false)
   const [sourceValue,       setSourceValue]       = useState("badsectorlabs")
+  const [registeredSourceId, setRegisteredSourceId] = useState("")
+  const autoFetchedRef = useRef(false)
   const [customRepoUrl,     setCustomRepoUrl]     = useState("")
   const [customPath,        setCustomPath]        = useState("templates")
   const [customRef,         setCustomRef]         = useState("main")
   const [sourceTemplates,   setSourceTemplates]   = useState<SourceTemplate[]>([])
+  const [catalogSource,     setCatalogSource]     = useState<"ludus" | "github" | null>(null)
   const [loadingSource,     setLoadingSource]     = useState(false)
   const [sourceError,       setSourceError]       = useState<string | null>(null)
   const [selected,          setSelected]          = useState<Set<string>>(new Set())
   const [adding,            setAdding]            = useState(false)
   const [addResults,        setAddResults]        = useState<{name:string;success:boolean;message:string}[]>([])
 
+  const { data: ludusSourcesMeta } = useQuery({
+    queryKey: queryKeys.sources(scopeTag),
+    queryFn: async () => {
+      const res = await fetch("/api/sources")
+      const json = await res.json()
+      return {
+        available: json.available !== false && res.ok,
+        sources: (json.sources ?? []) as Array<{ sourceID?: string; id?: string; url?: string }>,
+      }
+    },
+    enabled: open,
+    staleTime: STALE.long,
+  })
+
+  const registeredSources = useMemo(
+    () => mapRegisteredSources(ludusSourcesMeta?.sources ?? []),
+    [ludusSourcesMeta],
+  )
+
+  const registeredSourceIdForBanner = useMemo(() => {
+    if (sourceValue === "registered" && registeredSourceId) return registeredSourceId
+    if (sourceValue !== "badsectorlabs" || !ludusSourcesMeta?.sources?.length) return null
+    const hit = ludusSourcesMeta.sources.find((s) =>
+      (s.url ?? "").toLowerCase().includes("ludus-source-bsl"),
+    )
+    return hit?.sourceID || hit?.id || null
+  }, [ludusSourcesMeta, sourceValue, registeredSourceId])
+
   const fetchSource = useCallback(async () => {
     setLoadingSource(true)
     setSourceError(null)
     setSourceTemplates([])
+    setCatalogSource(null)
     setSelected(new Set())
     setAddResults([])
     try {
-      const params = new URLSearchParams({ source: sourceValue })
+      const params = new URLSearchParams()
+      if (sourceValue === "registered" && registeredSourceId) {
+        params.set("source", "registered")
+        params.set("sourceId", registeredSourceId)
+      } else {
+        params.set("source", sourceValue)
+      }
       if (sourceValue === "custom" && customRepoUrl) {
         // Derive GitLab API base from a repo browse URL like:
         // https://gitlab.com/owner/repo/-/tree/ref/path
@@ -104,12 +158,32 @@ function AddFromSource({ installedNames, onAdded }: {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setSourceTemplates(data.templates ?? [])
+      setCatalogSource(data.catalogSource === "ludus" ? "ludus" : "github")
     } catch (err) {
       setSourceError((err as Error).message)
     } finally {
       setLoadingSource(false)
     }
-  }, [sourceValue, customRepoUrl, customPath, customRef])
+  }, [sourceValue, registeredSourceId, customRepoUrl, customPath, customRef])
+
+  useEffect(() => {
+    if (!open || registeredSources.length === 0) return
+    const def = pickDefaultRegisteredSource(registeredSources)
+    if (!def) return
+    setSourceValue("registered")
+    setRegisteredSourceId((prev) => prev || def.id)
+  }, [open, registeredSources])
+
+  useEffect(() => {
+    if (!open) {
+      autoFetchedRef.current = false
+      return
+    }
+    if (autoFetchedRef.current) return
+    if (sourceValue === "registered" && !registeredSourceId) return
+    autoFetchedRef.current = true
+    void fetchSource()
+  }, [open, sourceValue, registeredSourceId, fetchSource])
 
   const toggleSelect = (name: string) => {
     setSelected((prev) => {
@@ -153,24 +227,22 @@ function AddFromSource({ installedNames, onAdded }: {
     }
   }
 
-  // Available = in source but NOT already added to Ludus
-  const available = sourceTemplates.filter((t) => !installedNames.has(t.name))
-  const alreadyIn = sourceTemplates.filter((t) => installedNames.has(t.name))
+  const presenceOf = (name: string) => getCatalogTemplatePresence(name, templatePresence)
+  const inLudus = (name: string) => presenceOf(name) !== "none"
+
+  const available = sourceTemplates.filter((t) => !inLudus(t.name))
+  const alreadyAdded = sourceTemplates.filter((t) => presenceOf(t.name) === "added")
+  const alreadyBuilt = sourceTemplates.filter((t) => presenceOf(t.name) === "built")
 
   return (
     <Card>
-      <button className="w-full text-left" onClick={() => setOpen((o) => !o)}>
-        <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
-          <CardTitle className="text-sm flex items-center gap-2">
-            {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-            <GitBranch className="h-4 w-4 text-primary" />
-            Add Templates from Source
-            <span className="text-xs text-muted-foreground font-normal">
-              — install community or official templates not bundled with Ludus
-            </span>
-          </CardTitle>
-        </CardHeader>
-      </button>
+      <ExpandableCardTrigger
+        open={open}
+        onToggle={() => setOpen((o) => !o)}
+        icon={GitBranch}
+        title="Add Templates from Source"
+        subtitle="— install community or official templates not bundled with Ludus"
+      />
 
       {open && (
         <CardContent className="space-y-4">
@@ -178,11 +250,34 @@ function AddFromSource({ installedNames, onAdded }: {
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex-1 min-w-[220px]">
               <label className="text-xs text-muted-foreground mb-1 block">Source</label>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                {registeredSources.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setSourceValue("registered")
+                      setSourceTemplates([])
+                      setAddResults([])
+                      autoFetchedRef.current = false
+                    }}
+                    className={cn(
+                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
+                      sourceValue === "registered"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50",
+                    )}
+                  >
+                    Registered sources
+                  </button>
+                )}
                 {["badsectorlabs", "custom"].map((v) => (
                   <button
                     key={v}
-                    onClick={() => { setSourceValue(v); setSourceTemplates([]); setAddResults([]) }}
+                    onClick={() => {
+                      setSourceValue(v)
+                      setSourceTemplates([])
+                      setAddResults([])
+                      autoFetchedRef.current = false
+                    }}
                     className={cn(
                       "px-3 py-1.5 rounded-md text-xs border transition-colors",
                       sourceValue === v
@@ -190,11 +285,33 @@ function AddFromSource({ installedNames, onAdded }: {
                         : "border-border bg-transparent text-muted-foreground hover:border-primary/50"
                     )}
                   >
-                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom GitLab repo"}
+                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom git repo"}
                   </button>
                 ))}
               </div>
             </div>
+
+            {sourceValue === "registered" && registeredSources.length > 0 && (
+              <div className="flex-1 min-w-[220px]">
+                <label className="text-xs text-muted-foreground mb-1 block">Registered source</label>
+                <select
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
+                  value={registeredSourceId}
+                  onChange={(e) => {
+                    setRegisteredSourceId(e.target.value)
+                    setSourceTemplates([])
+                    setAddResults([])
+                    autoFetchedRef.current = false
+                  }}
+                >
+                  {registeredSources.map((s: RegisteredLudusSource) => (
+                    <option key={s.id} value={s.id}>
+                      {registeredSourceLabel(s)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {sourceValue === "badsectorlabs" && (
               <a
@@ -272,64 +389,83 @@ function AddFromSource({ installedNames, onAdded }: {
             </div>
           )}
 
-          {/* Available templates grid */}
-          {available.length > 0 && (
+          {(sourceTemplates.length > 0 || catalogSource) && (
+            <SourceCatalogBanner
+              catalogSource={catalogSource}
+              registeredSourceId={registeredSourceIdForBanner}
+              sourcesAvailable={ludusSourcesMeta?.available}
+            />
+          )}
+
+          {/* Fetched templates grid — installed items shown but not selectable */}
+          {sourceTemplates.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Available to Add ({available.length})
+                Catalog ({sourceTemplates.length})
+                {(alreadyAdded.length > 0 || alreadyBuilt.length > 0) && (
+                  <span className="font-normal normal-case text-muted-foreground/80">
+                    {alreadyAdded.length > 0 && ` · ${alreadyAdded.length} added`}
+                    {alreadyBuilt.length > 0 && ` · ${alreadyBuilt.length} built`}
+                  </span>
+                )}
               </p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {available.map((t) => {
+                {sourceTemplates.map((t) => {
+                  const presence = presenceOf(t.name)
+                  const onLudus = presence !== "none"
                   const result = addResults.find((r) => r.name === t.name)
                   return (
                     <button
                       key={t.name}
-                      onClick={() => toggleSelect(t.name)}
+                      type="button"
+                      disabled={onLudus}
+                      onClick={() => !onLudus && toggleSelect(t.name)}
                       className={cn(
                         "text-left rounded-lg border p-3 text-xs transition-colors",
-                        selected.has(t.name)
-                          ? "border-primary bg-primary/10"
-                          : "border-border hover:border-primary/50"
+                        onLudus
+                          ? "border-border/60 bg-muted/30 opacity-80 cursor-default"
+                          : selected.has(t.name)
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-primary/50",
                       )}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <input
-                          type="checkbox"
-                          className="rounded shrink-0"
-                          checked={selected.has(t.name)}
-                          onChange={() => toggleSelect(t.name)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
+                        {!onLudus && (
+                          <input
+                            type="checkbox"
+                            className="rounded shrink-0"
+                            checked={selected.has(t.name)}
+                            onChange={() => toggleSelect(t.name)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        )}
+                        {presence === "built" && (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-status-success" />
+                        )}
+                        {presence === "added" && (
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" />
+                        )}
                         <code className="font-mono font-medium text-primary truncate">{t.name}</code>
-                        {result && (
+                        {presence === "built" && (
+                          <Badge variant="success" className="text-[10px] ml-auto shrink-0">Built</Badge>
+                        )}
+                        {presence === "added" && (
+                          <Badge variant="warning" className="text-[10px] ml-auto shrink-0">Added</Badge>
+                        )}
+                        {!onLudus && result && (
                           result.success
                             ? <Check className="h-3 w-3 text-status-success ml-auto shrink-0" />
                             : <XCircle className="h-3 w-3 text-destructive ml-auto shrink-0" />
                         )}
                       </div>
                       <p className="text-muted-foreground/70 truncate pl-5">
-                        {t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
+                        {t.version
+                          ? `v${t.version}`
+                          : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
                       </p>
                     </button>
                   )
                 })}
-              </div>
-            </div>
-          )}
-
-          {/* Already installed list */}
-          {alreadyIn.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Already in Ludus ({alreadyIn.length})
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {alreadyIn.map((t) => (
-                  <Badge key={t.name} variant="secondary" className="text-xs font-mono gap-1">
-                    <CheckCircle2 className="h-2.5 w-2.5 text-status-success" />
-                    {t.name}
-                  </Badge>
-                ))}
               </div>
             </div>
           )}
@@ -392,15 +528,13 @@ export function TemplatesPageClient() {
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
-  // Per-row confirmations (build-single / delete) now render inline next to
-  // the triggering template, so no auto-scroll is needed. Multi-select build
-  // / abort still use the unscoped bar at the top of the page.
 
   const [building, setBuilding] = useState(false)
   const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(new Set())
   const [logLines, setLogLines] = useState<string[]>([])
   const [showLogs, setShowLogs] = useState(false)
-  const [filterBuilt, setFilterBuilt] = useState<"all" | "built" | "unbuilt">("all")
+  const buildLogsRef = useRef<HTMLDivElement>(null)
+  const [filterBuilt, setFilterBuilt] = useState<"all" | "built" | "added">("all")
 
   // ── Build history ─────────────────────────────────────────────────────────
   const [buildHistoryOpen, setBuildHistoryOpen] = useState(false)
@@ -544,6 +678,7 @@ export function TemplatesPageClient() {
     setLogLines([])
     setShowLogs(true)
     setBuilding(true)
+    setTimeout(() => buildLogsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
     const result = await ludusApi.buildTemplates(names)
     if (result.error) {
       if (
@@ -605,13 +740,16 @@ export function TemplatesPageClient() {
   const filtered = templates
     .filter((t) => {
       if (filterBuilt === "built") return t.built
-      if (filterBuilt === "unbuilt") return !t.built
+      if (filterBuilt === "added") return !t.built
       return true
     })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   const builtCount = templates.filter((t) => t.built).length
-  const installedNames = new Set(templates.map((t) => t.name))
+  const templatePresence = useMemo(
+    () => buildCatalogTemplatePresenceMap(templates),
+    [templates],
+  )
 
   return (
     <div className="space-y-6">
@@ -631,7 +769,7 @@ export function TemplatesPageClient() {
         </Card>
         <Card className="glass-card">
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Not Built</p>
+            <p className="text-xs text-muted-foreground">Added</p>
             <p className="text-2xl font-bold mt-1 text-status-warning">{templates.length - builtCount}</p>
           </CardContent>
         </Card>
@@ -657,7 +795,7 @@ export function TemplatesPageClient() {
           )}
 
           <div className="flex gap-1 ml-2">
-            {(["all", "built", "unbuilt"] as const).map((f) => (
+            {(["all", "built", "added"] as const).map((f) => (
               <Button
                 key={f}
                 size="sm"
@@ -681,7 +819,7 @@ export function TemplatesPageClient() {
 
       {/* Build Logs */}
       {showLogs && (
-        <Card>
+        <Card ref={buildLogsRef}>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm flex items-center gap-2">
@@ -702,28 +840,32 @@ export function TemplatesPageClient() {
         </Card>
       )}
 
+      {/* Add from Source */}
+      <AddFromSource templatePresence={templatePresence} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
+
       {/* Build History */}
       <Card>
-        <button type="button" className="w-full text-left" onClick={() => setBuildHistoryOpen((o) => !o)}>
-          <CardHeader className="pb-3 hover:bg-muted/20 transition-colors">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2 flex-wrap">
-              {buildHistoryOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
-              <History className="h-4 w-4 text-primary shrink-0" />
-              Build History
-              {visibleBuildHistory.length > 0 && (
-                <Badge variant="secondary" className="text-xs">{visibleBuildHistory.length}</Badge>
-              )}
-              <span className="text-xs text-muted-foreground font-normal">
-                — {buildHistoryShowAll ? "all Ludus log runs (template + range)" : "past template packer runs"}
-              </span>
+        <ExpandableCardTrigger
+          open={buildHistoryOpen}
+          onToggle={() => setBuildHistoryOpen((o) => !o)}
+          icon={History}
+          title="Build History"
+          trailing={
+            visibleBuildHistory.length > 0 ? (
+              <Badge variant="secondary" className="text-xs">{visibleBuildHistory.length}</Badge>
+            ) : undefined
+          }
+          subtitle={
+            <>
+              — {buildHistoryShowAll ? "all Ludus log runs (template + range)" : "past template packer runs"}
               {!buildHistoryShowAll && hiddenBuildHistoryCount > 0 && (
-                <span className="text-[10px] text-muted-foreground font-normal">
+                <span className="ml-1">
                   ({hiddenBuildHistoryCount} range deploy{hiddenBuildHistoryCount === 1 ? "" : "s"} hidden)
                 </span>
               )}
-            </CardTitle>
-          </CardHeader>
-        </button>
+            </>
+          }
+        />
         {buildHistoryOpen && (
           <CardContent>
             {!selectedBuildLogId && (
@@ -804,9 +946,6 @@ export function TemplatesPageClient() {
           </CardContent>
         )}
       </Card>
-
-      {/* Add from Source */}
-      <AddFromSource installedNames={installedNames} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
 
       {/* Template List */}
       <Card>
@@ -891,9 +1030,9 @@ export function TemplatesPageClient() {
                                   <span className="text-xs">Built</span>
                                 </div>
                               ) : (
-                                <div className="flex items-center gap-1.5 text-muted-foreground">
-                                  <XCircle className="h-3.5 w-3.5" />
-                                  <span className="text-xs">Not Built</span>
+                                <div className="flex items-center gap-1.5 text-status-warning">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  <span className="text-xs">Added</span>
                                 </div>
                               )}
                             </td>

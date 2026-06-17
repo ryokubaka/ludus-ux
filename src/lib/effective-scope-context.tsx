@@ -8,6 +8,7 @@ import {
   useState,
 } from "react"
 import { fetchClientEffectiveScopeTag, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
+import { AUTH_CHANGED_EVENT } from "@/lib/client-auth-state"
 import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
 import { IMPERSONATION_STORAGE_KEY } from "@/lib/impersonation-headers"
 
@@ -57,6 +58,10 @@ export function EffectiveScopeProvider({
   }, [initialScopeTag])
 
   useLayoutEffect(() => {
+    const onAuth = () => {
+      setTag(readClientEffectiveScopeTagSync())
+      void fetchClientEffectiveScopeTag().then(setTag)
+    }
     const onImp = () => {
       const sync = readClientEffectiveScopeTagSync()
       setTag(sync)
@@ -68,9 +73,11 @@ export function EffectiveScopeProvider({
         void fetchClientEffectiveScopeTag().then(setTag)
       }
     }
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuth)
     window.addEventListener(IMPERSONATION_CHANGED_EVENT, onImp)
     window.addEventListener("storage", onStorage)
     return () => {
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuth)
       window.removeEventListener(IMPERSONATION_CHANGED_EVENT, onImp)
       window.removeEventListener("storage", onStorage)
     }

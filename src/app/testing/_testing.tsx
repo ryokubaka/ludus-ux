@@ -1353,7 +1353,6 @@ export function TestingPageClient() {
                 {logLines.length > 0 && (
                   <LogViewerCompound.Root
                     lines={logLines}
-                    autoScroll={isStreaming}
                     maxHeight="320px"
                     onClear={isStreaming ? undefined : () => setLogLines([])}
                   >

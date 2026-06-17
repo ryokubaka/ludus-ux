@@ -30,13 +30,17 @@ import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
 export function LogsPageClient() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
-  const { selectedRangeId } = useRange()
+  const { selectedRangeId, loading: rangesLoading, ranges } = useRange()
   const scopeTag = useEffectiveScopeTag()
   const [lines, setLines] = useState<string[]>([])
   const [isStreaming, setIsStreaming] = useState(false)
   const [rangeState, setRangeState] = useState<string>("")
   const [loading, setLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  const streamGenRef = useRef(0)
+
+  const rangeSelectionReady =
+    !rangesLoading && (ranges.length === 0 || selectedRangeId !== null)
 
   // ── History state ─────────────────────────────────────────────────────────
   const [selectedLogId, setSelectedLogId] = useState<string | null>(null)
@@ -197,6 +201,7 @@ export function LogsPageClient() {
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
+    const gen = ++streamGenRef.current
     setLines([])
     setIsStreaming(true)
 
@@ -238,10 +243,10 @@ export function LogsPageClient() {
       } catch (err) {
         if ((err as Error).name === "AbortError") return
       } finally {
-        setIsStreaming(false)
+        if (gen === streamGenRef.current) setIsStreaming(false)
       }
     })()
-  }, [loadLogs, selectedRangeId, queryClient])
+  }, [loadLogs, selectedRangeId, queryClient, scopeTag])
 
   const clearLogs = useCallback(() => setLines([]), [])
 
@@ -257,9 +262,10 @@ export function LogsPageClient() {
   }, [lines])
 
   useEffect(() => {
+    if (!rangeSelectionReady) return
     startStreaming()
     return () => abortRef.current?.abort()
-  }, [startStreaming])
+  }, [rangeSelectionReady, startStreaming])
 
   const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
 
@@ -306,7 +312,6 @@ export function LogsPageClient() {
           </div>
           <LogViewerCompound.Root
             lines={lines}
-            autoScroll={isStreaming}
             live={isStreaming}
             maxHeight="calc(100vh - 560px)"
           >

@@ -26,8 +26,12 @@ import {
   ChevronDown,
   ChevronRight,
   Shield,
+  Filter,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
+import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
+import { DeployLimitSelector } from "@/components/range/deploy-limit-selector"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { useRange } from "@/lib/range-context"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -39,46 +43,29 @@ import { cn } from "@/lib/utils"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
 
-const ALL_TAGS = [
-  "vm-deploy",
-  "network",
-  "dns-rewrites",
-  "assign-ip",
-  "windows",
-  "dcs",
-  "domain-join",
-  "sysprep",
-  "user-defined-roles",
-  "custom-choco",
-  "linux-packages",
-  "additional-tools",
-  "install-office",
-  "install-visual-studio",
-  "allow-share-access",
-  "custom-groups",
-  "share",
-  "nexus",
-]
+const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]
+const TAG_DESCRIPTIONS = LUDUS_DEPLOY_TAG_DESCRIPTIONS
 
-const TAG_DESCRIPTIONS: Record<string, string> = {
-  "vm-deploy": "Create all VMs defined in config",
-  network: "Set up VLANs and firewall rules",
-  "dns-rewrites": "Configure DNS rewrites",
-  "assign-ip": "Set static IPs and hostnames",
-  windows: "Configure Windows VMs (RDP, WinRM, etc.)",
-  dcs: "Set up domain controllers",
-  "domain-join": "Join Windows VMs to domain",
-  sysprep: "Run sysprep on Windows VMs",
-  "user-defined-roles": "Apply Ansible roles",
-  "custom-choco": "Install chocolatey packages",
-  "linux-packages": "Install Linux packages",
-  "additional-tools": "Install Firefox, Chrome, Burp, etc.",
-  "install-office": "Install Microsoft Office",
-  "install-visual-studio": "Install Visual Studio",
-  "allow-share-access": "Enable anonymous SMB share access",
-  "custom-groups": "Set custom Ansible groups",
-  share: "Deploy Ludus Share VM",
-  nexus: "Deploy Nexus cache VM",
+function buildDeployConfirmMessage(
+  tags: string[],
+  limitPattern: string | undefined,
+): string {
+  const parts: string[] = []
+  if (tags.length > 0) parts.push(`tags: ${tags.join(", ")}`)
+  if (limitPattern) parts.push(`limit: ${limitPattern}`)
+  if (parts.length === 0) return "Start full range deployment?"
+  return `Deploy with ${parts.join(", ")}?`
+}
+
+function buildDeployToastDescription(
+  tags: string[] | undefined,
+  limitPattern: string | undefined,
+): string {
+  const parts: string[] = []
+  if (tags?.length) parts.push(`Tags: ${tags.join(", ")}`)
+  else parts.push("Full tag set")
+  if (limitPattern) parts.push(`Limit: ${limitPattern}`)
+  return parts.join(" · ")
 }
 
 export function RangeConfigPageClient() {
@@ -95,8 +82,10 @@ export function RangeConfigPageClient() {
   const lastSyncedRangeRef = useRef<string | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [limitVM, setLimitVM] = useState("")
+  const [selectedLimitHosts, setSelectedLimitHosts] = useState<string[]>([])
+  const [customLimitPattern, setCustomLimitPattern] = useState("")
   const [showTagSelector, setShowTagSelector] = useState(false)
+  const [showLimitSelector, setShowLimitSelector] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
@@ -141,11 +130,19 @@ export function RangeConfigPageClient() {
     setConfig("")
     setOriginalConfig("")
     setNetworkRules([])
+    setSelectedLimitHosts([])
+    setCustomLimitPattern("")
+    setShowLimitSelector(false)
     stopStreaming()
     setDeploying(false)
     setShowLogs(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRangeId])
+
+  const deployLimitPattern = resolveDeployLimitPattern(selectedLimitHosts, customLimitPattern)
+  const limitSelectionCount = customLimitPattern.trim()
+    ? 1
+    : selectedLimitHosts.length
 
   // Sync editor ONLY on initial load or when the active range changes.
   // Background refetches must NOT overwrite what the user has typed or already saved —
@@ -222,7 +219,7 @@ export function RangeConfigPageClient() {
     const tagList = tagsForLudus && tagsForLudus.length > 0 ? tagsForLudus : undefined
     const result = await ludusApi.deployRange(
       tagList,
-      limitVM || undefined,
+      deployLimitPattern,
       selectedRangeId ?? undefined,
       forceLudus,
     )
@@ -247,8 +244,10 @@ export function RangeConfigPageClient() {
       setDeploying(false)
       return
     }
-    const tagDesc = tagList?.length ? `Tags: ${tagList.join(", ")}` : "Full deployment"
-    toast({ title: "Deployment started", description: tagDesc })
+    toast({
+      title: "Deployment started",
+      description: buildDeployToastDescription(tagList, deployLimitPattern),
+    })
     startStreaming(selectedRangeId ?? undefined)
   }
 
@@ -256,12 +255,7 @@ export function RangeConfigPageClient() {
     await executeDeploy(selectedTags.length > 0 ? selectedTags : undefined)
   }
   const handleDeploy = () =>
-    confirm(
-      selectedTags.length > 0
-        ? `Deploy with tags: ${selectedTags.join(", ")}?`
-        : "Start full range deployment?",
-      doDeploy
-    )
+    confirm(buildDeployConfirmMessage(selectedTags, deployLimitPattern), doDeploy)
 
   const doDeployFirewallRules = async () => {
     const merged = injectNetworkRules(config, networkRules)
@@ -411,6 +405,19 @@ export function RangeConfigPageClient() {
             </Button>
 
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowLimitSelector(!showLimitSelector)}
+              disabled={!!pendingAction}
+            >
+              <Filter className="h-4 w-4" />
+              Limit
+              {limitSelectionCount > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{limitSelectionCount}</Badge>
+              )}
+            </Button>
+
+            <Button
               onClick={handleDeploy}
               disabled={deploying || !!pendingAction}
               variant={deploying ? "secondary" : "default"}
@@ -497,6 +504,18 @@ export function RangeConfigPageClient() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {showLimitSelector && selectedRangeId && (
+        <DeployLimitSelector
+          rangeId={selectedRangeId}
+          configYaml={config}
+          selectedHosts={selectedLimitHosts}
+          onSelectedHostsChange={setSelectedLimitHosts}
+          customPattern={customLimitPattern}
+          onCustomPatternChange={setCustomLimitPattern}
+          disabled={!!pendingAction || deploying}
+        />
       )}
 
       {/* Network Rules panel */}

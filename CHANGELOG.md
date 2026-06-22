@@ -15,6 +15,11 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.3] - 2026-06-22
+
+**LUX**
+- [Add] **Configuration** — Deploy Host Limit panel on Range Configuration: checkbox host picker (config YAML + sync deployed VMs), maps to Ludus CLI `--limit` / `POST /range/deploy` `limit`; combinable with deploy tags.
+
 ## [1.1.2] - 2026-06-16
 
 **LUX**

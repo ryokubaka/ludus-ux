@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({ args: "", instanceId: undefined }))
-  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags } = body as {
+  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags, workspaceConfigYaml } = body as {
     args?: string
     instanceId?: string
     /** apiKey is optional: when absent, the session cookie's impersonation key is used. */
@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
      *  is known up-front (e.g. new-instance flow where the range was pre-created). */
     rangeId?: string
     ludusDeployTags?: unknown
+    workspaceConfigYaml?: string
   }
 
   const ludusDeployTags =
@@ -182,7 +183,8 @@ export async function POST(request: NextRequest) {
           creds,
           effectiveImpersonate ?? undefined,
           effectiveRangeId,
-          ludusDeployTags.length > 0 ? ludusDeployTags : undefined
+          ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
+          typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

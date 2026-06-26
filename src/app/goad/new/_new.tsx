@@ -29,6 +29,9 @@ import {
   CircleAlert,
   Tag,
   Shield,
+  FileCode2,
+  RotateCcw,
+  BookOpen,
 } from "lucide-react"
 import Link from "next/link"
 import type { GoadLabDef, GoadExtensionDef, GoadCatalog, GoadInstance, TemplateObject } from "@/lib/types"
@@ -48,6 +51,17 @@ import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/l
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS, filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { clearRangeVmsAndWait } from "@/lib/wait-range-vms-cleared"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { YamlEditor } from "@/components/range/yaml-editor"
+import { GoadAnsibleDependenciesPanel } from "@/components/goad/goad-ansible-dependencies-panel"
+import {
+  mergeGoadPreviewWithNetworkRules,
+  validateGoadConfigYaml,
+} from "@/lib/goad-preview-config"
+import {
+  extensionAnsibleDepsReady,
+  extensionMissingAnsibleRoles,
+  parseAnsibleInstalledSets,
+} from "@/lib/goad-dependency-service"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
@@ -215,6 +229,23 @@ export function NewGoadInstancePageClient() {
   // Optional Ludus deploy tags — set from Review & Deploy (advanced panel); forwarded to `ludus range deploy --tags`
   const [selectedLudusDeployTags, setSelectedLudusDeployTags] = useState<string[]>([])
   const [showLudusDeployTagsPanel, setShowLudusDeployTagsPanel] = useState(false)
+
+  // Step 5: generated / review Ludus config YAML
+  const [reviewConfigYaml, setReviewConfigYaml] = useState("")
+  const [generatedConfigYaml, setGeneratedConfigYaml] = useState("")
+  const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
+  const [configPreviewError, setConfigPreviewError] = useState<string | null>(null)
+  const [ansibleDepsReady, setAnsibleDepsReady] = useState(true)
+  const configYamlDirtyRef = useRef(false)
+  const configYamlDirty = reviewConfigYaml !== generatedConfigYaml
+  configYamlDirtyRef.current = configYamlDirty
+  const yamlValidation = useMemo(() => validateGoadConfigYaml(reviewConfigYaml), [reviewConfigYaml])
+
+  // Installed Ansible roles/collections (extension step gate + review deps)
+  const [ansibleInstalled, setAnsibleInstalled] = useState<ReturnType<
+    typeof parseAnsibleInstalledSets
+  > | null>(null)
+  const [ansibleInstalledLoading, setAnsibleInstalledLoading] = useState(false)
 
   // Range selection (step 2)
   const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
@@ -390,6 +421,61 @@ export function NewGoadInstancePageClient() {
     return ext.compatibility.includes("*") || ext.compatibility.includes(selectedLab)
   })
 
+  const extensionMissingAnsible = useCallback(
+    (ext: GoadExtensionDef): string[] => extensionMissingAnsibleRoles(ext, ansibleInstalled),
+    [ansibleInstalled],
+  )
+
+  const extensionAnsibleReady = useCallback(
+    (ext: GoadExtensionDef): boolean => extensionAnsibleDepsReady(ext, ansibleInstalled),
+    [ansibleInstalled],
+  )
+
+  useEffect(() => {
+    if (step !== 1 && step !== 4) return
+    setAnsibleInstalledLoading(true)
+    ludusApi
+      .listAnsible()
+      .then((res) => {
+        setAnsibleInstalled(parseAnsibleInstalledSets(res.data ?? []))
+      })
+      .catch(() => setAnsibleInstalled({ roles: new Set(), collections: new Set() }))
+      .finally(() => setAnsibleInstalledLoading(false))
+  }, [step])
+
+  const loadConfigPreview = useCallback(async () => {
+    if (!selectedLab) return
+    setConfigPreviewLoading(true)
+    setConfigPreviewError(null)
+    try {
+      const res = await fetch("/api/goad/preview-config", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        body: JSON.stringify({
+          lab: selectedLab,
+          extensions: Array.from(selectedExtensions),
+        }),
+      })
+      const data = (await res.json()) as { yaml?: string; error?: string }
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+      const merged = mergeGoadPreviewWithNetworkRules(data.yaml ?? "", networkRules)
+      setGeneratedConfigYaml(merged)
+      if (!configYamlDirtyRef.current) {
+        setReviewConfigYaml(merged)
+      }
+    } catch (err) {
+      setConfigPreviewError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setConfigPreviewLoading(false)
+    }
+  }, [selectedLab, selectedExtensions, networkRules])
+
+  useEffect(() => {
+    if (step !== 4 || !selectedLab) return
+    void loadConfigPreview()
+  }, [step, selectedLab, selectedExtensions, networkRules, loadConfigPreview])
+
   // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
   // e.g. "melchior-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
   // When impersonating, use the impersonated user's username so the range name
@@ -465,6 +551,28 @@ export function NewGoadInstancePageClient() {
   const handleDeploy = async () => {
     if (!selectedLab) return
 
+    const yamlCheck = validateGoadConfigYaml(reviewConfigYaml)
+    if (!yamlCheck.valid) {
+      toast({
+        variant: "destructive",
+        title: "Invalid configuration YAML",
+        description: yamlCheck.error,
+      })
+      return
+    }
+    if (!ansibleDepsReady) {
+      toast({
+        variant: "destructive",
+        title: "Ansible dependencies missing",
+        description: "Install required roles and collections before deploying.",
+      })
+      return
+    }
+
+    const deployConfigYaml = reviewConfigYaml.trim()
+    const useWizardYaml = deployConfigYaml.length > 0
+    const hasNetworkInYaml = useWizardYaml && reviewConfigYaml.includes("network:")
+
     const deployTagsForRun = filterLudusDeployTags(selectedLudusDeployTags)
     const ludusDeployTagsOpt = deployTagsForRun.length > 0 ? deployTagsForRun : undefined
 
@@ -527,9 +635,8 @@ export function NewGoadInstancePageClient() {
       return
     }
 
-    // If the user defined custom firewall rules, write them to the range config
-    // before GOAD starts. GOAD's ansible will apply the network tag and enforce them.
-    if (networkRules.length > 0 && rangeId) {
+    // When wizard YAML is canonical, network is injected via LUX_WIZARD_CONFIG_YML at deploy.
+    if (networkRules.length > 0 && rangeId && !useWizardYaml) {
       try {
         await ludusApi.setRangeConfig(injectNetworkRules("", networkRules), rangeId)
       } catch { /* Non-fatal — GOAD can still deploy, rules can be set post-deploy */ }
@@ -544,9 +651,11 @@ export function NewGoadInstancePageClient() {
     // Build pending-network snapshot for the handoff so the server can re-apply
     // it after GOAD finishes, even if the user navigates away.
     const networkSnapshot =
-      networkRules.length > 0
-        ? extractNetworkSection(injectNetworkRules("", networkRules))
-        : null
+      useWizardYaml && hasNetworkInYaml
+        ? extractNetworkSection(reviewConfigYaml)
+        : networkRules.length > 0
+          ? extractNetworkSection(injectNetworkRules("", networkRules))
+          : null
     const networkRulesJson = networkSnapshot ? JSON.stringify(networkSnapshot) : undefined
 
     // ── Determine whether we're reusing an existing instance ─────────────────
@@ -653,6 +762,7 @@ export function NewGoadInstancePageClient() {
         impersonation ? { username: impersonation.username } : undefined,
         rangeId ?? undefined,
         ludusDeployTagsOpt,
+        deployConfigYaml,
       )
 
       const taskIdForRedirect = await waitForGoadTaskId()
@@ -752,7 +862,14 @@ export function NewGoadInstancePageClient() {
         extensions: exts,
         argsHead: args.slice(0, 240),
       })
-      run(args, undefined, impersonation ? { username: impersonation.username } : undefined, rangeId ?? undefined, ludusDeployTagsOpt)
+      run(
+        args,
+        undefined,
+        impersonation ? { username: impersonation.username } : undefined,
+        rangeId ?? undefined,
+        ludusDeployTagsOpt,
+        deployConfigYaml,
+      )
 
       // Poll until GOAD creates the new workspace directory, then redirect.
       // GOAD writes instance.json early in the install flow (within ~30–60 s).
@@ -1047,7 +1164,12 @@ export function NewGoadInstancePageClient() {
             <div className="grid gap-2">
               {compatExtensions.map((ext) => {
                 const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
-                const canEnable = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                const ansibleReady = extensionAnsibleReady(ext)
+                const missingAnsible = extensionMissingAnsible(ext)
+                const canEnable =
+                  (tpl.ready || (ext.requiredTemplates ?? []).length === 0) &&
+                  ansibleReady &&
+                  !ansibleInstalledLoading
                 const isSelected = selectedExtensions.has(ext.name)
                 return (
                   <div
@@ -1078,9 +1200,14 @@ export function NewGoadInstancePageClient() {
                             +{ext.machines.length} VM{ext.machines.length !== 1 ? "s" : ""}
                           </span>
                         )}
-                        {!canEnable && (
+                        {!canEnable && !tpl.ready && (ext.requiredTemplates ?? []).length > 0 && (
                           <Badge variant="destructive" className="text-xs gap-1">
                             <PackageX className="h-2.5 w-2.5" /> Missing templates
+                          </Badge>
+                        )}
+                        {!canEnable && tpl.ready && missingAnsible.length > 0 && (
+                          <Badge variant="destructive" className="text-xs gap-1">
+                            <BookOpen className="h-2.5 w-2.5" /> Missing Ansible
                           </Badge>
                         )}
                       </div>
@@ -1092,6 +1219,14 @@ export function NewGoadInstancePageClient() {
                       )}
                       {(ext.requiredTemplates ?? []).length > 0 && (
                         <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                      )}
+                      {missingAnsible.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground mt-1 font-mono">
+                          Requires: {missingAnsible.join(", ")} — install on Review step or{" "}
+                          <Link href="/ansible" className="text-primary underline underline-offset-2">
+                            Ansible page
+                          </Link>
+                        </p>
                       )}
                     </div>
                   </div>
@@ -1381,6 +1516,88 @@ export function NewGoadInstancePageClient() {
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <CardTitle className="text-sm flex items-center gap-1.5">
+                    <FileCode2 className="h-3.5 w-3.5 text-primary" />
+                    Generated Configuration
+                  </CardTitle>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Ludus <code className="text-primary">provider/config.yml</code> preview — edit before deploy if needed
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={configPreviewLoading || !configYamlDirty}
+                    onClick={() => setReviewConfigYaml(generatedConfigYaml)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={configPreviewLoading}
+                    onClick={() => void loadConfigPreview()}
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5", configPreviewLoading && "animate-spin")} />
+                    Reload preview
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {configPreviewLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-4 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating configuration preview…
+                </div>
+              )}
+              {configPreviewError && !configPreviewLoading && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="text-xs space-y-2">
+                    <p>{configPreviewError}</p>
+                    <Button type="button" size="sm" variant="outline" onClick={() => void loadConfigPreview()}>
+                      Retry
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {!configPreviewLoading && !configPreviewError && (
+                <>
+                  {configYamlDirty && (
+                    <p className="text-[10px] text-amber-600">
+                      Configuration modified from generated preview — your edits will be applied on deploy.
+                    </p>
+                  )}
+                  {!yamlValidation.valid && reviewConfigYaml.trim() && (
+                    <p className="text-[10px] text-status-error">{yamlValidation.error}</p>
+                  )}
+                  <YamlEditor
+                    value={reviewConfigYaml}
+                    onChange={setReviewConfigYaml}
+                    height="320px"
+                  />
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <GoadAnsibleDependenciesPanel
+            configYaml={reviewConfigYaml}
+            enabled={!configPreviewLoading && !configPreviewError && !!reviewConfigYaml.trim()}
+            onReadyChange={setAnsibleDepsReady}
+          />
+
           {/* Template readiness summary */}
           {(() => {
             const allRequired = [
@@ -1452,7 +1669,20 @@ export function NewGoadInstancePageClient() {
             <Button variant="ghost" onClick={() => setStep(3)}>
               <ChevronLeft className="h-4 w-4" /> Back
             </Button>
-            <Button onClick={handleDeploy} disabled={isRunning || creatingRange || clearingRange} className="min-w-36">
+            <Button
+              onClick={handleDeploy}
+              disabled={
+                isRunning ||
+                creatingRange ||
+                clearingRange ||
+                configPreviewLoading ||
+                !!configPreviewError ||
+                !yamlValidation.valid ||
+                !reviewConfigYaml.trim() ||
+                !ansibleDepsReady
+              }
+              className="min-w-36"
+            >
               {creatingRange
                 ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating range...</>
                 : clearingRange

@@ -477,7 +477,7 @@ export function NewGoadInstancePageClient() {
   }, [step, selectedLab, selectedExtensions, networkRules, loadConfigPreview])
 
   // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
-  // e.g. "melchior-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
+  // e.g. "user1-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
   // When impersonating, use the impersonated user's username so the range name
   // reflects the actual owner, not the admin performing the action.
   // impersonation?.username is listed as a direct dep so the memo updates the
@@ -496,8 +496,8 @@ export function NewGoadInstancePageClient() {
    *
    * We intentionally never reuse an existing range — even an empty one.
    * The "reuse empty range" optimisation was removed because GET /range only
-   * returns the user's *default* range, so an empty `melchior` would be
-   * mistakenly picked, setting LUDUS_RANGE_ID=melchior and causing GOAD's
+   * returns the user's *default* range, so an empty `user1` would be
+   * mistakenly picked, setting LUDUS_RANGE_ID=user1 and causing GOAD's
    * internal `ludus range rm` to destroy the user's primary range.
    *
    * On failure returns `{ ok: false, error }` so the caller can stop before GOAD
@@ -508,7 +508,7 @@ export function NewGoadInstancePageClient() {
     | { ok: false; error: string }
   > => {
     // Always create a new dedicated range.
-    // Naming convention: <user>-<labname>-<uid>  e.g. "melchior-GOAD-Mini-LDQ8"
+    // Naming convention: <user>-<labname>-<uid>  e.g. "user1-GOAD-Mini-LDQ8"
     // Uses the stable newRangeUid so the preview shown in step 2 matches the actual ID.
     const candidateId = autoRangeId
     const displayName = candidateId

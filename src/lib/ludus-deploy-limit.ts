@@ -49,17 +49,17 @@ function parseRouterBlockFields(yamlText: string): { vmName: string; hostname: s
   return { vmName, hostname: get("hostname") || vmName }
 }
 
-/** Ansible --limit host key for the range router (explicit `router:` block or Ludus default). */
+/** Ludus deploy `limit` host key for the range router (explicit `router:` vm_name or default `{range_id}-router`). */
 export function resolveRouterLimitHost(yamlText: string, rangeId?: string): string | null {
   if (!rangeId?.trim()) return null
   const explicit = parseRouterBlockFields(yamlText)
   if (explicit) {
-    return resolveRangeIdInHost(explicit.hostname || explicit.vmName, rangeId)
+    return resolveRangeIdInHost(explicit.vmName, rangeId)
   }
   return ludusDefaultRouterHostname(rangeId)
 }
 
-/** Parse Ansible inventory hostnames from range-config YAML (VMs + router). */
+/** Parse Ludus deploy limit host keys (vm_name) from range-config YAML (VMs + router). */
 export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): string[] {
   if (!yamlText.trim()) return []
   const hosts: string[] = []
@@ -71,9 +71,7 @@ export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): s
     }
     const vmName = get("vm_name")
     if (!vmName) continue
-    // Ansible --limit matches inventory host keys (hostname), not Proxmox vm_name.
-    const hostname = get("hostname") || vmName
-    const resolved = rangeId ? resolveRangeIdInHost(hostname, rangeId) : hostname
+    const resolved = rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName
     hosts.push(resolved)
   }
   const routerHost = resolveRouterLimitHost(yamlText, rangeId)
@@ -81,40 +79,7 @@ export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): s
   return dedupeSorted(hosts)
 }
 
-/** Map resolved Proxmox vm_name → Ansible hostname from range-config YAML. */
-export function parseVmNameToHostnameMap(yamlText: string, rangeId?: string): Map<string, string> {
-  const map = new Map<string, string>()
-  const put = (vmName: string, hostname: string) => {
-    if (!vmName) return
-    const resolvedVm = rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName
-    const resolvedHost = rangeId ? resolveRangeIdInHost(hostname || vmName, rangeId) : hostname || vmName
-    map.set(resolvedVm, resolvedHost)
-  }
-
-  const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
-  for (const block of blocks) {
-    const get = (key: string): string => {
-      const m = block.match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+)$`, "m"))
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
-    }
-    const vmName = get("vm_name")
-    if (!vmName) continue
-    put(vmName, get("hostname") || vmName)
-  }
-
-  const explicitRouter = parseRouterBlockFields(yamlText)
-  if (explicitRouter) {
-    put(explicitRouter.vmName, explicitRouter.hostname)
-  } else if (rangeId) {
-    // Ludus always provisions a default Debian router; inventory hostname is `{range_id}-router`.
-    const routerHost = ludusDefaultRouterHostname(rangeId)
-    map.set(routerHost, routerHost)
-  }
-
-  return map
-}
-
-/** Resolve GET /range VM name to Ansible --limit host key using config mapping. */
+/** Resolve GET /range VM name to Ludus deploy `limit` host key. */
 export function resolveLimitHostForRangeVm(
   vmName: string,
   configYaml: string,
@@ -122,14 +87,9 @@ export function resolveLimitHostForRangeVm(
 ): string {
   const trimmed = vmName.trim()
   if (!trimmed) return trimmed
-  const mapped = parseVmNameToHostnameMap(configYaml, rangeId).get(trimmed)
-  if (mapped) return mapped
-  if (isLudusRangeRouterVmName(trimmed)) {
-    const routerHost = resolveRouterLimitHost(configYaml, rangeId)
-    if (routerHost) return routerHost
+  if (isLudusRangeRouterVmName(trimmed) && !parseRouterBlockFields(configYaml)) {
+    return ludusDefaultRouterHostname(rangeId)
   }
-  const configHosts = parseHostsFromRangeConfig(configYaml, rangeId)
-  if (configHosts.includes(trimmed)) return trimmed
   return trimmed
 }
 

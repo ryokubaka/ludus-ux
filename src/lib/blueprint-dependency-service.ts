@@ -7,7 +7,10 @@ import {
   resolveBlueprintRequirements,
   type BlueprintRequirement,
 } from "@/lib/blueprint-dependencies"
-import type { AnsibleItem } from "@/lib/types"
+import {
+  fetchInstalledAnsible,
+  installMissingAnsibleRequirements,
+} from "@/lib/ansible-requirements-service"
 
 export interface BlueprintDependencyCheck {
   blueprintId: string
@@ -29,16 +32,6 @@ interface AnsibleInstallResult {
 function isHttp404(error: string | undefined): boolean {
   if (!error) return false
   return /HTTP 404\b/i.test(error) || /\b404 Not Found\b/i.test(error)
-}
-
-function isAlreadyInstalled(error: string): boolean {
-  return /already installed/i.test(error) || /nothing to do/i.test(error)
-}
-
-async function fetchInstalledAnsible(): Promise<AnsibleItem[]> {
-  const res = await ludusApi.listAnsible()
-  if (res.error) throw new Error(res.error)
-  return res.data ?? []
 }
 
 async function fetchBlueprintRequirementsYaml(blueprintId: string): Promise<{
@@ -121,37 +114,6 @@ function formatInstallResults(results: AnsibleInstallResult[] | undefined): Inst
   }
 }
 
-async function installMissingIndividually(
-  missing: BlueprintRequirement[],
-): Promise<InstallBlueprintDepsResult> {
-  const installed: string[] = []
-  const failed: { name: string; error: string }[] = []
-
-  for (const req of missing) {
-    const res =
-      req.kind === "role"
-        ? await ludusApi.addRole(req.name, req.version)
-        : await ludusApi.addCollection(req.name, req.version)
-
-    if (res.error) {
-      if (isAlreadyInstalled(res.error)) {
-        installed.push(req.name)
-        continue
-      }
-      failed.push({ name: req.name, error: res.error })
-      continue
-    }
-    installed.push(req.name)
-  }
-
-  return {
-    ok: failed.length === 0,
-    installed,
-    failed,
-    usedBulkInstall: false,
-  }
-}
-
 /** Install blueprint Ansible deps via Ludus bulk endpoint, then per-item fallback. */
 export async function installBlueprintDependencies(
   blueprintId: string,
@@ -166,13 +128,12 @@ export async function installBlueprintDependencies(
     const parsed = formatInstallResults(bulk.data.ansibleResults)
     if (parsed.ok) return parsed
 
-    // Bulk ran but some items failed — re-check what's still missing.
     const installed = await fetchInstalledAnsible()
     const stillMissing = findMissingRequirements(installed, missing)
     if (stillMissing.length === 0) {
       return { ...parsed, ok: true }
     }
-    const fallback = await installMissingIndividually(stillMissing)
+    const fallback = await installMissingAnsibleRequirements(stillMissing)
     return {
       ok: fallback.ok,
       installed: [...parsed.installed, ...fallback.installed],
@@ -182,9 +143,10 @@ export async function installBlueprintDependencies(
   }
 
   if (bulk.error && !isHttp404(bulk.error)) {
-    // Non-404 bulk failure: try individual installs from requirements anyway.
-    const individual = await installMissingIndividually(missing)
-    if (individual.ok || individual.installed.length > 0) return individual
+    const individual = await installMissingAnsibleRequirements(missing)
+    if (individual.ok || individual.installed.length > 0) {
+      return { ...individual, usedBulkInstall: false }
+    }
     return {
       ok: false,
       installed: individual.installed,
@@ -193,7 +155,8 @@ export async function installBlueprintDependencies(
     }
   }
 
-  return installMissingIndividually(missing)
+  const individual = await installMissingAnsibleRequirements(missing)
+  return { ...individual, usedBulkInstall: false }
 }
 
 /** Re-check after install; returns updated missing list. */

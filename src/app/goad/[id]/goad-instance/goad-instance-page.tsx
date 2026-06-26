@@ -65,6 +65,10 @@ import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/l
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { useAbortRange } from "@/lib/use-abort-range"
+import {
+  parseAnsibleInstalledSets,
+  type AnsibleInstalledSets,
+} from "@/lib/goad-dependency-service"
 import { useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
@@ -211,6 +215,8 @@ function GoadInstancePage() {
     return () => window.clearInterval(id)
   }, [activeTab, instance?.ludusRangeId, refreshRangeStateFromServer, handleRefreshRangeLogs])
   const [templates, setTemplates] = useState<TemplateObject[]>([])
+  const [ansibleInstalled, setAnsibleInstalled] = useState<AnsibleInstalledSets | null>(null)
+  const [ansibleInstalledLoading, setAnsibleInstalledLoading] = useState(false)
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
 
@@ -858,10 +864,23 @@ function GoadInstancePage() {
     setHistoryGoadLines([])
   }, [])
 
+  const refreshAnsibleInstalled = useCallback(async () => {
+    setAnsibleInstalledLoading(true)
+    try {
+      const res = await ludusApi.listAnsible()
+      if (res.error) throw new Error(res.error)
+      setAnsibleInstalled(parseAnsibleInstalledSets(res.data ?? []))
+    } catch {
+      setAnsibleInstalled({ roles: new Set(), collections: new Set() })
+    } finally {
+      setAnsibleInstalledLoading(false)
+    }
+  }, [])
+
   // Fetch instance data, catalog, and Ludus templates when instanceId / impersonation changes
   useEffect(() => {
     fetchInstances()
-    fetch("/api/goad/catalog")
+    fetch("/api/goad/catalog", { method: "POST", credentials: "include" })
       .then((r) => r.json())
       .then((d: GoadCatalog) => { if (d.configured) setCatalog(d) })
       .catch(() => {})
@@ -875,6 +894,10 @@ function GoadInstancePage() {
   // impersonationHeaders — it is the right trigger for the whole block.
   // The direct fetch calls inside are intentionally stable one-shots.
   }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (activeTab === "extensions") void refreshAnsibleInstalled()
+  }, [activeTab, refreshAnsibleInstalled])
 
   useEffect(() => {
     if (activeTab === "history") fetchAllHistory()
@@ -1144,6 +1167,9 @@ function GoadInstancePage() {
           onReprovisionExtension={handleReprovisionExtension}
           onRemoveExtension={handleRemoveExtension}
           onInstallExtension={handleInstallExtension}
+          ansibleInstalled={ansibleInstalled}
+          ansibleInstalledLoading={ansibleInstalledLoading}
+          onAnsibleInstalledChange={refreshAnsibleInstalled}
         />
         <GoadHistoryTab
           active={activeTab === "history"}

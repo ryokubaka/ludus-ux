@@ -10,6 +10,7 @@
  */
 
 import type { NextRequest } from "next/server"
+import { randomUUID } from "crypto"
 import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
 import type { GoadInstance, GoadCatalog } from "./types"
 import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-request"
@@ -59,6 +60,9 @@ const LUDUS_WRAPPER_SH = [
   '    _P="$_a"',
   '  done',
   '  if [ -n "$_CF" ]; then',
+  '    if [ -n "${LUX_WIZARD_CONFIG_YML:-}" ] && [ -f "$LUX_WIZARD_CONFIG_YML" ]; then',
+  '      cp "$LUX_WIZARD_CONFIG_YML" "$_CF" 2>/dev/null || true',
+  '    fi',
   '    _SD="$(dirname "$_CF")/.lux-network-snapshot.json"',
   '    if [ -f "$_SD" ]; then',
   "      _LUX_ERR=$(mktemp 2>/dev/null || echo /tmp/lux-net-err.$$)",
@@ -469,7 +473,9 @@ export async function streamGoadCommand(
   rangeId?: string,
   /** When non-empty, Ludus wrapper appends `--tags` to every `ludus range deploy`
    *  in this session (comma-joined allowlist from {@link filterLudusDeployTags}). */
-  ludusDeployTags?: string[]
+  ludusDeployTags?: string[],
+  /** When set, Ludus wrapper replaces workspace config.yml before `range config set`. */
+  workspaceConfigYaml?: string,
 ): Promise<() => void> {
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
@@ -490,6 +496,29 @@ export async function streamGoadCommand(
   const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
   const safeDeployTags = filterLudusDeployTags(ludusDeployTags ?? [])
   const deployTagsJoined = safeDeployTags.join(",")
+
+  let luxWizardConfigPath = ""
+  const trimmedWizardYaml = workspaceConfigYaml?.trim()
+  if (trimmedWizardYaml) {
+    luxWizardConfigPath = `/tmp/lux-wizard-config-${randomUUID()}.yml`
+    const yamlB64 = Buffer.from(trimmedWizardYaml, "utf-8").toString("base64")
+    const safePath = luxWizardConfigPath.replace(/'/g, "")
+    const writeCmd = `echo '${yamlB64}' | base64 -d > '${safePath}' && chmod 644 '${safePath}'`
+    try {
+      if (impersonateAs) {
+        const safeUser = impersonateAs.username.replace(/'/g, "")
+        const safeInner = writeCmd.replace(/'/g, "'\\''")
+        await sshExec(`sudo -H -u '${safeUser}' bash -c '${safeInner}'`)
+      } else if (creds) {
+        await sshExec(writeCmd, creds)
+      } else {
+        await sshExec(writeCmd)
+      }
+    } catch {
+      luxWizardConfigPath = ""
+    }
+  }
+
   const pyEnvParts = [
     "PYTHONUNBUFFERED=1",
     "LUDUS_VERSION=2",
@@ -497,6 +526,9 @@ export async function streamGoadCommand(
     ...(safeRangeId ? [`LUDUS_RANGE_ID='${safeRangeId}'`] : []),
     ...(deployTagsJoined
       ? [`GOAD_LUDUS_DEPLOY_TAGS='${deployTagsJoined.replace(/'/g, "'\\''")}'`]
+      : []),
+    ...(luxWizardConfigPath
+      ? [`LUX_WIZARD_CONFIG_YML='${luxWizardConfigPath.replace(/'/g, "")}'`]
       : []),
   ]
   const pyEnv = pyEnvParts.join(" ")
@@ -1019,6 +1051,43 @@ def extract_templates_from_json(path):
         pass
     return templates
 
+def extract_roles_from_yaml_file(path):
+    """Scan Ludus provider YAML for roles: list entries."""
+    roles = set()
+    if not os.path.isfile(path):
+        return roles
+    try:
+        in_roles = False
+        with open(path) as f:
+            for line in f:
+                if re.match(r'^\\s+roles:\\s*$', line):
+                    in_roles = True
+                    continue
+                if in_roles:
+                    m = re.match(r'^\\s+-\\s+(\\S+)', line)
+                    if m:
+                        val = m.group(1).strip().strip('"').strip("'")
+                        if val:
+                            roles.add(val)
+                        continue
+                    if re.match(r'^\\s+\\w', line) and not re.match(r'^\\s+-\\s', line):
+                        in_roles = False
+    except Exception:
+        pass
+    return roles
+
+def get_required_roles(base_dir):
+    """Collect Ansible role refs from providers/ludus/*.yml."""
+    roles = set()
+    ludus_dir = os.path.join(base_dir, "providers", "ludus")
+    if os.path.isdir(ludus_dir):
+        for fname in os.listdir(ludus_dir):
+            if fname.endswith((".yml", ".yaml")):
+                roles |= extract_roles_from_yaml_file(
+                    os.path.join(ludus_dir, fname)
+                )
+    return sorted(roles)
+
 def get_required_templates(base_dir):
     """Collect required Ludus packer template names for a lab or extension.
 
@@ -1103,6 +1172,7 @@ def discover(goad_path):
                     with open(cfg_file) as f:
                         cfg = json.load(f)
                     required_templates = get_required_templates(ext_dir)
+                    required_roles = get_required_roles(ext_dir)
                     machines = cfg.get("machines") or []
                     if not machines and isinstance(cfg.get("lab"), dict):
                         hosts = cfg["lab"].get("hosts") or {}
@@ -1115,6 +1185,7 @@ def discover(goad_path):
                         "compatibility": cfg.get("compatibility", ["*"]),
                         "impact": cfg.get("impact", ""),
                         "requiredTemplates": required_templates,
+                        "requiredRoles": required_roles,
                     })
                 except Exception:
                     pass

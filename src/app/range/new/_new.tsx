@@ -33,7 +33,10 @@ import {
   FileCode2,
   Shield,
   Package,
+  RotateCcw,
 } from "lucide-react"
+import { YamlEditor } from "@/components/range/yaml-editor"
+import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
@@ -240,6 +243,8 @@ export function NewRangePageClient() {
   // Pre-populated from the existing range config when handleUseExisting runs.
   // For new ranges, starts empty so the user types/pastes.
   const [yamlConfig, setYamlConfig] = useState("")
+  const [reviewConfigYaml, setReviewConfigYaml] = useState("")
+  const [reviewConfigEdited, setReviewConfigEdited] = useState(false)
 
   // ── Blueprint step 2 ───────────────────────────────────────────────────────
   const [blueprints, setBlueprints] = useState<BlueprintListItem[]>([])
@@ -509,6 +514,19 @@ export function NewRangePageClient() {
     [vms, enableDomain, domainFqdn, networkRules]
   )
 
+  const reviewConfigDirty =
+    configMethod === "wizard" && reviewConfigEdited && reviewConfigYaml !== wizardYaml
+
+  useEffect(() => {
+    if (step !== 6 || configMethod !== "wizard" || reviewConfigEdited) return
+    setReviewConfigYaml(wizardYaml)
+  }, [step, configMethod, wizardYaml, reviewConfigEdited])
+
+  const wizardYamlValidation = useMemo(
+    () => validateGoadConfigYaml(reviewConfigYaml),
+    [reviewConfigYaml],
+  )
+
   const toggleTag = (tag: string) =>
     setSelectedTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
 
@@ -521,7 +539,26 @@ export function NewRangePageClient() {
     setDeployResult(null)
     setDeployStatus("")
 
-    const configToUpload = configMethod === "yaml" ? yamlConfig : wizardYaml
+    const configToUpload =
+      configMethod === "yaml"
+        ? yamlConfig
+        : configMethod === "wizard"
+          ? reviewConfigYaml
+          : wizardYaml
+
+    if (configMethod === "wizard") {
+      const yamlCheck = validateGoadConfigYaml(reviewConfigYaml)
+      if (!yamlCheck.valid) {
+        toast({
+          variant: "destructive",
+          title: "Invalid configuration YAML",
+          description: yamlCheck.error,
+        })
+        setDeploying(false)
+        setDeployStatus("")
+        return
+      }
+    }
 
     try {
       if (mode === "existing" && existingDeployedVMs.length > 0) {
@@ -1322,7 +1359,15 @@ export function NewRangePageClient() {
           </Card>
           <div className="flex justify-between">
             <Button variant="ghost" onClick={() => setStep(4)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button onClick={() => setStep(6)}>Next <ChevronRight className="h-4 w-4" /></Button>
+            <Button
+              onClick={() => {
+                setReviewConfigEdited(false)
+                setReviewConfigYaml(wizardYaml)
+                setStep(6)
+              }}
+            >
+              Next <ChevronRight className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       )}
@@ -1412,8 +1457,19 @@ export function NewRangePageClient() {
                       : "Generated Configuration"}
                 </CardTitle>
                 {configMethod === "wizard" && (
-                  <Button variant="ghost" size="sm" asChild>
-                    <Link href="/range/config">Edit in Full Editor</Link>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={!reviewConfigEdited}
+                    onClick={() => {
+                      setReviewConfigEdited(false)
+                      setReviewConfigYaml(wizardYaml)
+                    }}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
                   </Button>
                 )}
                 {configMethod === "yaml" && (
@@ -1433,13 +1489,30 @@ export function NewRangePageClient() {
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
+              ) : configMethod === "wizard" ? (
+                <div className="space-y-2">
+                  {reviewConfigDirty && (
+                    <p className="text-[10px] text-amber-600">
+                      Configuration modified from generated preview — your edits will be uploaded on deploy.
+                    </p>
+                  )}
+                  {!wizardYamlValidation.valid && reviewConfigYaml.trim() && (
+                    <p className="text-[10px] text-status-error">{wizardYamlValidation.error}</p>
+                  )}
+                  <YamlEditor
+                    value={reviewConfigYaml}
+                    onChange={(value) => {
+                      setReviewConfigEdited(true)
+                      setReviewConfigYaml(value)
+                    }}
+                    height="320px"
+                  />
+                </div>
               ) : (
                 <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
                   {configMethod === "yaml"
                     ? yamlConfig
-                    : configMethod === "blueprint"
-                      ? blueprintPreviewYaml || "(Preview unavailable — blueprint will still be applied on deploy.)"
-                      : wizardYaml}
+                    : blueprintPreviewYaml || "(Preview unavailable — blueprint will still be applied on deploy.)"}
                 </pre>
               )}
             </CardContent>
@@ -1497,6 +1570,8 @@ export function NewRangePageClient() {
                 disabled={
                   deploying ||
                   (configMethod === "yaml" && !yamlConfig.trim()) ||
+                  (configMethod === "wizard" &&
+                    (!reviewConfigYaml.trim() || !wizardYamlValidation.valid)) ||
                   (configMethod === "blueprint" && (!selectedBlueprintId || !blueprintDepsReady))
                 }
                 className="min-w-36"

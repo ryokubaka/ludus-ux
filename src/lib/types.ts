@@ -369,6 +369,8 @@ export interface GoadExtensionDef {
   impact: string
   /** Ludus packer template names required by this extension (beyond the base lab) */
   requiredTemplates: string[]
+  /** Ansible role refs from providers/ludus/config.yml (e.g. geerlingguy.docker) */
+  requiredRoles?: string[]
 }
 
 /** Full catalog returned by GET /api/goad/catalog */

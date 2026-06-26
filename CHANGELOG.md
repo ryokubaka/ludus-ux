@@ -15,6 +15,14 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.4] - 2026-06-22
+
+**LUX**
+- [Add] **Deploy New GOAD Instance** — Review step shows generated Ludus `provider/config.yml` preview in an editable YAML editor; custom config is injected at deploy via Ludus CLI wrapper.
+- [Add] **Deploy New GOAD Instance** — Ansible role/collection dependency checks with inline install on Review; extension checkboxes gated when required roles are missing (same pattern as template readiness).
+- [Add] **GOAD instance Extensions tab** — Gate extension install on missing Ansible roles; **Install dependencies** inline; refresh catalog on instance load for `requiredRoles`.
+- [Improve] **Deploy New Range (wizard)** — Review step uses inline Monaco YAML editor (editable generated config, reset/reload, validation) like the GOAD wizard.
+
 ## [1.1.3] - 2026-06-22
 
 **LUX**

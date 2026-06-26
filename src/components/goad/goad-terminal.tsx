@@ -466,7 +466,9 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
      *  only this instance's range, leaving other ranges untouched. */
     rangeId?: string,
     /** Passed to Ludus wrapper as `--tags` on each `ludus range deploy` (allowlist server-side). */
-    ludusDeployTags?: string[]
+    ludusDeployTags?: string[],
+    /** Wizard review YAML — injected before GOAD `ludus range config set`. */
+    workspaceConfigYaml?: string,
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -484,6 +486,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           impersonateAs,
           rangeId,
           ...(ludusDeployTags && ludusDeployTags.length > 0 ? { ludusDeployTags } : {}),
+          ...(workspaceConfigYaml?.trim() ? { workspaceConfigYaml } : {}),
         }),
         signal: controller.signal,
       },

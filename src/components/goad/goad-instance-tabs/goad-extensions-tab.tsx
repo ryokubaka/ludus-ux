@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import {
   CheckCircle2,
   Loader2,
@@ -8,7 +9,22 @@ import {
   Play,
   RotateCcw,
   Trash2,
+  BookOpen,
+  Download,
 } from "lucide-react"
+import Link from "next/link"
+import { useQueryClient } from "@tanstack/react-query"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/query-keys"
+import {
+  extensionAnsibleDepsReady,
+  extensionMissingAnsibleRoles,
+  installGoadDependencies,
+  requirementsFromExtensionRoleRefs,
+} from "@/lib/goad-dependency-service"
+import { findMissingFromInstalled } from "@/lib/ansible-requirements-service"
+import { useToast } from "@/hooks/use-toast"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +34,7 @@ import { TemplateChips } from "@/app/goad/[id]/goad-instance/template-chips"
 import { checkTemplates } from "@/components/goad/goad-instance-tab-utils"
 import { extensionIsProvisionOnly } from "@/lib/goad-catalog-capabilities"
 import { cn } from "@/lib/utils"
+import type { GoadExtensionDef } from "@/lib/types"
 import type { GoadExtensionsTabProps } from "./types"
 
 export function GoadExtensionsTab({
@@ -37,7 +54,70 @@ export function GoadExtensionsTab({
   onReprovisionExtension,
   onRemoveExtension,
   onInstallExtension,
+  ansibleInstalled,
+  ansibleInstalledLoading = false,
+  onAnsibleInstalledChange,
 }: GoadExtensionsTabProps) {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
+  const [installingDepsFor, setInstallingDepsFor] = useState<string | null>(null)
+
+  const handleInstallExtensionDeps = async (ext: GoadExtensionDef) => {
+    if (!ansibleInstalled) return
+    const required = requirementsFromExtensionRoleRefs(ext.requiredRoles ?? [])
+    const installedItems = [
+      ...[...ansibleInstalled.roles].map((name) => ({
+        name,
+        type: "role" as const,
+        version: "",
+      })),
+      ...[...ansibleInstalled.collections].map((name) => ({
+        name,
+        type: "collection" as const,
+        version: "",
+      })),
+    ]
+    const missing = findMissingFromInstalled(installedItems, required)
+    if (missing.length === 0) return
+
+    setInstallingDepsFor(ext.name)
+    try {
+      const result = await installGoadDependencies(missing)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
+      await onAnsibleInstalledChange?.()
+
+      if (result.failed.length > 0) {
+        toast({
+          variant: "destructive",
+          title: "Some dependencies failed to install",
+          description: result.failed.map((f) => `${f.name}: ${f.error}`).join("; "),
+        })
+        return
+      }
+
+      toast({
+        title: "Dependencies installed",
+        description: `Required Ansible items for ${ext.name} are ready. You can install the extension now.`,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (
+        tryToastLudusSlowHttpError({
+          toast,
+          error: msg,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => void onAnsibleInstalledChange?.(),
+        })
+      ) {
+        return
+      }
+      toast({ variant: "destructive", title: "Install failed", description: msg })
+    } finally {
+      setInstallingDepsFor(null)
+    }
+  }
+
   return (
     <TabsContent value="extensions" className="mt-4 flex flex-col min-h-0 flex-1 overflow-y-auto">
       {active ? (
@@ -155,26 +235,31 @@ export function GoadExtensionsTab({
                 {uninstalledExtensions.map((ext) => {
                   const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
                   const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                  const ansibleReady = extensionAnsibleDepsReady(ext, ansibleInstalled ?? null)
+                  const missingAnsible = extensionMissingAnsibleRoles(ext, ansibleInstalled ?? null)
                   const noNewVms = extensionIsProvisionOnly(ext)
                   const skipDeploy = noNewVms && provisionOnlyExtensionsSupported
                   const canInstall =
                     templatesReady &&
+                    ansibleReady &&
+                    !ansibleInstalledLoading &&
                     !!instance.ludusRangeId &&
                     instance.status !== "CREATED" &&
                     !isRunning
                   const scopeInstall = `ext-install:${ext.name}`
+                  const installingDeps = installingDepsFor === ext.name
                   return (
                     <div
                       key={ext.name}
                       className={cn(
                         "rounded-lg border",
-                        !templatesReady
+                        !templatesReady || !ansibleReady
                           ? "border-border opacity-70"
                           : "border-border hover:border-primary/30",
                       )}
                     >
-                      <div className="flex items-start justify-between p-3">
-                        <div className="flex items-start gap-3 min-w-0">
+                      <div className="flex items-start justify-between p-3 gap-3">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
                           <Package className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -189,6 +274,11 @@ export function GoadExtensionsTab({
                                   <PackageX className="h-2.5 w-2.5" /> Missing templates
                                 </Badge>
                               )}
+                              {templatesReady && missingAnsible.length > 0 && (
+                                <Badge variant="destructive" className="text-xs gap-1">
+                                  <BookOpen className="h-2.5 w-2.5" /> Missing Ansible
+                                </Badge>
+                              )}
                             </div>
                             {ext.description && (
                               <p className="text-xs text-muted-foreground mt-0.5">{ext.description}</p>
@@ -200,33 +290,66 @@ export function GoadExtensionsTab({
                                 allNames={allNames}
                               />
                             )}
+                            {missingAnsible.length > 0 && (
+                              <p className="text-[10px] text-muted-foreground mt-1 font-mono">
+                                Requires: {missingAnsible.join(", ")}
+                              </p>
+                            )}
                           </div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-shrink-0 ml-3 gap-1.5"
-                          onClick={() => onInstallExtension(ext.name)}
-                          disabled={!canInstall}
-                          title={
-                            instance.status === "CREATED"
-                              ? "Run Provide before installing extensions"
-                              : !instance.ludusRangeId
-                                ? "Run Provide first — a dedicated Ludus range is required"
-                                : !templatesReady
-                                  ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
-                                  : isRunning
-                                    ? "Wait for current action to finish"
-                                    : skipDeploy
-                                      ? "Enable extension and run Ansible only (no Ludus deploy)"
-                                      : noNewVms
-                                        ? "Install — GOAD on this server may still run Ludus range deploy"
-                                        : "Install this extension"
-                          }
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                          {skipDeploy ? "Provision" : "Install"}
-                        </Button>
+                        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                          {missingAnsible.length > 0 && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="gap-1.5 h-8"
+                              disabled={installingDeps || isRunning || ansibleInstalledLoading}
+                              onClick={() => void handleInstallExtensionDeps(ext)}
+                            >
+                              {installingDeps ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Download className="h-3.5 w-3.5" />
+                              )}
+                              {installingDeps ? "Installing…" : "Install dependencies"}
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 h-8"
+                            onClick={() => onInstallExtension(ext.name)}
+                            disabled={!canInstall}
+                            title={
+                              instance.status === "CREATED"
+                                ? "Run Provide before installing extensions"
+                                : !instance.ludusRangeId
+                                  ? "Run Provide first — a dedicated Ludus range is required"
+                                  : !templatesReady
+                                    ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
+                                    : !ansibleReady
+                                      ? `Missing Ansible: ${missingAnsible.join(", ")} — install dependencies first`
+                                      : isRunning
+                                        ? "Wait for current action to finish"
+                                        : skipDeploy
+                                          ? "Enable extension and run Ansible only (no Ludus deploy)"
+                                          : noNewVms
+                                            ? "Install — GOAD on this server may still run Ludus range deploy"
+                                            : "Install this extension"
+                            }
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            {skipDeploy ? "Provision" : "Install"}
+                          </Button>
+                          {missingAnsible.length > 0 && (
+                            <Link
+                              href="/ansible"
+                              className="text-[10px] text-primary underline underline-offset-2"
+                            >
+                              Ansible page
+                            </Link>
+                          )}
+                        </div>
                       </div>
                       <ConfirmBar
                         pending={pendingAction}

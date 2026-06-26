@@ -1,4 +1,5 @@
 import type { GoadExtensionDef, GoadInstance, GoadLabDef, LogHistoryEntry } from "@/lib/types"
+import type { AnsibleInstalledSets } from "@/lib/goad-dependency-service"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import type { CorrelatedHistoryEntry, GoadTaskForCorrelation } from "@/lib/goad-deploy-history-correlation"
 import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
@@ -74,6 +75,9 @@ export interface GoadExtensionsTabProps {
   onReprovisionExtension: (ext: string) => void
   onRemoveExtension: (ext: string) => void
   onInstallExtension: (extName: string) => void
+  ansibleInstalled?: AnsibleInstalledSets | null
+  ansibleInstalledLoading?: boolean
+  onAnsibleInstalledChange?: () => void | Promise<void>
 }
 
 export interface GoadInstanceHeaderProps {

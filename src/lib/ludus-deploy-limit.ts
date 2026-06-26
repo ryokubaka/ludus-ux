@@ -32,7 +32,12 @@ function dedupeSorted(hosts: string[]): string[] {
   )
 }
 
-/** Ludus default router Ansible hostname when `router:` is omitted from range config. */
+/** Default Ludus router Proxmox vm_name when `router:` is omitted from range config. */
+export function ludusDefaultRouterVmName(rangeId: string): string {
+  return `${rangeId.trim()}-router-debian11-x64`
+}
+
+/** Ludus default router label in config UI (`{range_id}-router` shorthand). */
 export function ludusDefaultRouterHostname(rangeId: string): string {
   return `${rangeId.trim()}-router`
 }
@@ -49,17 +54,116 @@ function parseRouterBlockFields(yamlText: string): { vmName: string; hostname: s
   return { vmName, hostname: get("hostname") || vmName }
 }
 
-/** Ansible --limit host key for the range router (explicit `router:` block or Ludus default). */
+/** Proxmox vm_name for router when building Ludus deploy `limit` (not UI shorthand). */
+export function resolveRouterLimitVmNameForDeploy(
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): string | null {
+  if (!rangeId.trim()) return null
+  if (deployedVms?.length) {
+    for (const vm of deployedVms) {
+      const name = vm.name?.trim()
+      if (name && isLudusRangeRouterVmName(name)) return name
+    }
+  }
+  const explicit = parseRouterBlockFields(configYaml)
+  if (explicit) {
+    return resolveRangeIdInHost(explicit.vmName, rangeId)
+  }
+  return ludusDefaultRouterVmName(rangeId)
+}
+
+function isRouterLimitShorthand(host: string, rangeId: string): boolean {
+  const trimmed = host.trim()
+  const id = rangeId.trim()
+  return trimmed === ludusDefaultRouterHostname(id)
+}
+
+function hostMatchesRouterLimit(
+  host: string,
+  rangeId: string,
+  routerVmName: string | null,
+): boolean {
+  const trimmed = host.trim()
+  if (!trimmed) return false
+  if (isLudusRangeRouterVmName(trimmed)) return true
+  if (isRouterLimitShorthand(trimmed, rangeId)) return true
+  return routerVmName != null && trimmed === routerVmName
+}
+
+/** Whether a deploy-limit host key is the range router (auto-included; omit from UI pickers). */
+export function isDeployLimitRouterHost(
+  host: string,
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): boolean {
+  if (!rangeId.trim()) return false
+  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms)
+  return hostMatchesRouterLimit(host, rangeId, routerVm)
+}
+
+/** Drop range router from deploy-limit checkbox lists (router is always appended at deploy). */
+export function filterRouterFromDeployLimitHosts(
+  hosts: string[],
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): string[] {
+  if (!rangeId.trim()) return hosts
+  return hosts.filter(
+    (h) => !isDeployLimitRouterHost(h, configYaml, rangeId, deployedVms),
+  )
+}
+
+/** Map UI shorthand / sync labels to Proxmox vm_name for Ludus deploy `limit`. */
+export function normalizeLimitHostForDeploy(
+  host: string,
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): string {
+  const trimmed = host.trim()
+  if (!trimmed) return trimmed
+  if (isRouterLimitShorthand(trimmed, rangeId) || isLudusRangeRouterVmName(trimmed)) {
+    return resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms) ?? trimmed
+  }
+  return trimmed
+}
+
+/**
+ * When limiting deploy to subset of VMs, always include the range router so DNS/network
+ * plays match (Ludus limit uses Proxmox vm_name, not `{range_id}-router` shorthand).
+ */
+export function expandDeployLimitHosts(
+  selectedHosts: string[],
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): string[] {
+  if (selectedHosts.length === 0) return []
+  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms)
+  const normalized = selectedHosts.map((h) =>
+    normalizeLimitHostForDeploy(h, configYaml, rangeId, deployedVms),
+  )
+  if (!routerVm) return dedupeSorted(normalized)
+  const hasRouter = normalized.some((h) => hostMatchesRouterLimit(h, rangeId, routerVm))
+  if (hasRouter) return dedupeSorted(normalized)
+  return dedupeSorted([...normalized, routerVm])
+}
+
+/** UI label for router in config host list (`{range_id}-router` shorthand). */
 export function resolveRouterLimitHost(yamlText: string, rangeId?: string): string | null {
   if (!rangeId?.trim()) return null
   const explicit = parseRouterBlockFields(yamlText)
   if (explicit) {
-    return resolveRangeIdInHost(explicit.hostname || explicit.vmName, rangeId)
+    return resolveRangeIdInHost(explicit.vmName, rangeId)
   }
   return ludusDefaultRouterHostname(rangeId)
 }
 
-/** Parse Ansible inventory hostnames from range-config YAML (VMs + router). */
+/** Parse Ludus deploy limit host keys (vm_name) from range-config YAML (VMs + router). */
 export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): string[] {
   if (!yamlText.trim()) return []
   const hosts: string[] = []
@@ -71,9 +175,7 @@ export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): s
     }
     const vmName = get("vm_name")
     if (!vmName) continue
-    // Ansible --limit matches inventory host keys (hostname), not Proxmox vm_name.
-    const hostname = get("hostname") || vmName
-    const resolved = rangeId ? resolveRangeIdInHost(hostname, rangeId) : hostname
+    const resolved = rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName
     hosts.push(resolved)
   }
   const routerHost = resolveRouterLimitHost(yamlText, rangeId)
@@ -81,40 +183,28 @@ export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): s
   return dedupeSorted(hosts)
 }
 
-/** Map resolved Proxmox vm_name → Ansible hostname from range-config YAML. */
-export function parseVmNameToHostnameMap(yamlText: string, rangeId?: string): Map<string, string> {
-  const map = new Map<string, string>()
-  const put = (vmName: string, hostname: string) => {
-    if (!vmName) return
-    const resolvedVm = rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName
-    const resolvedHost = rangeId ? resolveRangeIdInHost(hostname || vmName, rangeId) : hostname || vmName
-    map.set(resolvedVm, resolvedHost)
-  }
-
-  const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
-  for (const block of blocks) {
-    const get = (key: string): string => {
-      const m = block.match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+)$`, "m"))
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
-    }
-    const vmName = get("vm_name")
-    if (!vmName) continue
-    put(vmName, get("hostname") || vmName)
-  }
-
-  const explicitRouter = parseRouterBlockFields(yamlText)
-  if (explicitRouter) {
-    put(explicitRouter.vmName, explicitRouter.hostname)
-  } else if (rangeId) {
-    // Ludus always provisions a default Debian router; inventory hostname is `{range_id}-router`.
-    const routerHost = ludusDefaultRouterHostname(rangeId)
-    map.set(routerHost, routerHost)
-  }
-
-  return map
+/** Config YAML hosts selectable in Deploy Host Limit UI (router omitted — auto-included at deploy). */
+export function parseSelectableDeployLimitHosts(yamlText: string, rangeId?: string): string[] {
+  const hosts = parseHostsFromRangeConfig(yamlText, rangeId)
+  if (!rangeId?.trim()) return hosts
+  return filterRouterFromDeployLimitHosts(hosts, yamlText, rangeId)
 }
 
-/** Resolve GET /range VM name to Ansible --limit host key using config mapping. */
+/** Deployed VM hosts selectable in Deploy Host Limit UI (router omitted). */
+export function selectableLimitHostsFromRangeVms(
+  vms: Array<{ name?: string }>,
+  configYaml: string,
+  rangeId: string,
+): string[] {
+  return filterRouterFromDeployLimitHosts(
+    limitHostsFromRangeVms(vms, configYaml, rangeId),
+    configYaml,
+    rangeId,
+    vms,
+  )
+}
+
+/** Resolve GET /range VM name to Ludus deploy `limit` host key. */
 export function resolveLimitHostForRangeVm(
   vmName: string,
   configYaml: string,
@@ -122,14 +212,9 @@ export function resolveLimitHostForRangeVm(
 ): string {
   const trimmed = vmName.trim()
   if (!trimmed) return trimmed
-  const mapped = parseVmNameToHostnameMap(configYaml, rangeId).get(trimmed)
-  if (mapped) return mapped
-  if (isLudusRangeRouterVmName(trimmed)) {
-    const routerHost = resolveRouterLimitHost(configYaml, rangeId)
-    if (routerHost) return routerHost
+  if (isLudusRangeRouterVmName(trimmed) && !parseRouterBlockFields(configYaml)) {
+    return ludusDefaultRouterHostname(rangeId)
   }
-  const configHosts = parseHostsFromRangeConfig(configYaml, rangeId)
-  if (configHosts.includes(trimmed)) return trimmed
   return trimmed
 }
 
@@ -266,12 +351,36 @@ export function buildDeployLimitPattern(selectedHosts: string[]): string | undef
   return cleaned.length > 0 ? cleaned.join(",") : undefined
 }
 
-/** Effective limit: custom pattern wins over checkbox selection. */
+export interface ResolveDeployLimitPatternOptions {
+  rangeId?: string
+  configYaml?: string
+  deployedVms?: Array<{ name?: string }>
+  /** When true (default), append range router vm_name if missing from selection. */
+  includeRouter?: boolean
+}
+
+/** Effective limit: custom pattern wins; checkbox selection expands router + normalizes vm_name. */
 export function resolveDeployLimitPattern(
   selectedHosts: string[],
   customPattern: string,
+  options?: ResolveDeployLimitPatternOptions,
 ): string | undefined {
   const custom = customPattern.trim()
   if (custom) return custom
-  return buildDeployLimitPattern(selectedHosts)
+  if (selectedHosts.length === 0) return undefined
+
+  const includeRouter = options?.includeRouter !== false
+  const rangeId = options?.rangeId?.trim()
+  const configYaml = options?.configYaml ?? ""
+
+  const hosts =
+    includeRouter && rangeId
+      ? expandDeployLimitHosts(selectedHosts, configYaml, rangeId, options?.deployedVms)
+      : selectedHosts.map((h) =>
+          rangeId
+            ? normalizeLimitHostForDeploy(h, configYaml, rangeId, options?.deployedVms)
+            : h.trim(),
+        )
+
+  return buildDeployLimitPattern(hosts)
 }

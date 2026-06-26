@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { ludusApi } from "@/lib/api"
 import {
-  limitHostsFromRangeVms,
-  parseHostsFromRangeConfig,
+  parseSelectableDeployLimitHosts,
+  selectableLimitHostsFromRangeVms,
 } from "@/lib/ludus-deploy-limit"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -44,7 +44,7 @@ export function DeployLimitSelector({
   const [availableHosts, setAvailableHosts] = useState<string[]>([])
 
   const configHosts = useMemo(
-    () => parseHostsFromRangeConfig(configYaml, rangeId),
+    () => parseSelectableDeployLimitHosts(configYaml, rangeId),
     [configYaml, rangeId],
   )
 
@@ -53,6 +53,15 @@ export function DeployLimitSelector({
     setHostSource("config")
     setSearch("")
   }, [rangeId, configHosts])
+
+  useEffect(() => {
+    if (selectedHosts.length === 0) return
+    const allowed = new Set(availableHosts)
+    const pruned = selectedHosts.filter((h) => allowed.has(h))
+    if (pruned.length !== selectedHosts.length) {
+      onSelectedHostsChange(pruned)
+    }
+  }, [availableHosts, selectedHosts, onSelectedHostsChange])
 
   const filteredHosts = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -81,12 +90,12 @@ export function DeployLimitSelector({
         return
       }
       const vms = result.data?.VMs ?? []
-      const rangeHosts = limitHostsFromRangeVms(vms, configYaml, rangeId)
+      const rangeHosts = selectableLimitHostsFromRangeVms(vms, configYaml, rangeId)
       if (rangeHosts.length === 0) {
         toast({
           variant: "destructive",
           title: "No deployed VMs",
-          description: "Range has no VMs yet. Using hostnames from config YAML.",
+          description: "Range has no VMs yet. Using VM names from config YAML.",
         })
         setAvailableHosts(configHosts)
         setHostSource("config")
@@ -97,7 +106,7 @@ export function DeployLimitSelector({
       onSelectedHostsChange(selectedHosts.filter((h) => rangeHosts.includes(h)))
       toast({
         title: "Hosts synced",
-        description: `${rangeHosts.length} deployed VM${rangeHosts.length !== 1 ? "s" : ""} (Ansible hostnames from config).`,
+        description: `${rangeHosts.length} deployed VM${rangeHosts.length !== 1 ? "s" : ""} (VM names from deployed range).`,
       })
     } finally {
       setRangeLoading(false)
@@ -121,7 +130,7 @@ export function DeployLimitSelector({
           </span>
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1 leading-snug">
-          Limits which hosts Ansible runs against. Combinable with deploy tags (tags = steps, limit = hosts).
+          Limits which hosts the deploy runs against (Ludus matches <code className="text-[11px] text-primary/90">vm_name</code>, not Ansible hostname). Combinable with deploy tags (tags = steps, limit = hosts). The range router is auto-included at deploy and is not listed here.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">

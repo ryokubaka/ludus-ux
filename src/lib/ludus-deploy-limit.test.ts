@@ -3,16 +3,19 @@ import {
   buildDeployLimitPattern,
   expandDeployLimitHosts,
   extractInventoryText,
+  filterRouterFromDeployLimitHosts,
   mergeDeployLimitHosts,
   limitHostsFromRangeVms,
   normalizeLimitHostForDeploy,
   parseAnsibleInventoryFromLudusPayload,
   parseAnsibleInventoryHosts,
   parseHostsFromRangeConfig,
+  parseSelectableDeployLimitHosts,
   resolveLimitHostForRangeVm,
   resolveDeployLimitPattern,
   resolveRangeIdInHost,
   resolveRouterLimitVmNameForDeploy,
+  selectableLimitHostsFromRangeVms,
 } from "./ludus-deploy-limit"
 
 describe("ludus-deploy-limit", () => {
@@ -230,5 +233,43 @@ ludus:
         { name: `${rid}-router-debian11-x64` },
       ]),
     ).toEqual([`${rid}-GOAD-DC01`, `${rid}-router-debian11-x64`])
+  })
+
+  it("omits router from selectable deploy limit host lists", () => {
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+    hostname: "{{ range_id }}-dc01"
+  - vm_name: "{{ range_id }}-ws01"
+    hostname: "{{ range_id }}-ws01"
+`
+    expect(parseSelectableDeployLimitHosts(yaml, "myrange")).toEqual([
+      "myrange-dc01",
+      "myrange-ws01",
+    ])
+    expect(
+      selectableLimitHostsFromRangeVms(
+        [
+          { name: "myrange-dc01" },
+          { name: "myrange-router-debian11-x64" },
+          { name: "myrange-ws01" },
+        ],
+        yaml,
+        "myrange",
+      ),
+    ).toEqual(["myrange-dc01", "myrange-ws01"])
+  })
+
+  it("filterRouterFromDeployLimitHosts drops explicit router vm_name", () => {
+    const rid = "lab"
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+router:
+  vm_name: "{{ range_id }}-router-debian12-x64"
+`
+    expect(filterRouterFromDeployLimitHosts(parseHostsFromRangeConfig(yaml, rid), yaml, rid)).toEqual([
+      `${rid}-dc01`,
+    ])
   })
 })

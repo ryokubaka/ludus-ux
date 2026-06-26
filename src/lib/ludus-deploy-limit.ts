@@ -92,6 +92,31 @@ function hostMatchesRouterLimit(
   return routerVmName != null && trimmed === routerVmName
 }
 
+/** Whether a deploy-limit host key is the range router (auto-included; omit from UI pickers). */
+export function isDeployLimitRouterHost(
+  host: string,
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): boolean {
+  if (!rangeId.trim()) return false
+  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms)
+  return hostMatchesRouterLimit(host, rangeId, routerVm)
+}
+
+/** Drop range router from deploy-limit checkbox lists (router is always appended at deploy). */
+export function filterRouterFromDeployLimitHosts(
+  hosts: string[],
+  configYaml: string,
+  rangeId: string,
+  deployedVms?: Array<{ name?: string }>,
+): string[] {
+  if (!rangeId.trim()) return hosts
+  return hosts.filter(
+    (h) => !isDeployLimitRouterHost(h, configYaml, rangeId, deployedVms),
+  )
+}
+
 /** Map UI shorthand / sync labels to Proxmox vm_name for Ludus deploy `limit`. */
 export function normalizeLimitHostForDeploy(
   host: string,
@@ -156,6 +181,27 @@ export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): s
   const routerHost = resolveRouterLimitHost(yamlText, rangeId)
   if (routerHost) hosts.push(routerHost)
   return dedupeSorted(hosts)
+}
+
+/** Config YAML hosts selectable in Deploy Host Limit UI (router omitted — auto-included at deploy). */
+export function parseSelectableDeployLimitHosts(yamlText: string, rangeId?: string): string[] {
+  const hosts = parseHostsFromRangeConfig(yamlText, rangeId)
+  if (!rangeId?.trim()) return hosts
+  return filterRouterFromDeployLimitHosts(hosts, yamlText, rangeId)
+}
+
+/** Deployed VM hosts selectable in Deploy Host Limit UI (router omitted). */
+export function selectableLimitHostsFromRangeVms(
+  vms: Array<{ name?: string }>,
+  configYaml: string,
+  rangeId: string,
+): string[] {
+  return filterRouterFromDeployLimitHosts(
+    limitHostsFromRangeVms(vms, configYaml, rangeId),
+    configYaml,
+    rangeId,
+    vms,
+  )
 }
 
 /** Resolve GET /range VM name to Ludus deploy `limit` host key. */

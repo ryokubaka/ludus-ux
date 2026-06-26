@@ -18,8 +18,7 @@ Each bullet uses a single tag:
 ## [1.1.5] - 2026-06-26
 
 **LUX**
-- [Fix] **Configuration** — Deploy Host Limit checkboxes now use `vm_name` from range config (not Ansible `hostname`) so Ludus deploy limit matches selected hosts; default router still shows `{range_id}-router`.
-- [Fix] **Configuration** — Limited deploys auto-include the range router Proxmox `vm_name` (and map `{range_id}-router` shorthand) so DNS/network plays run when limiting to other VMs.
+- [Fix] **Configuration** — Deploy Host Limit uses `vm_name` from range config (not Ansible `hostname`) for Ludus `--limit`; the range router is omitted from the checkbox list and auto-included at deploy (Proxmox `vm_name`, including `{range_id}-router` shorthand) so DNS/network plays still run when limiting to other VMs.
 
 ## [1.1.4] - 2026-06-22
 

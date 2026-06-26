@@ -86,7 +86,7 @@ export function DeployLimitSelector({
         toast({
           variant: "destructive",
           title: "No deployed VMs",
-          description: "Range has no VMs yet. Using hostnames from config YAML.",
+          description: "Range has no VMs yet. Using VM names from config YAML.",
         })
         setAvailableHosts(configHosts)
         setHostSource("config")
@@ -97,7 +97,7 @@ export function DeployLimitSelector({
       onSelectedHostsChange(selectedHosts.filter((h) => rangeHosts.includes(h)))
       toast({
         title: "Hosts synced",
-        description: `${rangeHosts.length} deployed VM${rangeHosts.length !== 1 ? "s" : ""} (Ansible hostnames from config).`,
+        description: `${rangeHosts.length} deployed VM${rangeHosts.length !== 1 ? "s" : ""} (VM names from deployed range).`,
       })
     } finally {
       setRangeLoading(false)
@@ -121,7 +121,7 @@ export function DeployLimitSelector({
           </span>
         </CardTitle>
         <p className="text-xs text-muted-foreground mt-1 leading-snug">
-          Limits which hosts Ansible runs against. Combinable with deploy tags (tags = steps, limit = hosts).
+          Limits which hosts the deploy runs against (Ludus matches <code className="text-[11px] text-primary/90">vm_name</code>, not Ansible hostname). Combinable with deploy tags (tags = steps, limit = hosts). The range router is auto-included when you limit to other VMs so DNS/network plays still run.
         </p>
       </CardHeader>
       <CardContent className="space-y-3">

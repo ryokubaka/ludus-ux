@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest"
 import {
   buildDeployLimitPattern,
+  expandDeployLimitHosts,
   extractInventoryText,
   mergeDeployLimitHosts,
   limitHostsFromRangeVms,
+  normalizeLimitHostForDeploy,
   parseAnsibleInventoryFromLudusPayload,
   parseAnsibleInventoryHosts,
   parseHostsFromRangeConfig,
-  parseVmNameToHostnameMap,
   resolveLimitHostForRangeVm,
   resolveDeployLimitPattern,
   resolveRangeIdInHost,
+  resolveRouterLimitVmNameForDeploy,
 } from "./ludus-deploy-limit"
 
 describe("ludus-deploy-limit", () => {
@@ -36,7 +38,7 @@ ludus:
     ])
   })
 
-  it("uses hostname only when vm_name differs (Ansible inventory keys)", () => {
+  it("uses vm_name when it differs from hostname", () => {
     const yaml = `
 ludus:
   - vm_name: '{{ range_id }}-GOAD-DC01'
@@ -48,17 +50,17 @@ ludus:
   - vm_name: '{{ range_id }}-GOAD-W11-25H2'
     hostname: '{{ range_id }}-W1125H2'
 `
-    const rid = "smeowden-GOAD-Min1-IUMBUX"
+    const rid = "lab1-GOAD-Min1-A1B2C3"
     expect(parseHostsFromRangeConfig(yaml, rid)).toEqual([
-      `${rid}-DC01`,
+      `${rid}-GOAD-DC01`,
+      `${rid}-GOAD-W11-25H2`,
       `${rid}-KALI-OPS`,
       `${rid}-router`,
       `${rid}-VELOCIRAPTOR`,
-      `${rid}-W1125H2`,
     ])
   })
 
-  it("uses explicit router block hostname from config", () => {
+  it("uses explicit router block vm_name from config", () => {
     const yaml = `
 ludus:
   - vm_name: "{{ range_id }}-dc01"
@@ -67,10 +69,10 @@ router:
   vm_name: "{{ range_id }}-router-debian12-x64"
   hostname: "{{ range_id }}-gw"
 `
-    expect(parseHostsFromRangeConfig(yaml, "lab")).toEqual(["lab-dc01", "lab-gw"])
+    expect(parseHostsFromRangeConfig(yaml, "lab")).toEqual(["lab-dc01", "lab-router-debian12-x64"])
   })
 
-  it("maps default debian router vm name to ansible hostname on sync", () => {
+  it("maps default debian router vm name to {range_id}-router on sync", () => {
     const yaml = `
 ludus:
   - vm_name: '{{ range_id }}-GOAD-DC01'
@@ -154,7 +156,7 @@ admin:
     expect(parseAnsibleInventoryFromLudusPayload(payload)).toEqual(["lab-DC01", "lab-KALI"])
   })
 
-  it("maps GET /range vm names to ansible hostnames via config", () => {
+  it("passes through GET /range vm names for limit host list", () => {
     const yaml = `
 ludus:
   - vm_name: '{{ range_id }}-GOAD-DC01'
@@ -163,15 +165,14 @@ ludus:
     hostname: '{{ range_id }}-W1125H2'
 `
     const rid = "lab"
-    expect(parseVmNameToHostnameMap(yaml, rid).get(`${rid}-GOAD-DC01`)).toBe(`${rid}-DC01`)
     expect(
       limitHostsFromRangeVms(
         [{ name: `${rid}-GOAD-DC01` }, { name: `${rid}-GOAD-W11-25H2` }],
         yaml,
         rid,
       ),
-    ).toEqual([`${rid}-DC01`, `${rid}-W1125H2`])
-    expect(resolveLimitHostForRangeVm(`${rid}-GOAD-DC01`, yaml, rid)).toBe(`${rid}-DC01`)
+    ).toEqual([`${rid}-GOAD-DC01`, `${rid}-GOAD-W11-25H2`])
+    expect(resolveLimitHostForRangeVm(`${rid}-GOAD-DC01`, yaml, rid)).toBe(`${rid}-GOAD-DC01`)
   })
 
   it("extracts inventory text from Ludus envelope", () => {
@@ -192,5 +193,42 @@ ludus:
   it("prefers custom pattern over checkbox selection", () => {
     expect(resolveDeployLimitPattern(["dc01"], "windows")).toBe("windows")
     expect(resolveDeployLimitPattern(["dc01"], "")).toBe("dc01")
+  })
+
+  it("auto-includes router vm_name when limiting to a single VM", () => {
+    const rid = "lab1-GOAD-Mini-RQL64E"
+    const yaml = `
+ludus:
+  - vm_name: '{{ range_id }}-GOAD-W11-25H2'
+    hostname: '{{ range_id }}-W1125H2'
+`
+    const w11 = `${rid}-GOAD-W11-25H2`
+    const router = `${rid}-router-debian11-x64`
+    expect(
+      resolveDeployLimitPattern([w11], "", {
+        rangeId: rid,
+        configYaml: yaml,
+        deployedVms: [{ name: router }, { name: w11 }],
+      }),
+    ).toBe(`${w11},${router}`)
+  })
+
+  it("normalizes router shorthand to Proxmox vm_name for deploy limit", () => {
+    const rid = "lab"
+    expect(
+      normalizeLimitHostForDeploy(`${rid}-router`, "", rid, [
+        { name: `${rid}-router-debian12-x64` },
+      ]),
+    ).toBe(`${rid}-router-debian12-x64`)
+    expect(resolveRouterLimitVmNameForDeploy("", rid)).toBe(`${rid}-router-debian11-x64`)
+  })
+
+  it("expandDeployLimitHosts appends router when missing", () => {
+    const rid = "lab"
+    expect(
+      expandDeployLimitHosts([`${rid}-GOAD-DC01`], "", rid, [
+        { name: `${rid}-router-debian11-x64` },
+      ]),
+    ).toEqual([`${rid}-GOAD-DC01`, `${rid}-router-debian11-x64`])
   })
 })

@@ -139,7 +139,11 @@ export function RangeConfigPageClient() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRangeId])
 
-  const deployLimitPattern = resolveDeployLimitPattern(selectedLimitHosts, customLimitPattern)
+  const deployLimitPatternPreview = resolveDeployLimitPattern(
+    selectedLimitHosts,
+    customLimitPattern,
+    selectedRangeId ? { rangeId: selectedRangeId, configYaml: config } : undefined,
+  )
   const limitSelectionCount = customLimitPattern.trim()
     ? 1
     : selectedLimitHosts.length
@@ -213,8 +217,21 @@ export function RangeConfigPageClient() {
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
-    // Scroll to the logs panel after React renders it
     setTimeout(() => logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
+
+    let deployedVms: Array<{ name?: string }> | undefined
+    if (selectedRangeId && (selectedLimitHosts.length > 0 || customLimitPattern.trim())) {
+      const rangeResult = await ludusApi.getRangeStatus(selectedRangeId)
+      deployedVms = rangeResult.data?.VMs ?? []
+    }
+
+    const deployLimitPattern = resolveDeployLimitPattern(
+      selectedLimitHosts,
+      customLimitPattern,
+      selectedRangeId
+        ? { rangeId: selectedRangeId, configYaml: config, deployedVms }
+        : undefined,
+    )
     const tagRunAt = Date.now()
     const tagList = tagsForLudus && tagsForLudus.length > 0 ? tagsForLudus : undefined
     const result = await ludusApi.deployRange(
@@ -255,7 +272,7 @@ export function RangeConfigPageClient() {
     await executeDeploy(selectedTags.length > 0 ? selectedTags : undefined)
   }
   const handleDeploy = () =>
-    confirm(buildDeployConfirmMessage(selectedTags, deployLimitPattern), doDeploy)
+    confirm(buildDeployConfirmMessage(selectedTags, deployLimitPatternPreview), doDeploy)
 
   const doDeployFirewallRules = async () => {
     const merged = injectNetworkRules(config, networkRules)

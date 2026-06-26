@@ -62,7 +62,7 @@ export function GoadReassignDialog({
             <Label className="text-xs">Ludus Range ID (optional — leave blank to keep current)</Label>
             <Input
               className="font-mono text-xs"
-              placeholder={instance.ludusRangeId ?? "e.g. johndoe-GOAD-Mini-ABC123"}
+              placeholder={instance.ludusRangeId ?? "e.g. user1-GOAD-Mini-ABC123"}
               value={reassignTargetRange}
               onChange={(e) => onTargetRangeChange(e.target.value)}
             />

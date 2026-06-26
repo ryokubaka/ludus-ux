@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest"
 import {
   buildDeployLimitPattern,
+  expandDeployLimitHosts,
   extractInventoryText,
+  filterRouterFromDeployLimitHosts,
   mergeDeployLimitHosts,
   limitHostsFromRangeVms,
+  normalizeLimitHostForDeploy,
   parseAnsibleInventoryFromLudusPayload,
   parseAnsibleInventoryHosts,
   parseHostsFromRangeConfig,
+  parseSelectableDeployLimitHosts,
   resolveLimitHostForRangeVm,
   resolveDeployLimitPattern,
   resolveRangeIdInHost,
+  resolveRouterLimitVmNameForDeploy,
+  selectableLimitHostsFromRangeVms,
 } from "./ludus-deploy-limit"
 
 describe("ludus-deploy-limit", () => {
@@ -190,5 +196,80 @@ ludus:
   it("prefers custom pattern over checkbox selection", () => {
     expect(resolveDeployLimitPattern(["dc01"], "windows")).toBe("windows")
     expect(resolveDeployLimitPattern(["dc01"], "")).toBe("dc01")
+  })
+
+  it("auto-includes router vm_name when limiting to a single VM", () => {
+    const rid = "lab1-GOAD-Mini-RQL64E"
+    const yaml = `
+ludus:
+  - vm_name: '{{ range_id }}-GOAD-W11-25H2'
+    hostname: '{{ range_id }}-W1125H2'
+`
+    const w11 = `${rid}-GOAD-W11-25H2`
+    const router = `${rid}-router-debian11-x64`
+    expect(
+      resolveDeployLimitPattern([w11], "", {
+        rangeId: rid,
+        configYaml: yaml,
+        deployedVms: [{ name: router }, { name: w11 }],
+      }),
+    ).toBe(`${w11},${router}`)
+  })
+
+  it("normalizes router shorthand to Proxmox vm_name for deploy limit", () => {
+    const rid = "lab"
+    expect(
+      normalizeLimitHostForDeploy(`${rid}-router`, "", rid, [
+        { name: `${rid}-router-debian12-x64` },
+      ]),
+    ).toBe(`${rid}-router-debian12-x64`)
+    expect(resolveRouterLimitVmNameForDeploy("", rid)).toBe(`${rid}-router-debian11-x64`)
+  })
+
+  it("expandDeployLimitHosts appends router when missing", () => {
+    const rid = "lab"
+    expect(
+      expandDeployLimitHosts([`${rid}-GOAD-DC01`], "", rid, [
+        { name: `${rid}-router-debian11-x64` },
+      ]),
+    ).toEqual([`${rid}-GOAD-DC01`, `${rid}-router-debian11-x64`])
+  })
+
+  it("omits router from selectable deploy limit host lists", () => {
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+    hostname: "{{ range_id }}-dc01"
+  - vm_name: "{{ range_id }}-ws01"
+    hostname: "{{ range_id }}-ws01"
+`
+    expect(parseSelectableDeployLimitHosts(yaml, "myrange")).toEqual([
+      "myrange-dc01",
+      "myrange-ws01",
+    ])
+    expect(
+      selectableLimitHostsFromRangeVms(
+        [
+          { name: "myrange-dc01" },
+          { name: "myrange-router-debian11-x64" },
+          { name: "myrange-ws01" },
+        ],
+        yaml,
+        "myrange",
+      ),
+    ).toEqual(["myrange-dc01", "myrange-ws01"])
+  })
+
+  it("filterRouterFromDeployLimitHosts drops explicit router vm_name", () => {
+    const rid = "lab"
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+router:
+  vm_name: "{{ range_id }}-router-debian12-x64"
+`
+    expect(filterRouterFromDeployLimitHosts(parseHostsFromRangeConfig(yaml, rid), yaml, rid)).toEqual([
+      `${rid}-dc01`,
+    ])
   })
 })

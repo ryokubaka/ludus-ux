@@ -47,7 +47,7 @@ ludus:
   - vm_name: '{{ range_id }}-GOAD-W11-25H2'
     hostname: '{{ range_id }}-W1125H2'
 `
-    const rid = "smeowden-GOAD-Min1-IUMBUX"
+    const rid = "lab1-GOAD-Min1-A1B2C3"
     expect(parseHostsFromRangeConfig(yaml, rid)).toEqual([
       `${rid}-GOAD-DC01`,
       `${rid}-GOAD-W11-25H2`,

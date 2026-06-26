@@ -14,12 +14,12 @@ TASK [Create new clean snapshot] ***********************************************
 changed: [localhost] => (item=136)
 PLAY [Block VMs from accessing the internet when testing undefined or block_internet is true] ***
 TASK [Remove the default external rule] ****************************************
-changed: [labuser-GOAD-Mini-router-debian11-x64]
+changed: [range1-GOAD-Mini-router-debian11-x64]
 TASK [Flush the LUDUS_TESTING table to remove any user defined rules now that testing is done] ***
-skipping: [labuser-GOAD-Mini-router-debian11-x64]
+skipping: [range1-GOAD-Mini-router-debian11-x64]
 PLAY RECAP *********************************************************************
 localhost                  : ok=14   changed=3    unreachable=0    failed=0    skipped=3    rescued=0    ignored=1
-labuser-GOAD-Mini-router-debian11-x64 : ok=12   changed=4    unreachable=0    failed=0    skipped=27   rescued=0    ignored=0
+range1-GOAD-Mini-router-debian11-x64 : ok=12   changed=4    unreachable=0    failed=0    skipped=27   rescued=0    ignored=0
 `
 
 const TESTING_STOP_LOG_TAIL = `

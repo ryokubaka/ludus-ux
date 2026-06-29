@@ -15,6 +15,11 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.6] - 2026-06-22
+
+**LUX**
+- [Fix] **Templates** — Packer build logs strip ANSI escape codes (including literal `[1;32m` sequences from Ludus storage) so build output renders cleanly in the log viewer.
+
 ## [1.1.5] - 2026-06-26
 
 **LUX**

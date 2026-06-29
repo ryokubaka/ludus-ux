@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { LogViewerCompound } from "@/components/range/log-viewer"
+import { splitLogText } from "@/lib/strip-ansi"
 import {
   BookTemplate,
   RefreshCw,
@@ -564,7 +565,7 @@ export function TemplatesPageClient() {
     setBuildHistoryDetailLoading(true)
     const result = await ludusApi.getTemplateLogHistoryById(logId)
     if (result.data?.result) {
-      setBuildHistoryLines(result.data.result.split("\n").filter((l: string) => l.trim()))
+      setBuildHistoryLines(splitLogText(result.data.result))
     }
     setBuildHistoryDetailLoading(false)
   }, [])
@@ -602,7 +603,7 @@ export function TemplatesPageClient() {
     const logsResult = await ludusApi.getTemplateLogs()
     if (logsResult.data) {
       const logText = (logsResult.data as { result?: string })?.result || ""
-      const parsed = logText.split("\n").filter((l) => l.trim())
+      const parsed = splitLogText(logText)
       if (parsed.length > 0) setLogLines(parsed)
     }
   }, [])

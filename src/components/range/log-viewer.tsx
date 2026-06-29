@@ -5,6 +5,7 @@ import { ArrowDown, ArrowUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
 import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { stripAnsi } from "@/lib/strip-ansi"
 import { usePauseAwareLines } from "./use-pause-aware-lines"
 import { useLogSearch } from "./use-log-search"
 import {
@@ -54,8 +55,10 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
   const [wrap, setWrap] = useState(true)
   const [theme, setTheme] = useState<LogDockTheme>("dark")
 
+  const normalizedLines = useMemo(() => lines.map(stripAnsi), [lines])
+
   const effectiveAutoScroll = parentAutoScroll !== false && localAutoScroll
-  const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
+  const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(normalizedLines)
 
   const visibleLines = useMemo(
     () => (newestFirst ? [...displayLines].reverse() : displayLines),
@@ -75,7 +78,7 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     navigateMatch,
     toggleSearch,
     handleSearchKeyDown,
-  } = useLogSearch(visibleLines)
+  } = useLogSearch(visibleLines, { normalizeLine: stripAnsi })
 
   const scrollToLiveEdge = () => {
     const el = containerRef.current

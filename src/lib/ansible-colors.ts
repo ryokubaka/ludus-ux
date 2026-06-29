@@ -134,6 +134,8 @@ function ansibleLineClassDark(line: string): string {
   if (lower.includes("[play]") || lower.includes("[task]") || lower.includes("[recap]")) return "text-white font-semibold"
   if (lower.includes("[info]") || lower.includes("info:")) return "text-status-info"
 
+  if (/\s==>\s/.test(line) || line.trimStart().startsWith("==>")) return "text-status-success font-semibold"
+
   // Arrow-prefixed lines: Molecule "---> Scenario:", GOAD "->", "=>"
   if (/^-+>/.test(lower) || lower.startsWith("=>")) return "text-primary"
 

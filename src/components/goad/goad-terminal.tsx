@@ -11,6 +11,7 @@ import {
   type AnsibleLogTheme,
 } from "@/lib/ansible-colors"
 import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { stripAnsi } from "@/lib/strip-ansi"
 import { appendStreamLines } from "@/lib/log-buffer"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
@@ -21,17 +22,6 @@ import {
   type LogFontSize,
   DEFAULT_FONT_SIZE,
 } from "@/components/range/log-dock-toolbar"
-
-// Strip ANSI/VT100 codes so stored history with raw escape sequences renders cleanly.
-function stripAnsi(s: string): string {
-  return s
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b[^[\]]/g, "")
-    .replace(/\x1b/g, "")
-    .replace(/^.*\r(?!\n)/gm, "")
-    .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "")
-}
 
 // Render a PLAY RECAP stats line with per-stat colouring using shared utility
 function renderRecapStats(line: string, logTheme: AnsibleLogTheme): ReactNode {

@@ -18,6 +18,7 @@ import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
+import { stripAnsi } from "./strip-ansi"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -192,33 +193,6 @@ const GOAD_INI_DISABLE_IMPERSONATION_B64 = Buffer.from(
     "        cfg.write(f)",
   ].join("\n")
 ).toString("base64")
-
-/**
- * Strip ANSI/VT100 escape sequences from terminal output so raw text
- * is stored in the task store and displayed cleanly in the web UI.
- *
- * Covers:
- *  - CSI sequences  ESC [ … m / ESC [ … h / ESC [ … l  etc.
- *  - OSC sequences  ESC ] … BEL / ESC ] … ST
- *  - Cursor-movement sequences that produce no visible text
- *  - Standalone ESC byte
- */
-function stripAnsi(text: string): string {
-  return text
-    // CSI sequences: ESC [ followed by parameter bytes and a final byte
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
-    // OSC sequences: ESC ] … BEL or ESC ] … ST
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    // Standalone ESC + single char (e.g. ESC =, ESC >, ESC M)
-    .replace(/\x1b[^[\]]/g, "")
-    // Any remaining bare ESC
-    .replace(/\x1b/g, "")
-    // Carriage-return + overwrite sequences (e.g. progress bars rewriting a line)
-    // Keep only the last segment after the final \r on each line
-    .replace(/^.*\r(?!\n)/gm, "")
-    // Cursor-control chars except newline/tab
-    .replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "")
-}
 
 /** Per-user SSH credentials extracted from the encrypted session cookie. */
 export interface SSHCreds {

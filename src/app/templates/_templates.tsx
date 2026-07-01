@@ -599,10 +599,15 @@ export function TemplatesPageClient() {
 
   const hiddenBuildHistoryCount = buildHistory.length - visibleBuildHistory.length
 
+  const lastLogTextRef = useRef<string | null>(null)
   const fetchLogs = useCallback(async () => {
     const logsResult = await ludusApi.getTemplateLogs()
     if (logsResult.data) {
       const logText = (logsResult.data as { result?: string })?.result || ""
+      // The API returns the full blob every poll; skip the re-parse + re-render
+      // when the content hasn't changed (idle phases between build steps).
+      if (logText === lastLogTextRef.current) return
+      lastLogTextRef.current = logText
       const parsed = splitLogText(logText)
       if (parsed.length > 0) setLogLines(parsed)
     }

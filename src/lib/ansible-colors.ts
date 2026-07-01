@@ -32,6 +32,7 @@ export function ansibleClassForTheme(cls: string, theme: AnsibleLogTheme): strin
     "text-muted-foreground": "text-gray-600",
     "text-white font-semibold": "text-black font-semibold",
     "text-status-success": "text-green-800",
+    "text-status-success font-semibold": "text-green-800 font-semibold",
     "text-status-warning": "text-yellow-800",
     "text-status-error": "text-red-700",
     "text-status-error font-bold": "text-red-800 font-bold",

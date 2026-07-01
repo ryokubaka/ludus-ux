@@ -451,7 +451,9 @@ export function NewRangePageClient() {
         // Pre-populate network rules from existing config
         setNetworkRules(extractNetworkRules(yamlText))
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[range-new] failed to load existing config:", (err as Error).message)
+    }
     setLoadingExistingConfig(false)
     setStep(1)
   }
@@ -1509,7 +1511,7 @@ export function NewRangePageClient() {
                   />
                 </div>
               ) : (
-                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
+                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto resize-y min-h-[10rem] max-h-80 whitespace-pre">
                   {configMethod === "yaml"
                     ? yamlConfig
                     : blueprintPreviewYaml || "(Preview unavailable — blueprint will still be applied on deploy.)"}

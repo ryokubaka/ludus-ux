@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { isRecapStatsLine, parseRecapStats, getAnsibleLineClass } from "@/lib/ansible-colors"
-import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import { LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { parseLogLines, LOG_VIRTUALIZE_THRESHOLD, type ParsedLogLine } from "@/lib/log-line-render"
 import { stripAnsi } from "@/lib/strip-ansi"
 import { usePauseAwareLines } from "./use-pause-aware-lines"
 import { useLogSearch } from "./use-log-search"
+import { useResizableHeight, parsePxHeight } from "./use-resizable-height"
 import {
   LogDockToolbar,
   LogDockSearchBar,
@@ -41,12 +43,17 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     fillHeight = false,
     sortOrder = "asc",
     onSortOrderToggle,
+    resizable,
+    resizeKey,
+    minHeight = 140,
   } = config
 
   const containerRef = useRef<HTMLDivElement>(null)
   const userScrolledAwayRef = useRef(false)
   const prevScrollTopRef = useRef(0)
   const prevLinesLenRef = useRef(0)
+  const scrollToMatchRef = useRef<((lineIdx: number) => void) | null>(null)
+  const liveEdgeScrollRef = useRef<(() => void) | null>(null)
   const [showJumpBtn, setShowJumpBtn] = useState(false)
   const newestFirst = sortOrder === "desc"
 
@@ -78,12 +85,17 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     navigateMatch,
     toggleSearch,
     handleSearchKeyDown,
-  } = useLogSearch(visibleLines, { normalizeLine: stripAnsi })
+  } = useLogSearch(visibleLines, {
+    normalizeLine: stripAnsi,
+    getScrollToMatch: () => scrollToMatchRef.current,
+  })
 
   const scrollToLiveEdge = () => {
     const el = containerRef.current
     if (!el) return
-    el.scrollTop = newestFirst ? 0 : el.scrollHeight
+    const override = liveEdgeScrollRef.current
+    if (override) override()
+    else el.scrollTop = newestFirst ? 0 : el.scrollHeight
     prevScrollTopRef.current = el.scrollTop
     userScrolledAwayRef.current = false
     setShowJumpBtn(false)
@@ -171,6 +183,9 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     fillHeight,
     sortOrder,
     onSortOrderToggle,
+    resizable: resizable ?? !fillHeight,
+    resizeKey: resizeKey ?? downloadFilename,
+    minHeight,
     containerRef,
     userScrolledAwayRef,
     prevScrollTopRef,
@@ -202,6 +217,8 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     matchSet,
     searchInputRef,
     matchLineRefsRef,
+    scrollToMatchRef,
+    liveEdgeScrollRef,
     navigateMatch,
     toggleSearch,
     handleSearchKeyDown,
@@ -319,6 +336,28 @@ function LogViewerSearch() {
   )
 }
 
+function LogLineContent({ parsed }: { parsed: ParsedLogLine }) {
+  return (
+    <>
+      {parsed.wallTs ? (
+        <>
+          <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{parsed.wallTs}]</span>
+          <span> </span>
+        </>
+      ) : null}
+      {parsed.isRecap && parsed.segments ? (
+        <span className="min-w-0">
+          {parsed.segments.map((seg, j) => (
+            <span key={j} className={seg.cls}>{seg.text}</span>
+          ))}
+        </span>
+      ) : (
+        <span className={cn("min-w-0", parsed.bodyCls)}>{parsed.body}</span>
+      )}
+    </>
+  )
+}
+
 function LogViewerBody() {
   const {
     visibleLines,
@@ -334,11 +373,56 @@ function LogViewerBody() {
     matchIndices,
     currentMatchIdx,
     matchLineRefsRef,
+    scrollToMatchRef,
+    liveEdgeScrollRef,
     theme,
     showJumpBtn,
     scrollToLiveEdge,
     newestFirst,
+    resizable,
+    resizeKey,
+    minHeight,
   } = useLogViewer()
+
+  const parsedLines = useMemo(() => parseLogLines(visibleLines, theme), [visibleLines, theme])
+  const useVirtual = parsedLines.length > LOG_VIRTUALIZE_THRESHOLD
+  const canResize = Boolean(resizable) && !fillHeight
+  useResizableHeight(canResize, containerRef, {
+    storageKey: resizeKey,
+    defaultHeight: parsePxHeight(maxHeight, 400),
+  })
+
+  const rowVirtualizer = useVirtualizer({
+    count: parsedLines.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => Math.round(fontSize * 1.7),
+    overscan: 16,
+  })
+
+  // Windowed viewers scroll matches / to the live edge by index — matched or
+  // newest rows may be unmounted, so DOM-ref scrolling won't reach them.
+  useEffect(() => {
+    if (useVirtual) {
+      scrollToMatchRef.current = (idx: number) => rowVirtualizer.scrollToIndex(idx, { align: "center" })
+      liveEdgeScrollRef.current = () => {
+        const lastIdx = parsedLines.length - 1
+        if (lastIdx < 0) return
+        rowVirtualizer.scrollToIndex(newestFirst ? 0 : lastIdx, { align: newestFirst ? "start" : "end" })
+      }
+    } else {
+      scrollToMatchRef.current = null
+      liveEdgeScrollRef.current = null
+    }
+    return () => {
+      scrollToMatchRef.current = null
+      liveEdgeScrollRef.current = null
+    }
+  }, [useVirtual, rowVirtualizer, scrollToMatchRef, liveEdgeScrollRef, parsedLines.length, newestFirst])
+
+  // Row heights change with wrap / font size — drop cached measurements.
+  useEffect(() => {
+    if (useVirtual) rowVirtualizer.measure()
+  }, [wrap, fontSize, useVirtual, rowVirtualizer])
 
   return (
     <div className={cn("relative", fillHeight && "flex flex-col flex-1 min-h-0")}>
@@ -350,17 +434,48 @@ function LogViewerBody() {
           dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
           wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           fillHeight && "flex-1 min-h-0",
+          canResize && "resize-y",
         )}
-        style={fillHeight ? { fontSize: `${fontSize}px` } : { maxHeight, fontSize: `${fontSize}px` }}
+        style={
+          fillHeight
+            ? { fontSize: `${fontSize}px` }
+            : canResize
+              ? { fontSize: `${fontSize}px`, minHeight: `${minHeight}px`, maxHeight: "90vh" }
+              : { maxHeight, fontSize: `${fontSize}px` }
+        }
       >
-        {visibleLines.length === 0 ? (
+        {parsedLines.length === 0 ? (
           <p className="italic text-gray-600">No logs yet…</p>
+        ) : useVirtual ? (
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+            {rowVirtualizer.getVirtualItems().map((vi) => {
+              const i = vi.index
+              const parsed = parsedLines[i]
+              const isMatch = searchQuery.trim() !== "" && matchSet.has(i)
+              const isCurrent = isMatch && matchIndices[currentMatchIdx] === i
+              const highlightCls = isCurrent ? "bg-status-warning/40" : isMatch ? "bg-status-warning/20" : ""
+              return (
+                <div
+                  key={i}
+                  data-index={i}
+                  ref={rowVirtualizer.measureElement}
+                  className={cn("log-line", highlightCls)}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    transform: `translateY(${vi.start}px)`,
+                    width: wrap ? "100%" : "max-content",
+                    minWidth: wrap ? undefined : "100%",
+                  }}
+                >
+                  <LogLineContent parsed={parsed} />
+                </div>
+              )
+            })}
+          </div>
         ) : (
-          visibleLines.map((line, i) => {
-            const isErrorRole = /^\[ERROR\]\s/.test(line)
-            const normalized = stripStreamRolePrefix(line)
-            const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
-
+          parsedLines.map((parsed, i) => {
             const isMatch = searchQuery.trim() !== "" && matchSet.has(i)
             const isCurrent = isMatch && matchIndices[currentMatchIdx] === i
             const highlightCls = isCurrent ? "bg-status-warning/40" : isMatch ? "bg-status-warning/20" : ""
@@ -371,25 +486,9 @@ function LogViewerBody() {
                 }
               : undefined
 
-            const bodyCls = isErrorRole ? "text-status-error" : getAnsibleLineClass(body, theme)
-
             return (
               <div key={i} ref={refCallback} className={cn("log-line", highlightCls)}>
-                {wallTs ? (
-                  <>
-                    <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
-                    <span> </span>
-                  </>
-                ) : null}
-                {isRecapStatsLine(body) ? (
-                  <span className="min-w-0">
-                    {parseRecapStats(body, theme).map((seg, j) => (
-                      <span key={j} className={seg.cls}>{seg.text}</span>
-                    ))}
-                  </span>
-                ) : (
-                  <span className={cn("min-w-0", bodyCls)}>{body}</span>
-                )}
+                <LogLineContent parsed={parsed} />
               </div>
             )
           })

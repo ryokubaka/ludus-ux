@@ -1,20 +1,16 @@
 "use client"
 
-import { useEffect, useRef, useCallback, useState } from "react"
-import type { ReactNode } from "react"
+import { useEffect, useRef, useCallback, useState, useMemo } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { ArrowDown } from "lucide-react"
 import { cn } from "@/lib/utils"
-import {
-  isRecapStatsLine,
-  parseRecapStats,
-  getAnsibleLineClass,
-  type AnsibleLogTheme,
-} from "@/lib/ansible-colors"
-import { splitLeadingWallTimestamp, stripStreamRolePrefix, LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
+import { parseLogLine, LOG_VIRTUALIZE_THRESHOLD, type ParsedLogLine } from "@/lib/log-line-render"
 import { stripAnsi } from "@/lib/strip-ansi"
 import { appendStreamLines } from "@/lib/log-buffer"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
+import { useResizableHeight } from "@/components/range/use-resizable-height"
 import {
   LogDockToolbar,
   LogDockSearchBar,
@@ -23,21 +19,29 @@ import {
   DEFAULT_FONT_SIZE,
 } from "@/components/range/log-dock-toolbar"
 
-// Render a PLAY RECAP stats line with per-stat colouring using shared utility
-function renderRecapStats(line: string, logTheme: AnsibleLogTheme): ReactNode {
+function GoadLineContent({ parsed }: { parsed: ParsedLogLine }) {
+  const wallTsNode = parsed.wallTs ? (
+    <>
+      <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{parsed.wallTs}]</span>
+      <span> </span>
+    </>
+  ) : null
+  if (parsed.isRecap && parsed.segments) {
+    return (
+      <>
+        {wallTsNode}
+        {parsed.segments.map((seg, j) => (
+          <span key={j} className={seg.cls}>{seg.text}</span>
+        ))}
+      </>
+    )
+  }
   return (
     <>
-      {parseRecapStats(line, logTheme).map((seg, i) => (
-        <span key={i} className={seg.cls}>{seg.text}</span>
-      ))}
+      {wallTsNode}
+      <span className={cn(parsed.bodyCls, "min-w-0")}>{parsed.body}</span>
     </>
   )
-}
-
-// Colour class for all other lines (delegates to shared Ansible colour logic)
-function getLineClass(line: string, logTheme: AnsibleLogTheme): string {
-  if (line.startsWith("[TASKID]")) return "hidden"
-  return getAnsibleLineClass(line, logTheme)
 }
 
 interface GoadTerminalProps {
@@ -48,11 +52,15 @@ interface GoadTerminalProps {
   refreshLoading?: boolean
   className?: string
   label?: string
+  /** Allow the user to drag-resize the terminal body height. Defaults to true. */
+  resizable?: boolean
+  /** localStorage key for persisting the dragged height. */
+  resizeKey?: string
 }
 
 const BOTTOM_THRESHOLD = 80
 
-export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, className, label }: GoadTerminalProps) {
+export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, className, label, resizable = true, resizeKey }: GoadTerminalProps) {
   const containerRef        = useRef<HTMLDivElement>(null)
   const userScrolledUpRef   = useRef(false)
   const prevScrollTopRef    = useRef(0)
@@ -68,6 +76,32 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
   // ── Pause ─────────────────────────────────────────────────────────────────
   const { displayLines, paused, frozenAt, pause, resume } = usePauseAwareLines(lines)
 
+  // Strip ANSI + classify once per [lines, theme] instead of every render.
+  const parsedLines = useMemo(
+    () => displayLines.map((line) => parseLogLine(stripAnsi(line), theme)),
+    [displayLines, theme],
+  )
+
+  const useVirtual = parsedLines.length > LOG_VIRTUALIZE_THRESHOLD
+  const rowVirtualizer = useVirtualizer({
+    count: parsedLines.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => Math.round(fontSize * 1.7),
+    overscan: 16,
+  })
+
+  // Row heights change with wrap / font size — drop cached measurements.
+  useEffect(() => {
+    if (useVirtual) rowVirtualizer.measure()
+  }, [wrap, fontSize, useVirtual, rowVirtualizer])
+
+  // Height-only drag resize. Seed only from a stored value so the parent's
+  // fixed/flex height controls the terminal until the user drags the grip.
+  useResizableHeight(resizable, containerRef, {
+    storageKey: resizeKey ?? `lux-goad-termsize-${label ?? "default"}`,
+    defaultHeight: null,
+  })
+
   // ── Search (search against ANSI-stripped text, operate on display view) ───
   const {
     searchOpen,
@@ -82,7 +116,11 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
     navigateMatch,
     toggleSearch,
     handleSearchKeyDown,
-  } = useLogSearch(displayLines, { normalizeLine: stripAnsi })
+  } = useLogSearch(displayLines, {
+    normalizeLine: stripAnsi,
+    getScrollToMatch: () =>
+      useVirtual ? (idx: number) => rowVirtualizer.scrollToIndex(idx, { align: "center" }) : null,
+  })
 
   // ── Auto-scroll new lines ─────────────────────────────────────────────────
   useEffect(() => {
@@ -105,12 +143,16 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
     }
 
     if (!userScrolledUpRef.current) {
-      el.scrollTop = el.scrollHeight
+      if (useVirtual && parsedLines.length > 0) {
+        rowVirtualizer.scrollToIndex(parsedLines.length - 1, { align: "end" })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
       prevScrollTopRef.current = el.scrollTop
     } else if (hasNew) {
       setShowJumpBtn(true)
     }
-  }, [displayLines, localAutoScroll])
+  }, [displayLines, localAutoScroll, useVirtual, rowVirtualizer, parsedLines.length])
 
   const handleScroll = () => {
     const el = containerRef.current
@@ -128,7 +170,11 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
   const scrollToBottom = () => {
     const el = containerRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    if (useVirtual && parsedLines.length > 0) {
+      rowVirtualizer.scrollToIndex(parsedLines.length - 1, { align: "end" })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
     prevScrollTopRef.current   = el.scrollTop
     userScrolledUpRef.current  = false
     setShowJumpBtn(false)
@@ -209,13 +255,48 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
             dark ? "border-zinc-800 border-t-0" : "border-border",
             dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
+            resizable && "resize-y",
           )}
-          style={{ fontSize: `${fontSize}px`, lineHeight: "1.5" }}
+          style={{ fontSize: `${fontSize}px`, lineHeight: "1.5", ...(resizable ? { maxHeight: "90vh" } : {}) }}
         >
           {displayLines.length === 0 ? (
             <p className="italic text-gray-600">
               Waiting for output…
             </p>
+          ) : useVirtual ? (
+            <div
+              className={cn(
+                "m-0 font-mono leading-relaxed min-w-0",
+                wrap ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere]" : "whitespace-pre",
+              )}
+              style={{ fontSize: "inherit", position: "relative", height: rowVirtualizer.getTotalSize(), width: "100%" }}
+            >
+              {rowVirtualizer.getVirtualItems().map((vi) => {
+                const i = vi.index
+                const parsed = parsedLines[i]
+                const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
+                const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
+                const highlightCls = isCurrent ? "bg-status-warning/40" : isMatch ? "bg-status-warning/20" : ""
+                return (
+                  <div
+                    key={i}
+                    data-index={i}
+                    ref={rowVirtualizer.measureElement}
+                    className={cn(highlightCls, wrap && (parsed.isRecap ? "min-w-0" : "min-w-0 break-words"))}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      transform: `translateY(${vi.start}px)`,
+                      width: wrap ? "100%" : "max-content",
+                      minWidth: wrap ? undefined : "100%",
+                    }}
+                  >
+                    {parsed.isBlank ? null : <GoadLineContent parsed={parsed} />}
+                  </div>
+                )
+              })}
+            </div>
           ) : (
             <div
               className={cn(
@@ -225,9 +306,8 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
               )}
               style={{ fontSize: "inherit" }}
             >
-              {displayLines.map((line, i) => {
-                const clean = stripAnsi(line)
-                if (!clean.trim()) return null
+              {parsedLines.map((parsed, i) => {
+                if (parsed.isBlank) return null
 
                 const isMatch      = searchQuery.trim() !== "" && matchSet.has(i)
                 const isCurrent    = isMatch && matchIndices[currentMatchIdx] === i
@@ -239,35 +319,13 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
                     }
                   : undefined
 
-                const isErrorRole = /^\[ERROR\]\s/.test(clean)
-                if (isRecapStatsLine(clean)) {
-                  const normalized = stripStreamRolePrefix(clean)
-                  const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
-                  const recapLine = isRecapStatsLine(body) ? body : normalized
-                  return (
-                    <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0")}>
-                      {wallTs ? (
-                        <>
-                          <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
-                          <span> </span>
-                        </>
-                      ) : null}
-                      {renderRecapStats(recapLine, theme)}
-                    </div>
-                  )
-                }
-                const normalized = stripStreamRolePrefix(clean)
-                const { ts: wallTs, body } = splitLeadingWallTimestamp(normalized)
-                const bodyCls = isErrorRole ? "text-status-error" : getLineClass(body, theme)
                 return (
-                  <div key={i} ref={refCallback} className={cn(highlightCls, wrap && "min-w-0 break-words")}>
-                    {wallTs ? (
-                      <>
-                        <span className={LOG_PANE_WALL_CLOCK_CLASS}>[{wallTs}]</span>
-                        <span> </span>
-                      </>
-                    ) : null}
-                    <span className={cn(bodyCls, "min-w-0")}>{body}</span>
+                  <div
+                    key={i}
+                    ref={refCallback}
+                    className={cn(highlightCls, wrap && (parsed.isRecap ? "min-w-0" : "min-w-0 break-words"))}
+                  >
+                    <GoadLineContent parsed={parsed} />
                   </div>
                 )
               })}

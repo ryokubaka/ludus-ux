@@ -12,6 +12,10 @@ provider_name = _b(4) if len(sys.argv) > 4 else "ludus"
 
 out = {"ok": False, "yaml": "", "error": ""}
 
+# ip_range / range_id are supplied by the caller. When the real range values are
+# unknown (pure preview), the caller passes the "192.168.56" GOAD default and the
+# literal "{{ range_id }}" placeholder so Ludus resolves it later at deploy.
+
 try:
     extensions = json.loads(extensions_json)
     if not isinstance(extensions, list):
@@ -22,6 +26,11 @@ except Exception as e:
     print(json.dumps(out))
     sys.exit(0)
 
+# Trust boundary: templates are read only from the local, trusted GOAD repo
+# checkout under goad_path (ad/<lab> and extensions/<ext>). They are not
+# user-supplied, so a plain (non-sandboxed) Jinja2 Environment is acceptable
+# here. If custom/user-provided GOAD sources are ever introduced, switch to
+# jinja2.sandbox.SandboxedEnvironment before rendering.
 try:
     from jinja2 import Environment, FileSystemLoader
 except ImportError:
@@ -29,8 +38,8 @@ except ImportError:
     print(json.dumps(out))
     sys.exit(0)
 
-ip_range = "192.168.56"
-range_id = "{{ range_id }}"
+ip_range = _b(5) if len(sys.argv) > 5 and sys.argv[5] else "192.168.56"
+range_id = _b(6) if len(sys.argv) > 6 and sys.argv[6] else "{{ range_id }}"
 
 def lab_provider_path(lab, provider):
     return os.path.join(goad_path, "ad", lab, "providers", provider)

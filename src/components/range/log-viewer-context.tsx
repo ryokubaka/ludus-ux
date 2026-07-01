@@ -17,6 +17,12 @@ export interface LogViewerConfig {
   fillHeight?: boolean
   sortOrder?: "asc" | "desc"
   onSortOrderToggle?: () => void
+  /** Allow the user to drag-resize the log body height. Defaults to `!fillHeight`. */
+  resizable?: boolean
+  /** localStorage key for persisting the dragged height (defaults to `downloadFilename`). */
+  resizeKey?: string
+  /** Minimum body height in px when resizable (default 140). */
+  minHeight?: number
 }
 
 export interface LogViewerRuntime {
@@ -51,6 +57,10 @@ export interface LogViewerRuntime {
   matchSet: Set<number>
   searchInputRef: React.RefObject<HTMLInputElement | null>
   matchLineRefsRef: React.MutableRefObject<Map<number, HTMLDivElement>>
+  /** Body installs a virtualizer-backed scroll handler here when windowing is active. */
+  scrollToMatchRef: React.MutableRefObject<((lineIdx: number) => void) | null>
+  /** Body installs a virtualizer-backed "scroll to live edge" handler when windowing is active. */
+  liveEdgeScrollRef: React.MutableRefObject<(() => void) | null>
   navigateMatch: (dir: 1 | -1) => void
   toggleSearch: () => void
   handleSearchKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void

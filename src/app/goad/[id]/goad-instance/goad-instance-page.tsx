@@ -111,11 +111,12 @@ function GoadInstancePage() {
     getExtraHeaders: impersonationHeaders,
   })
   const [currentAction, setCurrentAction] = useState<string | null>(null)
-  const { refreshRanges } = useRange()
+  const { selectedRangeId, selectRange, refreshRanges } = useRange()
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
     rangeState,
+    activeRangeId: streamingRangeId,
     streamStartedAt: rangeStreamStartedAt,
     startStreaming: startRangeStreaming,
     stopStreaming: stopRangeStreaming,
@@ -125,6 +126,25 @@ function GoadInstancePage() {
 
   const isRangeStreamingRef = useRef(isRangeStreaming)
   isRangeStreamingRef.current = isRangeStreaming
+  const streamingRangeIdRef = useRef(streamingRangeId)
+  streamingRangeIdRef.current = streamingRangeId
+
+  /** Start or rebind Ludus deploy-log SSE when idle or bound to a different range. */
+  const rangeStreamNeedsStart = useCallback(
+    (rid: string | undefined) => {
+      const id = rid?.trim()
+      if (!id) return false
+      return !isRangeStreamingRef.current || streamingRangeIdRef.current !== id
+    },
+    [],
+  )
+
+  // Viewing a GOAD instance should drive the sidebar active range (and cookie).
+  useEffect(() => {
+    const rid = instance?.ludusRangeId?.trim()
+    if (!rid || selectedRangeId === rid) return
+    selectRange(rid)
+  }, [instance?.ludusRangeId, instanceId, selectedRangeId, selectRange])
 
   const rangeLogRefreshLock = useRef(false)
   const [rangeLogRefreshBusy, setRangeLogRefreshBusy] = useState(false)
@@ -336,7 +356,7 @@ function GoadInstancePage() {
     if (tab) setActiveTab(normalizeGoadInstanceTab(tab))
   // Run only once on mount — URL params don't change and we don't want to
   // clobber a tab the user manually selected after initial load.
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Auto-start range log streaming and (conditionally) switch to Deploy Status
   // tab whenever a task is running.  Covers two scenarios:
@@ -367,7 +387,7 @@ function GoadInstancePage() {
       // of the last run. runAction() clears these and restarts with
       // snapshotStart: true when a new deploy begins, so this doesn't
       // interfere with fresh deploys.
-      if (rid && !isRangeStreaming) {
+      if (rid && rangeStreamNeedsStart(rid)) {
         void (async () => {
           const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
           startRangeStreaming(rid, {
@@ -399,7 +419,7 @@ function GoadInstancePage() {
     // snapshotStart: false — after refresh/re-enter, omit skipping the first Ludus
     // snapshot; otherwise the panel stays empty until the next *new* line (History
     // still shows prior output).
-    if (isDeployAction && rid && !isRangeStreaming) {
+    if (isDeployAction && rid && rangeStreamNeedsStart(rid)) {
       void (async () => {
         const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
         startRangeStreaming(rid, {
@@ -416,7 +436,7 @@ function GoadInstancePage() {
 
     // Fallback: deploy hint missing but a GOAD task is still running and
     // Ludus is deploying — still stream + Deploy tab.
-    if (!isDeployAction && rid && !isRangeStreaming) {
+    if (!isDeployAction && rid && rangeStreamNeedsStart(rid)) {
       let cancelled = false
       void (async () => {
         try {
@@ -428,7 +448,7 @@ function GoadInstancePage() {
           const data = (await res.json()) as { rangeState?: string }
           const rs = String(data.rangeState ?? "").toUpperCase()
           if (rs !== "DEPLOYING" && rs !== "WAITING") return
-          if (cancelled || isRangeStreamingRef.current) return
+          if (cancelled || !rangeStreamNeedsStart(rid)) return
           const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
           startRangeStreaming(rid, {
             snapshotStart: false,
@@ -478,7 +498,7 @@ function GoadInstancePage() {
     return () => { cancelled = true }
   // Only re-run when taskId changes — the setter functions are stable and
   // don't need to be in the dep list.
-  }, [taskId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [taskId])
 
   // Server-side resume: on mount, reconnect GOAD task SSE so logs show after
   // redirect from goad/new (execute stream is abandoned on navigation).
@@ -722,7 +742,7 @@ function GoadInstancePage() {
     }
     if (isInitial) setLoading(false)
     else setRefreshing(false)
-  }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [instanceId, impersonationHeaders])
 
   const fetchInventories = useCallback(async () => {
     setInventoriesLoading(true)
@@ -777,11 +797,13 @@ function GoadInstancePage() {
       setTaskHistory(allTasks.filter((t) =>
         t.instanceId === instanceId || t.command.includes(instanceId)
       ))
-    } catch {}
+    } catch (err) {
+      console.warn("[goad-instance] fetchTaskHistory failed:", (err as Error).message)
+    }
     setHistoryLoading(false)
   // Omits setter functions — all stable; only re-create when the instance or
   // impersonation scope changes.
-  }, [instanceId, impersonationHeaders]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [instanceId, impersonationHeaders])
 
   const fetchDeployHistory = useCallback(async () => {
     if (!instance?.ludusRangeId) return
@@ -789,7 +811,9 @@ function GoadInstancePage() {
     try {
       const result = await ludusApi.getRangeLogHistory(instance.ludusRangeId)
       setDeployHistory(extractArray<LogHistoryEntry>(result.data as unknown))
-    } catch {}
+    } catch (err) {
+      console.warn("[goad-instance] fetchDeployHistory failed:", (err as Error).message)
+    }
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
 
@@ -893,7 +917,7 @@ function GoadInstancePage() {
   // `fetchInstances` is a useCallback that already captures instanceId and
   // impersonationHeaders — it is the right trigger for the whole block.
   // The direct fetch calls inside are intentionally stable one-shots.
-  }, [fetchInstances]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchInstances])
 
   useEffect(() => {
     if (activeTab === "extensions") void refreshAnsibleInstalled()

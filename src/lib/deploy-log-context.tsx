@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useRef, useCallback, useEffect } from "react"
+import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { appendStreamLines } from "@/lib/log-buffer"
 
 export type StartRangeStreamOptions = {
@@ -167,23 +167,32 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   // Clean up on provider unmount
   useEffect(() => () => stopStreaming(), [stopStreaming])
 
-  return (
-    <DeployLogContext.Provider
-      value={{
-        lines,
-        isStreaming,
-        rangeState,
-        activeRangeId,
-        streamStartedAt,
-        startStreaming,
-        stopStreaming,
-        clearLogs,
-        refreshRangeStateFromServer,
-      }}
-    >
-      {children}
-    </DeployLogContext.Provider>
+  const value = useMemo<DeployLogContextValue>(
+    () => ({
+      lines,
+      isStreaming,
+      rangeState,
+      activeRangeId,
+      streamStartedAt,
+      startStreaming,
+      stopStreaming,
+      clearLogs,
+      refreshRangeStateFromServer,
+    }),
+    [
+      lines,
+      isStreaming,
+      rangeState,
+      activeRangeId,
+      streamStartedAt,
+      startStreaming,
+      stopStreaming,
+      clearLogs,
+      refreshRangeStateFromServer,
+    ],
   )
+
+  return <DeployLogContext.Provider value={value}>{children}</DeployLogContext.Provider>
 }
 
 export function useDeployLogContext() {

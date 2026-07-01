@@ -105,7 +105,7 @@ export function updateSessionCredentials(
 export function deleteSessionCredentials(sessionId: string): void {
   try {
     getDb().prepare(`DELETE FROM lux_session_credentials WHERE session_id = ?`).run(sessionId)
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.warn("[session-credential-store] deleteSessionCredentials failed:", (err as Error).message)
   }
 }

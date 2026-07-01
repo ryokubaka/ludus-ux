@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { useEffect, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
+import { fetchSharedSession } from "@/lib/session-fetch"
 import {
   LayoutDashboard,
   FileCode2,
@@ -168,7 +169,7 @@ export function Sidebar() {
 
   useEffect(() => {
     let cancelled = false
-    fetch("/api/auth/session", { credentials: "include" })
+    fetchSharedSession()
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return

@@ -24,10 +24,12 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}))
-  const { lab, extensions, provider } = body as {
+  const { lab, extensions, provider, ipRange, rangeId } = body as {
     lab?: string
     extensions?: string[]
     provider?: string
+    ipRange?: string
+    rangeId?: string
   }
 
   if (!lab?.trim()) {
@@ -55,9 +57,14 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  // Preview defaults: GOAD's default /24 prefix and the literal Ludus placeholder
+  // (resolved by Ludus at deploy). Callers may pass real values when known.
+  const effectiveIpRange = (ipRange || "").trim() || "192.168.56"
+  const effectiveRangeId = (rangeId || "").trim() || "{{ range_id }}"
+
   const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64")
   const encoded = Buffer.from(GOAD_PREVIEW_CONFIG_PY, "utf-8").toString("base64")
-  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(lab.trim())}' '${b64(JSON.stringify(extensions))}' '${b64(providerName)}'`
+  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(lab.trim())}' '${b64(JSON.stringify(extensions))}' '${b64(providerName)}' '${b64(effectiveIpRange)}' '${b64(effectiveRangeId)}'`
 
   try {
     const { stdout, stderr, code } = await sshExec(cmd, creds)

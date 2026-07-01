@@ -260,6 +260,40 @@ ludus:
     ).toEqual(["myrange-dc01", "myrange-ws01"])
   })
 
+  it("parses router block even with a comment between key and fields (js-yaml)", () => {
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+router:
+  # the range gateway
+  vm_name: "{{ range_id }}-router-debian12-x64"
+  hostname: "{{ range_id }}-gw"
+`
+    expect(parseHostsFromRangeConfig(yaml, "lab")).toEqual([
+      "lab-dc01",
+      "lab-router-debian12-x64",
+    ])
+  })
+
+  it("does not treat a 'router:' inside a string value as a router block", () => {
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+    description: "this is the router: block for docs"
+`
+    // No real router: block -> falls back to the {range_id}-router shorthand only.
+    expect(parseHostsFromRangeConfig(yaml, "lab")).toEqual(["lab-dc01", "lab-router"])
+  })
+
+  it("does not treat a commented '- vm_name:' line as a host", () => {
+    const yaml = `
+ludus:
+  - vm_name: "{{ range_id }}-dc01"
+# - vm_name: "{{ range_id }}-DISABLED"
+`
+    expect(parseHostsFromRangeConfig(yaml, "lab")).toEqual(["lab-dc01", "lab-router"])
+  })
+
   it("filterRouterFromDeployLimitHosts drops explicit router vm_name", () => {
     const rid = "lab"
     const yaml = `

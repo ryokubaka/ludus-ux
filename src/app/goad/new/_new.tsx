@@ -277,7 +277,7 @@ export function NewGoadInstancePageClient() {
         setExistingInstanceInSelectedRange(found?.instanceId ?? null)
       })
       .catch(() => setExistingInstanceInSelectedRange(null))
-  }, [rangeMode, selectedExistingRange]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rangeMode, selectedExistingRange])
 
   // Template readiness
   const [templates, setTemplates] = useState<TemplateObject[]>([])
@@ -302,7 +302,7 @@ export function NewGoadInstancePageClient() {
       .then((r) => r.json())
       .then((d) => { if (d.username) setCurrentUsername(d.username) })
       .catch(() => {})
-  }, [impersonation?.username, shell]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [impersonation?.username, shell])
 
   // Fetch installed templates (once on mount — not affected by impersonation)
   useEffect(() => {
@@ -488,7 +488,6 @@ export function NewGoadInstancePageClient() {
     const user    = (effective || "user").toLowerCase().replace(/[^a-z0-9]/g, "")
     const labSlug = (selectedLab ?? "lab").replace(/\s+/g, "-").replace(/[^a-zA-Z0-9-]/g, "")
     return `${user}-${labSlug}-${newRangeUid}`
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [impersonation?.username, currentUsername, selectedLab, newRangeUid])
 
   /**

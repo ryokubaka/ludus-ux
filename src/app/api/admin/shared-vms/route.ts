@@ -11,9 +11,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { getSessionFromRequest } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 
 
 export interface SharedAdminVM {
@@ -31,20 +30,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
 
-  const settings = getSettings()
   // Proxmox pvesh must use PROXMOX_SSH_* / mounted key only — never the browser session's Ludus SSH password.
-  const sshPass = (settings.proxmoxSshPassword || "").trim()
-  if (!isRootProxmoxSshConfigured(settings)) {
-    return NextResponse.json(
-      {
-        error:
-          "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
-      },
-      { status: 503 },
-    )
-  }
-
-  const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
+  const ssh = requireProxmoxSsh()
+  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
+  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
 
   try {
     // 1. Get ADMIN pool members (vmid + node)

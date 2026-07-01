@@ -477,7 +477,11 @@ export async function streamGoadCommand(
     luxWizardConfigPath = `/tmp/lux-wizard-config-${randomUUID()}.yml`
     const yamlB64 = Buffer.from(trimmedWizardYaml, "utf-8").toString("base64")
     const safePath = luxWizardConfigPath.replace(/'/g, "")
-    const writeCmd = `echo '${yamlB64}' | base64 -d > '${safePath}' && chmod 644 '${safePath}'`
+    // Reap any wizard temp files left over from earlier interrupted deploys so
+    // /tmp does not accumulate them, then write the current one.
+    const reapStale =
+      `find /tmp -maxdepth 1 -type f -name 'lux-wizard-config-*.yml' -mmin +720 -delete 2>/dev/null || true`
+    const writeCmd = `${reapStale}; echo '${yamlB64}' | base64 -d > '${safePath}' && chmod 644 '${safePath}'`
     try {
       if (impersonateAs) {
         const safeUser = impersonateAs.username.replace(/'/g, "")
@@ -622,6 +626,13 @@ export async function streamGoadCommand(
   // right-hand side of pipes.
   const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
 
+  // Best-effort removal of this run's wizard temp file once the final session
+  // finishes (same identity that wrote it). Appended to the last command of each
+  // run path; error/abort paths are covered by the stale-file reaper above.
+  const wizardCleanup = luxWizardConfigPath
+    ? `; rm -f '${luxWizardConfigPath.replace(/'/g, "")}' 2>/dev/null || true`
+    : ""
+
   const wrapInnerForSudo = (inner: string) =>
     impersonateAs
       ? `sudo -H -u '${impersonateAs.username}' bash -c '${inner.replace(/'/g, "'\\''")}'`
@@ -664,10 +675,10 @@ export async function streamGoadCommand(
         pyEnvExports,
         `cd ${goadPath}`,
         `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
-      ].join("; ") + goadIniPatchPostfix
+      ].join("; ") + goadIniPatchPostfix + wizardCleanup
     }
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}`
+    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}${wizardCleanup}`
   }
 
   const command = wrapInnerForSudo(innerCommand)
@@ -755,7 +766,7 @@ export async function streamGoadCommand(
         const inner2 =
           [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc2}\n' | bash '${goadPath}/goad.sh'`].join(
             "; ",
-          ) + goadIniPatchPostfix
+          ) + goadIniPatchPostfix + wizardCleanup
         const cmd2 = wrapInnerForSudo(inner2)
         runPtySession(cmd2, {}, (code2) => {
           conn.end()
@@ -1026,22 +1037,71 @@ def extract_templates_from_json(path):
     return templates
 
 def extract_roles_from_yaml_file(path):
-    """Scan Ludus provider YAML for roles: list entries."""
+    """Scan Ludus provider YAML for role references (roles: list entries).
+    Prefers PyYAML when available (handles inline lists and dict role refs);
+    falls back to a line-regex scan so no PyYAML dependency is required."""
     roles = set()
     if not os.path.isfile(path):
         return roles
+    # Fast path: proper YAML parse when PyYAML is present on the host.
+    try:
+        import yaml as _yaml
+        def _add_ref(item):
+            if isinstance(item, str):
+                if item.strip():
+                    roles.add(item.strip())
+            elif isinstance(item, dict):
+                ref = item.get("role") or item.get("name") or item.get("src")
+                if isinstance(ref, str) and ref.strip():
+                    roles.add(ref.strip())
+        def _walk(node):
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    if k == "roles" and isinstance(v, list):
+                        for item in v:
+                            _add_ref(item)
+                    else:
+                        _walk(v)
+            elif isinstance(node, list):
+                for item in node:
+                    _walk(item)
+        with open(path) as f:
+            for doc in _yaml.safe_load_all(f):
+                _walk(doc)
+        if roles:
+            return roles
+    except Exception:
+        pass
+    # Fallback: regex line scan (no PyYAML dependency required).
     try:
         in_roles = False
         with open(path) as f:
             for line in f:
-                if re.match(r'^\\s+roles:\\s*$', line):
+                # Inline list form:  roles: [a, b, c]
+                m_inline = re.match(r'^\\s*roles:\\s*\\[(.+)\\]\\s*$', line)
+                if m_inline:
+                    for part in m_inline.group(1).split(','):
+                        val = part.strip().strip('"').strip("'")
+                        if val:
+                            roles.add(val)
+                    in_roles = False
+                    continue
+                if re.match(r'^\\s*roles:\\s*$', line):
                     in_roles = True
                     continue
                 if in_roles:
+                    # Dict entry:  - role: x  /  - name: x  /  - src: x
+                    m_dict = re.match(r'^\\s+-\\s+(?:role|name|src):\\s*(\\S+)', line)
+                    if m_dict:
+                        val = m_dict.group(1).strip().strip('"').strip("'")
+                        if val:
+                            roles.add(val)
+                        continue
+                    # Plain scalar entry:  - rolename
                     m = re.match(r'^\\s+-\\s+(\\S+)', line)
                     if m:
                         val = m.group(1).strip().strip('"').strip("'")
-                        if val:
+                        if val and not val.endswith(':'):
                             roles.add(val)
                         continue
                     if re.match(r'^\\s+\\w', line) and not re.match(r'^\\s+-\\s', line):

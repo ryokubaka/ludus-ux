@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test"
 import { loginAsAdmin, headerAccountMenuTrigger } from "./helpers/auth"
 
 async function expectHeaderTitle(page: Page, title: string | RegExp) {
-  await expect(page.getByRole("banner").getByRole("heading", { level: 1, name: title })).toBeVisible({
+  await expect(page.getByRole("banner").getByRole("heading", { level: 2, name: title })).toBeVisible({
     timeout: 30_000,
   })
 }

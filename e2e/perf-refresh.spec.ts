@@ -42,7 +42,7 @@ function createTally() {
 test.describe("perf refresh metrics", () => {
   test("hard reload: dashboard + settings (request buckets)", async ({ page }, testInfo) => {
     await loginAsAdmin(page, "/")
-    await expect(page.getByRole("banner").getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByRole("banner").getByRole("heading", { level: 2 })).toBeVisible({ timeout: 30_000 })
 
     const scenarios: Array<{
       label: string
@@ -60,7 +60,7 @@ test.describe("perf refresh metrics", () => {
       page.on("request", tally.onRequest)
       page.on("response", tally.onResponse)
       await page.reload({ waitUntil: "domcontentloaded" })
-      await expect(page.getByRole("banner").getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole("banner").getByRole("heading", { level: 2 })).toBeVisible({ timeout: 30_000 })
       await page.waitForTimeout(2500)
       page.removeListener("request", tally.onRequest)
       page.removeListener("response", tally.onResponse)
@@ -79,7 +79,7 @@ test.describe("perf refresh metrics", () => {
     await measure("dashboard_reload")
 
     await page.goto("/settings")
-    await expect(page.getByRole("banner").getByRole("heading", { level: 1, name: /Settings/i })).toBeVisible({
+    await expect(page.getByRole("banner").getByRole("heading", { level: 2, name: /Settings/i })).toBeVisible({
       timeout: 30_000,
     })
     await measure("settings_reload")

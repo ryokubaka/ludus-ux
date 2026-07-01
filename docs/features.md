@@ -7,6 +7,7 @@
 - **Firewall Rules Editor** — Collapsible visual panel on the Config page to add, edit, reorder (drag-and-drop), and delete `network.rules` entries without hand-editing YAML; "Apply to Config" merges rules into the Monaco editor. Also available as a wizard step in Deploy New Range and Deploy New GOAD Instance flows.
 - **New Range Wizard** — Guided flow: range selection → templates → domain → **firewall rules** → tags → deploy
 - **Range Logs** — Standalone SSE viewer with timestamps, download, clear; snapshot mode for post-connect streams; deploy history list matches Dashboard behavior (**GOAD** rows open the GOAD instance history view when linked)
+- **Log viewers** — Every log window (Range Logs, Dashboard deploy log, GOAD terminal, and the Templates / Blueprints / New Range / inventory config panes) is vertically resizable — drag the bottom-right corner and the height persists per view. Long output (>500 lines) is virtualized for smooth scrolling while keeping auto-tail, jump-to-live, and search navigation intact.
 
 ### Testing & snapshots
 

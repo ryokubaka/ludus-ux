@@ -15,6 +15,29 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.7] - 2026-07-01
+
+**LUX**
+- [Add] **Log viewers** — All log windows (Range Logs, Dashboard deploy log, GOAD terminal, and the Templates / Blueprints / New Range / inventory config panes) are vertically resizable by dragging the bottom-right corner; the chosen height persists per view.
+- [Fix] **Log viewers** — ANSI stripping no longer corrupts bracketed text starting with `m` (e.g. `TASK [main : ...]`, `ok: [myhost]`); the SGR regex now requires a digit group so only real color codes are removed.
+- [Fix] **Log viewers** — Carriage-return handling keeps a trailing-CR line's text (e.g. `downloading...\r`) instead of blanking it, and Packer phase-separator blank lines are preserved.
+- [Fix] **Log viewers** — Packer `==>` build-step lines keep a readable highlight color in the light theme.
+- [Fix] **E2E tests** — Corrected banner heading-level selectors in the perf and navigation specs so authenticated Playwright runs pass against the current header markup.
+- [Improve] **Code quality** — ESLint cleanup: removed stale disable directives, stabilized `useMemo` / query-key inputs, and migrated avatar `<img>` tags to `next/image`.
+- [Improve] **Configuration** — Deploy Host Limit parsing of range-config `router:`/`vm_name` now uses a YAML parser instead of regex, correctly handling comments, quoting, and nested structures.
+- [Improve] **Deploy New GOAD Instance** — Extension Ansible readiness shows a distinct "Checking Ansible…" state while loading (no more disabled button with an empty reason), and concurrent dependency installs track their own spinner without clobbering each other.
+- [Improve] **GOAD** — Provider role discovery understands inline `roles: [a, b]` lists and `role:`/`name:`/`src:` dict refs; temporary wizard config files in `/tmp` are cleaned up.
+- [Improve] **Templates** — Real (non-404) Ludus Sources errors are surfaced alongside the SSH-fallback failure instead of being silently swallowed.
+- [Improve] **Reliability** — Centralized session/SSH-credential helpers, shared cache-revalidation, and replaced silent `catch {}` blocks with logged warnings across API routes; expanded unit-test coverage.
+- [Security] **Ansible Galaxy search** — Proxy endpoint now requires an authenticated session and is rate-limited to prevent open, unauthenticated upstream fan-out.
+- [Security] **Blueprints** — Deleting a source-catalog (global) blueprint now requires an admin session, enforced server-side.
+- [Security] **Console / Profile** — Numeric `vmId` and node-name validation on console routes; avatar file paths are sanitized against path traversal.
+- [Perf] **Log viewers** — Long logs (>500 lines) are virtualized (`@tanstack/react-virtual`) and share a single memoized line parser, keeping scroll and search smooth on large deploys while preserving auto-tail, jump-to-live, and search navigation.
+- [Perf] **Log search** — Skips scanning while the search bar is closed and debounces re-scans during live streaming.
+- [Perf] **Session requests** — Concurrent `/api/auth/session` calls fired by shell components on page load are coalesced into a single in-flight request (no stale caching), cutting the reload request fan-out.
+- [Perf] **API polling** — Blueprint sharing details load only for blueprints that have shares; the Groups add-range dialog polls status only for selected ranges; Dashboard log-enrichment pauses while a deploy log is streaming; Templates build-log fetch skips re-render when the output is unchanged.
+- [Perf] **Rendering** — Memoized Range / Impersonation / Deploy-log context values, a single shared elapsed-time ticker, memoized VM-table sorting and rows, and dynamic import of the Dashboard log viewer reduce re-renders and initial bundle size.
+
 ## [1.1.6] - 2026-06-22
 
 **LUX**

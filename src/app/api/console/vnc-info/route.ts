@@ -7,6 +7,7 @@ import { logAndSafeError } from "@/lib/safe-client-error"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
+import { isNumericId } from "@/lib/validate-id"
 
 
 async function resolveSessionProxmoxUser(session: ResolvedSession): Promise<string> {
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
 
   const vmId = request.nextUrl.searchParams.get("vmId")
   const vmName = request.nextUrl.searchParams.get("vmName") || `vm-${vmId}`
-  if (!vmId) return NextResponse.json({ error: "vmId required" }, { status: 400 })
+  if (!vmId || !isNumericId(vmId)) return NextResponse.json({ error: "vmId must be a numeric VM identifier" }, { status: 400 })
 
   const settings = getSettings()
   const password = (session.sshPassword || "").trim()

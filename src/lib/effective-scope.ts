@@ -6,6 +6,7 @@
 
 import type { SessionData } from "@/lib/session"
 import { IMPERSONATION_STORAGE_KEY } from "@/lib/impersonation-headers"
+import { fetchSharedSession } from "@/lib/session-fetch"
 
 export const LEGACY_LUX_QUERY_CACHE_KEY = "lux_query_cache"
 
@@ -49,7 +50,7 @@ export function readClientEffectiveScopeTagSync(): string {
 export async function fetchClientEffectiveScopeTag(): Promise<string> {
   let login = "_unknown"
   try {
-    const sr = await fetch("/api/auth/session")
+    const sr = await fetchSharedSession()
     if (sr.ok) {
       const s = (await sr.json()) as { username?: string }
       if (s.username) login = String(s.username)

@@ -358,7 +358,8 @@ export function readPrivateKey(
   if (!p) return null
   try {
     return normalizePrivateKeyBuffer(fs.readFileSync(p))
-  } catch {
+  } catch (err) {
+    console.warn(`[root-ssh-auth] failed to read private key at ${p}:`, (err as Error).message)
     return null
   }
 }

@@ -451,7 +451,9 @@ export function NewRangePageClient() {
         // Pre-populate network rules from existing config
         setNetworkRules(extractNetworkRules(yamlText))
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[range-new] failed to load existing config:", (err as Error).message)
+    }
     setLoadingExistingConfig(false)
     setStep(1)
   }

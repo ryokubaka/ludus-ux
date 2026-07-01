@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { parseJsonBody } from "@/lib/require-session"
 import { getSettings } from "@/lib/settings-store"
 import { writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
@@ -23,8 +24,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  let body: { rangeId?: string; instanceIds?: string[] }
-  try { body = await request.json() } catch { body = {} }
+  const body = await parseJsonBody<{ rangeId?: string; instanceIds?: string[] }>(request)
 
   const { rangeId, instanceIds } = body
   if (!rangeId || !Array.isArray(instanceIds) || instanceIds.length === 0) {

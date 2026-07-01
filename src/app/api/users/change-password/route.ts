@@ -12,9 +12,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { resolveSession } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
@@ -38,10 +37,9 @@ export async function POST(request: NextRequest) {
   if (!userId?.trim()) return NextResponse.json({ error: "userId is required" }, { status: 400 })
   if (!newPassword?.trim()) return NextResponse.json({ error: "newPassword is required" }, { status: 400 })
 
-  const settings = getSettings()
-  if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) {
-    return NextResponse.json({ error: "SSH not configured" }, { status: 503 })
-  }
+  const ssh = requireProxmoxSsh()
+  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
+  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
 
   // Resolve the actual Linux username. Ludus v2 uses proxmoxUsername (which may differ
   // from userID, e.g. "pwtest2" → "pw-test-two"). We ask the Ludus API first, then
@@ -65,17 +63,13 @@ export async function POST(request: NextRequest) {
 
   // Verify the Linux user exists
   let homeDir = ""
-  const sshHost = settings.sshHost
-  const sshPort = settings.sshPort
-  const sshUser = settings.proxmoxSshUser || "root"
-  const sshPw = settings.proxmoxSshPassword || ""
 
   try {
     for (let attempt = 0; attempt < 8; attempt++) {
       try {
         homeDir = await sshExec(
           sshHost, sshPort,
-          sshUser, sshPw,
+          sshUser, sshPass,
           `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
         )
       } catch {
@@ -107,7 +101,7 @@ export async function POST(request: NextRequest) {
   try {
     await sshExec(
       sshHost, sshPort,
-      sshUser, sshPw,
+      sshUser, sshPass,
       `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
     )
   } catch (err) {

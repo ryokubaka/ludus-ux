@@ -5,6 +5,7 @@ import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { hasSshExecAuth } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { isNumericId } from "@/lib/validate-id"
 
 
 interface SpiceTicket {
@@ -111,8 +112,8 @@ export async function GET(request: NextRequest) {
   const vmId = params.get("vmId")
   const vmName = params.get("vmName") || `vm-${vmId}`
 
-  if (!vmId) {
-    return NextResponse.json({ error: "vmId is required" }, { status: 400 })
+  if (!vmId || !isNumericId(vmId)) {
+    return NextResponse.json({ error: "vmId must be a numeric VM identifier" }, { status: 400 })
   }
 
   const settings = getSettings()
@@ -135,6 +136,7 @@ export async function GET(request: NextRequest) {
     const nodes = JSON.parse(nodeJson) as Array<{ node: string }>
     if (!nodes?.length) throw new Error("No Proxmox nodes found")
     const node = nodes[0].node
+    if (!/^[a-zA-Z0-9._-]+$/.test(node)) throw new Error("Invalid Proxmox node name")
 
     // Try SPICE first
     try {
@@ -175,7 +177,7 @@ export async function GET(request: NextRequest) {
     const message = (err as Error).message
     logLuxRouteAction(request, session, { outcome: "failure", detail: message.slice(0, 120) })
     return NextResponse.json(
-      { error: `Console access failed: ${message}` },
+      { error: logAndSafeError("console/spice", err, "Console access failed") },
       { status: 500 }
     )
   }

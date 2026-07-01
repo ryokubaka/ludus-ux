@@ -3,13 +3,12 @@ import { shareBlueprintOnLudus } from "@/lib/blueprint-share"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { resolveSession } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const auth = await requireSession(request)
+  if (!auth.ok) return auth.response
+  const { session } = auth
 
   let body: { blueprintId?: string; userIDs?: string[]; groupNames?: string[] }
   try {

@@ -411,6 +411,39 @@ export function buildConnectAuthFromRootSettings(
   return { privateKey: key, ...(ph ? { passphrase: ph } : {}) }
 }
 
+export interface ProxmoxSshCredentials {
+  sshHost: string
+  sshPort: number
+  sshUser: string
+  sshPass: string
+}
+
+/**
+ * Validate that root SSH to the Proxmox host is configured and return
+ * connection credentials. Callers should return a 503 when `ok` is false.
+ */
+export function requireProxmoxSsh():
+  | { ok: true; creds: ProxmoxSshCredentials }
+  | { ok: false; error: string } {
+  const settings = getSettings()
+  if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) {
+    return {
+      ok: false,
+      error:
+        "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
+    }
+  }
+  return {
+    ok: true,
+    creds: {
+      sshHost: settings.sshHost,
+      sshPort: settings.sshPort,
+      sshUser: settings.proxmoxSshUser || "root",
+      sshPass: (settings.proxmoxSshPassword || "").trim(),
+    },
+  }
+}
+
 /** For pvesh-over-SSH: settings password, session login password, or mounted root key. */
 export function hasSshExecAuth(
   settings: Pick<RuntimeSettings, "proxmoxSshPassword" | "proxmoxSshKeyPath">,

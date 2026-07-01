@@ -181,7 +181,7 @@ async function checkCompletion(
 }
 
 export async function GET(request: NextRequest) {
-  try { pruneOldRangeOps() } catch {}
+  try { pruneOldRangeOps() } catch (err) { console.warn("[range-ops] pruneOldRangeOps:", (err as Error).message) }
 
   const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
@@ -200,7 +200,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  try { pruneOldRangeOps() } catch {}
+  try { pruneOldRangeOps() } catch (err) { console.warn("[range-ops] pruneOldRangeOps:", (err as Error).message) }
   const session = await resolveSession(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 

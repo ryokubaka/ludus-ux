@@ -777,7 +777,9 @@ function GoadInstancePage() {
       setTaskHistory(allTasks.filter((t) =>
         t.instanceId === instanceId || t.command.includes(instanceId)
       ))
-    } catch {}
+    } catch (err) {
+      console.warn("[goad-instance] fetchTaskHistory failed:", (err as Error).message)
+    }
     setHistoryLoading(false)
   // Omits setter functions — all stable; only re-create when the instance or
   // impersonation scope changes.
@@ -789,7 +791,9 @@ function GoadInstancePage() {
     try {
       const result = await ludusApi.getRangeLogHistory(instance.ludusRangeId)
       setDeployHistory(extractArray<LogHistoryEntry>(result.data as unknown))
-    } catch {}
+    } catch (err) {
+      console.warn("[goad-instance] fetchDeployHistory failed:", (err as Error).message)
+    }
     setDeployHistoryLoading(false)
   }, [instance?.ludusRangeId])
 

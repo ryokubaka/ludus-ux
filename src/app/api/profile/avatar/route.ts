@@ -54,6 +54,9 @@ export async function POST(request: NextRequest) {
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
+  const safeUser = sanitizeUsername(session.username)
+  if (!safeUser) return NextResponse.json({ error: "Invalid session username" }, { status: 400 })
+
   let formData: FormData
   try { formData = await request.formData() }
   catch { return NextResponse.json({ error: "Invalid multipart body" }, { status: 400 }) }
@@ -71,11 +74,11 @@ export async function POST(request: NextRequest) {
   fs.mkdirSync(AVATARS_DIR, { recursive: true })
 
   for (const e of Object.values(VALID_TYPES)) {
-    const old = path.join(AVATARS_DIR, `${session.username}.${e}`)
+    const old = path.join(AVATARS_DIR, `${safeUser}.${e}`)
     if (fs.existsSync(old)) fs.unlinkSync(old)
   }
 
-  const dest = path.join(AVATARS_DIR, `${session.username}.${detected.ext}`)
+  const dest = path.join(AVATARS_DIR, `${safeUser}.${detected.ext}`)
   fs.writeFileSync(dest, buffer)
 
   logLuxRouteAction(request, session)
@@ -86,8 +89,11 @@ export async function DELETE(request: NextRequest) {
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
+  const safeUser = sanitizeUsername(session.username)
+  if (!safeUser) return NextResponse.json({ error: "Invalid session username" }, { status: 400 })
+
   for (const e of Object.values(VALID_TYPES)) {
-    const p = path.join(AVATARS_DIR, `${session.username}.${e}`)
+    const p = path.join(AVATARS_DIR, `${safeUser}.${e}`)
     if (fs.existsSync(p)) fs.unlinkSync(p)
   }
   logLuxRouteAction(request, session)

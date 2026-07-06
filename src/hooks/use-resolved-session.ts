@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+import { fetchSharedSession } from "@/lib/session-fetch"
 
 export interface ResolvedSession {
   username: string
@@ -26,7 +27,7 @@ export function useResolvedSession(): ResolvedSession | null {
     }
 
     let cancelled = false
-    fetch("/api/auth/session")
+    fetchSharedSession()
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data?.authenticated) return

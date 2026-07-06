@@ -92,7 +92,7 @@ export function GoadInventoriesTab({
                           </div>
                         </CardHeader>
                         <CardContent className="p-0">
-                          <pre className="p-3 text-xs font-mono overflow-auto max-h-[60vh] bg-muted/30 rounded-b-lg whitespace-pre-wrap break-all">
+                          <pre className="p-3 text-xs font-mono overflow-auto resize-y min-h-[10rem] max-h-[60vh] bg-muted/30 rounded-b-lg whitespace-pre-wrap break-all">
                             {inv.content || "(empty)"}
                           </pre>
                         </CardContent>

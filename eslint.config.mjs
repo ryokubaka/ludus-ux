@@ -1,7 +1,7 @@
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals"
 import reactHooks from "eslint-plugin-react-hooks"
 
-export default [
+const config = [
   {
     ignores: [
       "**/node_modules/**",
@@ -29,3 +29,5 @@ export default [
     },
   },
 ]
+
+export default config

@@ -46,7 +46,7 @@ function getEffective(
 // ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  try { pruneStalePendingAllows() } catch {}
+  try { pruneStalePendingAllows() } catch (err) { console.warn("[pending-allows] prune:", (err as Error).message) }
 
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })

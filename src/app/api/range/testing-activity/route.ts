@@ -40,7 +40,9 @@ function getEffective(
 export async function POST(request: NextRequest) {
   try {
     pruneLuxRangeLogMarkers()
-  } catch {}
+  } catch (err) {
+    console.warn("[testing-activity] pruneLuxRangeLogMarkers:", (err as Error).message)
+  }
 
   const session = await getSessionFromRequest(request)
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })

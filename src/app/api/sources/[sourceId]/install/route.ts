@@ -8,22 +8,13 @@ import {
   resolveGlobalSourceBlueprintInstallApiKey,
 } from "@/lib/blueprint-global-install"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { installFromSource, isSourcesApiUnavailableError, type SourceInstallSelection } from "@/lib/ludus-source-client"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
 export const maxDuration = 300
-
-function revalidateAfterSourceMutation(scopeTag: string) {
-  revalidateLudusResource("templates")
-  revalidateLudusResource("blueprints")
-  revalidateLudusResource("ansible")
-  revalidateLudusScopeResource(scopeTag, "templates")
-  revalidateLudusScopeResource(scopeTag, "blueprints")
-  revalidateLudusScopeResource(scopeTag, "ansible")
-}
 
 export async function POST(
   request: NextRequest,

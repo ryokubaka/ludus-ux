@@ -25,8 +25,8 @@ export function writePendingNetworkSnapshot(instanceId: string, snapshotJson: st
     const filePath = pendingNetworkJsonPath(instanceId)
     // Wrap in the same envelope the pending-network API route uses.
     fs.writeFileSync(filePath, JSON.stringify({ snapshot: JSON.parse(snapshotJson) }), "utf8")
-  } catch {
-    // Non-fatal — caller will fall back to the inline snapshot path.
+  } catch (err) {
+    console.warn("[pending-network-fs] writePendingNetworkSnapshot failed:", (err as Error).message)
   }
 }
 

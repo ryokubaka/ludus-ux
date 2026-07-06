@@ -87,8 +87,8 @@ export function AdminPageClient() {
     staleTime: STALE.medium,
   })
 
-  const ranges = adminData?.ranges ?? []
-  const users = adminData?.users ?? []
+  const ranges = useMemo(() => adminData?.ranges ?? [], [adminData?.ranges])
+  const users = useMemo(() => adminData?.users ?? [], [adminData?.users])
   /** ROOT is admin-only; hide from utilization overview. */
   const usersVisible = useMemo(
     () => users.filter((u) => u.userID.toUpperCase() !== "ROOT"),
@@ -142,7 +142,7 @@ export function AdminPageClient() {
     staleTime: STALE.short,
   })
 
-  const adminPoolVMs = sharedVmsData?.vms ?? []
+  const adminPoolVMs = useMemo(() => sharedVmsData?.vms ?? [], [sharedVmsData?.vms])
 
   const fetchAdminPoolVMs = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms(scopeTag) })
@@ -267,7 +267,7 @@ export function AdminPageClient() {
     setUserRangeIDs(map)
     // Preserve expanded rows the user already opened; don't collapse on background refresh
     setExpandedUsers((prev) => new Set([...prev].filter((id) => map.has(id))))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Re-derive local ownership state whenever the query data changes
   useEffect(() => {

@@ -423,7 +423,9 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
             headers: { "Content-Type": "application/json", ...impersonationHeaders() },
             body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
           })
-        } catch {}
+        } catch (err) {
+          console.warn("[goad-actions] force-delete failed:", (err as Error).message)
+        }
         await refreshRanges()
         void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
         void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })

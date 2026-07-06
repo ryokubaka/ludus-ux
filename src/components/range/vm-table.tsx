@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo, useCallback, memo } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -32,6 +32,193 @@ interface VMTableProps {
   openingVm?: string | null
 }
 
+interface VMTableRowProps {
+  vm: VMObject
+  name: string
+  running: boolean
+  selected: boolean
+  powerLoading: boolean
+  pendingAction: "on" | "off" | undefined
+  isDownloading: boolean
+  isOpening: boolean
+  isDestroying: boolean
+  showConsole: boolean
+  onToggleSelect: (name: string) => void
+  onPower: (names: string[], action: "on" | "off") => void
+  onDestroy: (vm: VMObject) => void
+  onOpenBrowser?: (vm: VMObject) => void
+  onOpenBrowserNewWindow?: (vm: VMObject) => void
+  onDownloadVv?: (vm: VMObject) => void
+}
+
+const VMTableRow = memo(function VMTableRow({
+  vm,
+  name,
+  running,
+  selected,
+  powerLoading,
+  pendingAction,
+  isDownloading,
+  isOpening,
+  isDestroying,
+  showConsole,
+  onToggleSelect,
+  onPower,
+  onDestroy,
+  onOpenBrowser,
+  onOpenBrowserNewWindow,
+  onDownloadVv,
+}: VMTableRowProps) {
+  return (
+    <tr
+      className={cn(
+        "border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors",
+        selected && "bg-primary/5"
+      )}
+    >
+      <td className="p-3">
+        <Checkbox checked={selected} onCheckedChange={() => onToggleSelect(name)} />
+      </td>
+      <td className="p-3">
+        <div className="flex items-center gap-2">
+          <Monitor className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+          <span className="font-mono text-xs font-medium">{name}</span>
+        </div>
+      </td>
+      <td className="p-3">
+        <div className="flex items-center gap-1.5">
+          {powerLoading ? (
+            <>
+              <Loader2 className="h-3 w-3 animate-spin text-status-warning" />
+              <span className="text-xs text-status-warning">
+                {pendingAction === "on" ? "Starting…" : "Stopping…"}
+              </span>
+            </>
+          ) : (
+            <>
+              <Circle className={cn("h-2 w-2 fill-current", running ? "text-status-success" : "text-status-error")} />
+              <span className={cn("text-xs", running ? "text-status-success" : "text-status-error")}>
+                {running ? "Running" : "Stopped"}
+              </span>
+            </>
+          )}
+        </div>
+      </td>
+      <td className="p-3">
+        <span className="font-mono text-xs text-muted-foreground">
+          {vm.ip && vm.ip !== "null" ? vm.ip : "—"}
+        </span>
+      </td>
+      <td className="p-3">
+        <span className="font-mono text-xs text-muted-foreground">{vm.proxmoxID || vm.ID}</span>
+      </td>
+      {showConsole && (
+        <td className="p-3">
+          <div className="flex items-center justify-center gap-1">
+            {onOpenBrowser && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm" variant={running ? "ghost" : "ghost"}
+                    disabled={!running || isOpening}
+                    className={cn(!running && "opacity-30")}
+                    onClick={() => onOpenBrowser(vm)}
+                  >
+                    {isOpening
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <MonitorPlay className="h-3 w-3 text-primary" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{running ? "Browser console (noVNC)" : "Power on first"}</TooltipContent>
+              </Tooltip>
+            )}
+            {onOpenBrowserNewWindow && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm" variant="ghost"
+                    disabled={!running}
+                    className={cn(!running && "opacity-30")}
+                    onClick={() => onOpenBrowserNewWindow(vm)}
+                  >
+                    <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{running ? "Open console in new window" : "Power on first"}</TooltipContent>
+              </Tooltip>
+            )}
+            {onDownloadVv && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon-sm" variant="ghost"
+                    disabled={!running || isDownloading}
+                    className={cn(!running && "opacity-30")}
+                    onClick={() => onDownloadVv(vm)}
+                  >
+                    {isDownloading
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <Download className="h-3 w-3 text-primary" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{running ? "Download .vv (virt-viewer / SPICE)" : "Power on first"}</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </td>
+      )}
+      <td className="p-3">
+        <div className="flex items-center justify-end gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="icon-sm" variant="ghost"
+                disabled={powerLoading || running}
+                onClick={() => onPower([name], "on")}>
+                {powerLoading && pendingAction === "on"
+                  ? <Loader2 className="h-3 w-3 animate-spin text-status-success" />
+                  : <Power className="h-3 w-3 text-status-success" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Power On</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="icon-sm" variant="ghost"
+                disabled={powerLoading || !running}
+                onClick={() => onPower([name], "off")}>
+                {powerLoading && pendingAction === "off"
+                  ? <Loader2 className="h-3 w-3 animate-spin text-status-error" />
+                  : <PowerOff className="h-3 w-3 text-status-error" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Power Off</TooltipContent>
+          </Tooltip>
+        </div>
+      </td>
+      <td className="p-3 text-center">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-destructive"
+              disabled={powerLoading || isDestroying}
+              onClick={() => void onDestroy(vm)}
+            >
+              {isDestroying ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Destroy VM (permanent)</TooltipContent>
+        </Tooltip>
+      </td>
+    </tr>
+  )
+})
+
 export function VMTable({
   vms,
   onRefresh,
@@ -52,14 +239,14 @@ export function VMTable({
   const isRunning = (vm: VMObject) => vm.poweredOn ?? (vm.powerState === "running")
   const showConsole = !!(onOpenBrowser || onOpenBrowserNewWindow || onDownloadVv)
 
-  const toggleSelect = (name: string) => {
+  const toggleSelect = useCallback((name: string) => {
     setSelectedVMs((prev) => {
       const next = new Set(prev)
       if (next.has(name)) next.delete(name)
       else next.add(name)
       return next
     })
-  }
+  }, [])
 
   const toggleSelectAll = () => {
     if (selectedVMs.size === vms.length) {
@@ -69,7 +256,7 @@ export function VMTable({
     }
   }
 
-  const clearPendingPower = (names: string[]) => {
+  const clearPendingPower = useCallback((names: string[]) => {
     setLoadingVMs((prev) => {
       const next = new Set(prev)
       names.forEach((n) => next.delete(n))
@@ -80,9 +267,9 @@ export function VMTable({
       names.forEach((n) => next.delete(n))
       return next
     })
-  }
+  }, [])
 
-  const handlePower = async (names: string[], action: "on" | "off") => {
+  const handlePower = useCallback(async (names: string[], action: "on" | "off") => {
     setLoadingVMs((prev) => new Set([...Array.from(prev), ...names]))
     setPendingPowerAction((prev) => {
       const next = new Map(prev)
@@ -148,7 +335,7 @@ export function VMTable({
     } finally {
       clearPendingPower(names)
     }
-  }
+  }, [rangeId, onRefresh, toast, clearPendingPower])
 
   // Parent range polls can confirm power before our waiter finishes — drop spinners early.
   useEffect(() => {
@@ -164,7 +351,7 @@ export function VMTable({
     if (confirmed.length > 0) clearPendingPower(confirmed)
   }, [vms, pendingPowerAction])
 
-  const handleDestroyVm = async (vm: VMObject) => {
+  const handleDestroyVm = useCallback(async (vm: VMObject) => {
     const name = vmName(vm)
     const proxmoxId = vm.proxmoxID ?? vm.ID
     if (
@@ -220,13 +407,14 @@ export function VMTable({
       onRefresh?.()
     }
     setDestroyingProxmoxId(null)
-  }
+  }, [rangeId, onRefresh, toast, vmName])
 
   const selectedArray = Array.from(selectedVMs)
   const colSpan = 5 + (showConsole ? 1 : 0) + 1 + 1  // checkbox + name + status + ip + proxid + [console] + power + destroy
 
-  const sortedVms = [...vms].sort((a, b) =>
-    vmName(a).localeCompare(vmName(b), undefined, { sensitivity: "base" })
+  const sortedVms = useMemo(
+    () => [...vms].sort((a, b) => vmName(a).localeCompare(vmName(b), undefined, { sensitivity: "base" })),
+    [vms, vmName],
   )
 
   return (
@@ -290,161 +478,27 @@ export function VMTable({
             ) : (
               sortedVms.map((vm) => {
                 const name = vmName(vm)
-                const running = isRunning(vm)
-                const powerLoading = loadingVMs.has(name)
-                const pendingAction = pendingPowerAction.get(name)
-                const isDownloading = downloadingVm === name
-                const isOpening = openingVm === name
                 const proxmoxId = vm.proxmoxID ?? vm.ID
-                const isDestroying = destroyingProxmoxId === proxmoxId
                 return (
-                  <tr
+                  <VMTableRow
                     key={vm.ID || name}
-                    className={cn(
-                      "border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors",
-                      selectedVMs.has(name) && "bg-primary/5"
-                    )}
-                  >
-                    <td className="p-3">
-                      <Checkbox checked={selectedVMs.has(name)} onCheckedChange={() => toggleSelect(name)} />
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <Monitor className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                        <span className="font-mono text-xs font-medium">{name}</span>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <div className="flex items-center gap-1.5">
-                        {powerLoading ? (
-                          <>
-                            <Loader2 className="h-3 w-3 animate-spin text-status-warning" />
-                            <span className="text-xs text-status-warning">
-                              {pendingAction === "on" ? "Starting…" : "Stopping…"}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <Circle className={cn("h-2 w-2 fill-current", running ? "text-status-success" : "text-status-error")} />
-                            <span className={cn("text-xs", running ? "text-status-success" : "text-status-error")}>
-                              {running ? "Running" : "Stopped"}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {vm.ip && vm.ip !== "null" ? vm.ip : "—"}
-                      </span>
-                    </td>
-                    <td className="p-3">
-                      <span className="font-mono text-xs text-muted-foreground">{vm.proxmoxID || vm.ID}</span>
-                    </td>
-                    {showConsole && (
-                      <td className="p-3">
-                        <div className="flex items-center justify-center gap-1">
-                          {onOpenBrowser && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon-sm" variant={running ? "ghost" : "ghost"}
-                                  disabled={!running || isOpening}
-                                  className={cn(!running && "opacity-30")}
-                                  onClick={() => onOpenBrowser(vm)}
-                                >
-                                  {isOpening
-                                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                                    : <MonitorPlay className="h-3 w-3 text-primary" />}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>{running ? "Browser console (noVNC)" : "Power on first"}</TooltipContent>
-                            </Tooltip>
-                          )}
-                          {onOpenBrowserNewWindow && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon-sm" variant="ghost"
-                                  disabled={!running}
-                                  className={cn(!running && "opacity-30")}
-                                  onClick={() => onOpenBrowserNewWindow(vm)}
-                                >
-                                  <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>{running ? "Open console in new window" : "Power on first"}</TooltipContent>
-                            </Tooltip>
-                          )}
-                          {onDownloadVv && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  size="icon-sm" variant="ghost"
-                                  disabled={!running || isDownloading}
-                                  className={cn(!running && "opacity-30")}
-                                  onClick={() => onDownloadVv(vm)}
-                                >
-                                  {isDownloading
-                                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                                    : <Download className="h-3 w-3 text-primary" />}
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>{running ? "Download .vv (virt-viewer / SPICE)" : "Power on first"}</TooltipContent>
-                            </Tooltip>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                    <td className="p-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="icon-sm" variant="ghost"
-                              disabled={powerLoading || running}
-                              onClick={() => handlePower([name], "on")}>
-                              {powerLoading && pendingAction === "on"
-                                ? <Loader2 className="h-3 w-3 animate-spin text-status-success" />
-                                : <Power className="h-3 w-3 text-status-success" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Power On</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="icon-sm" variant="ghost"
-                              disabled={powerLoading || !running}
-                              onClick={() => handlePower([name], "off")}>
-                              {powerLoading && pendingAction === "off"
-                                ? <Loader2 className="h-3 w-3 animate-spin text-status-error" />
-                                : <PowerOff className="h-3 w-3 text-status-error" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Power Off</TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </td>
-                    <td className="p-3 text-center">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="icon-sm"
-                            variant="ghost"
-                            className="text-muted-foreground hover:text-destructive"
-                            disabled={powerLoading || isDestroying}
-                            onClick={() => void handleDestroyVm(vm)}
-                          >
-                            {isDestroying ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3 w-3" />
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Destroy VM (permanent)</TooltipContent>
-                      </Tooltip>
-                    </td>
-                  </tr>
+                    vm={vm}
+                    name={name}
+                    running={isRunning(vm)}
+                    selected={selectedVMs.has(name)}
+                    powerLoading={loadingVMs.has(name)}
+                    pendingAction={pendingPowerAction.get(name)}
+                    isDownloading={downloadingVm === name}
+                    isOpening={openingVm === name}
+                    isDestroying={destroyingProxmoxId === proxmoxId}
+                    showConsole={showConsole}
+                    onToggleSelect={toggleSelect}
+                    onPower={handlePower}
+                    onDestroy={handleDestroyVm}
+                    onOpenBrowser={onOpenBrowser}
+                    onOpenBrowserNewWindow={onOpenBrowserNewWindow}
+                    onDownloadVv={onDownloadVv}
+                  />
                 )
               })
             )}

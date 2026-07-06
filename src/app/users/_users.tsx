@@ -171,7 +171,7 @@ export function UsersPageClient() {
     staleTime: STALE.long,
   })
 
-  const users = usersData?.users ?? []
+  const users = useMemo(() => usersData?.users ?? [], [usersData?.users])
   /** ROOT is admin-only; hide from the directory UI. */
   const usersVisible = useMemo(
     () => users.filter((u) => u.userID.toUpperCase() !== "ROOT"),

@@ -1,21 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { isHttp404Error, syncSource } from "@/lib/ludus-source-client"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
 export const maxDuration = 300
-
-function revalidateAfterSourceMutation(scopeTag: string) {
-  revalidateLudusResource("templates")
-  revalidateLudusResource("blueprints")
-  revalidateLudusResource("ansible")
-  revalidateLudusScopeResource(scopeTag, "templates")
-  revalidateLudusScopeResource(scopeTag, "blueprints")
-  revalidateLudusScopeResource(scopeTag, "ansible")
-}
 
 export async function POST(
   request: NextRequest,

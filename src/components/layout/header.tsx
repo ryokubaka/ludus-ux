@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 import { clearLuxClientAuthState } from "@/lib/client-auth-state"
 import Link from "next/link"
+import Image from "next/image"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -17,6 +18,7 @@ import {
 import { User, Shield, LogOut, ChevronDown, Settings } from "lucide-react"
 import { useSidebar } from "@/lib/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
+import { fetchSharedSession } from "@/lib/session-fetch"
 import { cn } from "@/lib/utils"
 
 const pageTitles: Record<string, { title: string; description: string }> = {
@@ -57,7 +59,7 @@ export function Header() {
 
   useEffect(() => {
     let cancelled = false
-    fetch("/api/auth/session", { credentials: "include" })
+    fetchSharedSession()
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return
@@ -126,9 +128,12 @@ export function Header() {
                 {/* Avatar circle — larger than before */}
                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/20 border-2 border-primary/30 overflow-hidden flex-shrink-0">
                   {avatarUrl ? (
-                    <img
+                    <Image
                       src={avatarUrl}
                       alt={session.username}
+                      width={36}
+                      height={36}
+                      unoptimized
                       className="h-full w-full object-cover"
                       onError={() => setAvatarUrl(null)}
                     />
@@ -152,7 +157,14 @@ export function Header() {
               <DropdownMenuLabel className="flex items-center gap-2.5 py-2">
                 <div className="h-8 w-8 rounded-full bg-primary/20 border border-primary/30 overflow-hidden flex items-center justify-center flex-shrink-0">
                   {avatarUrl ? (
-                    <img src={avatarUrl} alt={session.username} className="h-full w-full object-cover" />
+                    <Image
+                      src={avatarUrl}
+                      alt={session.username}
+                      width={32}
+                      height={32}
+                      unoptimized
+                      className="h-full w-full object-cover"
+                    />
                   ) : session.isAdmin ? (
                     <Shield className="h-3.5 w-3.5 text-primary" />
                   ) : (

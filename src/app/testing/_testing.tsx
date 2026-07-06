@@ -196,7 +196,9 @@ async function deletePendingAllows(
       headers: { "Content-Type": "application/json", ...impHeaders },
       body: JSON.stringify({ rangeId, entries, opType }),
     })
-  } catch {}
+  } catch (err) {
+    console.warn("[testing] deletePendingAllows failed:", (err as Error).message)
+  }
 }
 
 async function postTestingAllowlistActivity(
@@ -215,7 +217,9 @@ async function postTestingAllowlistActivity(
       headers: { "Content-Type": "application/json", ...impHeaders },
       body: JSON.stringify({ rangeId, opType, detail: d, success }),
     })
-  } catch {}
+  } catch (err) {
+    console.warn("[testing] postTestingAllowlistActivity failed:", (err as Error).message)
+  }
 }
 
 /** LUX-persisted testing on/off events (Ludus does not add matching deploy-history rows). */
@@ -942,10 +946,14 @@ export function TestingPageClient() {
     // can throw or hang; logging after it meant add rows never appeared.
     try {
       await postTestingAllowlistActivity(rangeId, "testing_allow_add", val, addOk, impHeaders)
-    } catch {}
+    } catch (err) {
+      console.warn("[testing] postTestingAllowlistActivity (add):", (err as Error).message)
+    }
     try {
       await queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
-    } catch {}
+    } catch (err) {
+      console.warn("[testing] invalidateQueries (add):", (err as Error).message)
+    }
 
     const [freshDomains, freshPending] = await Promise.all([
       fetchAllowedDomains(rangeId, impHeaders),
@@ -1026,10 +1034,14 @@ export function TestingPageClient() {
         removeOk,
         impHeaders,
       )
-    } catch {}
+    } catch (err) {
+      console.warn("[testing] postTestingAllowlistActivity (remove):", (err as Error).message)
+    }
     try {
       await queryClient.invalidateQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) })
-    } catch {}
+    } catch (err) {
+      console.warn("[testing] invalidateQueries (remove):", (err as Error).message)
+    }
 
     const [freshDomains, freshPending] = await Promise.all([
       fetchAllowedDomains(rangeId, impHeaders),

@@ -170,7 +170,9 @@ function hydrateFromDb(): void {
                 logEntries.push({ logPath: path.join(subdir, sub.name), instanceId: subInstanceId })
               }
             }
-          } catch {}
+          } catch (err) {
+            console.warn(`[task-store] orphan scan: failed to read subdir ${entry.name}:`, (err as Error).message)
+          }
         } else if (entry.name.endsWith(".log")) {
           // Legacy layout: tasks/{taskId}.log (no instanceId info in path)
           logEntries.push({ logPath: path.join(TASKS_LOG_DIR, entry.name), instanceId: null })
@@ -190,7 +192,9 @@ function hydrateFromDb(): void {
         try {
           const content = fs.readFileSync(logPath, "utf8")
           lineCount = content.split("\n").filter((l) => l.length > 0).length
-        } catch {}
+        } catch (err) {
+          console.warn(`[task-store] orphan scan: failed to read log file ${logPath}:`, (err as Error).message)
+        }
 
         // Persist the recovered record so it survives future restarts.
         try {
@@ -199,7 +203,9 @@ function hydrateFromDb(): void {
                (id, command, instance_id, username, status, started_at, ended_at, exit_code, line_count)
              VALUES (?, ?, ?, NULL, 'error', ?, ?, -1, ?)`
           ).run(taskId, "recovered — container restarted mid-task", instanceId ?? null, startedAt, endedAt, lineCount)
-        } catch {}
+        } catch (err) {
+          console.warn(`[task-store] orphan scan: failed to persist recovered task ${taskId}:`, (err as Error).message)
+        }
 
         const task: GoadTask = {
           id: taskId,
@@ -277,7 +283,9 @@ function evictOldestIfNeeded(): void {
       for (const p of logFileCandidates(oldest, entry?.task.instanceId)) {
         if (fs.existsSync(p)) fs.unlinkSync(p)
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[task-store] evictOldestIfNeeded:", (err as Error).message)
+    }
   }
 }
 
@@ -374,11 +382,15 @@ export function appendLine(taskId: string, line: string): string | undefined {
       getDb()
         .prepare("UPDATE goad_tasks SET line_count = ? WHERE id = ?")
         .run(entry.task.lineCount, taskId)
-    } catch {}
+    } catch (err) {
+      console.warn("[task-store] appendLine: periodic line_count sync failed:", (err as Error).message)
+    }
   }
 
   for (const sub of entry.lineSubscribers) {
-    try { sub(stored) } catch {}
+    try { sub(stored) } catch (err) {
+      console.warn("[task-store] lineSubscriber error:", (err as Error).message)
+    }
   }
 
   // GOAD can spin forever on "deployment in progress (DEPLOYING)" when Ansible
@@ -432,7 +444,9 @@ export function completeTask(
     console.error("[task-store] completeTask DB write failed:", err)
   }
   for (const sub of entry.closeSubscribers) {
-    try { sub(exitCode) } catch {}
+    try { sub(exitCode) } catch (err) {
+      console.warn("[task-store] closeSubscriber error:", (err as Error).message)
+    }
   }
   entry.lineSubscribers.clear()
   entry.closeSubscribers.clear()
@@ -626,7 +640,9 @@ export function subscribeToTaskStatusEvents(cb: TaskStatusCallback): () => void 
 
 function notifyTaskStatus(taskId: string, status: TaskStatus): void {
   for (const cb of globalStatusSubscribers) {
-    try { cb(taskId, status) } catch {}
+    try { cb(taskId, status) } catch (err) {
+      console.warn("[task-store] statusSubscriber error:", (err as Error).message)
+    }
   }
 }
 
@@ -652,7 +668,9 @@ export function subscribeToTask(
   loadLinesFromFile(entry)
 
   for (const line of entry.task.lines) {
-    try { onLine(line) } catch {}
+    try { onLine(line) } catch (err) {
+      console.warn("[task-store] onLine replay error:", (err as Error).message)
+    }
   }
 
   if (entry.task.status !== "running") {

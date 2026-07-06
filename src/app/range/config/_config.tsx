@@ -27,11 +27,17 @@ import {
   ChevronRight,
   Shield,
   Filter,
+  ListChecks,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
 import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
+import {
+  ensureUserDefinedRolesTag,
+  resolveDeployOnlyRoles,
+} from "@/lib/ludus-deploy-only-roles"
 import { DeployLimitSelector } from "@/components/range/deploy-limit-selector"
+import { DeployOnlyRolesSelector } from "@/components/range/deploy-only-roles-selector"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { useRange } from "@/lib/range-context"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -47,12 +53,14 @@ const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]
 const TAG_DESCRIPTIONS = LUDUS_DEPLOY_TAG_DESCRIPTIONS
 
 function buildDeployConfirmMessage(
-  tags: string[],
+  tags: string[] | undefined,
   limitPattern: string | undefined,
+  onlyRoles: string[] | undefined,
 ): string {
   const parts: string[] = []
-  if (tags.length > 0) parts.push(`tags: ${tags.join(", ")}`)
+  if (tags && tags.length > 0) parts.push(`tags: ${tags.join(", ")}`)
   if (limitPattern) parts.push(`limit: ${limitPattern}`)
+  if (onlyRoles && onlyRoles.length > 0) parts.push(`only-roles: ${onlyRoles.join(", ")}`)
   if (parts.length === 0) return "Start full range deployment?"
   return `Deploy with ${parts.join(", ")}?`
 }
@@ -60,11 +68,13 @@ function buildDeployConfirmMessage(
 function buildDeployToastDescription(
   tags: string[] | undefined,
   limitPattern: string | undefined,
+  onlyRoles: string[] | undefined,
 ): string {
   const parts: string[] = []
   if (tags?.length) parts.push(`Tags: ${tags.join(", ")}`)
   else parts.push("Full tag set")
   if (limitPattern) parts.push(`Limit: ${limitPattern}`)
+  if (onlyRoles?.length) parts.push(`Only roles: ${onlyRoles.join(", ")}`)
   return parts.join(" · ")
 }
 
@@ -84,8 +94,11 @@ export function RangeConfigPageClient() {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [selectedLimitHosts, setSelectedLimitHosts] = useState<string[]>([])
   const [customLimitPattern, setCustomLimitPattern] = useState("")
+  const [selectedOnlyRoles, setSelectedOnlyRoles] = useState<string[]>([])
+  const [customOnlyRolesPattern, setCustomOnlyRolesPattern] = useState("")
   const [showTagSelector, setShowTagSelector] = useState(false)
   const [showLimitSelector, setShowLimitSelector] = useState(false)
+  const [showOnlyRolesSelector, setShowOnlyRolesSelector] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
@@ -132,7 +145,10 @@ export function RangeConfigPageClient() {
     setNetworkRules([])
     setSelectedLimitHosts([])
     setCustomLimitPattern("")
+    setSelectedOnlyRoles([])
+    setCustomOnlyRolesPattern("")
     setShowLimitSelector(false)
+    setShowOnlyRolesSelector(false)
     stopStreaming()
     setDeploying(false)
     setShowLogs(false)
@@ -147,6 +163,10 @@ export function RangeConfigPageClient() {
   const limitSelectionCount = customLimitPattern.trim()
     ? 1
     : selectedLimitHosts.length
+  const onlyRolesSelectionCount = customOnlyRolesPattern.trim()
+    ? 1
+    : selectedOnlyRoles.length
+  const onlyRolesPreview = resolveDeployOnlyRoles(selectedOnlyRoles, customOnlyRolesPattern)
 
   // Sync editor ONLY on initial load or when the active range changes.
   // Background refetches must NOT overwrite what the user has typed or already saved —
@@ -232,13 +252,15 @@ export function RangeConfigPageClient() {
         ? { rangeId: selectedRangeId, configYaml: config, deployedVms }
         : undefined,
     )
+    const onlyRolesForLudus = resolveDeployOnlyRoles(selectedOnlyRoles, customOnlyRolesPattern)
     const tagRunAt = Date.now()
-    const tagList = tagsForLudus && tagsForLudus.length > 0 ? tagsForLudus : undefined
+    const tagList = ensureUserDefinedRolesTag(tagsForLudus, onlyRolesForLudus)
     const result = await ludusApi.deployRange(
       tagList,
       deployLimitPattern,
       selectedRangeId ?? undefined,
       forceLudus,
+      onlyRolesForLudus,
     )
     if (!result.error && selectedRangeId && tagList && tagList.length > 0) {
       void registerLuxDeployTagRun(selectedRangeId, tagList, tagRunAt)
@@ -263,7 +285,7 @@ export function RangeConfigPageClient() {
     }
     toast({
       title: "Deployment started",
-      description: buildDeployToastDescription(tagList, deployLimitPattern),
+      description: buildDeployToastDescription(tagList, deployLimitPattern, onlyRolesForLudus),
     })
     startStreaming(selectedRangeId ?? undefined)
   }
@@ -272,7 +294,17 @@ export function RangeConfigPageClient() {
     await executeDeploy(selectedTags.length > 0 ? selectedTags : undefined)
   }
   const handleDeploy = () =>
-    confirm(buildDeployConfirmMessage(selectedTags, deployLimitPatternPreview), doDeploy)
+    confirm(
+      buildDeployConfirmMessage(
+        ensureUserDefinedRolesTag(
+          selectedTags.length > 0 ? selectedTags : undefined,
+          onlyRolesPreview,
+        ),
+        deployLimitPatternPreview,
+        onlyRolesPreview,
+      ),
+      doDeploy,
+    )
 
   const doDeployFirewallRules = async () => {
     const merged = injectNetworkRules(config, networkRules)
@@ -435,6 +467,19 @@ export function RangeConfigPageClient() {
             </Button>
 
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowOnlyRolesSelector(!showOnlyRolesSelector)}
+              disabled={!!pendingAction}
+            >
+              <ListChecks className="h-4 w-4" />
+              Only Roles
+              {onlyRolesSelectionCount > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{onlyRolesSelectionCount}</Badge>
+              )}
+            </Button>
+
+            <Button
               onClick={handleDeploy}
               disabled={deploying || !!pendingAction}
               variant={deploying ? "secondary" : "default"}
@@ -531,6 +576,17 @@ export function RangeConfigPageClient() {
           onSelectedHostsChange={setSelectedLimitHosts}
           customPattern={customLimitPattern}
           onCustomPatternChange={setCustomLimitPattern}
+          disabled={!!pendingAction || deploying}
+        />
+      )}
+
+      {showOnlyRolesSelector && (
+        <DeployOnlyRolesSelector
+          configYaml={config}
+          selectedRoles={selectedOnlyRoles}
+          onSelectedRolesChange={setSelectedOnlyRoles}
+          customPattern={customOnlyRolesPattern}
+          onCustomPatternChange={setCustomOnlyRolesPattern}
           disabled={!!pendingAction || deploying}
         />
       )}

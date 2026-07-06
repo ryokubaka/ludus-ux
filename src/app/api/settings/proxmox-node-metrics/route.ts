@@ -6,9 +6,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import {
   parseClusterResourceNodes,
   parseNodeList,
@@ -26,22 +25,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
 
-  const settings = getSettings()
   // Root `pvesh` over SSH — use only settings/env root password or mounted key.
   // Do not use `session.sshPassword` (LUX login password); it is not root@Proxmox
   // and would force password auth and skip the key, breaking key-only setups.
-  if (!isRootProxmoxSshConfigured(settings)) {
-    return NextResponse.json(
-      {
-        error:
-          "No Proxmox root SSH auth in SSH & GOAD: set root SSH password or private key (path or mount).",
-      },
-      { status: 503 },
-    )
-  }
-
-  const sshPass = (settings.proxmoxSshPassword || "").trim()
-  const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
+  const ssh = requireProxmoxSsh()
+  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
+  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
 
   try {
     const [nodeJson, resourcesJson] = await Promise.all([

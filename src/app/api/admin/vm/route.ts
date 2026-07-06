@@ -11,9 +11,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
+import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
@@ -32,19 +31,9 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "action must be 'start' or 'stop'" }, { status: 400 })
   }
 
-  const settings = getSettings()
-  const sshPass = (settings.proxmoxSshPassword || "").trim()
-  if (!isRootProxmoxSshConfigured(settings)) {
-    return NextResponse.json(
-      {
-        error:
-          "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
-      },
-      { status: 503 },
-    )
-  }
-
-  const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
+  const ssh = requireProxmoxSsh()
+  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
+  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
 
   try {
     const nodeJson = await sshExec(sshHost, sshPort, sshUser, sshPass, "pvesh get /nodes --output-format json")
@@ -75,19 +64,9 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "Valid proxmoxId required" }, { status: 400 })
   }
 
-  const settings = getSettings()
-  const sshPass = (settings.proxmoxSshPassword || "").trim()
-  if (!isRootProxmoxSshConfigured(settings)) {
-    return NextResponse.json(
-      {
-        error:
-          "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
-      },
-      { status: 503 },
-    )
-  }
-
-  const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
+  const ssh = requireProxmoxSsh()
+  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
+  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
 
   try {
     // Discover the active Proxmox node

@@ -17,10 +17,12 @@ import { useQueryClient } from "@tanstack/react-query"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { queryKeys } from "@/lib/query-keys"
 import {
-  extensionAnsibleDepsReady,
+  extensionAnsibleState,
   extensionMissingAnsibleRoles,
   installGoadDependencies,
   requirementsFromExtensionRoleRefs,
+  withInstalling,
+  withoutInstalling,
 } from "@/lib/goad-dependency-service"
 import { findMissingFromInstalled } from "@/lib/ansible-requirements-service"
 import { useToast } from "@/hooks/use-toast"
@@ -61,10 +63,12 @@ export function GoadExtensionsTab({
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
-  const [installingDepsFor, setInstallingDepsFor] = useState<string | null>(null)
+  const [installingDeps, setInstallingDeps] = useState<ReadonlySet<string>>(new Set())
 
   const handleInstallExtensionDeps = async (ext: GoadExtensionDef) => {
     if (!ansibleInstalled) return
+    // Guard against a second click for the same extension while its install runs.
+    if (installingDeps.has(ext.name)) return
     const required = requirementsFromExtensionRoleRefs(ext.requiredRoles ?? [])
     const installedItems = [
       ...[...ansibleInstalled.roles].map((name) => ({
@@ -81,7 +85,7 @@ export function GoadExtensionsTab({
     const missing = findMissingFromInstalled(installedItems, required)
     if (missing.length === 0) return
 
-    setInstallingDepsFor(ext.name)
+    setInstallingDeps((cur) => withInstalling(cur, ext.name))
     try {
       const result = await installGoadDependencies(missing)
       await queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
@@ -114,7 +118,7 @@ export function GoadExtensionsTab({
       }
       toast({ variant: "destructive", title: "Install failed", description: msg })
     } finally {
-      setInstallingDepsFor(null)
+      setInstallingDeps((cur) => withoutInstalling(cur, ext.name))
     }
   }
 
@@ -235,7 +239,13 @@ export function GoadExtensionsTab({
                 {uninstalledExtensions.map((ext) => {
                   const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
                   const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
-                  const ansibleReady = extensionAnsibleDepsReady(ext, ansibleInstalled ?? null)
+                  const ansibleState = extensionAnsibleState(
+                    ext,
+                    ansibleInstalled ?? null,
+                    ansibleInstalledLoading,
+                  )
+                  const ansibleReady = ansibleState === "ready"
+                  const ansibleUnknown = ansibleState === "unknown"
                   const missingAnsible = extensionMissingAnsibleRoles(ext, ansibleInstalled ?? null)
                   const noNewVms = extensionIsProvisionOnly(ext)
                   const skipDeploy = noNewVms && provisionOnlyExtensionsSupported
@@ -247,13 +257,13 @@ export function GoadExtensionsTab({
                     instance.status !== "CREATED" &&
                     !isRunning
                   const scopeInstall = `ext-install:${ext.name}`
-                  const installingDeps = installingDepsFor === ext.name
+                  const installing = installingDeps.has(ext.name)
                   return (
                     <div
                       key={ext.name}
                       className={cn(
                         "rounded-lg border",
-                        !templatesReady || !ansibleReady
+                        !templatesReady || ansibleState === "missing"
                           ? "border-border opacity-70"
                           : "border-border hover:border-primary/30",
                       )}
@@ -274,9 +284,14 @@ export function GoadExtensionsTab({
                                   <PackageX className="h-2.5 w-2.5" /> Missing templates
                                 </Badge>
                               )}
-                              {templatesReady && missingAnsible.length > 0 && (
+                              {templatesReady && ansibleState === "missing" && (
                                 <Badge variant="destructive" className="text-xs gap-1">
                                   <BookOpen className="h-2.5 w-2.5" /> Missing Ansible
+                                </Badge>
+                              )}
+                              {templatesReady && ansibleUnknown && (
+                                <Badge variant="outline" className="text-xs gap-1">
+                                  <Loader2 className="h-2.5 w-2.5 animate-spin" /> Checking Ansible…
                                 </Badge>
                               )}
                             </div>
@@ -303,15 +318,15 @@ export function GoadExtensionsTab({
                               size="sm"
                               variant="secondary"
                               className="gap-1.5 h-8"
-                              disabled={installingDeps || isRunning || ansibleInstalledLoading}
+                              disabled={installing || isRunning || ansibleInstalledLoading}
                               onClick={() => void handleInstallExtensionDeps(ext)}
                             >
-                              {installingDeps ? (
+                              {installing ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               ) : (
                                 <Download className="h-3.5 w-3.5" />
                               )}
-                              {installingDeps ? "Installing…" : "Install dependencies"}
+                              {installing ? "Installing…" : "Install dependencies"}
                             </Button>
                           )}
                           <Button
@@ -327,9 +342,11 @@ export function GoadExtensionsTab({
                                   ? "Run Provide first — a dedicated Ludus range is required"
                                   : !templatesReady
                                     ? `Missing Ludus templates: ${[...tpl.missingAbsent, ...tpl.missingUnbuilt].join(", ")}`
-                                    : !ansibleReady
-                                      ? `Missing Ansible: ${missingAnsible.join(", ")} — install dependencies first`
-                                      : isRunning
+                                    : ansibleUnknown
+                                      ? "Checking Ansible dependencies…"
+                                      : ansibleState === "missing"
+                                        ? `Missing Ansible: ${missingAnsible.join(", ")} — install dependencies first`
+                                        : isRunning
                                         ? "Wait for current action to finish"
                                         : skipDeploy
                                           ? "Enable extension and run Ansible only (no Ludus deploy)"

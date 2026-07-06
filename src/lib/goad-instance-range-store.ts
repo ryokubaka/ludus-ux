@@ -35,7 +35,8 @@ export function getInstanceRangeLocal(instanceId: string): string | null {
       .prepare("SELECT range_id FROM goad_instance_ranges WHERE instance_id = ?")
       .get(instanceId) as { range_id: string } | null
     return row?.range_id ?? null
-  } catch {
+  } catch (err) {
+    console.warn("[goad-range-store] getInstanceRangeLocal:", (err as Error).message)
     return null
   }
 }
@@ -47,7 +48,8 @@ export function getInstanceIdForRange(rangeId: string): string | null {
       .prepare("SELECT instance_id FROM goad_instance_ranges WHERE range_id = ?")
       .get(rangeId) as { instance_id: string } | null
     return row?.instance_id ?? null
-  } catch {
+  } catch (err) {
+    console.warn("[goad-range-store] getInstanceIdForRange:", (err as Error).message)
     return null
   }
 }
@@ -59,7 +61,8 @@ export function getAllInstanceRangesLocal(): Map<string, string> {
       .prepare("SELECT instance_id, range_id FROM goad_instance_ranges")
       .all() as { instance_id: string; range_id: string }[]
     return new Map(rows.map((r) => [r.instance_id, r.range_id]))
-  } catch {
+  } catch (err) {
+    console.warn("[goad-range-store] getAllInstanceRangesLocal:", (err as Error).message)
     return new Map()
   }
 }

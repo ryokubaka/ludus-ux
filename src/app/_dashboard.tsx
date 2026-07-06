@@ -16,7 +16,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { VMTable } from "@/components/range/vm-table"
-import { LogViewer, LogViewerCompound } from "@/components/range/log-viewer"
+import dynamic from "next/dynamic"
+// Deploy-log viewer (and its virtualization dep) only loads once the user opens
+// logs, keeping it out of the initial dashboard bundle.
+const LogViewer = dynamic(() => import("@/components/range/log-viewer").then((m) => m.LogViewer), {
+  ssr: false,
+  loading: () => <div className="p-4 text-xs italic text-muted-foreground">Loading logs…</div>,
+})
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
 import { timeAgo, cn, extractArray, getRangeStateBadge } from "@/lib/utils"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
@@ -255,15 +261,17 @@ export function DashboardPageClient() {
   })
 
   // ── Version query ───────────────────────────────────────────────────────────
-  const { data: versionData } = useQuery({
+  // `select` collapses the payload to the version string so consumers only
+  // re-render when the string itself changes.
+  const { data: version = "" } = useQuery({
     queryKey: queryKeys.version(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getVersion()
       return result.data ?? null
     },
+    select: (data) => (data ? data.result || data.version || "" : ""),
     staleTime: STALE.long,
   })
-  const version = versionData ? (versionData.result || versionData.version || "") : ""
 
   const { data: deployHistoryEntries = [], isLoading: deployHistoryListLoading, isFetching: deployHistoryRefreshing } =
     useQuery({
@@ -342,7 +350,13 @@ export function DashboardPageClient() {
     },
     enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
     staleTime: STALE.short,
-    refetchInterval: shouldPollGoadTasksAux ? 5000 : false,
+    // Pause the enrichment poll while the deploy-log SSE is actively streaming
+    // this range — the live stream already carries the deploy progress, so the
+    // 5s marker poll is redundant load until the stream ends.
+    refetchInterval:
+      shouldPollGoadTasksAux && !(isStreaming && streamingRangeId === (selectedRangeId ?? null))
+        ? 5000
+        : false,
   })
 
   // ── VM operation audit log (destroy_vm / remove_extension) ───────────────
@@ -1428,7 +1442,7 @@ export function DashboardPageClient() {
                           <X className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <LogViewerCompound.Root
+                      <LogViewer
                         lines={logLines}
                         onClear={clearLogs}
                         maxHeight="300px"
@@ -1437,11 +1451,7 @@ export function DashboardPageClient() {
                         onRefresh={selectedRangeId?.trim() ? handleRefreshDeployLogs : undefined}
                         refreshLoading={deployLogRefreshBusy}
                         downloadFilename={`ludus-deploy-${(selectedRangeId ?? "range").replace(/[^a-zA-Z0-9_-]+/g, "_")}`}
-                      >
-                        <LogViewerCompound.Toolbar />
-                        <LogViewerCompound.Search />
-                        <LogViewerCompound.Body />
-                      </LogViewerCompound.Root>
+                      />
                     </div>
                   )}
 
@@ -1639,7 +1649,7 @@ export function DashboardPageClient() {
               </p>
             </div>
           ) : (
-            <pre className="mt-2 mb-4 flex-1 min-h-[200px] max-h-[60vh] overflow-auto rounded-md border border-border bg-black/60 p-3 text-xs font-mono text-muted-foreground whitespace-pre-wrap">
+            <pre className="mt-2 mb-4 flex-1 resize-y min-h-[200px] max-h-[60vh] overflow-auto rounded-md border border-border bg-black/60 p-3 text-xs font-mono text-muted-foreground whitespace-pre-wrap">
               {inventoryDialog?.text?.trim()
                 ? inventoryDialog.text
                 : "(empty — Ludus returned no inventory text for this range)"}

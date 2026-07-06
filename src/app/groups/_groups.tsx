@@ -248,7 +248,10 @@ export function GroupsPageClient() {
     enabled: !!addRangeDialog,
     staleTime: STALE.long,
   })
-  const pickerRanges = Array.isArray(pickerRangesRaw) ? pickerRangesRaw : []
+  const pickerRanges = useMemo(
+    () => (Array.isArray(pickerRangesRaw) ? pickerRangesRaw : []),
+    [pickerRangesRaw],
+  )
 
   const { data: addUserDialogDetail, isLoading: loadingAddUserDetail } = useQuery({
     queryKey: queryKeys.groupDetail(scopeTag, addUserDialog || "_"),
@@ -315,17 +318,23 @@ export function GroupsPageClient() {
   }, [filteredPickerRanges, selectedRangeIds])
 
   const addRangePickerStatusQueries = useQueries({
-    queries: addRangeStatusQueryIds.map((rangeId) => ({
-      queryKey: queryKeys.rangeStatus(scopeTag, rangeId),
-      queryFn: async () => {
-        const r = await ludusApi.getRangeStatus(rangeId)
-        if (r.error || !r.data) throw new Error(r.error || "Could not load range status")
-        return r.data
-      },
-      enabled: !!addRangeDialog && addRangeStatusQueryIds.length > 0,
-      staleTime: 0,
-      refetchInterval: pollRangeStatusWhileRouterOff,
-    })),
+    queries: addRangeStatusQueryIds.map((rangeId) => {
+      const isSelected = selectedRangeIds.has(rangeId)
+      return {
+        queryKey: queryKeys.rangeStatus(scopeTag, rangeId),
+        queryFn: async () => {
+          const r = await ludusApi.getRangeStatus(rangeId)
+          if (r.error || !r.data) throw new Error(r.error || "Could not load range status")
+          return r.data
+        },
+        enabled: !!addRangeDialog && addRangeStatusQueryIds.length > 0,
+        // Unselected picker rows fetch their status once; only the rows the user
+        // actually checked keep polling, so the dialog no longer fans out a poll
+        // to every visible range every few seconds.
+        staleTime: isSelected ? 0 : STALE.short,
+        refetchInterval: isSelected ? pollRangeStatusWhileRouterOff : false,
+      }
+    }),
   })
 
   const addRangeStatusById = useMemo(() => {

@@ -517,6 +517,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     ludusDeployTags?: string[],
     /** Wizard review YAML — injected before GOAD `ludus range config set`. */
     workspaceConfigYaml?: string,
+    /** Passed to Ludus wrapper as `--only-roles` on each `ludus range deploy`. */
+    ludusOnlyRoles?: string[],
   ) => {
     abortRef.current?.abort()
     const controller = new AbortController()
@@ -535,6 +537,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           rangeId,
           ...(ludusDeployTags && ludusDeployTags.length > 0 ? { ludusDeployTags } : {}),
           ...(workspaceConfigYaml?.trim() ? { workspaceConfigYaml } : {}),
+          ...(ludusOnlyRoles && ludusOnlyRoles.length > 0 ? { ludusOnlyRoles } : {}),
         }),
         signal: controller.signal,
       },

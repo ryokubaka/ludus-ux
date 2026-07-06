@@ -19,12 +19,15 @@ Each bullet uses a single tag:
 
 **LUX**
 - [Add] **Log viewers** — All log windows (Range Logs, Dashboard deploy log, GOAD terminal, and the Templates / Blueprints / New Range / inventory config panes) are vertically resizable by dragging the bottom-right corner; the chosen height persists per view.
+- [Add] **Configuration / Deploy New Range / GOAD** — Deploy **Only Roles** selector on Range Configuration, Deploy New Range wizard (Deploy Tags step), and Deploy New GOAD Instance (advanced panel); maps to Ludus `--only-roles` / `only_roles` API field and auto-includes the `user-defined-roles` tag when roles are selected.
+- [Fix] **GOAD** — Switching GOAD instances now updates the sidebar active range so Range Logs stream the correct Ludus range.
 - [Fix] **Log viewers** — ANSI stripping no longer corrupts bracketed text starting with `m` (e.g. `TASK [main : ...]`, `ok: [myhost]`); the SGR regex now requires a digit group so only real color codes are removed.
 - [Fix] **Log viewers** — Carriage-return handling keeps a trailing-CR line's text (e.g. `downloading...\r`) instead of blanking it, and Packer phase-separator blank lines are preserved.
 - [Fix] **Log viewers** — Packer `==>` build-step lines keep a readable highlight color in the light theme.
 - [Fix] **E2E tests** — Corrected banner heading-level selectors in the perf and navigation specs so authenticated Playwright runs pass against the current header markup.
 - [Improve] **Code quality** — ESLint cleanup: removed stale disable directives, stabilized `useMemo` / query-key inputs, and migrated avatar `<img>` tags to `next/image`.
 - [Improve] **Configuration** — Deploy Host Limit parsing of range-config `router:`/`vm_name` now uses a YAML parser instead of regex, correctly handling comments, quoting, and nested structures.
+- [Improve] **Deploy New Range** — Wizard and blueprint paths move deploy tags and only-roles to **Advanced tag options** on Review & Deploy collapsible panel; dedicated Deploy Tags wizard step removed. Deployment via Blueprint in wizard now adds editable config YAML plus the same advanced deploy options.
 - [Improve] **Deploy New GOAD Instance** — Extension Ansible readiness shows a distinct "Checking Ansible…" state while loading (no more disabled button with an empty reason), and concurrent dependency installs track their own spinner without clobbering each other.
 - [Improve] **GOAD** — Provider role discovery understands inline `roles: [a, b]` lists and `role:`/`name:`/`src:` dict refs; temporary wizard config files in `/tmp` are cleaned up.
 - [Improve] **Templates** — Real (non-404) Ludus Sources errors are surfaced alongside the SSH-fallback failure instead of being silently swallowed.

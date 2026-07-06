@@ -18,6 +18,7 @@ import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
+import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
@@ -101,6 +102,17 @@ const LUDUS_WRAPPER_SH = [
   '  done',
   '  if [ "$_has_t" -eq 0 ]; then',
   '    set -- "$@" --tags "$GOAD_LUDUS_DEPLOY_TAGS"',
+  '  fi',
+  'fi',
+  '',
+  '# Optional: limit `ludus range deploy` roles (GOAD_LUDUS_ONLY_ROLES comma list).',
+  'if [ "$_has_rd" -eq 1 ] && [ -n "${GOAD_LUDUS_ONLY_ROLES:-}" ]; then',
+  '  _has_or=0',
+  '  for _a in "$@"; do',
+  '    case "$_a" in --only-roles) _has_or=1;; esac',
+  '  done',
+  '  if [ "$_has_or" -eq 0 ]; then',
+  '    set -- "$@" --only-roles "$GOAD_LUDUS_ONLY_ROLES"',
   '  fi',
   'fi',
   '',
@@ -450,6 +462,9 @@ export async function streamGoadCommand(
   ludusDeployTags?: string[],
   /** When set, Ludus wrapper replaces workspace config.yml before `range config set`. */
   workspaceConfigYaml?: string,
+  /** When non-empty, Ludus wrapper appends `--only-roles` to every `ludus range deploy`
+   *  in this session (comma-joined list). */
+  ludusOnlyRoles?: string[],
 ): Promise<() => void> {
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
@@ -468,8 +483,12 @@ export async function streamGoadCommand(
   // instead of falling back to reading the key from ~/.config/ludus/config.yml
   // (which is set up correctly during `goad -t install`).
   const safeRangeId = rangeId ? rangeId.replace(/'/g, "") : ""
-  const safeDeployTags = filterLudusDeployTags(ludusDeployTags ?? [])
+  const safeOnlyRoles = (ludusOnlyRoles ?? []).map((r) => r.trim()).filter(Boolean)
+  const safeDeployTags = filterLudusDeployTags(
+    ensureUserDefinedRolesTag(ludusDeployTags ?? [], safeOnlyRoles.length > 0 ? safeOnlyRoles : undefined) ?? [],
+  )
   const deployTagsJoined = safeDeployTags.join(",")
+  const onlyRolesJoined = safeOnlyRoles.join(",")
 
   let luxWizardConfigPath = ""
   const trimmedWizardYaml = workspaceConfigYaml?.trim()
@@ -504,6 +523,9 @@ export async function streamGoadCommand(
     ...(safeRangeId ? [`LUDUS_RANGE_ID='${safeRangeId}'`] : []),
     ...(deployTagsJoined
       ? [`GOAD_LUDUS_DEPLOY_TAGS='${deployTagsJoined.replace(/'/g, "'\\''")}'`]
+      : []),
+    ...(onlyRolesJoined
+      ? [`GOAD_LUDUS_ONLY_ROLES='${onlyRolesJoined.replace(/'/g, "'\\''")}'`]
       : []),
     ...(luxWizardConfigPath
       ? [`LUX_WIZARD_CONFIG_YML='${luxWizardConfigPath.replace(/'/g, "")}'`]

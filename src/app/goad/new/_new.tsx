@@ -12,8 +12,6 @@ import {
   Terminal,
   ChevronRight,
   ChevronLeft,
-  ChevronDown,
-  ChevronUp,
   Play,
   Puzzle,
   Check,
@@ -27,7 +25,6 @@ import {
   PackageCheck,
   PackageX,
   CircleAlert,
-  Tag,
   Shield,
   FileCode2,
   RotateCcw,
@@ -48,7 +45,12 @@ import { useImpersonation } from "@/lib/impersonation-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
-import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS, filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
+import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
+import {
+  ensureUserDefinedRolesTag,
+  resolveDeployOnlyRoles,
+} from "@/lib/ludus-deploy-only-roles"
+import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
 import { clearRangeVmsAndWait } from "@/lib/wait-range-vms-cleared"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { YamlEditor } from "@/components/range/yaml-editor"
@@ -229,6 +231,8 @@ export function NewGoadInstancePageClient() {
   // Optional Ludus deploy tags — set from Review & Deploy (advanced panel); forwarded to `ludus range deploy --tags`
   const [selectedLudusDeployTags, setSelectedLudusDeployTags] = useState<string[]>([])
   const [showLudusDeployTagsPanel, setShowLudusDeployTagsPanel] = useState(false)
+  const [selectedLudusOnlyRoles, setSelectedLudusOnlyRoles] = useState<string[]>([])
+  const [customLudusOnlyRolesPattern, setCustomLudusOnlyRolesPattern] = useState("")
 
   // Step 5: generated / review Ludus config YAML
   const [reviewConfigYaml, setReviewConfigYaml] = useState("")
@@ -572,8 +576,18 @@ export function NewGoadInstancePageClient() {
     const useWizardYaml = deployConfigYaml.length > 0
     const hasNetworkInYaml = useWizardYaml && reviewConfigYaml.includes("network:")
 
-    const deployTagsForRun = filterLudusDeployTags(selectedLudusDeployTags)
+    const onlyRolesForRun = resolveDeployOnlyRoles(
+      selectedLudusOnlyRoles,
+      customLudusOnlyRolesPattern,
+    )
+    const deployTagsForRun = filterLudusDeployTags(
+      ensureUserDefinedRolesTag(
+        filterLudusDeployTags(selectedLudusDeployTags),
+        onlyRolesForRun,
+      ) ?? [],
+    )
     const ludusDeployTagsOpt = deployTagsForRun.length > 0 ? deployTagsForRun : undefined
+    const ludusOnlyRolesOpt = onlyRolesForRun
 
     // [P3] Snapshot instance lists in parallel — user + admin view when impersonating.
     // Both fetches are independent so there's no reason to run them sequentially.
@@ -762,6 +776,7 @@ export function NewGoadInstancePageClient() {
         rangeId ?? undefined,
         ludusDeployTagsOpt,
         deployConfigYaml,
+        ludusOnlyRolesOpt,
       )
 
       const taskIdForRedirect = await waitForGoadTaskId()
@@ -868,6 +883,7 @@ export function NewGoadInstancePageClient() {
         rangeId ?? undefined,
         ludusDeployTagsOpt,
         deployConfigYaml,
+        ludusOnlyRolesOpt,
       )
 
       // Poll until GOAD creates the new workspace directory, then redirect.
@@ -1434,84 +1450,20 @@ export function NewGoadInstancePageClient() {
                 </div>
               </div>
               <Separator />
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2 gap-y-1">
-                  <Tag className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="text-xs text-muted-foreground">Ludus deploy tags</span>
-                  {filterLudusDeployTags(selectedLudusDeployTags).length > 0 && (
-                    <div className="flex flex-wrap gap-1 min-w-0">
-                      {filterLudusDeployTags(selectedLudusDeployTags).map((t) => (
-                        <Badge key={t} variant="secondary" className="text-xs font-mono">
-                          {t}
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="ml-auto gap-1 h-7 text-xs shrink-0"
-                    onClick={() => setShowLudusDeployTagsPanel((v) => !v)}
-                  >
-                    {showLudusDeployTagsPanel ? (
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    )}
-                    {showLudusDeployTagsPanel ? "Hide tag options" : "Advanced tag options"}
-                  </Button>
-                </div>
-                {!showLudusDeployTagsPanel && filterLudusDeployTags(selectedLudusDeployTags).length === 0 && (
-                  <p className="text-[10px] text-muted-foreground pl-5">
-                    Full Ludus Ansible (no <code className="text-primary">--tags</code> filter). Expand to limit deploy steps — same tag list as the range configuration wizard.
-                  </p>
-                )}
-                {showLudusDeployTagsPanel && (
-                  <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
-                    <p className="text-[10px] text-muted-foreground">
-                      Optional: pass <code className="text-primary">--tags</code> to every{" "}
-                      <code className="text-primary">ludus range deploy</code> in this GOAD session. Tight sets can break domain or extension steps.
-                    </p>
-                    <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
-                      {LUDUS_DEPLOY_TAGS.map((tag) => (
-                        <label
-                          key={tag}
-                          className={cn(
-                            "flex items-center gap-2 p-2 rounded border text-left transition-colors cursor-pointer",
-                            selectedLudusDeployTags.includes(tag)
-                              ? "border-primary bg-primary/10"
-                              : "border-border hover:border-primary/50",
-                          )}
-                        >
-                          <Checkbox
-                            checked={selectedLudusDeployTags.includes(tag)}
-                            onCheckedChange={() => toggleLudusDeployTag(tag)}
-                            className="shrink-0"
-                          />
-                          <div className="min-w-0">
-                            <code className="text-xs font-mono text-primary">{tag}</code>
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {LUDUS_DEPLOY_TAG_DESCRIPTIONS[tag] || ""}
-                            </p>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
-                    {selectedLudusDeployTags.length > 0 && (
-                      <div className="flex items-center justify-between pt-1 border-t border-border">
-                        <p className="text-xs text-muted-foreground">
-                          {selectedLudusDeployTags.length} tag{selectedLudusDeployTags.length !== 1 ? "s" : ""}{" "}
-                          selected
-                        </p>
-                        <Button size="sm" variant="ghost" onClick={() => setSelectedLudusDeployTags([])}>
-                          Clear all
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+              <DeployAdvancedOptionsPanel
+                selectedTags={selectedLudusDeployTags}
+                onToggleTag={toggleLudusDeployTag}
+                onClearTags={() => setSelectedLudusDeployTags([])}
+                configYaml={reviewConfigYaml}
+                selectedOnlyRoles={selectedLudusOnlyRoles}
+                onSelectedOnlyRolesChange={setSelectedLudusOnlyRoles}
+                customOnlyRolesPattern={customLudusOnlyRolesPattern}
+                onCustomOnlyRolesPatternChange={setCustomLudusOnlyRolesPattern}
+                expanded={showLudusDeployTagsPanel}
+                onExpandedChange={setShowLudusDeployTagsPanel}
+                helperContext="goad"
+                displayTags={filterLudusDeployTags(selectedLudusDeployTags)}
+              />
             </CardContent>
           </Card>
 

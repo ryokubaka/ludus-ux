@@ -22,6 +22,8 @@ export function invokeCleanup(taskId: string): boolean {
   const fn = registry.get(taskId)
   if (!fn) return false
   registry.delete(taskId)
-  try { fn() } catch {}
+  try { fn() } catch (err) {
+    console.warn(`[task-cleanup] cleanup for task ${taskId} threw:`, (err as Error).message)
+  }
   return true
 }

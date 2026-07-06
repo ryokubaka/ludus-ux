@@ -141,7 +141,6 @@ function VlanSelect({ value, onChange, availableVlans }: VlanSelectProps) {
           }}
           placeholder="VLAN number (1–255)"
           className="h-7 text-xs font-mono text-center"
-          // eslint-disable-next-line jsx-a11y/no-autofocus
           autoFocus={showCustomInput && !isCustomNum}
         />
       )}

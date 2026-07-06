@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { AUTH_CHANGED_EVENT } from "@/lib/client-auth-state"
+import { fetchSharedSession } from "@/lib/session-fetch"
 
 /** Non-secret snapshot from server session (RootLayout); avoids redundant /api/auth/session. */
 export interface ShellSessionSnapshot {
@@ -13,7 +14,7 @@ export interface ShellSessionSnapshot {
 const ShellSessionContext = createContext<ShellSessionSnapshot | null>(null)
 
 async function fetchShellSessionSnapshot(): Promise<ShellSessionSnapshot | null> {
-  const r = await fetch("/api/auth/session", { credentials: "include" })
+  const r = await fetchSharedSession()
   if (!r.ok) return null
   const data = (await r.json()) as {
     authenticated?: boolean

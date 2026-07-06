@@ -14,6 +14,5 @@ function chainDebugEnabled(): boolean {
 export function goadChainDebug(phase: string, data?: Record<string, unknown>): void {
   if (!chainDebugEnabled()) return
   const payload = { phase, ts: new Date().toISOString(), ...data }
-  // eslint-disable-next-line no-console
   console.info("[LUX_GOAD_CHAIN]", JSON.stringify(payload))
 }

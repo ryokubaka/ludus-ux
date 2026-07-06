@@ -42,16 +42,30 @@ export function ludusDefaultRouterHostname(rangeId: string): string {
   return `${rangeId.trim()}-router`
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function scalarString(value: unknown): string {
+  if (value == null) return ""
+  return (typeof value === "string" ? value : String(value)).trim()
+}
+
+/** Parse the `router:` block from range-config YAML (Proxmox vm_name + hostname). */
 function parseRouterBlockFields(yamlText: string): { vmName: string; hostname: string } | null {
-  const routerBlock = yamlText.match(/^router:\s*\n((?:[ \t].*\n?)*)/m)?.[1]
-  if (!routerBlock) return null
-  const get = (key: string): string => {
-    const m = routerBlock.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"))
-    return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
+  let doc: unknown
+  try {
+    doc = yaml.load(yamlText)
+  } catch {
+    return null
   }
-  const vmName = get("vm_name")
+  const router = asRecord(asRecord(doc)?.router)
+  if (!router) return null
+  const vmName = scalarString(router.vm_name)
   if (!vmName) return null
-  return { vmName, hostname: get("hostname") || vmName }
+  return { vmName, hostname: scalarString(router.hostname) || vmName }
 }
 
 /** Proxmox vm_name for router when building Ludus deploy `limit` (not UI shorthand). */
@@ -153,7 +167,12 @@ export function expandDeployLimitHosts(
   return dedupeSorted([...normalized, routerVm])
 }
 
-/** UI label for router in config host list (`{range_id}-router` shorthand). */
+/**
+ * Router host key for the config-derived host list. With an explicit `router:`
+ * block this is its resolved Proxmox `vm_name`; otherwise it falls back to the
+ * `{range_id}-router` UI shorthand. For the value actually passed to Ludus
+ * `--limit`, use `resolveRouterLimitVmNameForDeploy` (always a Proxmox vm_name).
+ */
 export function resolveRouterLimitHost(yamlText: string, rangeId?: string): string | null {
   if (!rangeId?.trim()) return null
   const explicit = parseRouterBlockFields(yamlText)
@@ -167,16 +186,19 @@ export function resolveRouterLimitHost(yamlText: string, rangeId?: string): stri
 export function parseHostsFromRangeConfig(yamlText: string, rangeId?: string): string[] {
   if (!yamlText.trim()) return []
   const hosts: string[] = []
-  const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
-  for (const block of blocks) {
-    const get = (key: string): string => {
-      const m = block.match(new RegExp(`^\\s*(?:-\\s*)?${key}:\\s*(.+)$`, "m"))
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
+  let doc: unknown
+  try {
+    doc = yaml.load(yamlText)
+  } catch {
+    doc = null
+  }
+  const ludus = asRecord(doc)?.ludus
+  if (Array.isArray(ludus)) {
+    for (const vm of ludus) {
+      const vmName = scalarString(asRecord(vm)?.vm_name)
+      if (!vmName) continue
+      hosts.push(rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName)
     }
-    const vmName = get("vm_name")
-    if (!vmName) continue
-    const resolved = rangeId ? resolveRangeIdInHost(vmName, rangeId) : vmName
-    hosts.push(resolved)
   }
   const routerHost = resolveRouterLimitHost(yamlText, rangeId)
   if (routerHost) hosts.push(routerHost)

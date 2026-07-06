@@ -107,7 +107,7 @@ export function pruneOldHandoffs(): void {
   try {
     const cutoff = Date.now() - 48 * 60 * 60 * 1000
     getDb().prepare(`DELETE FROM deploy_handoffs WHERE created_at < ?`).run(cutoff)
-  } catch {
-    // Non-fatal.
+  } catch (err) {
+    console.warn("[deploy-handoff] pruneOldHandoffs:", (err as Error).message)
   }
 }

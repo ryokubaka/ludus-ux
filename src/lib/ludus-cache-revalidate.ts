@@ -26,3 +26,13 @@ export function revalidateLudusAdminMutation(): void {
     revalidateLudusResource(r)
   }
 }
+
+/** Source mutations (create, delete, sync, install) invalidate templates, blueprints, and ansible. */
+export function revalidateAfterSourceMutation(scopeTag: string): void {
+  revalidateLudusResource("templates")
+  revalidateLudusResource("blueprints")
+  revalidateLudusResource("ansible")
+  revalidateLudusScopeResource(scopeTag, "templates")
+  revalidateLudusScopeResource(scopeTag, "blueprints")
+  revalidateLudusScopeResource(scopeTag, "ansible")
+}

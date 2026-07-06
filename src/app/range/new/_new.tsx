@@ -28,7 +28,6 @@ import {
   Play,
   AlertTriangle,
   Settings2,
-  Tag,
   Info,
   FileCode2,
   Shield,
@@ -41,6 +40,7 @@ import { ludusApi, pruneKnownHosts } from "@/lib/api"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
 import { applyBlueprintToRange } from "@/lib/blueprint-apply"
+import { substituteRangeIdInConfig } from "@/lib/range-config-templates"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/query-keys"
 import { useRange } from "@/lib/range-context"
@@ -53,12 +53,16 @@ import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
 import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
-import { LUDUS_DEPLOY_TAGS as ALL_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS as TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
+import {
+  ensureUserDefinedRolesTag,
+  resolveDeployOnlyRoles,
+} from "@/lib/ludus-deploy-only-roles"
+import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
 
 // ── Step arrays ────────────────────────────────────────────────────────────────
 // The step indicator switches between these two arrays the moment the user picks
 // their config method, making the divergent paths immediately obvious.
-const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Network Rules", "Deploy Tags", "Review & Deploy"]
+const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Network Rules", "Review & Deploy"]
 const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & Deploy"]
 const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "Review & Deploy"]
 
@@ -70,8 +74,7 @@ const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "R
 // step 2 : Configure VMs
 // step 3 : Domain Setup
 // step 4 : Network Rules
-// step 5 : Deploy Tags
-// step 6 : Review & Deploy
+// step 5 : Review & Deploy
 //
 // YAML path:
 // step 2 : YAML Config
@@ -236,8 +239,11 @@ export function NewRangePageClient() {
     [vms]
   )
 
-  // ── Wizard step 5: Deploy tags ───────────────────────────────────────────────
+  // ── Wizard / blueprint Review: deploy tags + only-roles ─────────────────────
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [selectedOnlyRoles, setSelectedOnlyRoles] = useState<string[]>([])
+  const [customOnlyRolesPattern, setCustomOnlyRolesPattern] = useState("")
+  const [showAdvancedDeployOptions, setShowAdvancedDeployOptions] = useState(false)
 
   // ── YAML step 2: raw config ──────────────────────────────────────────────────
   // Pre-populated from the existing range config when handleUseExisting runs.
@@ -251,6 +257,8 @@ export function NewRangePageClient() {
   const [blueprintsLoading, setBlueprintsLoading] = useState(false)
   const [selectedBlueprintId, setSelectedBlueprintId] = useState("")
   const [blueprintPreviewYaml, setBlueprintPreviewYaml] = useState("")
+  const [reviewBlueprintYaml, setReviewBlueprintYaml] = useState("")
+  const [reviewBlueprintEdited, setReviewBlueprintEdited] = useState(false)
   const [loadingBlueprintPreview, setLoadingBlueprintPreview] = useState(false)
   const [blueprintDepsReady, setBlueprintDepsReady] = useState(false)
 
@@ -327,7 +335,21 @@ export function NewRangePageClient() {
 
   useEffect(() => {
     setBlueprintDepsReady(false)
+    setReviewBlueprintEdited(false)
+    setShowAdvancedDeployOptions(false)
   }, [selectedBlueprintId])
+
+  useEffect(() => {
+    if (configMethod !== "blueprint" || reviewBlueprintEdited) return
+    setReviewBlueprintYaml(blueprintPreviewYaml)
+  }, [configMethod, blueprintPreviewYaml, reviewBlueprintEdited])
+
+  useEffect(() => {
+    setShowAdvancedDeployOptions(false)
+    setSelectedTags([])
+    setSelectedOnlyRoles([])
+    setCustomOnlyRolesPattern("")
+  }, [configMethod])
 
   const usedVlans = useMemo(() => {
     const vlans = new Set<number>()
@@ -451,7 +473,9 @@ export function NewRangePageClient() {
         // Pre-populate network rules from existing config
         setNetworkRules(extractNetworkRules(yamlText))
       }
-    } catch {}
+    } catch (err) {
+      console.warn("[range-new] failed to load existing config:", (err as Error).message)
+    }
     setLoadingExistingConfig(false)
     setStep(1)
   }
@@ -488,7 +512,14 @@ export function NewRangePageClient() {
 
   const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint") => {
     setConfigMethod(method)
+    setShowAdvancedDeployOptions(false)
     setStep(2)
+  }
+
+  const goToWizardReview = () => {
+    setReviewConfigEdited(false)
+    setReviewConfigYaml(wizardYaml)
+    setStep(5)
   }
 
   // ── Domain role auto-assignment ──────────────────────────────────────────────
@@ -518,9 +549,12 @@ export function NewRangePageClient() {
     configMethod === "wizard" && reviewConfigEdited && reviewConfigYaml !== wizardYaml
 
   useEffect(() => {
-    if (step !== 6 || configMethod !== "wizard" || reviewConfigEdited) return
+    if (step !== 5 || configMethod !== "wizard" || reviewConfigEdited) return
     setReviewConfigYaml(wizardYaml)
   }, [step, configMethod, wizardYaml, reviewConfigEdited])
+
+  const reviewBlueprintDirty =
+    configMethod === "blueprint" && reviewBlueprintEdited && reviewBlueprintYaml !== blueprintPreviewYaml
 
   const wizardYamlValidation = useMemo(
     () => validateGoadConfigYaml(reviewConfigYaml),
@@ -531,7 +565,7 @@ export function NewRangePageClient() {
     setSelectedTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
 
   // ── Unified deploy ────────────────────────────────────────────────────────────
-  // Both Wizard (step 5) and YAML (step 3) routes converge here.
+  // Wizard (step 5), YAML (step 3), and Blueprint (step 3) routes converge here.
   // configMethod determines which YAML to upload and whether tags apply.
 
   const handleDeploy = async () => {
@@ -656,6 +690,17 @@ export function NewRangePageClient() {
           setDeployStatus("")
           return
         }
+        if (reviewBlueprintEdited && reviewBlueprintYaml.trim() && effectiveRangeId) {
+          setDeployStatus("Uploading edited configuration…")
+          const yaml = substituteRangeIdInConfig(reviewBlueprintYaml, effectiveRangeId)
+          const uploadRes = await ludusApi.setRangeConfig(yaml, effectiveRangeId)
+          if (uploadRes.error) {
+            toast({ title: "Config upload failed", description: uploadRes.error, variant: "destructive" })
+            setDeploying(false)
+            setDeployStatus("")
+            return
+          }
+        }
       } else {
         const configRes = await ludusApi.setRangeConfig(configToUpload, effectiveRangeId || undefined)
         if (configRes.error) {
@@ -667,9 +712,24 @@ export function NewRangePageClient() {
       }
 
       setDeployStatus("Starting deployment…")
-      const tags = configMethod === "wizard" && selectedTags.length > 0 ? selectedTags : undefined
+      const appliesDeployOptions = configMethod === "wizard" || configMethod === "blueprint"
+      const onlyRoles = appliesDeployOptions
+        ? resolveDeployOnlyRoles(selectedOnlyRoles, customOnlyRolesPattern)
+        : undefined
+      const tags = appliesDeployOptions
+        ? ensureUserDefinedRolesTag(
+            selectedTags.length > 0 ? selectedTags : undefined,
+            onlyRoles,
+          )
+        : undefined
       const tagRunAt = Date.now()
-      const deployRes = await ludusApi.deployRange(tags, undefined, effectiveRangeId || undefined)
+      const deployRes = await ludusApi.deployRange(
+        tags,
+        undefined,
+        effectiveRangeId || undefined,
+        undefined,
+        onlyRoles,
+      )
       if (!deployRes.error && effectiveRangeId && tags && tags.length > 0) {
         void registerLuxDeployTagRun(effectiveRangeId, tags, tagRunAt)
       }
@@ -722,7 +782,7 @@ export function NewRangePageClient() {
         : WIZARD_STEPS
 
   const reviewBackStep =
-    configMethod === "yaml" || configMethod === "blueprint" ? 2 : 5
+    configMethod === "yaml" || configMethod === "blueprint" ? 2 : 4
 
   const consolidatedBlueprints = useMemo(
     () => consolidateBlueprintList(blueprints),
@@ -939,10 +999,10 @@ export function NewRangePageClient() {
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Pick VM templates, configure networking, optionally set up an Active Directory domain,
-                and choose deploy tags. Best for building ranges from scratch.
+                then review config and deploy options on the final step. Best for building ranges from scratch.
               </p>
               <div className="flex flex-wrap gap-1">
-                {["Configure VMs", "Domain Setup", "Network Rules", "Deploy Tags"].map((s) => (
+                {["Configure VMs", "Domain Setup", "Network Rules", "Review & deploy"].map((s) => (
                   <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
                 ))}
               </div>
@@ -1305,10 +1365,10 @@ export function NewRangePageClient() {
           <div className="flex justify-between">
             <Button variant="ghost" onClick={() => setStep(3)}><ChevronLeft className="h-4 w-4" /> Back</Button>
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setStep(5)}>
+              <Button variant="ghost" onClick={goToWizardReview}>
                 Skip <ChevronRight className="h-4 w-4" />
               </Button>
-              <Button onClick={() => setStep(5)}>
+              <Button onClick={goToWizardReview}>
                 Next <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
@@ -1316,64 +1376,8 @@ export function NewRangePageClient() {
         </div>
       )}
 
-      {/* ── Step 5 (Wizard): Deploy Tags ────────────────────────────────────── */}
-      {step === 5 && configMethod === "wizard" && (
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Tag className="h-4 w-4" /> Deploy Tags
-              </CardTitle>
-              <p className="text-xs text-muted-foreground mt-1">
-                Optionally limit the deployment to specific Ansible steps. Leave all unchecked for a full
-                deployment (recommended for first-time deploys).
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="grid grid-cols-2 gap-1.5 max-h-[26rem] overflow-y-auto pr-1">
-                {ALL_TAGS.map((tag) => (
-                  <label
-                    key={tag}
-                    className={cn(
-                      "flex items-center gap-2 p-2 rounded border text-left transition-colors cursor-pointer",
-                      selectedTags.includes(tag) ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
-                    )}
-                  >
-                    <Checkbox checked={selectedTags.includes(tag)} onCheckedChange={() => toggleTag(tag)} className="shrink-0" />
-                    <div className="min-w-0">
-                      <code className="text-xs font-mono text-primary">{tag}</code>
-                      <p className="text-[10px] text-muted-foreground truncate">{TAG_DESCRIPTIONS[tag] || ""}</p>
-                    </div>
-                  </label>
-                ))}
-              </div>
-              {selectedTags.length > 0 && (
-                <div className="flex items-center justify-between pt-1 border-t">
-                  <p className="text-xs text-muted-foreground">
-                    {selectedTags.length} tag{selectedTags.length !== 1 ? "s" : ""} selected — only these steps will run
-                  </p>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedTags([])}>Clear all</Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-          <div className="flex justify-between">
-            <Button variant="ghost" onClick={() => setStep(4)}><ChevronLeft className="h-4 w-4" /> Back</Button>
-            <Button
-              onClick={() => {
-                setReviewConfigEdited(false)
-                setReviewConfigYaml(wizardYaml)
-                setStep(6)
-              }}
-            >
-              Next <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Review & Deploy (Wizard: step 6 / YAML or Blueprint: step 3) ───── */}
-      {((step === 6 && configMethod === "wizard") ||
+      {/* ── Review & Deploy (Wizard: step 5 / YAML or Blueprint: step 3) ───── */}
+      {((step === 5 && configMethod === "wizard") ||
         (step === 3 && (configMethod === "yaml" || configMethod === "blueprint"))) && (
         <div className="space-y-4">
           <Card>
@@ -1432,17 +1436,24 @@ export function NewRangePageClient() {
                     )}
                   </div>
                 )}
-                {configMethod === "wizard" && selectedTags.length > 0 && (
-                  <div className="col-span-2">
-                    <span className="text-xs text-muted-foreground">Tags</span>
-                    <p className="flex flex-wrap gap-1 mt-0.5">
-                      {selectedTags.map((t) => (
-                        <code key={t} className="font-mono text-[11px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{t}</code>
-                      ))}
-                    </p>
-                  </div>
-                )}
               </div>
+              {(configMethod === "wizard" || configMethod === "blueprint") && (
+                <DeployAdvancedOptionsPanel
+                  selectedTags={selectedTags}
+                  onToggleTag={toggleTag}
+                  onClearTags={() => setSelectedTags([])}
+                  configYaml={
+                    configMethod === "wizard" ? reviewConfigYaml : reviewBlueprintYaml
+                  }
+                  selectedOnlyRoles={selectedOnlyRoles}
+                  onSelectedOnlyRolesChange={setSelectedOnlyRoles}
+                  customOnlyRolesPattern={customOnlyRolesPattern}
+                  onCustomOnlyRolesPatternChange={setCustomOnlyRolesPattern}
+                  expanded={showAdvancedDeployOptions}
+                  onExpandedChange={setShowAdvancedDeployOptions}
+                  helperContext="direct"
+                />
+              )}
             </CardContent>
           </Card>
 
@@ -1478,6 +1489,22 @@ export function NewRangePageClient() {
                   </Button>
                 )}
                 {configMethod === "blueprint" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs gap-1"
+                    disabled={!reviewBlueprintDirty}
+                    onClick={() => {
+                      setReviewBlueprintEdited(false)
+                      setReviewBlueprintYaml(blueprintPreviewYaml)
+                    }}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Reset
+                  </Button>
+                )}
+                {configMethod === "blueprint" && (
                   <Button variant="ghost" size="sm" onClick={() => setStep(2)}>
                     Change Blueprint
                   </Button>
@@ -1508,11 +1535,25 @@ export function NewRangePageClient() {
                     height="320px"
                   />
                 </div>
+              ) : configMethod === "blueprint" ? (
+                <div className="space-y-2">
+                  {reviewBlueprintDirty && (
+                    <p className="text-[10px] text-amber-600">
+                      Configuration modified from blueprint preview — your edits will be uploaded after apply.
+                    </p>
+                  )}
+                  <YamlEditor
+                    value={reviewBlueprintYaml}
+                    onChange={(value) => {
+                      setReviewBlueprintEdited(true)
+                      setReviewBlueprintYaml(value)
+                    }}
+                    height="320px"
+                  />
+                </div>
               ) : (
-                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre">
-                  {configMethod === "yaml"
-                    ? yamlConfig
-                    : blueprintPreviewYaml || "(Preview unavailable — blueprint will still be applied on deploy.)"}
+                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto resize-y min-h-[10rem] max-h-80 whitespace-pre">
+                  {yamlConfig}
                 </pre>
               )}
             </CardContent>

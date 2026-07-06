@@ -11,13 +11,13 @@ import { deleteBlueprintsOnLudus } from "@/lib/blueprint-delete"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { resolveSession } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
+import { canDeleteBlueprint } from "@/lib/blueprint-delete-authz"
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const auth = await requireSession(request)
+  if (!auth.ok) return auth.response
+  const { session } = auth
 
   let body: { blueprintId?: string; aliasIds?: string[] }
   try {
@@ -34,6 +34,22 @@ export async function POST(request: NextRequest) {
   const aliasIds = Array.isArray(body.aliasIds)
     ? body.aliasIds.map((id) => String(id).trim()).filter(Boolean)
     : []
+
+  // Only admins may delete source-catalog (global) blueprints. Enforce here so a
+  // non-admin cannot delete a shared blueprint by targeting its source ID directly.
+  if (
+    !canDeleteBlueprint(session, blueprintId) ||
+    aliasIds.some((id) => !canDeleteBlueprint(session, id))
+  ) {
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: `delete-blueprint-denied=${blueprintId}`,
+    })
+    return NextResponse.json(
+      { error: "Admin access required to delete source blueprints" },
+      { status: 403 },
+    )
+  }
 
   const { attempts, anyOk } = await deleteBlueprintsOnLudus(session, request, blueprintId, aliasIds)
 

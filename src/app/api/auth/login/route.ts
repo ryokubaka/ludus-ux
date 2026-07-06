@@ -36,7 +36,9 @@ async function finishLogin(
   logSecurityAudit("login", "success", { user: args.username, ip })
   if (args.isAdmin && args.apiKey.trim()) {
     const { rememberBlueprintOperator } = await import("@/lib/blueprint-global-install")
-    await rememberBlueprintOperator(args.apiKey.trim()).catch(() => {})
+    await rememberBlueprintOperator(args.apiKey.trim()).catch((err) => {
+      console.warn("rememberBlueprintOperator failed:", err instanceof Error ? err.message : err)
+    })
   }
   await establishSession(response, args)
   return response

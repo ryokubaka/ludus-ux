@@ -15,7 +15,7 @@ Each bullet uses a single tag:
 
 ---
 
-## [1.1.7] - 2026-07-01
+## [1.1.7] - 2026-07-06
 
 **LUX**
 - [Add] **Log viewers** — All log windows (Range Logs, Dashboard deploy log, GOAD terminal, and the Templates / Blueprints / New Range / inventory config panes) are vertically resizable by dragging the bottom-right corner; the chosen height persists per view.

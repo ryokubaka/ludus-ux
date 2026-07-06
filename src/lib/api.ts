@@ -408,13 +408,20 @@ export const ludusApi = {
   // an array causes Go JSON to silently fail to unmarshal the field, leaving
   // it empty and triggering a full "all" deploy instead of the requested tags.
   // Optional force=true — Ludus refuses deploy in testing mode unless set (CLI `--force`).
-  deployRange: (tags?: string[], limit?: string, rangeId?: string, force?: boolean) => {
+  deployRange: (
+    tags?: string[],
+    limit?: string,
+    rangeId?: string,
+    force?: boolean,
+    onlyRoles?: string[],
+  ) => {
     const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
     const tagsStr = tags?.length ? tags.join(",") : undefined
-    const body: { tags?: string; limit?: string; force?: boolean } = {}
+    const body: { tags?: string; limit?: string; force?: boolean; only_roles?: string[] } = {}
     if (tagsStr) body.tags = tagsStr
     if (limit) body.limit = limit
     if (force) body.force = true
+    if (onlyRoles?.length) body.only_roles = onlyRoles
     return post(`/range/deploy${q}`, Object.keys(body).length > 0 ? body : undefined)
   },
   abortDeploy: (rangeId?: string): Promise<LudusEnvelope> => {

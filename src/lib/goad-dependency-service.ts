@@ -59,6 +59,38 @@ export function extensionAnsibleDepsReady(
   return extensionMissingAnsibleRoles(ext, ansibleInstalled).length === 0
 }
 
+export type ExtensionAnsibleState = "ready" | "missing" | "unknown"
+
+/**
+ * Tri-state for an extension's Ansible readiness so UI can distinguish
+ * "not yet known / still loading" from a confirmed "missing" — avoids showing a
+ * disabled button with no explanation (or an empty "Missing Ansible:" tooltip).
+ */
+export function extensionAnsibleState(
+  ext: { requiredRoles?: string[] },
+  ansibleInstalled: AnsibleInstalledSets | null,
+  loading = false,
+): ExtensionAnsibleState {
+  const refs = ext.requiredRoles ?? []
+  if (refs.length === 0) return "ready"
+  if (loading || !ansibleInstalled) return "unknown"
+  return extensionMissingAnsibleRoles(ext, ansibleInstalled).length === 0 ? "ready" : "missing"
+}
+
+/** Add a name to an in-flight set without mutating the input (React-safe). */
+export function withInstalling(current: ReadonlySet<string>, name: string): Set<string> {
+  const next = new Set(current)
+  next.add(name)
+  return next
+}
+
+/** Remove only the given name from an in-flight set (clears own spinner, not others'). */
+export function withoutInstalling(current: ReadonlySet<string>, name: string): Set<string> {
+  const next = new Set(current)
+  next.delete(name)
+  return next
+}
+
 export interface GoadDependencyCheck {
   required: BlueprintRequirement[]
   missing: BlueprintRequirement[]

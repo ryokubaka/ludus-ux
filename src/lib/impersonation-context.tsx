@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { impersonationHeadersFromData, IMPERSONATION_STORAGE_KEY } from "./impersonation-headers"
 
@@ -154,8 +154,13 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     return impersonationHeadersFromData(impersonation)
   }, [impersonation])
 
+  const value = useMemo(
+    () => ({ impersonation, exitImpersonation, impersonationHeaders }),
+    [impersonation, exitImpersonation, impersonationHeaders],
+  )
+
   return (
-    <ImpersonationContext.Provider value={{ impersonation, exitImpersonation, impersonationHeaders }}>
+    <ImpersonationContext.Provider value={value}>
       {children}
     </ImpersonationContext.Provider>
   )

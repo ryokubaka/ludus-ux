@@ -4,11 +4,20 @@ import type { KeyboardEvent } from "react"
 export interface UseLogSearchOptions {
   /** Applied before case-folded match — e.g. stripAnsi for raw terminal lines. */
   normalizeLine?: (line: string) => string
+  /**
+   * Resolve a custom scroll handler when the current match changes. Virtualized
+   * viewers return a `scrollToIndex`-backed handler since matched rows may be
+   * unmounted; returning null/undefined falls back to `scrollIntoView` on the
+   * registered row element.
+   */
+  getScrollToMatch?: () => ((lineIdx: number) => void) | null | undefined
 }
 
 export function useLogSearch(lines: string[], options?: UseLogSearchOptions) {
   const normalizeRef = useRef(options?.normalizeLine)
   normalizeRef.current = options?.normalizeLine
+  const getScrollToMatchRef = useRef(options?.getScrollToMatch)
+  getScrollToMatchRef.current = options?.getScrollToMatch
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -22,18 +31,30 @@ export function useLogSearch(lines: string[], options?: UseLogSearchOptions) {
     return () => clearTimeout(t)
   }, [searchQuery])
 
+  // Feed the O(n) scan from a debounced copy of `lines` so rapid live-stream
+  // appends don't rescan every frame. Update immediately when search is closed
+  // (no scan happens then anyway) to keep the reference fresh for the next open.
+  const [scanLines, setScanLines] = useState(lines)
+  useEffect(() => {
+    if (!searchOpen) {
+      setScanLines(lines)
+      return
+    }
+    const t = setTimeout(() => setScanLines(lines), 180)
+    return () => clearTimeout(t)
+  }, [lines, searchOpen])
+
   const matchIndices = useMemo(() => {
-    if (!debouncedQuery.trim()) return []
+    // Skip the whole scan while the search bar is closed.
+    if (!searchOpen || !debouncedQuery.trim()) return []
     const q = debouncedQuery.toLowerCase()
     const normalize = normalizeRef.current ?? ((s: string) => s)
     const result: number[] = []
-    lines.forEach((line, i) => {
+    scanLines.forEach((line, i) => {
       if (normalize(line).toLowerCase().includes(q)) result.push(i)
     })
     return result
-    // normalizeRef is stable (ref), intentionally excluded from deps
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, debouncedQuery])
+  }, [scanLines, debouncedQuery, searchOpen])
 
   const matchSet = useMemo(() => new Set(matchIndices), [matchIndices])
 
@@ -42,7 +63,12 @@ export function useLogSearch(lines: string[], options?: UseLogSearchOptions) {
   useEffect(() => {
     if (matchIndices.length === 0) return
     const lineIdx = matchIndices[currentMatchIdx]
-    matchLineRefsRef.current.get(lineIdx)?.scrollIntoView({ block: "nearest" })
+    const customScroll = getScrollToMatchRef.current?.()
+    if (customScroll) {
+      customScroll(lineIdx)
+    } else {
+      matchLineRefsRef.current.get(lineIdx)?.scrollIntoView({ block: "nearest" })
+    }
   }, [matchIndices, currentMatchIdx])
 
   useEffect(() => {

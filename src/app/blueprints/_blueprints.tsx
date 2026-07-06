@@ -750,7 +750,7 @@ export function BlueprintsPageClient() {
     },
     staleTime: STALE.realtime,
     refetchOnMount: "always",
-    refetchInterval: 60_000,
+    refetchInterval: 120_000,
     refetchIntervalInBackground: false,
   })
 
@@ -814,6 +814,11 @@ export function BlueprintsPageClient() {
   const sharingQueries = useQueries({
     queries: consolidatedBlueprints.map((entry) => {
       const id = entry.primaryId
+      // Only fetch the detailed share list for blueprints that actually have
+      // shares (per the list payload's own counts). Unshared blueprints render
+      // nothing here, so skipping them avoids two API calls each.
+      const hasShares =
+        blueprintSharedUserCount(entry.blueprint) > 0 || blueprintSharedGroupCount(entry.blueprint) > 0
       return {
         queryKey: queryKeys.blueprintSharing(scopeTag, id),
         queryFn: async () => {
@@ -826,7 +831,7 @@ export function BlueprintsPageClient() {
             groups: asObjectArray<BlueprintAccessGroupItem>(g.data),
           }
         },
-        enabled: !!id && listReady && !entry.isSourceCatalog,
+        enabled: !!id && listReady && !entry.isSourceCatalog && hasShares,
         staleTime: STALE.medium,
       }
     }),
@@ -875,8 +880,8 @@ export function BlueprintsPageClient() {
     enabled: !!shareDialog,
     staleTime: STALE.medium,
   })
-  const sharePickerUsers = sharePickerDirectory?.users ?? []
-  const sharePickerGroups = sharePickerDirectory?.groups ?? []
+  const sharePickerUsers = useMemo(() => sharePickerDirectory?.users ?? [], [sharePickerDirectory?.users])
+  const sharePickerGroups = useMemo(() => sharePickerDirectory?.groups ?? [], [sharePickerDirectory?.groups])
   const loadingShareUsers = loadingShareDirectory
   const loadingShareGroups = loadingShareDirectory
 
@@ -1746,7 +1751,7 @@ export function BlueprintsPageClient() {
             <DialogHeader>
               <DialogTitle>Blueprint Config — {viewDialog.id}</DialogTitle>
             </DialogHeader>
-            <pre className="bg-black/60 rounded-md p-4 text-xs font-mono text-status-success overflow-auto max-h-96 whitespace-pre-wrap">
+            <pre className="bg-black/60 rounded-md p-4 text-xs font-mono text-status-success overflow-auto resize-y min-h-[10rem] max-h-96 whitespace-pre-wrap">
               {viewDialog.yaml}
             </pre>
             <DialogFooter>

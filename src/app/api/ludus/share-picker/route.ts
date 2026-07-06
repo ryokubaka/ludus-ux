@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { fetchSharePickerDirectory } from "@/lib/ludus-share-picker-server"
-import { resolveSession } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 
 /** GET /api/ludus/share-picker — Ludus users + groups for share dialogs (any authenticated user). */
 export async function GET(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const auth = await requireSession(request)
+  if (!auth.ok) return auth.response
 
-  const directory = await fetchSharePickerDirectory(session)
+  const directory = await fetchSharePickerDirectory(auth.session)
   return NextResponse.json(directory)
 }

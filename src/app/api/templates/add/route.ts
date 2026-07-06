@@ -42,6 +42,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { resolveSession } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
+import { combineTemplateFailure } from "@/lib/template-add-errors"
 
 
 interface TemplateSpec {
@@ -243,7 +244,14 @@ async function tryInstallTemplatesViaSources(
     }
   } catch (err) {
     if (!isHttp404Error(err)) {
-      // Sources available but failed — let SSH fallback handle each template
+      // Sources available but failed with a real error — record it per template so
+      // the reason survives into the SSH fallback result instead of being swallowed.
+      const msg = err instanceof Error ? err.message : String(err)
+      for (const spec of specs) {
+        if (!out.has(spec.name)) {
+          out.set(spec.name, { success: false, message: `Ludus Sources error: ${msg}` })
+        }
+      }
     }
   }
 
@@ -306,9 +314,14 @@ export async function POST(request: NextRequest) {
       if (fromSource?.success) {
         return { name: spec.name, ...fromSource }
       }
+      const sourcesFailure = fromSource && !fromSource.success ? fromSource.message : undefined
       return addTemplate(spec)
         .then((r) => ({ name: spec.name, ...r }))
-        .catch((e) => ({ name: spec.name, success: false, message: (e as Error).message }))
+        .catch((e) => ({
+          name: spec.name,
+          success: false,
+          message: combineTemplateFailure((e as Error).message, sourcesFailure),
+        }))
     }),
   )
 

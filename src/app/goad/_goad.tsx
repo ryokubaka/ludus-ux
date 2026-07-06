@@ -255,7 +255,7 @@ export function GoadPageClient() {
     }
     return () => es.close()
   // Re-subscribe when the effective scope changes (e.g. impersonation switch).
-  }, [queryClient, scopeTag, impUser]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queryClient, scopeTag, impUser])
 
   const recentTasks = tasksData ?? []
   const goadRefreshSpin = instancesFetching || adminFetching || tasksFetching
@@ -497,6 +497,7 @@ export function GoadPageClient() {
                                       <Link
                                         href={`/goad/${encodeURIComponent(inst.instanceId)}`}
                                         className="font-mono text-xs font-bold text-primary hover:underline"
+                                        onClick={() => { if (inst.ludusRangeId) selectRange(inst.ludusRangeId) }}
                                       >
                                         {inst.instanceId}
                                       </Link>

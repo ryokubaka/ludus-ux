@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import Image from "next/image"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -176,9 +177,12 @@ export function AccountPageClient() {
             <div className="relative flex-shrink-0">
               <div className="h-28 w-28 rounded-full bg-primary/10 border-2 border-primary/20 overflow-hidden flex items-center justify-center">
                 {displayAvatar ? (
-                  <img
+                  <Image
                     src={displayAvatar}
                     alt="Profile"
+                    width={112}
+                    height={112}
+                    unoptimized
                     className="h-full w-full object-cover"
                     onError={() => { setAvatarUrl(null); setPreviewUrl(null) }}
                   />

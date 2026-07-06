@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({ args: "", instanceId: undefined }))
-  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags, workspaceConfigYaml } = body as {
+  const { args, instanceId, impersonateAs, rangeId: bodyRangeId, ludusDeployTags: rawDeployTags, ludusOnlyRoles: rawOnlyRoles, workspaceConfigYaml } = body as {
     args?: string
     instanceId?: string
     /** apiKey is optional: when absent, the session cookie's impersonation key is used. */
@@ -37,12 +37,18 @@ export async function POST(request: NextRequest) {
      *  is known up-front (e.g. new-instance flow where the range was pre-created). */
     rangeId?: string
     ludusDeployTags?: unknown
+    ludusOnlyRoles?: unknown
     workspaceConfigYaml?: string
   }
 
   const ludusDeployTags =
     Array.isArray(rawDeployTags) && rawDeployTags.every((x) => typeof x === "string")
       ? filterLudusDeployTags(rawDeployTags as string[])
+      : []
+
+  const ludusOnlyRoles =
+    Array.isArray(rawOnlyRoles) && rawOnlyRoles.every((x) => typeof x === "string")
+      ? (rawOnlyRoles as string[]).map((r) => r.trim()).filter(Boolean)
       : []
 
   if (!args) {
@@ -185,6 +191,7 @@ export async function POST(request: NextRequest) {
           effectiveRangeId,
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
           typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
+          ludusOnlyRoles.length > 0 ? ludusOnlyRoles : undefined,
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

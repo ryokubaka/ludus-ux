@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { RangeAccessEntry } from "./types"
 import { queryKeys } from "./query-keys"
@@ -149,22 +149,22 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("impersonation-changed", handler)
   }, [queryClient])
 
-  return (
-    <RangeContext.Provider
-      value={{
-        ranges,
-        selectedRangeId,
-        loading: isLoading,
-        rangesFetching,
-        rangeSelectionLocked,
-        setRangeSelectionLocked,
-        selectRange,
-        refreshRanges,
-      }}
-    >
-      {children}
-    </RangeContext.Provider>
+  const value = useMemo<RangeContextValue>(
+    () => ({
+      ranges,
+      selectedRangeId,
+      loading: isLoading,
+      rangesFetching,
+      rangeSelectionLocked,
+      setRangeSelectionLocked,
+      selectRange,
+      refreshRanges,
+    }),
+    // setRangeSelectionLocked is a stable useState setter.
+    [ranges, selectedRangeId, isLoading, rangesFetching, rangeSelectionLocked, selectRange, refreshRanges],
   )
+
+  return <RangeContext.Provider value={value}>{children}</RangeContext.Provider>
 }
 
 export function useRange() {

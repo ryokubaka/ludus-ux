@@ -20,6 +20,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
+import { parseJsonBody } from "@/lib/require-session"
 import { getSettings } from "@/lib/settings-store"
 import { chownGoadInstance, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
@@ -35,8 +36,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
 
-  let body: { instanceId?: string; targetUserId?: string; rangeId?: string }
-  try { body = await request.json() } catch { body = {} }
+  const body = await parseJsonBody<{ instanceId?: string; targetUserId?: string; rangeId?: string }>(request)
 
   const { instanceId, targetUserId, rangeId } = body
   if (!instanceId || !targetUserId) {

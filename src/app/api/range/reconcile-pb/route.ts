@@ -7,22 +7,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
+import { requireSession, parseJsonBody } from "@/lib/require-session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { reconcilePbAfterFollowOnLudusDeploy } from "@/lib/goad-ludus-reconcile"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const auth = await requireSession(request)
+  if (!auth.ok) return auth.response
+  const { session } = auth
 
-  let body: { rangeId?: string }
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
-  }
+  const body = await parseJsonBody<{ rangeId?: string }>(request)
 
   const rangeId = typeof body.rangeId === "string" ? body.rangeId.trim() : ""
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })

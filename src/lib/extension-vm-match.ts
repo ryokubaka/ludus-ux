@@ -113,7 +113,6 @@ export function matchingVmIdsForExtension(
   }
 
   if (ids.size === 0 && vms.length > 0) {
-    // eslint-disable-next-line no-console
     console.warn("[LUX] matchingVmIdsForExtension: no VMs matched", {
       extensionName,
       slug,

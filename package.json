@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -33,6 +33,7 @@
     "@radix-ui/react-toast": "^1.1.5",
     "@radix-ui/react-tooltip": "^1.0.7",
     "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-virtual": "^3.14.5",
     "better-sqlite3": "^12.9.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
@@ -46,9 +47,9 @@
     "react-resizable-panels": "^2.1.7",
     "recharts": "^2.12.7",
     "ssh2": "^1.15.0",
-    "tar": "^7.5.11",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
+    "tar": "^7.5.11",
     "ws": "^8.21.0"
   },
   "overrides": {

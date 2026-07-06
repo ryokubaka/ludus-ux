@@ -95,7 +95,9 @@ export async function GET(request: NextRequest) {
       apiKey: effectiveApiKey,
     })
     domains = extractAllowedDomains(result.data)
-  } catch {}
+  } catch (err) {
+    console.warn(`[allowed-domains] standard API failed for ${rangeId}:`, (err as Error).message)
+  }
 
   // Strategy 2: Admin API with ROOT API key (if available and strategy 1 came up empty)
   if (domains.length === 0 && settings.rootApiKey && settings.ludusAdminUrl) {
@@ -109,7 +111,9 @@ export async function GET(request: NextRequest) {
         domains = adminDomains
         console.log(`[allowed-domains] standard API returned empty, admin API found ${domains.length} entries for ${rangeId}`)
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[allowed-domains] admin API failed for ${rangeId}:`, (err as Error).message)
+    }
   }
 
   return NextResponse.json({ allowedDomains: domains })

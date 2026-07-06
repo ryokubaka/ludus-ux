@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { markRouteDynamic } from "@/lib/mark-route-dynamic"
-import { resolveSession } from "@/lib/session"
+import { requireSession, parseJsonBody } from "@/lib/require-session"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import {
   applySelectedRangeCookie,
@@ -17,17 +17,11 @@ type Body = { rangeId?: string | null }
  */
 export async function POST(request: NextRequest) {
   await markRouteDynamic()
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const auth = await requireSession(request)
+  if (!auth.ok) return auth.response
+  const { session } = auth
 
-  let body: Body = {}
-  try {
-    body = (await request.json()) as Body
-  } catch {
-    body = {}
-  }
+  const body = await parseJsonBody<Body>(request)
 
   const response = NextResponse.json({ ok: true })
   const scopeTag = effectiveScopeTagFromSession(session)

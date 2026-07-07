@@ -21,6 +21,7 @@ import {
   encryptSettingsValueAtRest,
   isSettingsValueAtRestEncrypted,
 } from "./settings-value-at-rest"
+import { goadPathFromEnv, ludusInstallPathFromEnv } from "./install-path-env"
 
 export interface RuntimeSettings {
   ludusUrl: string
@@ -28,6 +29,8 @@ export interface RuntimeSettings {
   sshHost: string
   sshPort: number
   goadPath: string
+  /** Ludus install root on the Ludus host (ranges, user ansible collections). */
+  ludusInstallPath: string
   /** Whether the GOAD integration is shown in the UI. Defaults to true. */
   goadEnabled: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
@@ -72,7 +75,8 @@ function defaults(): RuntimeSettings {
     ludusAdminUrl: process.env.LUDUS_ADMIN_URL || "",
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
-    goadPath: process.env.GOAD_PATH || "/opt/GOAD",
+    goadPath: goadPathFromEnv(),
+    ludusInstallPath: ludusInstallPathFromEnv(),
     goadEnabled: process.env.ENABLE_GOAD !== "false",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
@@ -93,6 +97,7 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "sshHost",
   "sshPort",
   "goadPath",
+  "ludusInstallPath",
   "goadEnabled",
   "rootApiKey",
   "blueprintOperatorApiKey",

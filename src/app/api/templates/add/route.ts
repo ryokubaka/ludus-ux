@@ -43,6 +43,7 @@ import { resolveSession } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 import { combineTemplateFailure } from "@/lib/template-add-errors"
+import { resolveLudusInstallPath } from "@/lib/runtime-paths"
 
 
 interface TemplateSpec {
@@ -60,45 +61,51 @@ interface TemplateSpec {
  *       parent-of-parent dir (i.e. the top-level templates folder).
  *    2. Fall back to the standard Ludus installation paths.
  * ──────────────────────────────────────────────────────────────────────────*/
-let cachedTemplatesDir: string | null = null
+let cachedTemplatesDir: { root: string; dir: string } | null = null
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
 
 async function findTemplatesDir(): Promise<string> {
-  if (cachedTemplatesDir) return cachedTemplatesDir
+  const ludusRoot = resolveLudusInstallPath()
+  if (cachedTemplatesDir?.root === ludusRoot) return cachedTemplatesDir.dir
 
   // Try to locate an existing .pkr.hcl file and derive the templates root
   const findResult = await sshExec(
-    "find /opt/ludus /root/.config/ludus /home -maxdepth 10 -name '*.pkr.hcl' 2>/dev/null | head -3"
+    `find ${shellSingleQuote(ludusRoot)} /root/.config/ludus /home -maxdepth 10 -name '*.pkr.hcl' 2>/dev/null | head -3`
   )
   const found = (findResult.stdout || "").trim()
   if (found) {
-    // Each line is a path like /opt/ludus/packer/templates/debian12/debian12.pkr.hcl
-    // Walk up two levels to get the templates root (/opt/ludus/packer/templates)
+    // Each line is a path like <ludusRoot>/packer/templates/debian12/debian12.pkr.hcl
+    // Walk up two levels to get the templates root (<ludusRoot>/packer/templates)
     const firstPath = found.split("\n")[0].trim()
     const dir = firstPath.split("/").slice(0, -2).join("/")
     if (dir) {
-      cachedTemplatesDir = dir
+      cachedTemplatesDir = { root: ludusRoot, dir }
       return dir
     }
   }
 
   // Standard Ludus v2 installation paths to try in order
   const candidates = [
-    "/opt/ludus/packer/templates",
-    "/opt/ludus/templates",
-    "/opt/ludus/packer-templates",
+    `${ludusRoot}/packer/templates`,
+    `${ludusRoot}/templates`,
+    `${ludusRoot}/packer-templates`,
     "/root/.config/ludus/packer/templates",
   ]
   for (const candidate of candidates) {
-    const check = await sshExec(`test -d '${candidate}' && echo ok`)
+    const check = await sshExec(`test -d ${shellSingleQuote(candidate)} && echo ok`)
     if ((check.stdout || "").trim() === "ok") {
-      cachedTemplatesDir = candidate
+      cachedTemplatesDir = { root: ludusRoot, dir: candidate }
       return candidate
     }
   }
 
-  // Last resort: use /opt/ludus (Ludus CLI should still find files under here)
-  cachedTemplatesDir = "/opt/ludus/packer/templates"
-  return cachedTemplatesDir
+  // Last resort: default under configured Ludus install root
+  const fallback = `${ludusRoot}/packer/templates`
+  cachedTemplatesDir = { root: ludusRoot, dir: fallback }
+  return fallback
 }
 
 

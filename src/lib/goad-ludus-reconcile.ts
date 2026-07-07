@@ -30,6 +30,7 @@ import { getSettings } from "./settings-store"
 import { fetchPbRangeStatus, setPbRangeState } from "./pocketbase-client"
 import { getHandoffByInstanceId, getHandoffByTaskId } from "./goad-deploy-handoff-store"
 import { getInstanceRangeLocal } from "./goad-instance-range-store"
+import { ludusRangeAnsibleLogPath } from "@/lib/runtime-paths"
 import { readGoadRangeId } from "./goad-ssh"
 import { sshExec } from "./proxmox-ssh"
 import { isRootProxmoxSshConfigured, rootPasswordCredsIfSet } from "./root-ssh-auth"
@@ -195,7 +196,7 @@ async function readLudusAnsibleLogViaSsh(rangeId: string): Promise<string | null
   if (!/^[\w.-]+$/.test(rid)) return null
   const settings = getSettings()
   if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
-  const logPath = `/opt/ludus/ranges/${rid}/ansible.log`
+  const logPath = ludusRangeAnsibleLogPath(rid)
   try {
     const content = await sshExec(
       settings.sshHost,
@@ -219,7 +220,7 @@ async function readLudusAnsibleLogViaSsh(rangeId: string): Promise<string | null
 function ludusAnsibleLogPath(rangeId: string): string | null {
   const rid = rangeId.trim()
   if (!/^[\w.-]+$/.test(rid)) return null
-  return `/opt/ludus/ranges/${rid}/ansible.log`
+  return ludusRangeAnsibleLogPath(rid)
 }
 
 /** ansible.log mtime on Ludus host (ms epoch) — anchor history timestamps, not browser refresh time. */

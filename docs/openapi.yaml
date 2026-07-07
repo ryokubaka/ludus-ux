@@ -130,6 +130,9 @@ components:
         goadPath:
           type: string
           example: /opt/GOAD
+        ludusInstallPath:
+          type: string
+          example: /opt/ludus
         rootApiKey:
           type: string
         proxmoxSshUser:
@@ -739,6 +742,8 @@ paths:
                 sshPort:
                   type: integer
                 goadPath:
+                  type: string
+                ludusInstallPath:
                   type: string
                 proxmoxSshUser:
                   type: string

@@ -20,6 +20,8 @@ import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from 
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
+import { buildEnsureGoadVenvShell } from "./goad-ansible-env"
+import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -470,7 +472,27 @@ export async function streamGoadCommand(
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
   const ludusApiKey = impersonateAs?.apiKey || apiKey || process.env.LUDUS_API_KEY || "";
-  const goadPath = getSettings().goadPath || "/opt/GOAD";
+  const goadPath = resolveGoadPath();
+
+  if (ludusApiKey.trim()) {
+    try {
+      const { ensureGoadAnsibleRequirements } = await import("./goad-ansible-requirements")
+      const depResult = await ensureGoadAnsibleRequirements(
+        ludusApiKey,
+        effectiveCreds,
+        onData,
+        goadPath,
+        impersonateAs?.username,
+      )
+      if (!depResult.ok) {
+        onError(new Error(depResult.error ?? "GOAD Ansible dependency install failed"))
+        return () => {}
+      }
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)))
+      return () => {}
+    }
+  }
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
   // PYTHONUNBUFFERED=1 prevents Python from block-buffering stdout when stdin is a pipe,
@@ -605,25 +627,24 @@ export async function streamGoadCommand(
   //    and UI-triggered commands alike.
   // 2. Writability gate — emits a clear, actionable message if root SSH above
   //    didn't succeed (e.g. root creds not configured).
-  // 3. goad.sh venv activation — activates $HOME/.goad/.venv if it already
-  //    exists.  goad.sh itself creates the venv on first run, so this is only
-  //    for subsequent invocations where we want the activated PATH before the
-  //    actual command runs (e.g. so the ludus wrapper step can find the right
-  //    python3 / ansible on PATH).  Silently skipped on first run — goad.sh
-  //    will create the venv as part of the main command.
-  // 4. First-run ~/.goad/goad.ini — if missing, seed full GOAD-compatible template
+  // 3. Ludus Ansible env — collections/roles live under Ludus user tree (installed
+  //    via Ludus API before SSH — see ensureGoadAnsibleRequirements).
+  // 4. venv activation — activates $HOME/.goad/.venv for PATH (python3, ansible-playbook).
+  // 5. First-run ~/.goad/goad.ini — if missing, seed full GOAD-compatible template
   //    with use_impersonation=no before goad.py starts (GOAD skips create_config_file
   //    when the file exists and does not overwrite it).
-  // 5. When LUX passes a dedicated rangeId — patch existing goad.ini to enforce
+  // 6. When LUX passes a dedicated rangeId — patch existing goad.ini to enforce
   //    use_impersonation=no; runs again after goad.sh for edge cases.
-  // 6. ludus wrapper — prepends a range-scoping shim to $PATH (only when
+  // 7. ludus wrapper — prepends a range-scoping shim to $PATH (only when
   //    a dedicated rangeId is known for this operation).
+  const ensureGoadVenv = buildEnsureGoadVenvShell(goadPath, resolveLudusInstallPath())
   const pythonEnvSetup =
     `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
 
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
     `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
+    ensureGoadVenv,
     pythonEnvSetup,
     goadIniSeedCmd,
     ...(goadIniPatchCmd ? [goadIniPatchCmd] : []),
@@ -838,7 +859,7 @@ export async function writeGoadRangeId(
   rangeId: string,
   creds?: SSHCreds
 ): Promise<void> {
-  const goadPath = getSettings().goadPath || "/opt/GOAD"
+  const goadPath = resolveGoadPath()
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
   const dir = `${goadPath}/workspace/${safeId}`
   const filePath = `${dir}/.goad_range_id`
@@ -852,7 +873,7 @@ export async function readGoadRangeId(
   creds?: SSHCreds
 ): Promise<string | null> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/GOAD"
+    const goadPath = resolveGoadPath()
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
     const { stdout, code } = await sshExec(`cat '${filePath}' 2>/dev/null`, creds)
@@ -870,7 +891,9 @@ export async function readGoadRangeId(
 const LIST_INSTANCES_PY = `
 import os, json, pwd, sys, stat as statmod
 
-goad_path = sys.argv[1] if len(sys.argv) > 1 else '/opt/GOAD'
+if len(sys.argv) < 2:
+    sys.exit(1)
+goad_path = sys.argv[1]
 workspace  = os.path.join(goad_path, 'workspace')
 
 results = []
@@ -933,7 +956,7 @@ print(json.dumps(results))
  */
 export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/GOAD";
+    const goadPath = resolveGoadPath();
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
@@ -1285,7 +1308,7 @@ let catalogCache: CacheEntry | null = null
 const CATALOG_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog> {
-  const goadPath = getSettings().goadPath || "/opt/GOAD";
+  const goadPath = resolveGoadPath();
 
   if (catalogCache && Date.now() < catalogCache.expiry && catalogCache.goadPath === goadPath) {
     return catalogCache.data;
@@ -1330,7 +1353,7 @@ export async function getGoadLabConfig(
   creds?: SSHCreds
 ): Promise<Record<string, unknown> | null> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/GOAD";
+    const goadPath = resolveGoadPath();
     const configPath = `${goadPath}/ad/${labName}/data/config.json`;
     const { stdout, code } = await sshExec(`cat "${configPath}" 2>/dev/null`, creds);
     if (code !== 0 || !stdout.trim()) return null;
@@ -1385,7 +1408,7 @@ export async function getInstanceInventories(
   creds?: SSHCreds
 ): Promise<InstanceInventoryFile[]> {
   try {
-    const goadPath = getSettings().goadPath || "/opt/GOAD";
+    const goadPath = resolveGoadPath();
     const encoded = Buffer.from(LIST_INVENTORIES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}' '${instanceId.replace(/'/g, "'\\''")}'`;
     const { stdout, code } = await sshExec(cmd, creds);
@@ -1407,7 +1430,7 @@ export async function chownGoadInstance(
   targetUser: string,
   creds?: SSHCreds,
 ): Promise<void> {
-  const goadPath = getSettings().goadPath || "/opt/GOAD";
+  const goadPath = resolveGoadPath();
   const safePath = `${goadPath}/workspace/${instanceId.replace(/'/g, "'\\''")}`
   const safeUser = targetUser.replace(/'/g, "'\\''")
   const cmd = `chown -R '${safeUser}':'${safeUser}' '${safePath}'`

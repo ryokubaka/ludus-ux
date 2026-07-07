@@ -24,7 +24,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | Variable | Description |
 |---|---|
 | `LUDUS_ADMIN_URL` | Admin API base URL (port **8081**). Compose default uses `LUDUS_SSH_HOST` with `:8081` (override in `.env` if needed). Prefer `https://<ludus-host>:8081` when reachable from the container. SSH tunnel to `127.0.0.1:18081` is optional when 8081 is loopback-only; remote URLs are not overwritten by the tunnel. |
-| `LUDUS_ROOT_API_KEY` | Root API key (from `/opt/ludus/install/root-api-key` on the server) |
+| `LUDUS_ROOT_API_KEY` | Root API key (from `<LUDUS_INSTALL_PATH>/install/root-api-key` on the server) |
 | `PROXMOX_SSH_USER` | Root (or privileged) SSH user for server-side Proxmox/Ludus operations |
 | `PROXMOX_SSH_PASSWORD` | Optional for server-side root SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not the root key. |
 | `PROXMOX_SSH_KEY_PATH` | Private key path **inside** the container; must match the file under `SSH_KEY_PATH` on the host (default `/app/ssh/id_rsa`) |
@@ -36,6 +36,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 |---|---|---|
 | `ENABLE_GOAD` | Show GOAD in the UI (`false` to hide) | `true` |
 | `GOAD_PATH` | Path to the GOAD installation on the Ludus server | `/opt/GOAD` |
+| `LUDUS_INSTALL_PATH` | Ludus install root on the Ludus server (ranges, packer, user Ansible collections) | `/opt/ludus` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
 
 ## TLS / HTTPS

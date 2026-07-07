@@ -24,6 +24,7 @@ import { resolveSession } from "@/lib/session"
 import { sshExec, isGoadConfigured, workspaceSshExecPlan } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
+import { resolveGoadPath } from "@/lib/runtime-paths"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
@@ -178,7 +179,7 @@ export async function POST(
   }
 
   const settings = getSettings()
-  const goadPath = settings.goadPath || "/opt/GOAD"
+  const goadPath = resolveGoadPath()
   const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64")
 
   const rootCreds = rootPasswordCredsIfSet(settings)

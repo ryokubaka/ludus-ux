@@ -15,6 +15,15 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.8] - 2026-07-07
+
+**LUX**
+- [Fix] **GOAD provisioning on Ludus** — Before each GOAD run, LUX installs missing Ansible roles/collections via Ludus API (`POST /ansible/collection`, `POST /ansible/role`) instead of `ansible-galaxy` over SSH, so installs are Ludus-tracked, visible on the Ansible page, and avoid permission errors writing into Ludus-managed collection trees.
+- [Fix] **GOAD provisioning on Ludus** — After Ludus API install, LUX verifies canary collection plugin files on disk (e.g. `ansible.windows` → `win_dns_client.ps1`); broken or partial trees trigger a Ludus `force` reinstall before `ansible-playbook` runs, fixing `couldn't resolve module/action 'ansible.windows.win_dns_client'` when inventory listed the collection as installed.
+- [Fix] **GOAD SSH preamble** — Export Ludus per-user Ansible env (`ANSIBLE_HOME`, `ANSIBLE_COLLECTIONS_PATH`, `ANSIBLE_ROLES_PATH`) so GOAD's venv `ansible-playbook` resolves collections Ludus installed under the user's tree; venv bootstrap remains on SSH (pip only).
+- [Add] **Settings / env** — `LUDUS_INSTALL_PATH` (`/opt/ludus` default) for Ludus install root on the server; wired through Settings UI, Docker Compose, `.env.example`, OpenAPI, and `runtime-paths` helpers used by GOAD SSH, range log paths, and template discovery (no hardcoded `/opt/ludus` or `/opt/GOAD` in runtime code).
+- [Improve] **GOAD paths** — All GOAD API routes and SSH helpers resolve `GOAD_PATH` via `resolveGoadPath()` instead of inline fallbacks.
+
 ## [1.1.7] - 2026-07-06
 
 **LUX**

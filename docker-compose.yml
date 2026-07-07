@@ -36,6 +36,7 @@ services:
       - GOAD_SSH_PASSWORD=${GOAD_SSH_PASSWORD:-}
       - GOAD_SSH_KEY_PATH=${GOAD_SSH_KEY_PATH:-/app/ssh/id_rsa}
       - GOAD_PATH=${GOAD_PATH:-/opt/GOAD}
+      - LUDUS_INSTALL_PATH=${LUDUS_INSTALL_PATH:-/opt/ludus}
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
       # TLS terminates at nginx; app listens on plain HTTP (see TRUST_PROXY_TLS).
       - DISABLE_HTTPS=${DISABLE_HTTPS:-true}

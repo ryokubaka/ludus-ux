@@ -28,6 +28,7 @@ import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
+import { resolveGoadPath } from "@/lib/runtime-paths"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -49,7 +50,7 @@ export async function POST(
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const settings = getSettings()
-  const goadPath = settings.goadPath || "/opt/GOAD"
+  const goadPath = resolveGoadPath()
   const rootCreds = rootPasswordCredsIfSet(settings)
 
   // ── 1. Resolve rangeID ────────────────────────────────────────────────────

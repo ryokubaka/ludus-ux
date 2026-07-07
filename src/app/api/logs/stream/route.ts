@@ -14,6 +14,7 @@ import {
   deployLogLineHasLeadingWallTimestamp,
 } from "@/lib/log-line-timestamp"
 import { safeClientError } from "@/lib/safe-client-error"
+import { ludusRangeAnsibleLogPath } from "@/lib/runtime-paths"
 
 
 /** Read the GOAD ansible log (SSH-based). Returns new lines since lastLineCount. */
@@ -24,8 +25,7 @@ async function readGoadLog(
 ): Promise<{ lines: string[]; newCount: number }> {
   if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) return { lines: [], newCount: lastCount }
   try {
-    // Ludus v2 stores range files under /opt/ludus/ranges/<rangeID>/
-    const logPath = `/opt/ludus/ranges/${rangeId}/ansible.log`
+    const logPath = ludusRangeAnsibleLogPath(rangeId)
     const content = await sshExec(
       settings.sshHost, settings.sshPort,
       settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",

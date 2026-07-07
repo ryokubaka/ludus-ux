@@ -25,6 +25,7 @@ import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { getSettings } from "@/lib/settings-store"
+import { resolveGoadPath } from "@/lib/runtime-paths"
 import { getDb } from "@/lib/db"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -104,7 +105,7 @@ export async function POST(
 
   // Step 2: Remove the GOAD workspace directory
   try {
-    const goadPath = settings.goadPath || "/opt/GOAD"
+    const goadPath = resolveGoadPath()
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const workspacePath = `${goadPath}/workspace/${safeId}`
 

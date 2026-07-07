@@ -54,6 +54,7 @@ interface Settings {
   sshHost: string
   sshPort: number
   goadPath: string
+  ludusInstallPath: string
   goadEnabled: boolean
   rootApiKey?: string
   /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
@@ -932,7 +933,7 @@ function SettingsContent() {
                 <Input id="root-api-key" type="password" value={draft?.rootApiKey || ""} onChange={(e) => setDraft((d) => d ? { ...d, rootApiKey: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="ROOT.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
                 <p className="text-xs text-muted-foreground">
                   Required for user/group management. Found at{" "}
-                  <code className="text-primary">/opt/ludus/install/root-api-key</code> on the server.
+                  <code className="text-primary">{draft?.ludusInstallPath || "<LUDUS_INSTALL_PATH>"}/install/root-api-key</code> on the server.
                 </p>
                 {draft?.rootApiKeyOverriddenByEnv ? (
                   <Alert variant="default" className="mt-2 border-status-warning/40 bg-status-warning/10">
@@ -998,6 +999,13 @@ function SettingsContent() {
                   <span className="ml-2 text-xs text-muted-foreground font-normal">GOAD_PATH</span>
                 </Label>
                 <Input id="goad-path" value={draft?.goadPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, goadPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/GOAD" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ludus-install-path">
+                  Ludus Installation Path
+                  <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUS_INSTALL_PATH</span>
+                </Label>
+                <Input id="ludus-install-path" value={draft?.ludusInstallPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludusInstallPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/ludus" />
               </div>
 
               <div className="border-t border-border pt-4 space-y-3">

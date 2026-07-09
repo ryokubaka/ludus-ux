@@ -16,6 +16,15 @@ describe("buildLudusAnsibleEnvShell", () => {
     expect(sh).toContain("/users/$_LUX_ANSIBLE_USER/.ansible/collections")
     expect(sh).not.toContain(".goad/ansible_collections")
   })
+
+  it("prepends GOAD shared ansible/roles when goadPath is set", () => {
+    const goadRoot = goadPathFromEnv()
+    const sh = buildLudusAnsibleEnvShell(ludusInstallPathFromEnv(), goadRoot)
+    expect(sh).toContain(`_LUX_GOAD_ROOT='${goadRoot}'`)
+    expect(sh).toContain(
+      'export ANSIBLE_ROLES_PATH="$_LUX_GOAD_ROOT/ansible/roles:$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/roles:',
+    )
+  })
 })
 
 describe("buildVerifyGoadCollectionsShell", () => {
@@ -32,6 +41,7 @@ describe("buildEnsureGoadVenvShell", () => {
     const goadRoot = goadPathFromEnv()
     const sh = buildEnsureGoadVenvShell(goadRoot, ludusInstallPathFromEnv())
     expect(sh).toContain(`_LUX_GOAD_ROOT='${goadRoot}'`)
+    expect(sh).toContain('$_LUX_GOAD_ROOT/ansible/roles:')
     expect(sh).toContain('"$HOME/.goad/.venv"')
     expect(sh).toContain('"$HOME/.goad/.venv/bin/pip"')
     expect(sh).not.toContain("ansible-galaxy")

@@ -2,7 +2,8 @@
  * Shell snippets for GOAD SSH sessions on the Ludus host.
  *
  * - {@link buildLudusAnsibleEnvShell} — Ansible env vars matching Ludus range deploy
- *   (collections/roles under the Ludus user tree).
+ *   (collections/roles under the Ludus user tree) plus GOAD's shared `ansible/roles`
+ *   (extensions' ansible.cfg `roles_path` is overridden by `ANSIBLE_ROLES_PATH`).
  * - {@link buildEnsureGoadVenvShell} — bootstrap ~/.goad/.venv + pip deps only.
  *
  * Galaxy roles/collections are installed via Ludus API (POST /ansible/collection,
@@ -11,15 +12,25 @@
  *
  * Paths must come from {@link resolveGoadPath} / {@link resolveLudusInstallPath}.
  */
-export function buildLudusAnsibleEnvShell(ludusInstallPath: string): string {
+export function buildLudusAnsibleEnvShell(
+  ludusInstallPath: string,
+  goadPath?: string,
+): string {
   const root = ludusInstallPath.replace(/'/g, "")
+  const goadRoot = goadPath?.replace(/'/g, "")
+  // ANSIBLE_ROLES_PATH replaces ansible.cfg roles_path — must include GOAD shared
+  // roles (common, commonwkstn, …) that extensions resolve via ../../../ansible/roles.
+  const rolesPath = goadRoot
+    ? `$_LUX_GOAD_ROOT/ansible/roles:$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/roles:$_LUX_LUDUS_ROOT/resources/global-roles:$HOME/.ansible/roles`
+    : `$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/roles:$_LUX_LUDUS_ROOT/resources/global-roles:$HOME/.ansible/roles`
   return [
     `_LUX_LUDUS_ROOT='${root}'`,
+    ...(goadRoot ? [`_LUX_GOAD_ROOT='${goadRoot}'`] : []),
     `_LUX_ANSIBLE_USER="$(whoami)"`,
     `_LUX_LUDUS_COLLECTIONS="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/collections"`,
     `export ANSIBLE_HOME="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible"`,
     `export ANSIBLE_COLLECTIONS_PATH="$_LUX_LUDUS_COLLECTIONS:$HOME/.ansible/collections:/usr/share/ansible/collections"`,
-    `export ANSIBLE_ROLES_PATH="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/roles:$_LUX_LUDUS_ROOT/resources/global-roles:$HOME/.ansible/roles"`,
+    `export ANSIBLE_ROLES_PATH="${rolesPath}"`,
     `export ANSIBLE_SSH_CONTROL_PATH_DIR="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/cp"`,
     `mkdir -p "$ANSIBLE_HOME/collections" "$ANSIBLE_HOME/roles" "$ANSIBLE_SSH_CONTROL_PATH_DIR" 2>/dev/null || true`,
   ].join("; ")
@@ -29,8 +40,7 @@ export function buildLudusAnsibleEnvShell(ludusInstallPath: string): string {
 export function buildEnsureGoadVenvShell(goadPath: string, ludusInstallPath: string): string {
   const root = goadPath.replace(/'/g, "")
   return [
-    buildLudusAnsibleEnvShell(ludusInstallPath),
-    `_LUX_GOAD_ROOT='${root}'`,
+    buildLudusAnsibleEnvShell(ludusInstallPath, root),
     `_LUX_PIP="$HOME/.goad/.venv/bin/pip"`,
     `_LUX_PY="$HOME/.goad/.venv/bin/python3"`,
     `_LUX_NEW_VENV=0`,

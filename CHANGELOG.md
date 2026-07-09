@@ -15,6 +15,11 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.9] - 2026-07-09
+
+**LUX**
+- [Fix] **GOAD extension playbooks** — SSH preamble `ANSIBLE_ROLES_PATH` now prepends `$GOAD_PATH/ansible/roles` so shared roles (`common`, `commonwkstn`, …) resolve when env overrides extension `ansible.cfg` `roles_path` (fixes `role 'common' was not found` on workstation extensions).
+
 ## [1.1.8] - 2026-07-07
 
 **LUX**

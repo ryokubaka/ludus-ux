@@ -15,6 +15,16 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.10] - 2026-07-09
+
+**LUX**
+- [Add] **GOAD** — On the GOAD instance page action bar, Provision Lab can target the entire lab, a single playbook, or from a playbook onward (`provision_lab` / `provision` / `provision_lab_from`). Playbook lists come from `playbooks.yml` (lab key, or `default` fallback like upstream GOAD).
+- [Add] **Settings / env** — `LUDUS_ANSIBLE_VERBOSE` (default on) and Settings toggle to pass Ludus `--verbose-ansible` / API `verbose` on range deploy (proxy injects when omitted; GOAD Ludus CLI wrapper appends the flag).
+- [Fix] **Exit impersonation** — Overlay “Returning to your account…”, clear cookie/range under it, then hard-navigate to dashboard (avoids root-layout crash from in-place cache clear that left “Try again” on `/`).
+- [Fix] **Testing mode** — Starting or stopping testing mode opens the range log stream with `snapshotStart` so stale prior deploy output is not replayed before the new op writes logs.
+- [Fix] **Testing mode start / EFI** — Before Ludus `PUT /testing/start` (snapshot), LUX detects EFI disks missing `ms-cert=2023k`, briefly powers those VMs off, runs `qm enroll-efi-keys`, restores power if they were running, then snapshots. Snapshots taken without 2023 UEFI certs cannot roll back later (Proxmox warning; Ludus often surfaces as `proxmox_snap` / `New-style module did not handle its own exit` — see badsectorlabs/ludus-source-bsl#3). Start aborts if enroll fails. Testing UI shows **Checking UEFI…** while probing; preview is stored until the range gains a new VM. BitLocker protectors (if any) are out of scope for lab VMs.
+- [Docs] **Known issue (upstream Ludus):** On Ludus ≤2.2.3, `POST /range/deploy` ignores the client `verbose` field. The server passes `force` into Ansible as the verbosity flag, so deploys that require `--force` (e.g. testing mode) always run at Ansible `-vvvv`. LUX still sends `verbose` / `--verbose-ansible` for forward compatibility. Quiet Ludus range logs on force deploys need an upstream Ludus fix (add `Verbose` to `DeployRangeRequest`; pass `deployBody.Verbose` instead of `Force` into `RunRangeManagementAnsibleWithTag`).
+
 ## [1.1.9] - 2026-07-09
 
 **LUX**

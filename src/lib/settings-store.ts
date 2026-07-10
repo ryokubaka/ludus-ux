@@ -33,6 +33,11 @@ export interface RuntimeSettings {
   ludusInstallPath: string
   /** Whether the GOAD integration is shown in the UI. Defaults to true. */
   goadEnabled: boolean
+  /**
+   * Pass Ludus `--verbose-ansible` / API `verbose` on range deploy.
+   * Default true. Stock Ludus ≤2.2.3 may ignore this and treat `force` as verbose.
+   */
+  ludusAnsibleVerbose: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
   rootApiKey: string
   /** Ludus admin user API key for global source blueprint install/share (auto-set on first admin source install). */
@@ -78,6 +83,7 @@ function defaults(): RuntimeSettings {
     goadPath: goadPathFromEnv(),
     ludusInstallPath: ludusInstallPathFromEnv(),
     goadEnabled: process.env.ENABLE_GOAD !== "false",
+    ludusAnsibleVerbose: process.env.LUDUS_ANSIBLE_VERBOSE !== "false",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
       process.env.LUX_LUDUS_BLUEPRINT_OPERATOR_API_KEY,
@@ -99,6 +105,7 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "goadPath",
   "ludusInstallPath",
   "goadEnabled",
+  "ludusAnsibleVerbose",
   "rootApiKey",
   "blueprintOperatorApiKey",
   "blueprintOperatorUserId",
@@ -145,7 +152,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled") {
+      if (k === "goadEnabled" || k === "ludusAnsibleVerbose") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)

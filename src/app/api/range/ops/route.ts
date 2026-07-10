@@ -8,6 +8,9 @@
  *
  * We do NOT fail ops on rangeState ERROR/ABORTED — testing ansible runs outside deploy state.
  * We do NOT reconcile PocketBase on passive status reads (see pb-status route).
+ *
+ * testing_start: before Ludus, enroll UEFI 2023 certs on EFI disks missing ms-cert=2023k
+ * so testing snapshots can be rolled back later (see badsectorlabs/ludus-source-bsl#3).
  */
 
 import { NextRequest, NextResponse } from "next/server"
@@ -37,6 +40,7 @@ import {
   testingOpLogSliceProvesComplete,
 } from "@/lib/testing-mode-pb-reconcile"
 import { readLudusRangeLogsForReconcile } from "@/lib/goad-ludus-reconcile"
+import { runTestingStartEfiEnrollPreflight } from "@/lib/proxmox-testing-stop-preflight"
 
 function getEffective(
   request: NextRequest,
@@ -240,6 +244,66 @@ export async function POST(request: NextRequest) {
   })
   await noteTestingOpLogMarker(op.id, logsBefore, rangeId)
 
+  let efiEnroll: Awaited<ReturnType<typeof runTestingStartEfiEnrollPreflight>> | undefined
+
+  // Before testing start snapshots: enroll UEFI 2023 certs so rollback works
+  // (EFI disk without ms-cert=2023k breaks Proxmox snapshot revert).
+  if (opType === "testing_start") {
+    try {
+      efiEnroll = await runTestingStartEfiEnrollPreflight({
+        rangeId,
+        apiKey: ctx.effectiveApiKey,
+        userOverride: ctx.ludusUserOverride,
+      })
+      if (efiEnroll.fatal) {
+        forgetTestingStopRetry(op.id)
+        completeRangeOp(op.id, false)
+        recordLuxTestingOpTerminal(op, false, {
+          apiKey: ctx.effectiveApiKey,
+          userOverride: ctx.ludusUserOverride,
+        })
+        const detail =
+          efiEnroll.errors.join("; ") ||
+          efiEnroll.skippedReason ||
+          "UEFI certificate enrollment failed"
+        logLuxRouteAction(request, session, { outcome: "failure", detail })
+        return NextResponse.json(
+          {
+            error: `Cannot start testing mode: ${detail}`,
+            efiEnroll: {
+              attempted: efiEnroll.attempted,
+              enrolled: efiEnroll.enrolled,
+              errors: efiEnroll.errors,
+              candidates: efiEnroll.candidates,
+              skippedReason: efiEnroll.skippedReason,
+            },
+          },
+          { status: 502 },
+        )
+      }
+      if (efiEnroll.attempted) {
+        console.log(
+          `[range-ops] testing-start EFI enroll rangeId=${rangeId} ` +
+            `enrolled=${efiEnroll.enrolled.length}/${efiEnroll.vmids.length}`,
+        )
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[range-ops] testing-start EFI enroll threw for ${rangeId}:`, msg)
+      forgetTestingStopRetry(op.id)
+      completeRangeOp(op.id, false)
+      recordLuxTestingOpTerminal(op, false, {
+        apiKey: ctx.effectiveApiKey,
+        userOverride: ctx.ludusUserOverride,
+      })
+      logLuxRouteAction(request, session, { outcome: "failure", detail: msg })
+      return NextResponse.json(
+        { error: `Cannot start testing mode: UEFI enrollment error — ${msg}` },
+        { status: 502 },
+      )
+    }
+  }
+
   const ludusPath = opType === "testing_start"
     ? `/testing/start?rangeID=${encodeURIComponent(rangeId)}`
     : `/testing/stop?rangeID=${encodeURIComponent(rangeId)}`
@@ -262,7 +326,19 @@ export async function POST(request: NextRequest) {
     })
     logLuxRouteAction(request, session, { outcome: "failure", detail: result.error || `HTTP ${result.status}` })
     return NextResponse.json(
-      { error: result.error || `Ludus returned HTTP ${result.status}` },
+      {
+        error: result.error || `Ludus returned HTTP ${result.status}`,
+        ...(efiEnroll
+          ? {
+              efiEnroll: {
+                attempted: efiEnroll.attempted,
+                enrolled: efiEnroll.enrolled,
+                errors: efiEnroll.errors,
+                candidates: efiEnroll.candidates,
+              },
+            }
+          : {}),
+      },
       { status: result.status || 500 },
     )
   }
@@ -276,11 +352,35 @@ export async function POST(request: NextRequest) {
       logLuxRouteAction(request, session, {
         detail: `${opType} rangeId=${rangeId} (completed on PUT return, attempt ${attempt + 1})`,
       })
-      return NextResponse.json({ op: completedOp })
+      return NextResponse.json({
+        op: completedOp,
+        ...(efiEnroll
+          ? {
+              efiEnroll: {
+                attempted: efiEnroll.attempted,
+                enrolled: efiEnroll.enrolled,
+                errors: efiEnroll.errors,
+                candidates: efiEnroll.candidates,
+              },
+            }
+          : {}),
+      })
     }
     if (attempt < 5) await delayMs(2000)
   }
 
   logLuxRouteAction(request, session, { detail: `${opType} rangeId=${rangeId}` })
-  return NextResponse.json({ op: { ...op, status: "running" } })
+  return NextResponse.json({
+    op: { ...op, status: "running" },
+    ...(efiEnroll
+      ? {
+          efiEnroll: {
+            attempted: efiEnroll.attempted,
+            enrolled: efiEnroll.enrolled,
+            errors: efiEnroll.errors,
+            candidates: efiEnroll.candidates,
+          },
+        }
+      : {}),
+  })
 }

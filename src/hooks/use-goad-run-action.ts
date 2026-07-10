@@ -23,6 +23,7 @@ import {
 import type { GoadPostProcessingStep } from "@/components/goad/goad-instance-tabs/types"
 import type { GoadInstance } from "@/lib/types"
 import type { useToast } from "@/hooks/use-toast"
+import { clearSessionEfiStopPreview } from "@/lib/testing-stop-efi-session"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 
@@ -290,6 +291,9 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
           }).catch(() => {})
         }
         setPostProcessingStep("idle")
+      }
+      if (code === 0 && instance?.ludusRangeId) {
+        clearSessionEfiStopPreview(instance.ludusRangeId)
       }
       fetchInstances()
       return code

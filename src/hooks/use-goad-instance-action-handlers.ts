@@ -14,6 +14,11 @@ import { clearRangeAborting } from "@/lib/range-aborting"
 import { queryKeys } from "@/lib/query-keys"
 import type { GoadCatalog, GoadExtensionDef, GoadInstance } from "@/lib/types"
 import type { useToast } from "@/hooks/use-toast"
+import {
+  buildGoadProvisionReplCommand,
+  provisionModeLabel,
+  type GoadProvisionMode,
+} from "@/lib/goad-provision-target"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 type ConfirmFn = (label: string, fn: () => void, key?: string) => void
@@ -152,6 +157,24 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     confirm("Run full Ansible provisioning?", () =>
       runAction("provision-lab", `--repl "use ${instanceId};provision_lab"`),
     )
+
+  const handleProvisionLabTargeted = (mode: GoadProvisionMode, playbook?: string) => {
+    let goadArgs: string
+    try {
+      goadArgs = buildGoadProvisionReplCommand(instanceId, mode, playbook)
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Provision",
+        description: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    const label = provisionModeLabel(mode, playbook)
+    confirm(`Run Ansible provisioning (${label})?`, () =>
+      runAction("provision-lab", goadArgs),
+    )
+  }
 
   const handleInstallProvideProvision = () =>
     confirm(
@@ -483,6 +506,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     requestAbort,
     handleProvide,
     handleProvisionLab,
+    handleProvisionLabTargeted,
     handleInstallProvideProvision,
     handleStatus,
     handleSyncIps,

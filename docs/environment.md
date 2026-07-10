@@ -37,6 +37,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `ENABLE_GOAD` | Show GOAD in the UI (`false` to hide) | `true` |
 | `GOAD_PATH` | Path to the GOAD installation on the Ludus server | `/opt/GOAD` |
 | `LUDUS_INSTALL_PATH` | Ludus install root on the Ludus server (ranges, packer, user Ansible collections) | `/opt/ludus` |
+| `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). | `true` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
 
 ## TLS / HTTPS

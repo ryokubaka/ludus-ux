@@ -41,6 +41,15 @@ import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import {
+  fetchAndStoreEfiPreflight,
+  prefetchTestingStopEfiForSelectedRange,
+  sessionPreviewToNotice,
+} from "@/lib/prefetch-testing-stop-efi"
+import {
+  clearSessionEfiStopPreview,
+  readSessionEfiStopPreview,
+} from "@/lib/testing-stop-efi-session"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
 
@@ -364,6 +373,19 @@ export function TestingPageClient() {
   const selectedRangeIdRef = useRef<string | null>(null)
   useEffect(() => { selectedRangeIdRef.current = selectedRangeId }, [selectedRangeId])
 
+  /** EFI enroll notice for Start confirm / toast (set in handleToggle). */
+  const efiStartNoticeRef = useRef<{ notice: string; count: number } | null>(null)
+  const [efiChecking, setEfiChecking] = useState(false)
+
+  // Warm EFI preview for selected range: fill session if empty; validate fingerprint if present.
+  useEffect(() => {
+    if (rangesLoading || !selectedRangeId) return
+    const existing = readSessionEfiStopPreview(selectedRangeId)
+    prefetchTestingStopEfiForSelectedRange(selectedRangeId, {
+      forceValidate: Boolean(existing),
+    })
+  }, [rangesLoading, selectedRangeId])
+
   // ── Per-range status (from dot queries — single source of truth) ────────
   const selectedRangeIdx = useMemo(
     () => contextRanges.findIndex((r) => r.rangeID === selectedRangeId),
@@ -372,6 +394,19 @@ export function TestingPageClient() {
   const selectedPbQuery = selectedRangeIdx >= 0 ? testingDotQueries[selectedRangeIdx] : undefined
   const status = selectedPbQuery?.data ?? null
   const statusLoading = selectedPbQuery?.isFetching ?? false
+
+  // New VMs after deploy — drop session so next Start re-probes.
+  const prevRangeStateRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const next = status?.rangeState
+    const prev = prevRangeStateRef.current
+    prevRangeStateRef.current = next
+    if (!selectedRangeId || !prev || !next) return
+    const wasDeploying = prev === "DEPLOYING" || prev === "WAITING"
+    if (wasDeploying && next === "SUCCESS") {
+      clearSessionEfiStopPreview(selectedRangeId)
+    }
+  }, [selectedRangeId, status?.rangeState])
 
   const refreshRangeStatus = useCallback(
     (rangeId: string) =>
@@ -555,7 +590,7 @@ export function TestingPageClient() {
       !!activeOp &&
       (activeOp.opType === "testing_start" || activeOp.opType === "testing_stop"))
   // True while we should lock the button and show progress UI
-  const isInProgress = toggling || opInProgress || isDeploying || opInitialising
+  const isInProgress = toggling || opInProgress || isDeploying || opInitialising || efiChecking
 
   useEffect(() => {
     setRangeSelectionLocked(testingToggleInProgress)
@@ -764,6 +799,18 @@ export function TestingPageClient() {
 
   // ── Toggle testing mode ───────────────────────────────────────────────────
 
+  const loadEfiStartPreview = async (
+    rangeId: string,
+  ): Promise<{ notice: string | null; count: number }> => {
+    const cached = readSessionEfiStopPreview(rangeId)
+    if (cached) {
+      return sessionPreviewToNotice(cached)
+    }
+    const result = await fetchAndStoreEfiPreflight(rangeId)
+    if (result) return sessionPreviewToNotice(result)
+    return { notice: null, count: 0 }
+  }
+
   const doToggle = async () => {
     if (!selectedRangeId) return
     setToggling(true)
@@ -777,7 +824,16 @@ export function TestingPageClient() {
     // logs.  Starting after the await would miss all of that output.
     // Note: for testing-mode ops, rangeState never enters DEPLOYING, so the
     // stream relies on its warmup window to stay open and collect logs.
-    startLogStream(selectedRangeId)
+    startLogStream(selectedRangeId, true)
+
+    if (opType === "testing_start" && efiStartNoticeRef.current) {
+      const { count } = efiStartNoticeRef.current
+      toast({
+        title: "Enrolling UEFI certificates…",
+        description:
+          `Enrolling UEFI certificates on ${count} VM${count === 1 ? "" : "s"}, then snapshotting…`,
+      })
+    }
 
     // POST to our API route which creates the DB record AND calls Ludus.
     // Using fetch directly so we can inject impersonation headers that apiRequest
@@ -796,6 +852,11 @@ export function TestingPageClient() {
       abortRef.current?.abort()
       setToggling(false)
       return
+    }
+
+    // Enroll may have changed EFI state — drop session so next Start re-probes if needed.
+    if (opType === "testing_start") {
+      clearSessionEfiStopPreview(selectedRangeId)
     }
 
     setActiveOp(data.op)
@@ -822,13 +883,40 @@ export function TestingPageClient() {
     // Stream is already running — no need to start it again here.
   }
 
-  const handleToggle = () =>
-    confirm(
-      isEnabled
-        ? "Stop Testing Mode? All VMs will be reverted to their pre-testing snapshots."
-        : "Start Testing Mode? All VMs will be snapshotted and internet access will be blocked.",
-      doToggle
-    )
+  const handleToggle = () => {
+    if (efiChecking) return
+    if (isEnabled) {
+      efiStartNoticeRef.current = null
+      confirm(
+        "Stop Testing Mode? All VMs will be reverted to their pre-testing snapshots.",
+        doToggle,
+      )
+      return
+    }
+    const rangeId = selectedRangeId
+    if (!rangeId) return
+    void (async () => {
+      const cached = readSessionEfiStopPreview(rangeId)
+      const needsFetch = !cached
+      if (needsFetch) setEfiChecking(true)
+      try {
+        const preview = await loadEfiStartPreview(rangeId)
+        if (preview.notice && preview.count > 0) {
+          efiStartNoticeRef.current = { notice: preview.notice, count: preview.count }
+        } else {
+          efiStartNoticeRef.current = null
+        }
+        const base =
+          "Start Testing Mode? All VMs will be snapshotted and internet access will be blocked."
+        confirm(
+          preview.notice ? `${base}\n\n${preview.notice}` : base,
+          doToggle,
+        )
+      } finally {
+        if (needsFetch) setEfiChecking(false)
+      }
+    })()
+  }
 
   const handleDismissStuckTestingOp = () => {
     const rangeId = selectedRangeIdRef.current ?? selectedRangeId
@@ -1068,13 +1156,15 @@ export function TestingPageClient() {
 
   // PocketBase testingEnabled is authoritative for start vs stop UI (not DB opType).
   const progressLabel =
-    opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
+    efiChecking ? "Checking UEFI…"
+    : opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
     : isDeploying   ? "Processing…"
     : isInProgress  ? (isEnabled ? "Stopping…" : "Starting…")
     : ""
 
   const statusBadgeExtra: { label: string; variant: "info" | "secondary" } | null =
-    isDeploying          ? { label: "PROCESSING", variant: "info" }
+    efiChecking           ? { label: "CHECKING UEFI", variant: "secondary" }
+    : isDeploying          ? { label: "PROCESSING", variant: "info" }
     : opInitialising     ? { label: "CHECKING",   variant: "secondary" }
     : opInProgress       ? { label: "QUEUED",     variant: "secondary" }
     : null
@@ -1211,6 +1301,7 @@ export function TestingPageClient() {
                   onClick={handleToggle}
                   disabled={
                     isInProgress ||
+                    efiChecking ||
                     statusLoading ||
                     !!pendingAction ||
                     hasPendingOps ||
@@ -1220,14 +1311,16 @@ export function TestingPageClient() {
                   variant={isEnabled ? "destructive" : "default"}
                   className="min-w-52"
                 >
-                  {isInProgress ? (
+                  {isInProgress || efiChecking ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : isEnabled ? (
                     <ShieldOff className="h-4 w-4" />
                   ) : (
                     <Camera className="h-4 w-4" />
                   )}
-                  {isInProgress
+                  {efiChecking
+                    ? "Checking UEFI…"
+                    : isInProgress
                     ? progressLabel
                     : isEnabled
                     ? "Stop Testing (Revert VMs)"

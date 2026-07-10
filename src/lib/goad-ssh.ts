@@ -118,6 +118,17 @@ const LUDUS_WRAPPER_SH = [
   '  fi',
   'fi',
   '',
+  '# Optional: Ludus Ansible verbosity (GOAD_LUDUS_VERBOSE_ANSIBLE=1).',
+  'if [ "$_has_rd" -eq 1 ] && [ "${GOAD_LUDUS_VERBOSE_ANSIBLE:-}" = "1" ]; then',
+  '  _has_v=0',
+  '  for _a in "$@"; do',
+  '    case "$_a" in --verbose-ansible|-v) _has_v=1;; esac',
+  '  done',
+  '  if [ "$_has_v" -eq 0 ]; then',
+  '    set -- "$@" --verbose-ansible',
+  '  fi',
+  'fi',
+  '',
   '# Range scoping: inject --range unless already supplied.',
   'for _a in "$@"; do case "$_a" in --range|-r) exec "$_R" "$@";; esac; done',
   'exec "$_R" --range "$LUDUS_RANGE_ID" "$@"',
@@ -549,6 +560,7 @@ export async function streamGoadCommand(
     ...(onlyRolesJoined
       ? [`GOAD_LUDUS_ONLY_ROLES='${onlyRolesJoined.replace(/'/g, "'\\''")}'`]
       : []),
+    ...(getSettings().ludusAnsibleVerbose ? ["GOAD_LUDUS_VERBOSE_ANSIBLE=1"] : []),
     ...(luxWizardConfigPath
       ? [`LUX_WIZARD_CONFIG_YML='${luxWizardConfigPath.replace(/'/g, "")}'`]
       : []),
@@ -1194,8 +1206,53 @@ def get_required_templates(base_dir):
 
     return sorted(templates)
 
+def load_playbooks_yml(goad_path):
+    """Parse playbooks.yml → {lab_name: [playbook.yml, ...]} (comments stripped)."""
+    path = os.path.join(goad_path, "playbooks.yml")
+    out = {}
+    if not os.path.isfile(path):
+        return out
+    try:
+        import yaml as _yaml
+        with open(path) as f:
+            data = _yaml.safe_load(f) or {}
+        if isinstance(data, dict):
+            for lab, items in data.items():
+                if not isinstance(lab, str) or not isinstance(items, list):
+                    continue
+                books = []
+                for item in items:
+                    if isinstance(item, str) and item.strip():
+                        books.append(item.strip())
+                out[lab] = books
+            return out
+    except Exception:
+        pass
+    # Fallback: line scan (no PyYAML) — skip # comments; lab keys end with ':'
+    try:
+        current = None
+        with open(path) as f:
+            for raw in f:
+                line = raw.split("#", 1)[0].rstrip()
+                if not line.strip():
+                    continue
+                m_lab = re.match(r'^([A-Za-z0-9_.-]+):\\s*$', line)
+                if m_lab:
+                    current = m_lab.group(1)
+                    out.setdefault(current, [])
+                    continue
+                if current is None:
+                    continue
+                m_item = re.match(r'^\\s+-\\s+(\\S+)', line)
+                if m_item:
+                    out[current].append(m_item.group(1).strip().strip('"').strip("'"))
+    except Exception:
+        pass
+    return out
+
 def discover(goad_path):
     result = {"labs": [], "extensions": []}
+    playbooks_by_lab = load_playbooks_yml(goad_path)
 
     ad_path = os.path.join(goad_path, "ad")
     if os.path.isdir(ad_path):
@@ -1232,6 +1289,7 @@ def discover(goad_path):
                 "domains": domain_count,
                 "requiredTemplates": required_templates,
                 "ludusSupported": ludus_supported,
+                "playbooks": playbooks_by_lab.get(lab_name) or playbooks_by_lab.get("default") or [],
             })
 
     ext_path = os.path.join(goad_path, "extensions")

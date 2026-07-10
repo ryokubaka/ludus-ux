@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {

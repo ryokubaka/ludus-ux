@@ -357,6 +357,11 @@ export interface GoadLabDef {
   requiredTemplates: string[]
   /** Whether a providers/ludus/ directory exists for this lab */
   ludusSupported: boolean
+  /**
+   * Ordered Ansible playbook basenames from goad-mod `playbooks.yml` for this lab
+   * (comments stripped). Empty when the lab has no entry or the file is missing.
+   */
+  playbooks?: string[]
 }
 
 /** An extension discovered from <goadPath>/extensions/<ext>/config.json */

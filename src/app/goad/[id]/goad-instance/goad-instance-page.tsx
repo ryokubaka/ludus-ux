@@ -1006,6 +1006,7 @@ function GoadInstancePage() {
     requestAbort,
     handleProvide,
     handleProvisionLab,
+    handleProvisionLabTargeted,
     handleInstallProvideProvision,
     handleStatus,
     handleSyncIps,
@@ -1105,6 +1106,8 @@ function GoadInstancePage() {
         onInstallProvideProvision={handleInstallProvideProvision}
         onProvide={handleProvide}
         onProvisionLab={handleProvisionLab}
+        onProvisionLabTargeted={handleProvisionLabTargeted}
+        labPlaybooks={labInfo?.playbooks ?? []}
         onSyncIps={handleSyncIps}
         onStart={handleStart}
         onStop={handleStop}

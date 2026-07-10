@@ -38,6 +38,7 @@ services:
       - GOAD_PATH=${GOAD_PATH:-/opt/GOAD}
       - LUDUS_INSTALL_PATH=${LUDUS_INSTALL_PATH:-/opt/ludus}
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
+      - LUDUS_ANSIBLE_VERBOSE=${LUDUS_ANSIBLE_VERBOSE:-true}
       # TLS terminates at nginx; app listens on plain HTTP (see TRUST_PROXY_TLS).
       - DISABLE_HTTPS=${DISABLE_HTTPS:-true}
       - TRUST_PROXY_TLS=${TRUST_PROXY_TLS:-true}

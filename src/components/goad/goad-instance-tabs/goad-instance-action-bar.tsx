@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import {
   CheckCircle2,
   HardDriveDownload,
@@ -17,6 +18,15 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import type { GoadProvisionMode } from "@/lib/goad-provision-target"
 import type { GoadInstanceActionBarProps } from "./types"
 
 export function GoadInstanceActionBar({
@@ -29,11 +39,13 @@ export function GoadInstanceActionBar({
   currentAction,
   rangeState,
   pendingAction,
+  labPlaybooks,
   commitConfirm,
   cancelConfirm,
   onInstallProvideProvision,
   onProvide,
   onProvisionLab,
+  onProvisionLabTargeted,
   onSyncIps,
   onStart,
   onStop,
@@ -45,6 +57,34 @@ export function GoadInstanceActionBar({
 }: GoadInstanceActionBarProps) {
   const showAbort =
     isRunning || rangeState === "DEPLOYING" || rangeState === "WAITING" || isAborting
+
+  const [provisionMode, setProvisionMode] = useState<GoadProvisionMode>("entire")
+  const [selectedPlaybook, setSelectedPlaybook] = useState(labPlaybooks[0] ?? "")
+
+  useEffect(() => {
+    if (labPlaybooks.length === 0) {
+      setSelectedPlaybook("")
+      setProvisionMode("entire")
+      return
+    }
+    if (!labPlaybooks.includes(selectedPlaybook)) {
+      setSelectedPlaybook(labPlaybooks[0])
+    }
+  }, [labPlaybooks, selectedPlaybook])
+
+  const needsPlaybook = provisionMode === "single" || provisionMode === "from"
+  const provisionDisabled =
+    isRunning ||
+    !!pendingAction ||
+    (needsPlaybook && (!selectedPlaybook || labPlaybooks.length === 0))
+
+  const handleProvisionClick = () => {
+    if (provisionMode === "entire" || labPlaybooks.length === 0) {
+      onProvisionLab()
+      return
+    }
+    onProvisionLabTargeted(provisionMode, selectedPlaybook)
+  }
 
   return (
     <Card className="flex-shrink-0">
@@ -84,9 +124,15 @@ export function GoadInstanceActionBar({
             <Button
               size="sm"
               variant="outline"
-              onClick={onProvisionLab}
-              disabled={isRunning || !!pendingAction}
-              title="Run all Ansible playbooks to configure the lab"
+              onClick={handleProvisionClick}
+              disabled={provisionDisabled}
+              title={
+                provisionMode === "entire" || labPlaybooks.length === 0
+                  ? "Run all Ansible playbooks to configure the lab"
+                  : provisionMode === "single"
+                    ? `Run only ${selectedPlaybook}`
+                    : `Run from ${selectedPlaybook} through the end of the lab playbook list`
+              }
             >
               {isRunning && currentAction === "provision-lab" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -195,6 +241,53 @@ export function GoadInstanceActionBar({
             Delete Instance + Range
           </Button>
         </div>
+
+        {labPlaybooks.length > 0 ? (
+          <div className="flex flex-wrap items-end gap-3 pt-1 border-t border-border/60">
+            <div className="space-y-1 min-w-[10rem]">
+              <Label className="text-xs text-muted-foreground">Provision scope</Label>
+              <Select
+                value={provisionMode}
+                onValueChange={(v) => setProvisionMode(v as GoadProvisionMode)}
+                disabled={isRunning || !!pendingAction}
+              >
+                <SelectTrigger className="h-8 text-xs w-[11rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="entire">Entire lab</SelectItem>
+                  <SelectItem value="single">This playbook only</SelectItem>
+                  <SelectItem value="from">From this playbook onward</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {needsPlaybook && (
+              <div className="space-y-1 min-w-[12rem] flex-1 max-w-md">
+                <Label className="text-xs text-muted-foreground">Playbook</Label>
+                <Select
+                  value={selectedPlaybook}
+                  onValueChange={setSelectedPlaybook}
+                  disabled={isRunning || !!pendingAction}
+                >
+                  <SelectTrigger className="h-8 text-xs font-mono">
+                    <SelectValue placeholder="Select playbook" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {labPlaybooks.map((pb) => (
+                      <SelectItem key={pb} value={pb} className="font-mono text-xs">
+                        {pb}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground pt-1 border-t border-border/60">
+            No playbooks.yml entry for this lab — Provision Lab runs the entire lab.
+          </p>
+        )}
       </CardContent>
     </Card>
   )

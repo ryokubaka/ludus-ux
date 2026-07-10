@@ -3,6 +3,7 @@ import type { AnsibleInstalledSets } from "@/lib/goad-dependency-service"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import type { CorrelatedHistoryEntry, GoadTaskForCorrelation } from "@/lib/goad-deploy-history-correlation"
 import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+import type { GoadProvisionMode } from "@/lib/goad-provision-target"
 
 export type GoadPostProcessingStep = "idle" | "network-pending" | "network-deploying"
 
@@ -110,11 +111,14 @@ export interface GoadInstanceActionBarProps {
   currentAction: string | null
   rangeState: string | null
   pendingAction: ConfirmPendingAction
+  /** Ordered playbooks from catalog playbooks.yml for this lab (may be empty). */
+  labPlaybooks: string[]
   commitConfirm: () => void
   cancelConfirm: () => void
   onInstallProvideProvision: () => void
   onProvide: () => void
   onProvisionLab: () => void
+  onProvisionLabTargeted: (mode: GoadProvisionMode, playbook?: string) => void
   onSyncIps: () => void
   onStart: () => void
   onStop: () => void

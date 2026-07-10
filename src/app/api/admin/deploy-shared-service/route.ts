@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { getSettings } from "@/lib/settings-store"
 
 
 export async function POST(request: NextRequest) {
@@ -47,7 +48,10 @@ export async function POST(request: NextRequest) {
   // Ludus expects tags as a comma-separated string — NOT a JSON array.
   // Sending an array causes Go JSON unmarshaling to silently ignore the field
   // and fall back to "all" (full deploy with no tag filter).
-  const ludusBody = { tags: service }
+  const ludusBody = {
+    tags: service,
+    verbose: getSettings().ludusAnsibleVerbose,
+  }
 
   console.log(
     `[deploy-shared-service] Calling Ludus: POST ${ludusPath}`,

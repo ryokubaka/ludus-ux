@@ -56,6 +56,7 @@ interface Settings {
   goadPath: string
   ludusInstallPath: string
   goadEnabled: boolean
+  ludusAnsibleVerbose: boolean
   rootApiKey?: string
   /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
   rootApiKeyOverriddenByEnv?: boolean
@@ -979,6 +980,21 @@ function SettingsContent() {
                   </p>
                 </div>
                 <Switch checked={draft?.goadEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, goadEnabled: v } : d)} disabled={!session?.isAdmin} />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Ludus Ansible verbose</p>
+                  <p className="text-xs text-muted-foreground">
+                    Pass <code className="text-primary">--verbose-ansible</code> / API <code className="text-primary">verbose</code> on range deploy.
+                    Default on. Set <code className="text-primary">LUDUS_ANSIBLE_VERBOSE=false</code> in <code className="text-primary">.env</code> to default off.
+                    Stock Ludus ≤2.2.3 may ignore this when <code className="text-primary">force</code> is set (upstream bug).
+                  </p>
+                </div>
+                <Switch
+                  checked={draft?.ludusAnsibleVerbose ?? true}
+                  onCheckedChange={(v) => setDraft((d) => d ? { ...d, ludusAnsibleVerbose: v } : d)}
+                  disabled={!session?.isAdmin}
+                />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2 space-y-1.5">

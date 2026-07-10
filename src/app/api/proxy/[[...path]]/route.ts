@@ -10,6 +10,7 @@ import {
 } from "@/lib/lux-api-audit"
 import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
 import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
+import { getSettings } from "@/lib/settings-store"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -21,6 +22,23 @@ async function parseRequestBody(request: NextRequest): Promise<unknown> {
     return request.json().catch(() => undefined)
   }
   return request.text().catch(() => undefined)
+}
+
+/** Inject Settings `ludusAnsibleVerbose` into POST /range/deploy when client omits `verbose`. */
+function applyLudusDeployVerbose(path: string, method: string, body: unknown): unknown {
+  if (method !== "POST") return body
+  const base = path.split("?")[0]
+  if (base !== "/range/deploy") return body
+  const verbose = getSettings().ludusAnsibleVerbose
+  if (body == null || body === "") {
+    return { verbose }
+  }
+  if (typeof body === "object" && !Array.isArray(body)) {
+    const obj = body as Record<string, unknown>
+    if (typeof obj.verbose === "boolean") return body
+    return { ...obj, verbose }
+  }
+  return body
 }
 
 async function handler(
@@ -62,7 +80,8 @@ async function handler(
       : impersonateApiKey || session.apiKey
 
   try {
-    const body = await parseRequestBody(request)
+    const rawBody = await parseRequestBody(request)
+    const body = applyLudusDeployVerbose(path, request.method, rawBody)
 
     const result = await ludusRequest(fullPath, {
       method: request.method,

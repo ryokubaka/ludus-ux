@@ -1,12 +1,14 @@
-"use client"
-
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { impersonationHeadersFromData, IMPERSONATION_STORAGE_KEY } from "./impersonation-headers"
+import { syncSelectedRangeCookie } from "./sync-selected-range-cookie"
 
 export { IMPERSONATION_STORAGE_KEY }
-/** Dispatched on `window` in the same tab after writing to sessionStorage. */
+/** Dispatched on `window` after impersonation enter/exit (same tab). */
 export const IMPERSONATION_CHANGED_EVENT = "impersonation-changed"
+
+/** Must match `STORAGE_KEY` in range-context.tsx */
+const RANGE_STORAGE_KEY = "lux_selected_range"
 
 const STORAGE_KEY = IMPERSONATION_STORAGE_KEY
 
@@ -17,6 +19,8 @@ export interface ImpersonationData {
 
 interface ImpersonationContextValue {
   impersonation: ImpersonationData | null
+  /** True while leaving impersonation (overlay until full dashboard load). */
+  exitingImpersonation: boolean
   exitImpersonation: () => void
   /** Headers to attach to API fetch calls that should run under the impersonated user. */
   impersonationHeaders: () => Record<string, string>
@@ -24,6 +28,7 @@ interface ImpersonationContextValue {
 
 const ImpersonationContext = createContext<ImpersonationContextValue>({
   impersonation: null,
+  exitingImpersonation: false,
   exitImpersonation: () => { },
   impersonationHeaders: () => ({}),
 })
@@ -72,11 +77,16 @@ export async function saveImpersonation(data: {
     const err = (await res.json().catch(() => ({}))) as { error?: string }
     throw new Error(err.error || "Failed to start impersonation")
   }
+  // Drop prior selected range so sidebar picks a valid range for the new scope.
+  sessionStorage.removeItem(RANGE_STORAGE_KEY)
+  syncSelectedRangeCookie(null)
   window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
 }
 
 export function ImpersonationProvider({ children }: { children: React.ReactNode }) {
   const [impersonation, setImpersonation] = useState<ImpersonationData | null>(null)
+  const [exitingImpersonation, setExitingImpersonation] = useState(false)
+  const exitingRef = useRef(false)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -110,6 +120,8 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     // Re-read when the same-tab code dispatches our custom event after writing
     // to sessionStorage.  (The native 'storage' event only fires in other tabs.)
     const handleChanged = () => {
+      // Exit flow hard-navigates — ignore events during exit.
+      if (exitingRef.current) return
       const next = readStorage()
       setImpersonation(next)
       // Clear the entire query cache so the new user's pages load fresh data
@@ -134,20 +146,34 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /**
+   * Leave impersonation gracefully:
+   * 1. Show exit overlay (covers current page — including GOAD)
+   * 2. Clear cookie + local range under the overlay
+   * 3. Hard-navigate to `/` — full document load as admin
+   *
+   * Soft-nav + `queryClient.clear()` / `setImpersonation(null)` crashes the root
+   * layout (global-error on `/`) and drops the overlay. Hard assign keeps the
+   * overlay painted until the new document replaces this one.
+   */
   const exitImpersonation = useCallback(() => {
-    // Clear UI state immediately so the banner disappears without waiting.
-    sessionStorage.removeItem(STORAGE_KEY)
-    setImpersonation(null)
-    // The session cookie MUST be cleared before dispatching the event.
-    // Queries refetch on the event and hit the proxy — if the cookie still
-    // holds the impersonated user's API key the proxy will use it (session
-    // takes priority over headers), returning impersonated data again.
-    fetch("/api/auth/impersonate", { method: "DELETE" })
-      .catch(() => { })
-      .finally(() => {
-        // Cookie is clear — safe to invalidate; proxy prefers X-Impersonate-* when sent.
-        window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT))
-      })
+    if (exitingRef.current) return
+    exitingRef.current = true
+    setExitingImpersonation(true)
+
+    void (async () => {
+      sessionStorage.removeItem(STORAGE_KEY)
+      sessionStorage.removeItem(RANGE_STORAGE_KEY)
+      syncSelectedRangeCookie(null)
+
+      try {
+        await fetch("/api/auth/impersonate", { method: "DELETE" })
+      } catch {
+        /* still navigate home */
+      }
+
+      window.location.assign("/")
+    })()
   }, [])
 
   const impersonationHeaders = useCallback((): Record<string, string> => {
@@ -155,8 +181,8 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
   }, [impersonation])
 
   const value = useMemo(
-    () => ({ impersonation, exitImpersonation, impersonationHeaders }),
-    [impersonation, exitImpersonation, impersonationHeaders],
+    () => ({ impersonation, exitingImpersonation, exitImpersonation, impersonationHeaders }),
+    [impersonation, exitingImpersonation, exitImpersonation, impersonationHeaders],
   )
 
   return (

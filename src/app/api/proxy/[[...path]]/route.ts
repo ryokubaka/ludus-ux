@@ -9,6 +9,12 @@ import {
   ludusProxyEvent,
 } from "@/lib/lux-api-audit"
 import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
+import {
+  ensureAnsibleHomeLayoutAsRoot,
+  resolveSessionLinuxUser,
+} from "@/lib/ansible-home-repair"
+import { formatAnsibleHomeRepairLogLine } from "@/lib/ludus-ansible-preflight"
+import { shouldRepairAnsibleHomeAfterProxyMutation } from "@/lib/ludus-proxy-ansible-repair"
 import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
 import { getSettings } from "@/lib/settings-store"
 
@@ -83,6 +89,28 @@ async function handler(
     const rawBody = await parseRequestBody(request)
     const body = applyLudusDeployVerbose(path, request.method, rawBody)
 
+    const linuxUser = resolveSessionLinuxUser(session, request)
+    const basePath = path.split("?")[0]
+    if (request.method === "POST" && basePath === "/range/deploy" && linuxUser) {
+      const { ensureLudusPlatformAnsibleRequirements } = await import(
+        "@/lib/ludus-platform-ansible-requirements"
+      )
+      const platformResult = await ensureLudusPlatformAnsibleRequirements(
+        effectiveApiKey,
+        undefined,
+        () => {},
+        undefined,
+        linuxUser,
+      )
+      if (!platformResult.ok) {
+        return NextResponse.json(
+          { error: platformResult.error ?? "Ludus platform Ansible dependency install failed" },
+          { status: 500 },
+        )
+      }
+      await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
+    }
+
     const result = await ludusRequest(fullPath, {
       method: request.method,
       body,
@@ -130,6 +158,10 @@ async function handler(
         "success",
       )
       revalidateAfterLudusProxyMutation(request.method, path, session)
+      if (linuxUser && shouldRepairAnsibleHomeAfterProxyMutation(request.method, basePath, body)) {
+        await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
+        console.info(formatAnsibleHomeRepairLogLine(linuxUser))
+      }
     }
 
     return NextResponse.json(result.data, { status: result.status || 200 })

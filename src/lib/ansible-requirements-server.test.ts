@@ -9,8 +9,13 @@ vi.mock("@/lib/ludus-cache-revalidate", () => ({
   revalidateLudusResource: vi.fn(),
 }))
 
+vi.mock("@/lib/ansible-home-repair", () => ({
+  ensureAnsibleHomeLayoutAsRoot: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { ludusGet, ludusPost } from "@/lib/ludus-client"
 import { revalidateLudusResource } from "@/lib/ludus-cache-revalidate"
+import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
 import { installMissingAnsibleRequirementsServer } from "./ansible-requirements-server"
 
 describe("installMissingAnsibleRequirementsServer", () => {
@@ -41,6 +46,18 @@ describe("installMissingAnsibleRequirementsServer", () => {
       expect.anything(),
     )
     expect(revalidateLudusResource).toHaveBeenCalledWith("ansible")
+  })
+
+  it("repairs ansible home layout when linuxUser is set and installs succeeded", async () => {
+    vi.mocked(ludusPost).mockResolvedValue({ status: 201, data: { result: "ok" } })
+
+    await installMissingAnsibleRequirementsServer(
+      "ROOT.key",
+      [{ kind: "role", name: "geerlingguy.mysql" }],
+      { linuxUser: "demouser" },
+    )
+
+    expect(ensureAnsibleHomeLayoutAsRoot).toHaveBeenCalledWith("demouser")
   })
 
   it("returns failed entries when Ludus rejects install", async () => {

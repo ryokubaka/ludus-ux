@@ -5,6 +5,10 @@ vi.mock("@/lib/goad-ssh", () => ({
   sshExec: vi.fn(),
 }))
 
+vi.mock("@/lib/ansible-home-repair", () => ({
+  ensureAnsibleHomeLayoutAsRoot: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock("@/lib/ansible-requirements-server", () => ({
   findMissingAnsibleRequirementsServer: vi.fn(),
   installMissingAnsibleRequirementsServer: vi.fn(),
@@ -91,7 +95,7 @@ describe("ensureGoadAnsibleRequirements", () => {
     )
   })
 
-  it("uses sudo when reading requirements for impersonated user", async () => {
+  it("reads requirements via root SSH and verifies collections as impersonated user", async () => {
     vi.mocked(sshExec)
       .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
@@ -105,6 +109,35 @@ describe("ensureGoadAnsibleRequirements", () => {
       IMPERSONATED_SSH_USER,
     )
 
-    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).toContain(`sudo -H -u '${IMPERSONATED_SSH_USER}'`)
+    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).not.toContain("sudo -H -u")
+    expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toContain(`sudo -H -u '${IMPERSONATED_SSH_USER}'`)
+  })
+
+  it("passes impersonated linuxUser to Ludus API install for ansible home repair", async () => {
+    vi.mocked(sshExec)
+      .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+    vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([
+      { kind: "role", name: "geerlingguy.mysql" },
+    ])
+    vi.mocked(installMissingAnsibleRequirementsServer).mockResolvedValue({
+      ok: true,
+      installed: ["geerlingguy.mysql"],
+      failed: [],
+    })
+
+    await ensureGoadAnsibleRequirements(
+      "ROOT.test-key",
+      undefined,
+      () => {},
+      goadPathFromEnv(),
+      IMPERSONATED_SSH_USER,
+    )
+
+    expect(installMissingAnsibleRequirementsServer).toHaveBeenCalledWith(
+      "ROOT.test-key",
+      expect.any(Array),
+      { force: false, linuxUser: IMPERSONATED_SSH_USER },
+    )
   })
 })

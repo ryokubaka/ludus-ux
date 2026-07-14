@@ -14,6 +14,8 @@ describe("buildLudusAnsibleEnvShell", () => {
     expect(sh).toContain('export ANSIBLE_HOME="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible"')
     expect(sh).toContain('export ANSIBLE_COLLECTIONS_PATH="$_LUX_LUDUS_COLLECTIONS:')
     expect(sh).toContain("/users/$_LUX_ANSIBLE_USER/.ansible/collections")
+    expect(sh).toContain('export ANSIBLE_SSH_CONTROL_PATH_DIR="$HOME/.goad/ansible-cp"')
+    expect(sh).not.toContain(".ansible/cp")
     expect(sh).not.toContain(".goad/ansible_collections")
   })
 

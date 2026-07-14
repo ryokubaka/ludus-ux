@@ -15,6 +15,14 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.1.11] - 2026-07-14
+
+**LUX**
+- [Fix] **GOAD and range deploy** — Fixed deploy failures like “Cannot write to ControlPath …/.ansible/cp”, especially when an admin runs GOAD or deploy as another user. LUX now sets up Ansible folders on the Ludus server the way Ludus expects: the server can write its SSH cache, and you can still edit installed roles and collections. GOAD runs use a separate cache folder so they do not clash with range deploy.
+- [Improve] **Ansible installs** — After you install roles, collections, blueprints, or subscription content from the Ansible page (or when LUX installs dependencies before a deploy), permissions are corrected automatically. Same when an admin rolls a user’s API key. You should not need manual `chown` on the Ludus host for normal use.
+- [Fix] **Templates — Add from Source** — Templates are installed to the correct folder on the Ludus server, registered under your Ludus account (not root), large uploads no longer fail with “Argument list too long”, and if the files are already on the server LUX treats that as success instead of erroring.
+- [Docs] **Templates** — Added troubleshooting for Ansible deploy permission errors and how they differ from Packer cache permission fixes.
+
 ## [1.1.10] - 2026-07-09
 
 **LUX**

@@ -31,7 +31,8 @@ export function buildLudusAnsibleEnvShell(
     `export ANSIBLE_HOME="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible"`,
     `export ANSIBLE_COLLECTIONS_PATH="$_LUX_LUDUS_COLLECTIONS:$HOME/.ansible/collections:/usr/share/ansible/collections"`,
     `export ANSIBLE_ROLES_PATH="${rolesPath}"`,
-    `export ANSIBLE_SSH_CONTROL_PATH_DIR="$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/cp"`,
+    // GOAD user-context ansible — do not mkdir ~/.ansible/cp here (Ludus server owns that path).
+    `export ANSIBLE_SSH_CONTROL_PATH_DIR="$HOME/.goad/ansible-cp"`,
     `mkdir -p "$ANSIBLE_HOME/collections" "$ANSIBLE_HOME/roles" "$ANSIBLE_SSH_CONTROL_PATH_DIR" 2>/dev/null || true`,
   ].join("; ")
 }

@@ -1,0 +1,4 @@
+# Keep shell scripts LF so Linux CI (sh) and containers do not break on CRLF.
+*.sh text eol=lf
+ci/** text eol=lf
+docker/** text eol=lf

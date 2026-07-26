@@ -182,6 +182,66 @@ chown -R ludus:ludus /opt/ludus/users/<username>/packer
 
 If you copied template directories in as root, `chown -R ludus:ludus` the template folder as well.
 
+### GOAD / range deploy fails: `Cannot write to ControlPath …/.ansible/cp`
+
+Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Linux user (`ANSIBLE_HOME` and `ANSIBLE_SSH_CONTROL_PATH_DIR` point at `/opt/ludus/users/<username>/.ansible` — see [Ludus roles docs](https://docs.ludus.cloud/docs/roles) and [GET/POST `/ansible`](https://api-docs.ludus.cloud/retrieve-available-ansible-roles-and-collections-24251967e0)). SSH ControlPath lives at `…/.ansible/cp`, which must be writable by **`ludus`**, not the range owner.
+
+**Right after a Galaxy install via the Ludus API, `ludus:ludus` ownership is normal (transient).** Ludus runs `ansible-galaxy` as the service user, then may attempt a recursive chown to the range owner — that can fail or leave a mixed tree. LUX normalizes to the **split layout** below on every install and before GOAD / range deploy.
+
+| Path | Steady-state owner | Mode |
+|------|-------------------|------|
+| `cp/`, `tmp/` | **`ludus:ludus`** | `700` |
+| `roles/`, `collections/`, `galaxy_cache/` | **`<username>:ludus`** | `770` |
+| `.ansible/` directory | **`<username>:ludus`** | `770` |
+
+GOAD **user-context** ansible uses **`~/.goad/ansible-cp`** instead (not `~/.ansible/cp`).
+
+Adding the range owner to the Linux **`ludus` group does not fix ControlPath** — the server process runs as user **`ludus`**, not as the range owner. Do **not** run `chown -R <username>:<username> .ansible` — that breaks deploy.
+
+**Diagnose** (on the Ludus host):
+
+```bash
+getent passwd <username>
+ls -la /opt/ludus/users/<username>/.ansible/cp
+# Should be: drwx------ ludus ludus
+sudo -u ludus test -w /opt/ludus/users/<username>/.ansible/cp && echo OK || echo FAIL
+```
+
+**Fix manually:**
+
+```bash
+sudo mkdir -p /opt/ludus/users/<username>/.ansible/{cp,tmp}
+sudo chown ludus:ludus /opt/ludus/users/<username>/.ansible/cp /opt/ludus/users/<username>/.ansible/tmp
+sudo chmod 700 /opt/ludus/users/<username>/.ansible/cp /opt/ludus/users/<username>/.ansible/tmp
+sudo chown -R <username>:ludus /opt/ludus/users/<username>/.ansible/{roles,collections,galaxy_cache} 2>/dev/null || true
+```
+
+When LUX has root SSH configured, it runs this repair after Ludus API ansible installs (roles, collections, blueprints, subscription roles), on user provisioning, and before GOAD / range deploy.
+
+### Add from Source succeeds but template missing from the build list
+
+**Symptoms:** Toast says the template was added; **Add from Source** shows it as installed, but the main template table never lists it (and `ludus templates list` on the Ludus host does not either).
+
+**Common causes:**
+
+1. **List filter** — New templates are **Not Built**. Use the **all** or **added** filter on the Templates page (not **built** only).
+2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX installs under `/opt/ludus/packer/<name>/` and registers as the logged-in Ludus user.
+3. **Stale UI** — Click the refresh icon on Templates after add; LUX invalidates cache on success but a long `staleTime` can lag briefly.
+
+**Diagnose on the Ludus host** (as a normal Ludus user, not root):
+
+```bash
+ludus templates list
+ls -la /opt/ludus/packer/ubuntu-24.04-x64-server   # example
+```
+
+If files exist under `packer/` but `ludus templates list` omits the name, re-add from LUX (1.1.11+) or run manually:
+
+```bash
+export LUDUS_API_KEY=<your-user-key>
+ludus templates add -d /opt/ludus/packer/<template-dir-name>
+```
+
 ### Template added but build uses wrong definition
 
 User templates live under `/opt/ludus/users/<username>/packer/`. Built-ins live under `/opt/ludus/packer/`. A name collision or stale copy can cause confusing builds — delete the user copy in LUX or on disk and re-add from source if needed.

@@ -5,6 +5,7 @@ import {
   type BlueprintRequirement,
 } from "@/lib/blueprint-dependencies"
 import { revalidateLudusResource } from "@/lib/ludus-cache-revalidate"
+import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
 import { ludusGet, ludusPost } from "@/lib/ludus-client"
 import type { InstallAnsibleRequirementsResult } from "@/lib/ansible-requirements-service"
 import type { AnsibleItem } from "@/lib/types"
@@ -17,6 +18,8 @@ function isAlreadyInstalledAnsible(error: string, status: number): boolean {
 export interface InstallAnsibleServerOptions {
   /** Ludus API force reinstall (fixes broken/partial collection trees on disk). */
   force?: boolean
+  /** Linux user whose ~/.ansible layout to repair after install (split ownership). */
+  linuxUser?: string
 }
 
 export async function fetchInstalledAnsibleServer(apiKey: string): Promise<AnsibleItem[]> {
@@ -72,6 +75,9 @@ export async function installMissingAnsibleRequirementsServer(
 
   if (installed.length > 0) {
     revalidateLudusResource("ansible")
+    if (options.linuxUser?.trim()) {
+      await ensureAnsibleHomeLayoutAsRoot(options.linuxUser)
+    }
   }
 
   return {

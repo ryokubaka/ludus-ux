@@ -188,6 +188,7 @@ export async function POST(request: NextRequest) {
           },
           creds,
           effectiveImpersonate ?? undefined,
+          taskOwner ?? undefined,
           effectiveRangeId,
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
           typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,

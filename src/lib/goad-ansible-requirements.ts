@@ -25,7 +25,6 @@ function wrapShellForUser(inner: string, runAsUser?: string): string {
 export async function readGoadAnsibleRequirementsYaml(
   goadPath: string,
   creds?: SSHCreds,
-  runAsUser?: string,
 ): Promise<string | null> {
   const safeRoot = goadPath.replace(/'/g, "")
   const inner = [
@@ -36,7 +35,8 @@ export async function readGoadAnsibleRequirementsYaml(
     `cat "$G/$F" 2>/dev/null || true`,
   ].join("; ")
 
-  const { stdout } = await sshExec(wrapShellForUser(inner, runAsUser), creds)
+  // GOAD install tree is often root-only (/opt/GOAD*); always read via root SSH.
+  const { stdout } = await sshExec(inner, creds)
   const text = stdout.trim()
   return text || null
 }
@@ -78,6 +78,7 @@ async function installAndLog(
   items: BlueprintRequirement[],
   onLog: (line: string) => void,
   force: boolean,
+  runAsUser?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   if (items.length === 0) return { ok: true }
 
@@ -88,7 +89,10 @@ async function installAndLog(
     onLog(`[+] Ludus: ${label} ${name}`)
   }
 
-  const result = await installMissingAnsibleRequirementsServer(apiKey, items, { force })
+  const result = await installMissingAnsibleRequirementsServer(apiKey, items, {
+    force,
+    linuxUser: runAsUser,
+  })
   for (const name of result.installed) {
     onLog(`[+] Installed (or already present): ${name}`)
   }
@@ -125,7 +129,7 @@ export async function ensureGoadAnsibleRequirements(
 
   let requirementsYaml: string | null
   try {
-    requirementsYaml = await readGoadAnsibleRequirementsYaml(goadPath, creds, runAsUser)
+    requirementsYaml = await readGoadAnsibleRequirementsYaml(goadPath, creds)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     onLog(`[!] Could not read GOAD ansible requirements over SSH: ${msg}`)
@@ -154,7 +158,7 @@ export async function ensureGoadAnsibleRequirements(
 
   if (missing.length > 0) {
     onLog(`[+] Installing ${missing.length} missing Ansible item(s) via Ludus API…`)
-    const installResult = await installAndLog(key, missing, onLog, false)
+    const installResult = await installAndLog(key, missing, onLog, false, runAsUser)
     if (!installResult.ok) return installResult
   } else {
     onLog("[+] GOAD Ansible dependencies listed in Ludus")
@@ -172,7 +176,7 @@ export async function ensureGoadAnsibleRequirements(
     onLog(
       `[!] Incomplete collection(s) on disk (Ludus inventory can lie after a failed install): ${broken.map((b) => b.name).join(", ")}`,
     )
-    const repairResult = await installAndLog(key, broken, onLog, true)
+    const repairResult = await installAndLog(key, broken, onLog, true, runAsUser)
     if (!repairResult.ok) return repairResult
 
     try {

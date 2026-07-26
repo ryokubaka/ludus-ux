@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.1.10",
+  "version": "1.1.11",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -38,10 +38,10 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.0",
     "lucide-react": "^0.400.0",
     "monaco-editor": "^0.46.0",
-    "next": "^16.2.7",
+    "next": "^16.2.11",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-resizable-panels": "^2.1.7",
@@ -49,7 +49,7 @@
     "ssh2": "^1.15.0",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
-    "tar": "^7.5.11",
+    "tar": "^7.5.22",
     "ws": "^8.21.0"
   },
   "overrides": {
@@ -57,13 +57,34 @@
     "dompurify": ">=3.3.2",
     "cross-spawn": ">=7.0.5",
     "glob": ">=10.5.0",
+    "postcss": "^8.5.18",
+    "js-yaml": "^4.3.0",
+    "sharp": "^0.35.0",
+    "brace-expansion": "5.0.8",
     "@eslint/config-array": {
-      "minimatch": {
-        "brace-expansion": "1.1.13"
-      }
+      "minimatch": "10.2.5"
+    },
+    "@eslint/eslintrc": {
+      "minimatch": "10.2.5"
+    },
+    "eslint": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-import": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-jsx-a11y": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-react": {
+      "minimatch": "10.2.5"
+    },
+    "minimatch@10": {
+      "brace-expansion": "5.0.8"
     },
     "next": {
-      "postcss": "8.5.10"
+      "postcss": "8.5.18",
+      "sharp": "^0.35.0"
     }
   },
   "devDependencies": {
@@ -79,8 +100,8 @@
     "@types/ws": "^8.5.13",
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",
-    "eslint-config-next": "^16.2.7",
-    "postcss": "^8.5.10",
+    "eslint-config-next": "^16.2.11",
+    "postcss": "^8.5.18",
     "tailwindcss": "^3.3.0",
     "typescript": "^5",
     "vitest": "^4.1.8"

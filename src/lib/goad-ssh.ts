@@ -21,6 +21,11 @@ import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
 import { buildEnsureGoadVenvShell } from "./goad-ansible-env"
+import {
+  buildAnsibleCpPreamble,
+  resolveGoadLinuxUser,
+} from "./ludus-ansible-preflight"
+import { ensureAnsibleHomeLayoutAsRoot } from "./ansible-home-repair"
 import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
@@ -466,6 +471,8 @@ export async function streamGoadCommand(
    *  impersonated user's API key replaces the caller's key.  The SSH connection
    *  itself uses root credentials (creds is ignored and falls back to root/key). */
   impersonateAs?: { username: string; apiKey: string },
+  /** Ludus session username for ~/.ansible ownership repair when SSH is root-only. */
+  ludusLinuxUser?: string,
   /** Dedicated Ludus rangeID for this GOAD instance. When set, LUDUS_RANGE_ID
    *  is injected into the GOAD environment so Ludus operations target only
    *  this range — leaving other ranges completely untouched. */
@@ -484,16 +491,36 @@ export async function streamGoadCommand(
   const effectiveCreds = impersonateAs ? undefined : creds;
   const ludusApiKey = impersonateAs?.apiKey || apiKey || process.env.LUDUS_API_KEY || "";
   const goadPath = resolveGoadPath();
+  const ansibleLinuxUser = resolveGoadLinuxUser({
+    impersonateAs,
+    creds: effectiveCreds,
+    sessionUsername: ludusLinuxUser,
+  })
 
   if (ludusApiKey.trim()) {
     try {
+      const { ensureLudusPlatformAnsibleRequirements } = await import(
+        "./ludus-platform-ansible-requirements"
+      )
+      const platformResult = await ensureLudusPlatformAnsibleRequirements(
+        ludusApiKey,
+        effectiveCreds,
+        onData,
+        undefined,
+        ansibleLinuxUser ?? undefined,
+      )
+      if (!platformResult.ok) {
+        onError(new Error(platformResult.error ?? "Ludus platform Ansible dependency install failed"))
+        return () => {}
+      }
+
       const { ensureGoadAnsibleRequirements } = await import("./goad-ansible-requirements")
       const depResult = await ensureGoadAnsibleRequirements(
         ludusApiKey,
         effectiveCreds,
         onData,
         goadPath,
-        impersonateAs?.username,
+        ansibleLinuxUser ?? undefined,
       )
       if (!depResult.ok) {
         onError(new Error(depResult.error ?? "GOAD Ansible dependency install failed"))
@@ -503,6 +530,11 @@ export async function streamGoadCommand(
       onError(err instanceof Error ? err : new Error(String(err)))
       return () => {}
     }
+  }
+
+  const linuxUser = ansibleLinuxUser
+  if (linuxUser) {
+    await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
   }
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
@@ -657,6 +689,7 @@ export async function streamGoadCommand(
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
     `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
     ensureGoadVenv,
+    buildAnsibleCpPreamble(),
     pythonEnvSetup,
     goadIniSeedCmd,
     ...(goadIniPatchCmd ? [goadIniPatchCmd] : []),

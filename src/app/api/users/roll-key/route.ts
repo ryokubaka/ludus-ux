@@ -20,6 +20,7 @@ import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
 
 export const maxDuration = 600
 
@@ -141,6 +142,11 @@ export async function POST(request: NextRequest) {
         const n = parseInt(String(verify).trim(), 10)
         if (Number.isFinite(n) && n > 0) {
           bashrcUpdated = true
+          try {
+            await ensureAnsibleHomeLayoutAsRoot(linuxUser)
+          } catch {
+            // Non-fatal — GOAD pre-flight repairs ~/.ansible on first deploy
+          }
         } else {
           bashrcError =
             ".bashrc did not contain LUDUS_API_KEY after write (slow disk or permissions — use Roll API key once the account exists)"

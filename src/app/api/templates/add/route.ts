@@ -11,7 +11,8 @@
  *  4. Create the full directory tree on the server (iso/, ansible/, etc.).
  *  5. Write each file preserving its relative path within the template.
  *  6. Fix ownership/permissions to ludus:ludus 755.
- *  7. Register the template with `ludus templates add -d <destDir>`.
+ *  7. Register the template with `ludus templates add -d <destDir>` as the
+ *     logged-in Ludus user (ROOT key / root SSH alone is not sufficient).
  *
  * Request body:
  *   {
@@ -44,6 +45,15 @@ import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 import { combineTemplateFailure } from "@/lib/template-add-errors"
 import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import {
+  buildLudusTemplateAddCmd,
+  derivePackerRootFromPkrPath,
+  isLudusCliTemplateAddFailure,
+  isLudusTemplateAlreadyRegistered,
+  packerRootCandidates,
+  shellSingleQuote,
+} from "@/lib/template-packer-paths"
+import { writeRemoteFileViaSsh } from "@/lib/template-remote-write"
 
 
 interface TemplateSpec {
@@ -53,48 +63,31 @@ interface TemplateSpec {
   ref:     string
 }
 
-/** ──────────────────────────────────────────────────────────────────────────
- *  Discover the Ludus packer templates directory on the server.
- *
- *  Strategy (in order):
- *    1. Find where an existing *.pkr.hcl template file lives and derive the
- *       parent-of-parent dir (i.e. the top-level templates folder).
- *    2. Fall back to the standard Ludus installation paths.
- * ──────────────────────────────────────────────────────────────────────────*/
-let cachedTemplatesDir: { root: string; dir: string } | null = null
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
+interface TemplateAddContext {
+  ludusApiKey: string
+  linuxUser: string
 }
+
+let cachedTemplatesDir: { root: string; dir: string } | null = null
 
 async function findTemplatesDir(): Promise<string> {
   const ludusRoot = resolveLudusInstallPath()
   if (cachedTemplatesDir?.root === ludusRoot) return cachedTemplatesDir.dir
 
-  // Try to locate an existing .pkr.hcl file and derive the templates root
+  // Prefer built-in packer tree; never treat Ludus Sources mirrors as install targets.
   const findResult = await sshExec(
-    `find ${shellSingleQuote(ludusRoot)} /root/.config/ludus /home -maxdepth 10 -name '*.pkr.hcl' 2>/dev/null | head -3`
+    `find ${shellSingleQuote(`${ludusRoot}/packer`)} -maxdepth 3 -name '*.pkr.hcl' ! -path '*/sources/*' 2>/dev/null | head -1`,
   )
-  const found = (findResult.stdout || "").trim()
-  if (found) {
-    // Each line is a path like <ludusRoot>/packer/templates/debian12/debian12.pkr.hcl
-    // Walk up two levels to get the templates root (<ludusRoot>/packer/templates)
-    const firstPath = found.split("\n")[0].trim()
-    const dir = firstPath.split("/").slice(0, -2).join("/")
+  const firstPath = (findResult.stdout || "").trim().split("\n")[0]?.trim()
+  if (firstPath) {
+    const dir = derivePackerRootFromPkrPath(firstPath)
     if (dir) {
       cachedTemplatesDir = { root: ludusRoot, dir }
       return dir
     }
   }
 
-  // Standard Ludus v2 installation paths to try in order
-  const candidates = [
-    `${ludusRoot}/packer/templates`,
-    `${ludusRoot}/templates`,
-    `${ludusRoot}/packer-templates`,
-    "/root/.config/ludus/packer/templates",
-  ]
-  for (const candidate of candidates) {
+  for (const candidate of packerRootCandidates(ludusRoot)) {
     const check = await sshExec(`test -d ${shellSingleQuote(candidate)} && echo ok`)
     if ((check.stdout || "").trim() === "ok") {
       cachedTemplatesDir = { root: ludusRoot, dir: candidate }
@@ -102,14 +95,16 @@ async function findTemplatesDir(): Promise<string> {
     }
   }
 
-  // Last resort: default under configured Ludus install root
-  const fallback = `${ludusRoot}/packer/templates`
+  const fallback = `${ludusRoot}/packer`
   cachedTemplatesDir = { root: ludusRoot, dir: fallback }
   return fallback
 }
 
 
-async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; message: string }> {
+async function addTemplate(
+  spec: TemplateSpec,
+  ctx: TemplateAddContext,
+): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
 
   const safe = assertSafeTemplateRepoUrl(apiBase)
@@ -118,28 +113,22 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
   }
   const safeApiBase = safe.apiBase
 
-  // ── Step 1: Recursively list ALL files in the template directory ──────────
-  // Using recursive listing ensures subdirs like iso/, ansible/, scripts/ are included.
   const blobs = await fetchAllRepoBlobs(safeApiBase, templatePath, ref)
 
   if (blobs.length === 0) {
     throw new Error(`No files found in ${templatePath}`)
   }
 
-  // ── Step 2: Fetch every file's content, preserving relative paths ─────────
-  // blob.path = "templates/win2019-server-x64/ansible/tasks/main.yml"
-  // relativePath = "ansible/tasks/main.yml"  (strip the templatePath prefix)
   const prefix = templatePath.endsWith("/") ? templatePath : templatePath + "/"
-  const files: { relativePath: string; b64: string }[] = []
+  const files: { relativePath: string; content: Buffer }[] = []
   for (const blob of blobs) {
     const relativePath = blob.path.startsWith(prefix)
       ? blob.path.slice(prefix.length)
       : blob.name
     const content = await fetchRepoRawFile(safeApiBase, blob.path, ref)
-    files.push({ relativePath, b64: Buffer.from(content).toString("base64") })
+    files.push({ relativePath, content: Buffer.from(content) })
   }
 
-  // ── Step 3: Discover the server's templates directory ────────────────────
   let templatesDir: string
   try {
     templatesDir = await findTemplatesDir()
@@ -155,16 +144,13 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     throw err
   }
 
-  // ── Step 4: Create the destination directory tree on the server ───────────
   const destDir = `${templatesDir}/${name}`
 
-  // Collect all unique sub-directories needed and create them in a single call
   const subdirs = new Set<string>()
   subdirs.add(destDir)
   for (const file of files) {
     const parts = file.relativePath.split("/").slice(0, -1)
     if (parts.length > 0) {
-      // Add every ancestor dir (mkdir -p handles this, but we still need the leaf)
       subdirs.add(`${destDir}/${parts.join("/")}`)
     }
   }
@@ -174,38 +160,34 @@ async function addTemplate(spec: TemplateSpec): Promise<{ success: boolean; mess
     throw new Error(`Failed to create template dirs under ${destDir}: ${mkdirResult.stderr}`)
   }
 
-  // ── Step 5: Write each file to its correct relative path ─────────────────
   for (const file of files) {
     const destPath = `${destDir}/${file.relativePath}`
-    const cmd = `printf '%s' '${file.b64.replace(/'/g, "'\\''")}' | base64 -d > '${destPath}'`
-    const writeResult = await sshExec(cmd)
-    if (writeResult.code !== 0) {
+    try {
+      await writeRemoteFileViaSsh(destPath, file.content)
+    } catch (err) {
       await sshExec(`rm -rf '${destDir}'`).catch(() => {})
-      throw new Error(`Failed to write ${file.relativePath}: ${writeResult.stderr}`)
+      throw new Error(`Failed to write ${file.relativePath}: ${(err as Error).message}`)
     }
   }
 
-  // ── Step 6: Fix ownership + permissions ──────────────────────────────────
-  // Files are written as root; the ludus service user needs read access.
-  // Existing templates are ludus:ludus 755 — match that.
   await sshExec(`chown -R ludus:ludus '${destDir}' && chmod -R 755 '${destDir}'`).catch(() => {
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
-  // ── Step 7: Register the template with the Ludus CLI ─────────────────────
-  // `ludus templates add -d <dir>` registers the template in PocketBase.
-  // The command prints [ERROR] lines when it tries to LIST templates afterwards
-  // (root's Ludus CLI lacks list permissions), but the registration itself
-  // succeeds — exit code 0 is the reliable success indicator.
-  const addResult = await sshExec(`ludus templates add -d '${destDir}' 2>&1`)
+  const addCmd = buildLudusTemplateAddCmd(destDir, ctx.linuxUser, ctx.ludusApiKey)
+  const addResult = await sshExec(`${addCmd} 2>&1`)
+  const rawMsg = (addResult.stdout + addResult.stderr).trim()
 
-  if (addResult.code !== 0) {
-    const rawMsg = (addResult.stdout + addResult.stderr).trim()
+  if (isLudusCliTemplateAddFailure(rawMsg, addResult.code)) {
     throw new Error(
       `ludus templates add failed (exit ${addResult.code}).\n` +
       `Output: ${rawMsg || "(none)"}\n` +
       `Template files are on disk at: ${destDir}`
     )
+  }
+
+  if (isLudusTemplateAlreadyRegistered(rawMsg)) {
+    return { success: true, message: `Template "${name}" is already registered` }
   }
 
   return { success: true, message: `Template "${name}" added successfully` }
@@ -226,10 +208,14 @@ async function tryInstallTemplatesViaSources(
     const names = specs.map((s) => s.name)
     const { warnings, data } = await installSourceTemplates(apiKey, sourceID, names)
 
-    const failed = new Set<string>()
     for (const t of data?.templateResults ?? []) {
-      if (t.ok === false && t.name) {
-        failed.add(t.name)
+      if (!t.name) continue
+      if (t.ok === true) {
+        out.set(t.name, {
+          success: true,
+          message: t.message || `Template "${t.name}" installed from Ludus source`,
+        })
+      } else if (t.ok === false) {
         out.set(t.name, {
           success: false,
           message: t.message || `Template "${t.name}" failed via Ludus Sources`,
@@ -238,21 +224,15 @@ async function tryInstallTemplatesViaSources(
     }
     for (const w of warnings) {
       const m = /Template ([^:]+):/.exec(w)
-      if (m) failed.add(m[1])
-    }
-
-    for (const name of names) {
-      if (out.has(name)) continue
-      if (failed.has(name)) continue
-      out.set(name, {
-        success: true,
-        message: `Template "${name}" installed from Ludus source`,
-      })
+      if (m?.[1] && !out.has(m[1])) {
+        out.set(m[1], {
+          success: false,
+          message: w,
+        })
+      }
     }
   } catch (err) {
     if (!isHttp404Error(err)) {
-      // Sources available but failed with a real error — record it per template so
-      // the reason survives into the SSH fallback result instead of being swallowed.
       const msg = err instanceof Error ? err.message : String(err)
       for (const spec of specs) {
         if (!out.has(spec.name)) {
@@ -265,6 +245,22 @@ async function tryInstallTemplatesViaSources(
   return out
 }
 
+function resolveTemplateAddContext(
+  session: NonNullable<Awaited<ReturnType<typeof resolveSession>>>,
+  request: NextRequest,
+): TemplateAddContext {
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const ludusApiKey = (imp.apiKey || session.apiKey || "").trim()
+  const linuxUser = (imp.sshLogin || imp.ludusPrincipal || session.username || "").trim().toLowerCase()
+  if (!ludusApiKey) {
+    throw new Error("No Ludus API key in session — sign in again.")
+  }
+  if (!linuxUser) {
+    throw new Error("Could not resolve Linux username for template registration.")
+  }
+  return { ludusApiKey, linuxUser }
+}
+
 export async function POST(request: NextRequest) {
   const session = await resolveSession(request)
   if (!session) {
@@ -274,8 +270,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 })
   }
 
-  const effectiveApiKey =
-    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+  let addCtx: TemplateAddContext
+  try {
+    addCtx = resolveTemplateAddContext(session, request)
+  } catch (err) {
+    return NextResponse.json(
+      { error: (err as Error).message },
+      { status: 400 },
+    )
+  }
 
   let body: { templates: TemplateSpec[] }
   try {
@@ -289,8 +292,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No templates specified" }, { status: 400 })
   }
 
-  // Sanitize template names to prevent path traversal / shell injection via destDir.
-  // Names must be alphanumeric with dashes, underscores, or dots only.
   const NAME_RE = /^[a-zA-Z0-9._-]{1,120}$/
   for (const spec of templates) {
     if (!NAME_RE.test(spec.name ?? "")) {
@@ -311,7 +312,7 @@ export async function POST(request: NextRequest) {
 
   const sourceResults = new Map<string, { success: boolean; message: string }>()
   for (const group of byRepo.values()) {
-    const batch = await tryInstallTemplatesViaSources(effectiveApiKey, group)
+    const batch = await tryInstallTemplatesViaSources(addCtx.ludusApiKey, group)
     for (const [name, result] of batch) sourceResults.set(name, result)
   }
 
@@ -322,7 +323,7 @@ export async function POST(request: NextRequest) {
         return { name: spec.name, ...fromSource }
       }
       const sourcesFailure = fromSource && !fromSource.success ? fromSource.message : undefined
-      return addTemplate(spec)
+      return addTemplate(spec, addCtx)
         .then((r) => ({ name: spec.name, ...r }))
         .catch((e) => ({
           name: spec.name,

@@ -22,6 +22,9 @@ Each bullet uses a single tag:
 - [Improve] **Ansible installs** — After you install roles, collections, blueprints, or subscription content from the Ansible page (or when LUX installs dependencies before a deploy), permissions are corrected automatically. Same when an admin rolls a user’s API key. You should not need manual `chown` on the Ludus host for normal use.
 - [Fix] **Templates — Add from Source** — Templates are installed to the correct folder on the Ludus server, registered under your Ludus account (not root), large uploads no longer fail with “Argument list too long”, and if the files are already on the server LUX treats that as success instead of erroring.
 - [Docs] **Templates** — Added troubleshooting for Ansible deploy permission errors and how they differ from Packer cache permission fixes.
+- [Security] **tar** 7.5.22 — patches GHSA-8x88-c5mf-7j5w (negative entry size infinite loop in archive replace).
+- [Security] **sharp** 0.35.0+ (override on Next optional dep) — patches GHSA-f88m-g3jw-g9cj (libvips CVEs inherited by image optimization).
+- [Security] **brace-expansion** 5.0.8 / 1.1.16 overrides — patches GHSA-3jxr-9vmj-r5cp (and GHSA-mh99-v99m-4gvg on the 5.x line).
 
 ## [1.1.10] - 2026-07-09
 

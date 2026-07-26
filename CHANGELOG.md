@@ -24,7 +24,10 @@ Each bullet uses a single tag:
 - [Docs] **Templates** — Added troubleshooting for Ansible deploy permission errors and how they differ from Packer cache permission fixes.
 - [Security] **tar** 7.5.22 — patches GHSA-8x88-c5mf-7j5w (negative entry size infinite loop in archive replace).
 - [Security] **sharp** 0.35.0+ (override on Next optional dep) — patches GHSA-f88m-g3jw-g9cj (libvips CVEs inherited by image optimization).
-- [Security] **brace-expansion** 5.0.8 / 1.1.16 overrides — patches GHSA-3jxr-9vmj-r5cp (and GHSA-mh99-v99m-4gvg on the 5.x line).
+- [Security] **brace-expansion** 5.0.8 — npm overrides (including ESLint plugin `minimatch` 10.2.5); patches GHSA-3jxr-9vmj-r5cp and GHSA-mh99-v99m-4gvg.
+- [Security] **Next.js** 16.2.11 — patches July 2026 release (CVE-2026-64641 Server Actions DoS, CVE-2026-64642 middleware/proxy bypass, CVE-2026-64645 rewrite SSRF, CVE-2026-64649 Server Actions SSRF on custom servers).
+- [Security] **postcss** 8.5.18+ — direct devDependency, global override, and `overrides.next.postcss`; patches CVE-2026-45623 and GHSA-r28c-9q8g-f849 (source map disclosure).
+- [Security] **js-yaml** 4.3.0+ — direct dependency and override (including ESLint); patches CVE-2026-59869 (crafted YAML DoS).
 
 ## [1.1.10] - 2026-07-09
 

@@ -76,8 +76,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/better-sqlite3 ./nod
 # Release notes API (`GET /api/changelog`) reads `CHANGELOG.md` from cwd — not part of Next standalone trace.
 COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
-# Assistant skill + LUX OpenAPI (tool index); Compose may also bind-mount ./skills
-COPY --from=builder --chown=nextjs:nodejs /app/skills ./skills
 COPY --from=builder --chown=nextjs:nodejs /app/docs ./docs
 
 # Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS

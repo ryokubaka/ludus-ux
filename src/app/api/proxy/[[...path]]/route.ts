@@ -17,6 +17,12 @@ import { formatAnsibleHomeRepairLogLine } from "@/lib/ludus-ansible-preflight"
 import { shouldRepairAnsibleHomeAfterProxyMutation } from "@/lib/ludus-proxy-ansible-repair"
 import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
 import { getSettings } from "@/lib/settings-store"
+import {
+  assertRouterTemplateReady,
+} from "@/lib/ludus-router-template-assert"
+import {
+  routerTemplateBlockMessage,
+} from "@/lib/ludus-router-template"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -91,6 +97,22 @@ async function handler(
 
     const linuxUser = resolveSessionLinuxUser(session, request)
     const basePath = path.split("?")[0]
+    if (request.method === "POST" && basePath === "/range/deploy") {
+      const router = await assertRouterTemplateReady(effectiveApiKey, {
+        userOverride,
+      })
+      if (!router.ok) {
+        return NextResponse.json(
+          {
+            error: routerTemplateBlockMessage(router),
+            code: "router_template_required",
+            template: router.template,
+            reason: router.reason,
+          },
+          { status: 409 },
+        )
+      }
+    }
     if (request.method === "POST" && basePath === "/range/deploy" && linuxUser) {
       const { ensureLudusPlatformAnsibleRequirements } = await import(
         "@/lib/ludus-platform-ansible-requirements"

@@ -51,6 +51,8 @@ tags:
     description: SPICE/VNC console access for Proxmox VMs
   - name: GOAD
     description: GOAD (Game of Active Directory) lab orchestration
+  - name: Assistant
+    description: In-app AI assistant (OpenAI-compatible LLM, admin model APIs)
 
 # ---------------------------------------------------------------------------
 # Reusable components
@@ -1481,11 +1483,14 @@ paths:
   /api/templates/sources:
     get:
       tags: [Templates]
-      summary: List available VM templates
+      summary: List template catalog (register only — does NOT Packer-build)
       description: |
         Lists available VM templates from a remote GitLab repository
         (default: `badsectorlabs/ludus`). Results are cached in-process for
         5 minutes. No authentication required.
+
+        This is **registration catalog only**. Running Packer to make a template
+        usable is Ludus `POST /templates` (`buildTemplates`), not this endpoint.
       operationId: listTemplateSources
       parameters:
         - name: source
@@ -1531,11 +1536,15 @@ paths:
   /api/templates/add:
     post:
       tags: [Templates]
-      summary: Install templates on the Ludus server
+      summary: Register/install Packer files on Ludus (does NOT run Packer)
       description: |
         Fetches template files from GitLab, copies them to the Ludus server via
         root SSH, and registers them with `ludus templates add`. Uses root SSH
         credentials from the application settings.
+
+        After success (or "already registered"), the template is **Not Built**.
+        Operators must Packer-build via Ludus `POST /templates` (`buildTemplates`)
+        before the template is usable in range configs.
       operationId: addTemplates
       security:
         - sessionCookie: []
@@ -1680,11 +1689,15 @@ paths:
   /api/goad/catalog:
     get:
       tags: [GOAD]
-      summary: Get GOAD lab catalog
+      summary: Get GOAD lab catalog (GOAD / GOAD-Mini / … — do not invent lab YAML)
       description: |
         Discovers the GOAD lab catalog on the Ludus server via SSH. Reads
         `<goadPath>/ad/*/data/config.json` and
         `<goadPath>/extensions/*/config.json`. Results are cached server-side.
+
+        Use this before answering GOAD / GOAD-Mini questions. Prefer the LUX
+        GOAD wizard (`/goad`) over inventing range-config YAML. Alternate path:
+        install Ludus blueprint `goad` from Sources — ask the user which path.
       operationId: getGoadCatalog
       security:
         - sessionCookie: []
@@ -2062,7 +2075,10 @@ paths:
               properties:
                 args:
                   type: string
-                  description: GOAD command arguments (e.g. `install -p GOAD -l ludus`).
+                  description: |
+                    Required. GOAD CLI arguments (not a labName field).
+                    Fresh lab, no extensions: `-l GOAD-Mini -p ludus -m local -t install`.
+                    Prefer the LUX /goad Deploy New Instance wizard when unsure.
                 instanceId:
                   type: string
                   description: GOAD instance ID for range scoping.
@@ -2224,3 +2240,136 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/assistant/chat:
+    post:
+      tags: [Assistant]
+      summary: Chat with the in-app AI assistant (SSE)
+      operationId: assistantChat
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    required: [role, content]
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant]
+                      content:
+                        type: string
+                confirmToken:
+                  type: string
+                  description: HMAC token after confirming a destructive tool call
+                selectedRangeId:
+                  type: string
+                  nullable: true
+      responses:
+        '200':
+          description: Server-Sent Events stream of agent events.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: Invalid body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Assistant disabled or LLM not configured.
+
+  /api/assistant/models:
+    get:
+      tags: [Assistant]
+      summary: List models from the configured LLM endpoint
+      operationId: listAssistantModels
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Model list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider:
+                    type: string
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Admin only.
+
+  /api/assistant/models/pull:
+    post:
+      tags: [Assistant]
+      summary: Pull an Ollama model (SSE progress)
+      operationId: pullAssistantModel
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: SSE pull progress.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Admin only.
+
+  /api/assistant/test:
+    post:
+      tags: [Assistant]
+      summary: Test LLM connectivity
+      operationId: testAssistantLlm
+      security:
+        - sessionCookie: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                llmBaseUrl:
+                  type: string
+                llmApiKey:
+                  type: string
+                llmModel:
+                  type: string
+      responses:
+        '200':
+          description: Connectivity result.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Admin only.

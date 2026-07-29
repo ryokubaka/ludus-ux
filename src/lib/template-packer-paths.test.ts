@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
   buildLudusTemplateAddCmd,
+  buildLudusTemplateDeleteCmd,
   derivePackerRootFromPkrPath,
   isLudusCliTemplateAddFailure,
+  isLudusTemplateDeleteRefused,
   packerRootCandidates,
+  templateDirNameAliases,
 } from "./template-packer-paths"
 import { ludusInstallPathFromEnv } from "./install-path-env"
 
@@ -52,15 +55,60 @@ describe("isLudusCliTemplateAddFailure", () => {
 })
 
 describe("buildLudusTemplateAddCmd", () => {
-  it("runs ludus templates add as the target user with API key", () => {
+  it("runs ludus templates add as root with the API key (no sudo -u)", () => {
     const cmd = buildLudusTemplateAddCmd(
       "/opt/ludus/packer/ubuntu-24.04-x64-server",
-      "admin",
       "USER.testkey123",
     )
-    expect(cmd).toContain("sudo -H -u")
-    expect(cmd).toContain("_LU='admin'")
-    expect(cmd).toContain('LUDUS_API_KEY="$_KEY"')
-    expect(cmd).toContain("ludus templates add -d '/opt/ludus/packer/ubuntu-24.04-x64-server'")
+    expect(cmd).toBe(
+      "env LUDUS_VERSION=2 LUDUS_API_KEY='USER.testkey123' ludus templates add -d '/opt/ludus/packer/ubuntu-24.04-x64-server'",
+    )
+    expect(cmd).not.toContain("sudo")
+    expect(cmd).not.toContain("runuser")
+  })
+
+  it("escapes single quotes in api key", () => {
+    const cmd = buildLudusTemplateAddCmd("/opt/ludus/packer/t", "KEY'part")
+    expect(cmd).toContain("LUDUS_API_KEY='KEY'\\''part'")
+  })
+})
+
+describe("isLudusTemplateDeleteRefused", () => {
+  it("detects packer included-template soft refuse", () => {
+    expect(
+      isLudusTemplateDeleteRefused(
+        "Built template removed but template 'debian10' is a ludus server included template and cannot be deleted",
+      ),
+    ).toBe(true)
+    expect(isLudusTemplateDeleteRefused("Template 'x' removed")).toBe(false)
+  })
+})
+
+describe("templateDirNameAliases", () => {
+  it("pairs list name with catalog dir without -template", () => {
+    expect(templateDirNameAliases("ubuntu-24.04-x64-desktop-template")).toEqual([
+      "ubuntu-24.04-x64-desktop-template",
+      "ubuntu-24.04-x64-desktop",
+    ])
+  })
+
+  it("adds -template when given catalog dir", () => {
+    expect(templateDirNameAliases("ubuntu-24.04-x64-desktop")).toEqual([
+      "ubuntu-24.04-x64-desktop",
+      "ubuntu-24.04-x64-desktop-template",
+    ])
+  })
+})
+
+describe("buildLudusTemplateDeleteCmd", () => {
+  it("removes both list-name and catalog-dir aliases under packer", () => {
+    const cmd = buildLudusTemplateDeleteCmd("/opt/ludus", "ubuntu-24.04-x64-desktop-template")
+    expect(cmd).toContain("rm -rf")
+    expect(cmd).toContain("/packer/")
+    expect(cmd).toContain('"$ROOT/users"')
+    expect(cmd).toContain("ubuntu-24.04-x64-desktop-template")
+    expect(cmd).toContain("ubuntu-24.04-x64-desktop")
+    expect(cmd).toContain("vm_name")
+    expect(cmd.startsWith("bash -lc ")).toBe(true)
   })
 })

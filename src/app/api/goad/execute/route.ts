@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { streamGoadCommand, isGoadConfigured, readGoadRangeId } from "@/lib/goad-ssh"
+import { streamGoadCommand, isGoadConfigured, readGoadRangeId, listGoadInstances } from "@/lib/goad-ssh"
 import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
 import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
@@ -10,6 +10,13 @@ import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
+import {
+  assertRouterTemplateReady,
+} from "@/lib/ludus-router-template-assert"
+import {
+  routerTemplateBlockMessage,
+} from "@/lib/ludus-router-template"
+import { scheduleGoadDeployLinkage } from "@/lib/goad-deploy-link"
 
 
 export async function POST(request: NextRequest) {
@@ -130,6 +137,21 @@ export async function POST(request: NextRequest) {
   // so GOAD's `ludus` calls are authenticated as the correct user.
   const apiKey = (effectiveImpersonate?.apiKey || session?.apiKey) ?? null
 
+  if (apiKey) {
+    const router = await assertRouterTemplateReady(apiKey)
+    if (!router.ok) {
+      const msg = routerTemplateBlockMessage(router)
+      return new Response(`data: [ERROR] ${msg}\n\n`, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      })
+    }
+  }
+
   // Use the session's own credentials so GOAD runs as the logged-in user,
   // using their personal LUDUS_API_KEY and their own GOAD workspace.
   // When impersonating, creds are ignored — root SSH + sudo handles auth.
@@ -145,6 +167,29 @@ export async function POST(request: NextRequest) {
     ip: clientIpFromRequest(request),
     outcome: "success",
   })
+
+  // Server-side range↔instance linkage (UI did this client-side; assistant skipped it).
+  // Creates deploy handoff, polls for new workspace, set-range + chown + ownership.
+  if (effectiveRangeId && taskOwner) {
+    let beforeInstanceIds: string[] = []
+    try {
+      const settings = getSettings()
+      const rootCreds = rootPasswordCredsIfSet(settings)
+      const listed = await listGoadInstances(rootCreds)
+      beforeInstanceIds = listed.map((i) => i.instanceId)
+    } catch {
+      /* best-effort snapshot */
+    }
+    scheduleGoadDeployLinkage({
+      taskId,
+      rangeId: effectiveRangeId,
+      username: taskOwner,
+      apiKey,
+      instanceId: typeof instanceId === "string" ? instanceId : undefined,
+      beforeInstanceIds,
+    })
+  }
+
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({

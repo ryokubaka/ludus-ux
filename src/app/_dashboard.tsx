@@ -56,6 +56,7 @@ import {
   ShieldAlert,
 } from "lucide-react"
 import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
+import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
@@ -567,6 +568,32 @@ export function DashboardPageClient() {
 
   // ── Deploy actions ──────────────────────────────────────────────────────────
   const doDeploy = async () => {
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = Array.isArray(tplRes.data)
+        ? tplRes.data
+        : tplRes.data &&
+            typeof tplRes.data === "object" &&
+            Array.isArray((tplRes.data as { templates?: unknown }).templates)
+          ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
+          : []
+      const routerBuilt = rows.some(
+        (t) =>
+          t &&
+          typeof t === "object" &&
+          t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE &&
+          t.built === true,
+      )
+      if (!routerBuilt) {
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any Ludus range deploy. Open Templates to add/build it.`,
+        })
+        return
+      }
+    }
+
     clearLogs()
     setShowLogs(true)
     setDeploying(true)

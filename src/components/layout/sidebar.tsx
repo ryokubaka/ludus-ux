@@ -30,6 +30,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ExternalLink,
+  Bot,
 } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
@@ -57,6 +58,8 @@ interface NavItem {
   goadOnly?: boolean
   /** Ludus 2.2.0+ Sources API — hidden on older servers */
   ludusSources?: boolean
+  /** In-app AI assistant — only when enabled + configured */
+  aiAssistant?: boolean
 }
 
 interface NavGroup {
@@ -100,6 +103,7 @@ const navGroups: NavGroup[] = [
     label: "Integrations",
     items: [
       { href: "/goad", label: "GOAD Management", icon: Terminal, goadOnly: true },
+      { href: "/assistant", label: "AI Assistant (Beta)", icon: Bot, aiAssistant: true },
     ],
   },
   {
@@ -126,14 +130,16 @@ function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null
 
 const ADMIN_CACHE_KEY = "ludus-sidebar-is-admin"
 const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
+const AI_CACHE_KEY = "ludus-sidebar-ai-enabled"
 
 function navItemVisible(
   item: NavItem,
-  ctx: { isAdmin: boolean; goadEnabled: boolean; sourcesSupported: boolean },
+  ctx: { isAdmin: boolean; goadEnabled: boolean; sourcesSupported: boolean; aiAssistantEnabled: boolean },
 ): boolean {
   if (item.adminOnly && !ctx.isAdmin) return false
   if (item.goadOnly && !ctx.goadEnabled) return false
   if (item.ludusSources && !ctx.sourcesSupported) return false
+  if (item.aiAssistant && !ctx.aiAssistantEnabled) return false
   return true
 }
 
@@ -148,6 +154,7 @@ export function Sidebar() {
   // Prefer server shell snapshot (no /api/auth/session); fall back to fetch if absent.
   const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   const [goadEnabled, setGoadEnabled] = useState(true)
+  const [aiAssistantEnabled, setAiAssistantEnabled] = useState(false)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
@@ -163,8 +170,8 @@ export function Sidebar() {
   const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
   const sourcesSupported = ludusVersion !== "" && ludusSupportsSources(ludusVersion)
   const navCtx = useMemo(
-    () => ({ isAdmin, goadEnabled, sourcesSupported }),
-    [isAdmin, goadEnabled, sourcesSupported],
+    () => ({ isAdmin, goadEnabled, sourcesSupported, aiAssistantEnabled }),
+    [isAdmin, goadEnabled, sourcesSupported, aiAssistantEnabled],
   )
 
   useEffect(() => {
@@ -191,15 +198,34 @@ export function Sidebar() {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
     if (cachedGoad !== null) setGoadEnabled(cachedGoad !== "false")
 
-    fetch("/api/settings")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data && typeof data.goadEnabled === "boolean") {
-          setGoadEnabled(data.goadEnabled)
-          sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
-        }
-      })
-      .catch(() => {})
+    const refreshNavFlags = () => {
+      const cachedAi = sessionStorage.getItem(AI_CACHE_KEY)
+      if (cachedAi !== null) setAiAssistantEnabled(cachedAi === "true")
+
+      fetch("/api/settings")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && typeof data.goadEnabled === "boolean") {
+            setGoadEnabled(data.goadEnabled)
+            sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
+          }
+          const aiOn =
+            !!data?.aiAssistantEnabled &&
+            typeof data?.llmBaseUrl === "string" &&
+            data.llmBaseUrl.trim() !== ""
+          setAiAssistantEnabled(aiOn)
+          sessionStorage.setItem(AI_CACHE_KEY, String(aiOn))
+        })
+        .catch(() => {})
+    }
+
+    refreshNavFlags()
+    window.addEventListener("lux-settings-updated", refreshNavFlags)
+    window.addEventListener("focus", refreshNavFlags)
+    return () => {
+      window.removeEventListener("lux-settings-updated", refreshNavFlags)
+      window.removeEventListener("focus", refreshNavFlags)
+    }
   }, [])
 
   useEffect(() => {

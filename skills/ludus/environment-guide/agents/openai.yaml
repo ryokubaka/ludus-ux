@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ludus Environment Guide"
+  short_description: "Choose and deploy pre-built Ludus lab environments"
+  default_prompt: "Use $environment-guide to recommend and deploy the best Ludus environment for my training goal."

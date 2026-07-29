@@ -30,6 +30,7 @@ import {
   ListChecks,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
 import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
 import {
@@ -48,6 +49,7 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { cn } from "@/lib/utils"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
+import { ludusSupportsExtensionsKey } from "@/lib/ludus-version"
 
 const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]
 const TAG_DESCRIPTIONS = LUDUS_DEPLOY_TAG_DESCRIPTIONS
@@ -135,6 +137,19 @@ export function RangeConfigPageClient() {
     enabled: !!selectedRangeId,
     staleTime: STALE.long,
   })
+
+  const { data: versionData } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      if (result.error) throw new Error(result.error)
+      return result.data
+    },
+    staleTime: STALE.long,
+  })
+  const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
+  const extensionsKeySupported =
+    ludusVersion !== "" && ludusSupportsExtensionsKey(ludusVersion)
 
   // Clear editor + deploy UI when switching ranges so keepPreviousData-style stale
   // YAML from the prior range cannot briefly appear under the new range key.
@@ -234,6 +249,27 @@ export function RangeConfigPageClient() {
       const saved = await persistRangeConfig(config)
       if (!saved) return
     }
+
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = Array.isArray(tplRes.data)
+        ? tplRes.data
+        : tplRes.data && typeof tplRes.data === "object" && Array.isArray((tplRes.data as { templates?: unknown }).templates)
+          ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
+          : []
+      const routerBuilt = rows.some(
+        (t) => t && typeof t === "object" && t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE && t.built === true,
+      )
+      if (!routerBuilt) {
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+        })
+        return
+      }
+    }
+
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
@@ -675,6 +711,27 @@ export function RangeConfigPageClient() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">range-config.yml</CardTitle>
+          {ludusVersion !== "" && (
+            <p className="text-xs text-muted-foreground font-normal pt-1 leading-snug">
+              {extensionsKeySupported ? (
+                <>
+                  Ludus 2.3.0+ — optional top-level <code className="text-primary">ludus_extensions</code>{" "}
+                  stores arbitrary YAML metadata. LUX preserves it across GOAD Provide/provision (with{" "}
+                  <code className="text-primary">network:</code>). Router{" "}
+                  <code className="text-primary">global_role_vars</code> and VM{" "}
+                  <code className="text-primary">force_ip</code> are also edited here.
+                </>
+              ) : (
+                <>
+                  Connected Ludus is below 2.3.0 — top-level{" "}
+                  <code className="text-primary">ludus_extensions</code> may be rejected or ignored.
+                  Upgrade Ludus to use that key. Router{" "}
+                  <code className="text-primary">global_role_vars</code> and VM{" "}
+                  <code className="text-primary">force_ip</code> remain editable as YAML.
+                </>
+              )}
+            </p>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (

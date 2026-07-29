@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ludus Troubleshooting"
+  short_description: "Troubleshoot Ludus deploy, network, and template failures"
+  default_prompt: "Use $troubleshooting to diagnose my Ludus error and give targeted fix commands."

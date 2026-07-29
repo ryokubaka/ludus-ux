@@ -9,6 +9,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [Getting started](getting-started.md) | Requirements, Docker, install (quickstart or manual), upgrade |
 | [SSH and authentication](ssh-and-auth.md) | Root vs session auth, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |
+| [AI assistant](assistant.md) | **Beta** — Settings → AI, Ollama profile, tools, `skills/ludus-ux`; [report bugs](https://github.com/ryokubaka/ludus-ux/issues) |
 | [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
 | [Templates](templates.md) | Packer template builds in LUX, add-from-source, Proxmox ACL troubleshooting |
 | [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |

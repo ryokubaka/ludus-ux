@@ -15,6 +15,24 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.2.0] - 2026-07-29
+
+**LUX**
+- [Add] **AI assistant (beta)** — Optional in-app chat (`/assistant`) with OpenAI-compatible LLM (BYO or Compose `--profile ollama` pre-pulling **`qwen2.5:14b`**). Settings → AI tab; session tools for Ludus `/api/v2` and LUX `/api/*` with destructive confirm; shipped skill `skills/ludus-ux`. See `docs/assistant.md` (model recommendations — not fully validated). Report bugs via [GitHub Issues](https://github.com/ryokubaka/ludus-ux/issues).
+- [Add] **Assistant conversation persistence** — SQLite-backed sessions (list / new / delete); survive refresh.
+- [Add] **Assistant background runs** — Chat jobs keep running after refresh/navigation; **Stop** cancels; new message overrides the active run.
+- [Add] **Assistant documentation tools** — `search_documentation` / `read_documentation` / `fetch_ludus_doc` over LUX docs, skill refs, and cached [Ludus docs](https://docs.ludus.cloud/); auto-seed on first chat; admin `GET|POST /api/assistant/docs/seed`.
+- [Add] **Assistant workflow playbooks** — Discrete docs under `skills/ludus-ux/references/workflows/` (INDEX + GOAD/range/sources/console). Docs-first before `ask_user`/APIs; forbids invented flags like `--dedicated`.
+- [Add] **Upstream Ludus skills (supplement)** — Vendored [badsectorlabs/ludus-skills](https://gitlab.com/badsectorlabs/ludus-skills) under `skills/ludus/` (range-config, ludus-cli, troubleshooting, environment-guide). Docs search indexes them; `ludus-ux` stays preferred for LUX/GOAD wizards.
+- [Add] **Range config / GOAD** — Ludus 2.3.0+ top-level `ludus_extensions` is preserved across GOAD Provide/provision (sidecar + CLI wrapper + post-run restore), same pattern as `network:`. Config page notes when the key is available vs when the connected Ludus is older.
+- [Improve] **Router template gate** — Block GOAD/`deployRange` until `debian-11-x64-server-template` is Packer-built (Ludus range router). Enforced in proxy, Dashboard Deploy, range wizards, `executeGoad`, assistant tools; included in GOAD `templateAudit`.
+- [Improve] **Sources** — Source ID always shown (Ludus 2.3.0+ may auto-prefix with userID); register dialog documents that behavior.
+- [Improve] **Settings** — Ansible verbose + force quirk warning only when connected Ludus is ≤2.2.3 (or version unknown).
+- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/**` and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
+- [Fix] **GOAD venv / exit code** — Recreate broken `~/.goad/.venv` (missing activate) and pip-install when `rich` missing; preserve `goad.sh` exit status so failures are not reported as EXIT 0.
+- [Docs] Features / environment notes for `ludus_extensions` preservation and version-gated verbose warning.
+- [Docs] **AI Assistant beta** — Docs + Settings/Assistant UI mark the feature as beta and link [GitHub Issues](https://github.com/ryokubaka/ludus-ux/issues) for bug reports.
+
 ## [1.1.11] - 2026-07-14
 
 **LUX**

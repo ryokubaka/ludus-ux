@@ -40,8 +40,13 @@ describe("revalidateAfterLudusProxyMutation", () => {
     expect(revalidateLudusResource).toHaveBeenCalledWith("blueprints")
   })
 
-  it("revalidates templates on DELETE", () => {
+  it("revalidates templates on DELETE /templates/…", () => {
     revalidateAfterLudusProxyMutation("DELETE", "/templates/x", session)
+    expect(revalidateLudusResource).toHaveBeenCalledWith("templates")
+  })
+
+  it("revalidates templates on DELETE /template/… (Ludus singular)", () => {
+    revalidateAfterLudusProxyMutation("DELETE", "/template/debian10", session)
     expect(revalidateLudusResource).toHaveBeenCalledWith("templates")
   })
 

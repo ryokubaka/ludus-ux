@@ -4,7 +4,7 @@
  * - {@link buildLudusAnsibleEnvShell} — Ansible env vars matching Ludus range deploy
  *   (collections/roles under the Ludus user tree) plus GOAD's shared `ansible/roles`
  *   (extensions' ansible.cfg `roles_path` is overridden by `ANSIBLE_ROLES_PATH`).
- * - {@link buildEnsureGoadVenvShell} — bootstrap ~/.goad/.venv + pip deps only.
+ * - {@link buildEnsureGoadVenvShell} — bootstrap ~/.goad/.venv + pip deps (recreate if broken).
  *
  * Galaxy roles/collections are installed via Ludus API (POST /ansible/collection,
  * POST /ansible/role) in {@link ensureGoadAnsibleRequirements} — not ansible-galaxy
@@ -37,17 +37,28 @@ export function buildLudusAnsibleEnvShell(
   ].join("; ")
 }
 
-/** Ensure GOAD's ~/.goad/.venv exists; pip-install GOAD root requirements on first create. */
+/**
+ * Ensure GOAD's ~/.goad/.venv exists and has activate + python + pip deps (incl. rich).
+ * Recreates a broken/partial venv (dir present but no activate) — common goad.sh failure mode.
+ */
 export function buildEnsureGoadVenvShell(goadPath: string, ludusInstallPath: string): string {
   const root = goadPath.replace(/'/g, "")
+  // Keep each `if …; then …; fi` as ONE array element so `.join("; ")` never yields `then;`.
   return [
     buildLudusAnsibleEnvShell(ludusInstallPath, root),
-    `_LUX_PIP="$HOME/.goad/.venv/bin/pip"`,
-    `_LUX_PY="$HOME/.goad/.venv/bin/python3"`,
+    `mkdir -p "$HOME/.goad"`,
+    `_LUX_VENV="$HOME/.goad/.venv"`,
+    `_LUX_PIP="$_LUX_VENV/bin/pip"`,
+    `_LUX_PY="$_LUX_VENV/bin/python3"`,
+    `_LUX_ACT="$_LUX_VENV/bin/activate"`,
     `_LUX_NEW_VENV=0`,
-    `if [ ! -x "$_LUX_PY" ]; then python3 -m venv "$HOME/.goad/.venv"; _LUX_NEW_VENV=1; fi`,
-    // One line — .join("; ") must not split `then` from its body (would emit invalid `then;`).
-    `if [ -x "$_LUX_PY" ]; then _LUX_VER=$("$_LUX_PY" -c 'import sys; print(f"{sys.version_info[0]}{sys.version_info[1]:02d}{sys.version_info[2]:02d}")' 2>/dev/null || echo 0); if [ "$_LUX_VER" -ge 31100 ] 2>/dev/null; then _LUX_REQ=requirements_311.yml; else _LUX_REQ=requirements.yml; fi; if [ "$_LUX_NEW_VENV" = 1 ] && [ -f "$_LUX_GOAD_ROOT/$_LUX_REQ" ] && [ -x "$_LUX_PIP" ]; then "$_LUX_PIP" install -r "$_LUX_GOAD_ROOT/$_LUX_REQ"; fi; fi`,
+    // Broken leftover: directory exists but activate/python missing → goad.sh skips create and fails.
+    `if [ ! -f "$_LUX_ACT" ] || [ ! -x "$_LUX_PY" ]; then rm -rf "$_LUX_VENV"; python3 -m venv "$_LUX_VENV" || { echo "[-] Failed to create GOAD venv at $_LUX_VENV (install python3-venv / python3.*-venv on the Ludus host)."; exit 1; }; _LUX_NEW_VENV=1; fi`,
+    `if [ ! -f "$_LUX_ACT" ] || [ ! -x "$_LUX_PY" ]; then echo "[-] GOAD venv incomplete after create ($_LUX_ACT)."; exit 1; fi`,
+    `_LUX_PIP="$_LUX_VENV/bin/pip"`,
+    `_LUX_PY="$_LUX_VENV/bin/python3"`,
+    // Install GOAD requirements on first create OR when rich (goad.py dep) is missing.
+    `if [ -x "$_LUX_PY" ]; then _LUX_VER=$("$_LUX_PY" -c 'import sys; print(f"{sys.version_info[0]}{sys.version_info[1]:02d}{sys.version_info[2]:02d}")' 2>/dev/null || echo 0); if [ "$_LUX_VER" -ge 31100 ] 2>/dev/null; then _LUX_REQ=requirements_311.yml; else _LUX_REQ=requirements.yml; fi; _LUX_NEED_PIP=0; if [ "$_LUX_NEW_VENV" = 1 ]; then _LUX_NEED_PIP=1; fi; if ! "$_LUX_PY" -c "import rich" 2>/dev/null; then _LUX_NEED_PIP=1; fi; if [ "$_LUX_NEED_PIP" = 1 ] && [ -x "$_LUX_PIP" ]; then if [ -f "$_LUX_GOAD_ROOT/$_LUX_REQ" ]; then "$_LUX_PIP" install -r "$_LUX_GOAD_ROOT/$_LUX_REQ" || { echo "[-] pip install -r $_LUX_GOAD_ROOT/$_LUX_REQ failed"; exit 1; }; else "$_LUX_PIP" install rich || { echo "[-] pip install rich failed"; exit 1; }; fi; fi; fi`,
   ].join("; ")
 }
 

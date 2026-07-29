@@ -33,9 +33,9 @@ import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
 // REAL_LUDUS_PATH is replaced by sed at deploy time with the actual binary path.
 // Two responsibilities:
 //  1. Inject --range $LUDUS_RANGE_ID into every ludus call (range scoping).
-//  2. For `range config set -f <file>`: re-inject the user's network: block from
-//     a sidecar JSON written by sync-network, so GOAD's template regeneration
-//     (which wipes the block) doesn't cause iptables to be flushed during deploy.
+//  2. For `range config set -f <file>`: re-inject network: and ludus_extensions
+//     from sidecar JSON written by sync-network, so GOAD's template regeneration
+//     cannot wipe firewall rules / extensions metadata before Ansible runs.
 const LUDUS_WRAPPER_SH = [
   '#!/bin/sh',
   '_R="REAL_LUDUS_PATH"',
@@ -47,8 +47,9 @@ const LUDUS_WRAPPER_SH = [
   '  exec "$_R" "$@"',
   'fi',
   '',
-  '# Firewall preservation: detect `range config set` anywhere in argv (GOAD',
-  '# prepends `--user <id>` when impersonating — see goad/command/linux.py).',
+  '# Firewall + ludus_extensions preservation: detect `range config set`',
+  '# anywhere in argv (GOAD prepends `--user <id>` when impersonating —',
+  '# see goad/command/linux.py).',
   '_has_rcs=0',
   '_p2=""',
   '_p1=""',
@@ -73,18 +74,23 @@ const LUDUS_WRAPPER_SH = [
   '      cp "$LUX_WIZARD_CONFIG_YML" "$_CF" 2>/dev/null || true',
   '    fi',
   '    _SD="$(dirname "$_CF")/.lux-network-snapshot.json"',
-  '    if [ -f "$_SD" ]; then',
+  '    _SE="$(dirname "$_CF")/.lux-extensions-snapshot.json"',
+  '    if [ -f "$_SD" ] || [ -f "$_SE" ]; then',
   "      _LUX_ERR=$(mktemp 2>/dev/null || echo /tmp/lux-net-err.$$)",
   // python3 -c: double-quoted strings only inside single-quoted -c body.
+  // argv: config.yml, network sidecar path, extensions sidecar path
   "      if ! python3 -c '",
-  'import json,yaml,sys',
-  'with open(sys.argv[2]) as f: n=json.load(f)',
-  'with open(sys.argv[1]) as f: d=yaml.safe_load(f) or {}',
+  'import json,yaml,sys,os',
+  'cfg,ns,es=sys.argv[1],sys.argv[2],sys.argv[3]',
+  'with open(cfg) as f: d=yaml.safe_load(f) or {}',
   'if isinstance(d,dict):',
-  ' d["network"]=n',
-  ' with open(sys.argv[1],"w") as f: yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False)',
-  "' \"$_CF\" \"$_SD\" 2>\"$_LUX_ERR\"; then",
-  '        echo "[LUX] network snapshot merge failed (config + .lux-network-snapshot.json). First lines of stderr:" >&2',
+  ' if ns and os.path.isfile(ns):',
+  '  with open(ns) as f: d["network"]=json.load(f)',
+  ' if es and os.path.isfile(es):',
+  '  with open(es) as f: d["ludus_extensions"]=json.load(f)',
+  ' with open(cfg,"w") as f: yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False)',
+  "' \"$_CF\" \"${_SD:-}\" \"${_SE:-}\" 2>\"$_LUX_ERR\"; then",
+  '        echo "[LUX] range-config snapshot merge failed (network / ludus_extensions sidecars). First lines of stderr:" >&2',
   '        head -n 8 "$_LUX_ERR" >&2',
   '      fi',
   '      rm -f "$_LUX_ERR" 2>/dev/null',
@@ -637,13 +643,12 @@ export async function streamGoadCommand(
   // 1. **Range scoping** — rewrites `ludus …` to `ludus --range $LUDUS_RANGE_ID …`
   //    unless --range/-r was already supplied.
   //
-  // 2. **Firewall preservation** — when GOAD calls `ludus range config set -f
-  //    <file>`, the wrapper checks for a `.lux-network-snapshot.json` sidecar
-  //    (written by sync-network before the GOAD session) and injects the user's
-  //    `network:` block into the config file *right before* pushing it to Ludus.
-  //    This closes the window where GOAD's template regeneration wipes firewall
-  //    rules: the deploy runs against a config that already contains them, so
-  //    iptables on the router is never flushed.
+  // 2. **Firewall + ludus_extensions preservation** — when GOAD calls
+  //    `ludus range config set -f <file>`, the wrapper merges
+  //    `.lux-network-snapshot.json` and/or `.lux-extensions-snapshot.json`
+  //    (written by sync-network before the GOAD session) into the config file
+  //    *right before* pushing it to Ludus. This closes the window where GOAD's
+  //    template regeneration wipes firewall rules / extensions metadata.
   //
   // The wrapper is base64-encoded and decoded on the remote to avoid shell
   // quoting nightmares (nested single/double quotes, Python inside sh, etc.).
@@ -683,7 +688,7 @@ export async function streamGoadCommand(
   //    a dedicated rangeId is known for this operation).
   const ensureGoadVenv = buildEnsureGoadVenvShell(goadPath, resolveLudusInstallPath())
   const pythonEnvSetup =
-    `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
+    `if [ ! -f "$HOME/.goad/.venv/bin/activate" ]; then echo "[-] GOAD venv missing ($HOME/.goad/.venv/bin/activate)."; exit 1; fi; . "$HOME/.goad/.venv/bin/activate"`
 
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
@@ -714,12 +719,17 @@ export async function streamGoadCommand(
   // right-hand side of pipes.
   const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
 
-  // Best-effort removal of this run's wizard temp file once the final session
-  // finishes (same identity that wrote it). Appended to the last command of each
-  // run path; error/abort paths are covered by the stale-file reaper above.
-  const wizardCleanup = luxWizardConfigPath
-    ? `; rm -f '${luxWizardConfigPath.replace(/'/g, "")}' 2>/dev/null || true`
+  // Preserve goad.sh exit status — cleanup/`|| true` must not wipe failures (EXIT 0 bug).
+  const wizardCleanupCmd = luxWizardConfigPath
+    ? `rm -f '${luxWizardConfigPath.replace(/'/g, "")}' 2>/dev/null || true`
     : ""
+  const afterGoad = (goadCmd: string, opts?: { cleanup?: boolean }) => {
+    const parts = [goadCmd, "_LUX_GOAD_EC=$?"]
+    if (goadIniPatchCmd) parts.push(goadIniPatchCmd)
+    if (opts?.cleanup !== false && wizardCleanupCmd) parts.push(wizardCleanupCmd)
+    parts.push("exit $_LUX_GOAD_EC")
+    return parts.join("; ")
+  }
 
   const wrapInnerForSudo = (inner: string) =>
     impersonateAs
@@ -751,9 +761,12 @@ export async function streamGoadCommand(
     const split = trySplitReplAfterProvisionLab(rawCmds)
     if (split) {
       const esc1 = [...split.phase1Parts, "exit"].join("\n").replace(/'/g, "'\\''")
-      innerCommand =
-        [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc1}\n' | bash '${goadPath}/goad.sh'`].join("; ") +
-        goadIniPatchPostfix
+      innerCommand = [
+        setupPreamble,
+        pyEnvExports,
+        `cd ${goadPath}`,
+        afterGoad(`printf '${esc1}\n' | bash '${goadPath}/goad.sh'`, { cleanup: false }),
+      ].join("; ")
       replSplitTail = { extensionLines: split.extensionLines, allParts: split.allParts }
     } else {
       const stdinCmds = rawCmds.split(";").join("\n")
@@ -762,11 +775,14 @@ export async function streamGoadCommand(
         setupPreamble,
         pyEnvExports,
         `cd ${goadPath}`,
-        `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
-      ].join("; ") + goadIniPatchPostfix + wizardCleanup
+        afterGoad(`printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`),
+      ].join("; ")
     }
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}${wizardCleanup}`
+    const goadInvoke = pyEnv
+      ? `${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`
+      : `bash '${goadPath}/goad.sh' ${goadArgs}`
+    innerCommand = [setupPreamble, `cd ${goadPath}`, afterGoad(goadInvoke)].join("; ")
   }
 
   const command = wrapInnerForSudo(innerCommand)
@@ -851,10 +867,12 @@ export async function streamGoadCommand(
         const esc2 = ["unload", "use " + id, ...replSplitTail.extensionLines, "exit"]
           .join("\n")
           .replace(/'/g, "'\\''")
-        const inner2 =
-          [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc2}\n' | bash '${goadPath}/goad.sh'`].join(
-            "; ",
-          ) + goadIniPatchPostfix + wizardCleanup
+        const inner2 = [
+            setupPreamble,
+            pyEnvExports,
+            `cd ${goadPath}`,
+            afterGoad(`printf '${esc2}\n' | bash '${goadPath}/goad.sh'`),
+          ].join("; ")
         const cmd2 = wrapInnerForSudo(inner2)
         runPtySession(cmd2, {}, (code2) => {
           conn.end()

@@ -45,6 +45,12 @@ import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 import { cn } from "@/lib/utils"
 import { statusBadge } from "@/lib/status-colors"
 import { useResolvedSession } from "@/hooks/use-resolved-session"
+import { useQuery } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { STALE } from "@/lib/query-client"
+import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus-version"
+import { AiSettingsPanel } from "@/components/settings/ai-settings-panel"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +69,10 @@ interface Settings {
   proxmoxSshUser?: string
   proxmoxSshPassword?: string
   proxmoxSshKeyPath?: string
+  aiAssistantEnabled?: boolean
+  llmBaseUrl?: string
+  llmApiKey?: string
+  llmModel?: string
 }
 
 interface SessionInfo {
@@ -664,6 +674,18 @@ function SettingsContent() {
   const session: SessionInfo | null = resolved
     ? { username: resolved.username, isAdmin: resolved.isAdmin }
     : null
+  const scopeTag = useEffectiveScopeTag()
+  const { data: versionData } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      if (result.error) throw new Error(result.error)
+      return result.data
+    },
+    staleTime: STALE.long,
+  })
+  const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
+  const showVerboseForceQuirk = ludusMayIgnoreDeployVerboseWhenForce(ludusVersion)
 
   const [settings, setSettings] = useState<Settings | null>(null)
   const [draft, setDraft] = useState<Settings | null>(null)
@@ -704,6 +726,7 @@ function SettingsContent() {
     () => [
       { value: "general", label: "General" },
       { value: "ssh", label: "SSH & GOAD" },
+      { value: "ai", label: "AI" },
       ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
       { value: "about", label: "About" },
     ],
@@ -752,6 +775,9 @@ function SettingsContent() {
         toast({ variant: "destructive", title: "Error", description: data.error })
       } else {
         setSettings(data); setDraft(data)
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("lux-settings-updated"))
+        }
         toast({
           title: "Settings saved",
           description:
@@ -987,7 +1013,12 @@ function SettingsContent() {
                   <p className="text-xs text-muted-foreground">
                     Pass <code className="text-primary">--verbose-ansible</code> / API <code className="text-primary">verbose</code> on range deploy.
                     Default on. Set <code className="text-primary">LUDUS_ANSIBLE_VERBOSE=false</code> in <code className="text-primary">.env</code> to default off.
-                    Stock Ludus ≤2.2.3 may ignore this when <code className="text-primary">force</code> is set (upstream bug).
+                    {showVerboseForceQuirk && (
+                      <>
+                        {" "}Stock Ludus ≤2.2.3 may ignore this when <code className="text-primary">force</code> is set (upstream bug
+                        {ludusVersion ? <> — connected: <code className="text-primary">{ludusVersion}</code></> : null}).
+                      </>
+                    )}
                   </p>
                 </div>
                 <Switch
@@ -1139,6 +1170,18 @@ function SettingsContent() {
               </Button>
             </div>
           )}
+        </TabsContent>
+
+        {/* ── AI ──────────────────────────────────────────────────────── */}
+        <TabsContent value="ai" className="space-y-4 mt-0">
+          <AiSettingsPanel
+            draft={draft}
+            setDraft={setDraft}
+            isAdmin={!!session?.isAdmin}
+            onSave={handleSave}
+            saving={saving}
+            isDirty={!!isDirty}
+          />
         </TabsContent>
 
         {/* ── Branding ────────────────────────────────────────────────── */}

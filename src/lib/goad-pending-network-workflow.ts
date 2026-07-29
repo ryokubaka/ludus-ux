@@ -136,6 +136,12 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
     )
 
     for (let attempt = 0; attempt < 3; attempt++) {
+      const { assertRouterTemplateReady } = await import("@/lib/ludus-router-template-assert")
+      const router = await assertRouterTemplateReady(key)
+      if (!router.ok) {
+        console.warn("[pending-network-workflow] router template gate:", router.error)
+        return
+      }
       const tagRunAt = Date.now()
       const dep = await ludusRequest<unknown>(`/range/deploy?rangeID=${encodeURIComponent(rangeId)}`, {
         method: "POST",

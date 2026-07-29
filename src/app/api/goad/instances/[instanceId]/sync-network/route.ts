@@ -1,11 +1,11 @@
 /**
  * POST /api/goad/instances/[instanceId]/sync-network
  *
- * Injects the caller-supplied `network:` block into the GOAD **instance**
- * Ludus config on the server — primarily `workspace/<id>/provider/config.yml`
- * (GOAD: `GoadPath.get_instance_provider_path`). Some trees still
- * use `workspace/<id>/providers/ludus/config.yml`; we update whichever file
- * exists (prefer `provider/config.yml` when both exist).
+ * Injects the caller-supplied `network:` and/or `ludus_extensions` blocks into
+ * the GOAD **instance** Ludus config on the server — primarily
+ * `workspace/<id>/provider/config.yml` (GOAD: `GoadPath.get_instance_provider_path`).
+ * Some trees still use `workspace/<id>/providers/ludus/config.yml`; we update
+ * whichever file exists (prefer `provider/config.yml` when both exist).
  *
  * Why not just rely on the post-action restore in goad/[id]/page.tsx?
  *
@@ -13,20 +13,23 @@
  *   (containing `ludus:` VM entries rendered from extension templates), then
  *   calls `ludus range config set -c <that file>` BEFORE the Ansible deploy
  *   runs. At that point Ludus replaces range-config.yml wholesale — any
- *   `network:` block the user saved via Range Configuration is gone. The
- *   subsequent deploy runs Ansible against the wiped config, which FLUSHES
- *   iptables on the router. Restoring the YAML afterwards puts the rules
- *   back on disk but the router stays flushed until another deploy runs.
+ *   `network:` / `ludus_extensions` the user saved via Range Configuration is
+ *   gone. The subsequent deploy runs Ansible against the wiped config, which
+ *   FLUSHES iptables on the router (and drops extensions metadata). Restoring
+ *   the YAML afterwards puts the rules back on disk but the router stays
+ *   flushed until another deploy runs.
  *
- *   Pre-injecting `network:` into the workspace config.yml dodges this
- *   window: GOAD's PUT carries the user's rules forward, so Ludus
- *   range-config is never actually wiped and the deploy applies iptables
- *   with the rules intact. The post-action restore + network-tag deploy
- *   remains in place as a safety net for `provide`, which regenerates
- *   config.yml from templates and will usually drop our injection.
+ *   Pre-injecting into the workspace config.yml dodges this window: GOAD's PUT
+ *   carries the user's keys forward, so Ludus range-config is never actually
+ *   wiped and the deploy applies iptables with the rules intact. The
+ *   post-action restore + network-tag deploy remains in place as a safety net
+ *   for `provide`, which regenerates config.yml from templates and will usually
+ *   drop our injection.
  *
- * Body:  { network: {…} | null } — a parsed YAML object, not a YAML string.
- *                                   null deletes the block.
+ * Body:  { network?: object | null, ludus_extensions?: unknown }
+ *   - `network` present: inject/replace (null deletes the block + sidecar)
+ *   - `ludus_extensions` present: inject/replace (null deletes + sidecar)
+ *   At least one of the two keys must be present.
  * Reply: { ok, updated, file, error? }
  */
 
@@ -45,7 +48,7 @@ import json, os, sys, base64
 def _b(i):
     return base64.b64decode(sys.argv[i]).decode("utf-8")
 
-goad_path, instance_id, network_json = _b(1), _b(2), _b(3)
+goad_path, instance_id, network_json, extensions_json = _b(1), _b(2), _b(3), _b(4)
 ws = os.path.join(goad_path, "workspace", instance_id)
 _cfg_candidates = [
     os.path.join(ws, "provider", "config.yml"),
@@ -53,7 +56,8 @@ _cfg_candidates = [
 ]
 cfg_path = next((p for p in _cfg_candidates if os.path.isfile(p)), None)
 provider_dir = os.path.dirname(cfg_path) if cfg_path else ""
-sidecar_path = os.path.join(provider_dir, ".lux-network-snapshot.json") if provider_dir else ""
+net_sidecar = os.path.join(provider_dir, ".lux-network-snapshot.json") if provider_dir else ""
+ext_sidecar = os.path.join(provider_dir, ".lux-extensions-snapshot.json") if provider_dir else ""
 
 out = {"ok": False, "updated": False, "file": (os.path.relpath(cfg_path, ws) if cfg_path else "provider/config.yml")}
 
@@ -72,10 +76,19 @@ if not cfg_path:
     print(json.dumps(out))
     sys.exit(0)
 
+# Empty argv means "key not provided"; JSON "null" means explicit delete.
+has_network = network_json != ""
+has_extensions = extensions_json != ""
 try:
-    network = json.loads(network_json) if network_json else None
+    network = json.loads(network_json) if has_network else None
 except Exception as e:
     out["error"] = "invalid network payload: " + str(e)
+    print(json.dumps(out))
+    sys.exit(0)
+try:
+    extensions = json.loads(extensions_json) if has_extensions else None
+except Exception as e:
+    out["error"] = "invalid ludus_extensions payload: " + str(e)
     print(json.dumps(out))
     sys.exit(0)
 
@@ -86,22 +99,41 @@ try:
         out["error"] = "config.yml root is not a mapping"
         print(json.dumps(out))
         sys.exit(0)
-    existing = data.get("network")
-    if network is None:
-        if "network" in data:
-            del data["network"]
-            out["updated"] = True
-        if os.path.isfile(sidecar_path):
-            os.remove(sidecar_path)
-    else:
-        if existing != network:
-            data["network"] = network
-            out["updated"] = True
-        with open(sidecar_path, "w", encoding="utf-8") as fh:
-            json.dump(network, fh)
+
+    if has_network:
+        existing = data.get("network")
+        if network is None:
+            if "network" in data:
+                del data["network"]
+                out["updated"] = True
+            if os.path.isfile(net_sidecar):
+                os.remove(net_sidecar)
+        else:
+            if existing != network:
+                data["network"] = network
+                out["updated"] = True
+            with open(net_sidecar, "w", encoding="utf-8") as fh:
+                json.dump(network, fh)
+
+    if has_extensions:
+        existing_ext = data.get("ludus_extensions")
+        if extensions is None:
+            if "ludus_extensions" in data:
+                del data["ludus_extensions"]
+                out["updated"] = True
+            if os.path.isfile(ext_sidecar):
+                os.remove(ext_sidecar)
+        else:
+            if existing_ext != extensions:
+                data["ludus_extensions"] = extensions
+                out["updated"] = True
+            with open(ext_sidecar, "w", encoding="utf-8") as fh:
+                json.dump(extensions, fh)
+
     if out["updated"]:
         with open(cfg_path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)
+    # Sidecar-only write (config already matched) still counts as success.
     out["ok"] = True
 except Exception as e:
     out["error"] = str(e)
@@ -137,10 +169,25 @@ export async function POST(
     }
   }
 
-  const body = (await request.json().catch(() => ({}))) as { network?: unknown }
-  // Accept either an object (inject/replace) or explicit null (remove).
-  const network = body.network === undefined ? null : body.network
-  if (network !== null && (typeof network !== "object" || Array.isArray(network))) {
+  const body = (await request.json().catch(() => ({}))) as {
+    network?: unknown
+    ludus_extensions?: unknown
+  }
+  const hasNetwork = Object.prototype.hasOwnProperty.call(body, "network")
+  const hasExtensions = Object.prototype.hasOwnProperty.call(body, "ludus_extensions")
+  if (!hasNetwork && !hasExtensions) {
+    return NextResponse.json(
+      { error: "Provide network and/or ludus_extensions" },
+      { status: 400 },
+    )
+  }
+
+  const network = hasNetwork ? body.network : undefined
+  if (
+    hasNetwork &&
+    network !== null &&
+    (typeof network !== "object" || Array.isArray(network))
+  ) {
     return NextResponse.json(
       { error: "network must be an object or null" },
       { status: 400 },
@@ -158,8 +205,12 @@ export async function POST(
       : undefined
 
   const encoded = Buffer.from(SYNC_NETWORK_PY, "utf-8").toString("base64")
-  const networkArg = network === null ? "" : JSON.stringify(network)
-  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(instanceId)}' '${b64(networkArg)}'`
+  // Empty string = key omitted; JSON null/value = explicit sync.
+  const networkArg = hasNetwork ? JSON.stringify(network ?? null) : ""
+  const extensionsArg = hasExtensions ? JSON.stringify(body.ludus_extensions ?? null) : ""
+  const cmd =
+    `echo '${encoded}' | base64 -d | python3 - ` +
+    `'${b64(goadPath)}' '${b64(instanceId)}' '${b64(networkArg)}' '${b64(extensionsArg)}'`
 
   const plan = workspaceSshExecPlan(request, session, cmd, rootCreds, userCreds)
   if (!plan.ok) {

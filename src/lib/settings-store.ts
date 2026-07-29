@@ -35,7 +35,8 @@ export interface RuntimeSettings {
   goadEnabled: boolean
   /**
    * Pass Ludus `--verbose-ansible` / API `verbose` on range deploy.
-   * Default true. Stock Ludus ≤2.2.3 may ignore this and treat `force` as verbose.
+   * Default true. Stock Ludus ≤2.2.3 may ignore this and treat `force` as verbose
+   * (see ludusMayIgnoreDeployVerboseWhenForce).
    */
   ludusAnsibleVerbose: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
@@ -53,6 +54,14 @@ export interface RuntimeSettings {
    * When set, tried before PROXMOX_SSH_KEY_PATH env — survives Next/env oddities and is saved in SQLite.
    */
   proxmoxSshKeyPath: string
+  /** In-app AI assistant (Settings → AI). Defaults false. */
+  aiAssistantEnabled: boolean
+  /** OpenAI-compatible base URL (e.g. https://api.openai.com/v1 or http://ollama:11434/v1). */
+  llmBaseUrl: string
+  /** Optional API key for the LLM provider (encrypted at rest). */
+  llmApiKey: string
+  /** Model id for chat completions (e.g. qwen2.5:14b, gpt-4o-mini). */
+  llmModel: string
 }
 
 // NOTE: Do NOT read process.env here at module-level; Next.js standalone builds
@@ -68,6 +77,7 @@ const SETTINGS_SECRET_KEYS: Array<keyof RuntimeSettings> = [
   "proxmoxSshPassword",
   "rootApiKey",
   "blueprintOperatorApiKey",
+  "llmApiKey",
 ]
 
 function appSecretForSettingsAtRest(): string {
@@ -92,6 +102,10 @@ function defaults(): RuntimeSettings {
     proxmoxSshUser: process.env.PROXMOX_SSH_USER || "root",
     proxmoxSshPassword: process.env.PROXMOX_SSH_PASSWORD || "",
     proxmoxSshKeyPath: "",
+    aiAssistantEnabled: process.env.ENABLE_AI_ASSISTANT === "true",
+    llmBaseUrl: (process.env.LUX_LLM_BASE_URL || "").trim(),
+    llmApiKey: (process.env.LUX_LLM_API_KEY || "").trim(),
+    llmModel: (process.env.LUX_LLM_MODEL || "qwen2.5:14b").trim() || "qwen2.5:14b",
   }
 }
 
@@ -112,6 +126,10 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "proxmoxSshUser",
   "proxmoxSshPassword",
   "proxmoxSshKeyPath",
+  "aiAssistantEnabled",
+  "llmBaseUrl",
+  "llmApiKey",
+  "llmModel",
 ]
 
 function encodeSettingForDb(key: string, value: unknown): string {
@@ -152,7 +170,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled" || k === "ludusAnsibleVerbose") {
+      if (k === "goadEnabled" || k === "ludusAnsibleVerbose" || k === "aiAssistantEnabled") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)

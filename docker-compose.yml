@@ -39,6 +39,11 @@ services:
       - LUDUS_INSTALL_PATH=${LUDUS_INSTALL_PATH:-/opt/ludus}
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
       - LUDUS_ANSIBLE_VERBOSE=${LUDUS_ANSIBLE_VERBOSE:-true}
+      # In-app AI assistant (OpenAI-compatible / optional Ollama profile)
+      - ENABLE_AI_ASSISTANT=${ENABLE_AI_ASSISTANT:-false}
+      - LUX_LLM_BASE_URL=${LUX_LLM_BASE_URL:-}
+      - LUX_LLM_API_KEY=${LUX_LLM_API_KEY:-}
+      - LUX_LLM_MODEL=${LUX_LLM_MODEL:-qwen2.5:14b}
       # TLS terminates at nginx; app listens on plain HTTP (see TRUST_PROXY_TLS).
       - DISABLE_HTTPS=${DISABLE_HTTPS:-true}
       - TRUST_PROXY_TLS=${TRUST_PROXY_TLS:-true}
@@ -48,6 +53,7 @@ services:
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh
       - ${DATA_DIR:-./data}:/app/data
+      - ./skills:/app/skills:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -56,6 +62,38 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Optional local LLM: docker compose --profile ollama up -d
+  # Publishes host :11434. From ludus-ux use compose DNS (not host.docker.internal):
+  #   http://ollama:11434/v1
+  # host.docker.internal → published port often fails on Linux Docker (hairpin NAT).
+  # GPU (NVIDIA): requires host nvidia-container-toolkit — see docs/assistant.md § GPU.
+  # Without the toolkit, remove `gpus:` below (CPU fallback) or Compose will fail to start.
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    container_name: ludus-ux-ollama
+    restart: unless-stopped
+    ports:
+      - "${LUX_OLLAMA_HOST_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./docker/ollama/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    gpus: all
+    environment:
+      # Listen on all interfaces so other containers / host-published port can reach it
+      - OLLAMA_HOST=0.0.0.0:11434
+      - LUX_OLLAMA_DEFAULT_MODEL=${LUX_LLM_MODEL:-qwen2.5:14b}
+      - NVIDIA_VISIBLE_DEVICES=${LUX_OLLAMA_NVIDIA_VISIBLE_DEVICES:-all}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - TZ=${TZ:-America/New_York}
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
 
   nginx:
     build:
@@ -83,3 +121,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+volumes:
+  ollama_data:

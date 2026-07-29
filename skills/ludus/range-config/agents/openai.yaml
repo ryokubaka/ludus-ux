@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ludus Range Config"
+  short_description: "Build and validate Ludus range configuration YAML"
+  default_prompt: "Use $range-config to help me draft and validate a Ludus range YAML config."

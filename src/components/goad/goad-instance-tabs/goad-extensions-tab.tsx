@@ -238,7 +238,7 @@ export function GoadExtensionsTab({
               <div className="grid gap-2">
                 {uninstalledExtensions.map((ext) => {
                   const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
-                  const templatesReady = tpl.ready || (ext.requiredTemplates ?? []).length === 0
+                  const templatesReady = tpl.ready
                   const ansibleState = extensionAnsibleState(
                     ext,
                     ansibleInstalled ?? null,

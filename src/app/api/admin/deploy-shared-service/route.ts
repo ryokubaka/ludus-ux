@@ -20,6 +20,12 @@ import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { getSettings } from "@/lib/settings-store"
+import {
+  assertRouterTemplateReady,
+} from "@/lib/ludus-router-template-assert"
+import {
+  routerTemplateBlockMessage,
+} from "@/lib/ludus-router-template"
 
 
 export async function POST(request: NextRequest) {
@@ -58,6 +64,20 @@ export async function POST(request: NextRequest) {
     `body=${JSON.stringify(ludusBody)}`,
     `user=${session.username}`,
   )
+
+  const router = await assertRouterTemplateReady(session.apiKey)
+  if (!router.ok) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: router.error })
+    return NextResponse.json(
+      {
+        error: routerTemplateBlockMessage(router),
+        code: "router_template_required",
+        template: router.template,
+        reason: router.reason,
+      },
+      { status: 409 },
+    )
+  }
 
   const result = await ludusRequest(ludusPath, {
     method: "POST",

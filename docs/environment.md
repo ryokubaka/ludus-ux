@@ -40,22 +40,6 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). Settings UI hides that warning when the connected server reports ≥2.2.4. | `true` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
 
-## AI assistant (beta)
-
-Optional in-app Assistant (OpenAI-compatible LLM). **Beta** — verify deploys and [report bugs](https://github.com/ryokubaka/ludus-ux/issues). See [Assistant](assistant.md). Admin configures under **Settings → AI**; env seeds defaults.
-
-| Variable | Description | Default |
-|---|---|---|
-| `ENABLE_AI_ASSISTANT` | Show/enable assistant when also configured | `false` |
-| `LUX_LLM_BASE_URL` | OpenAI-compatible base URL. For Compose `ollama` profile: **`http://ollama:11434/v1`** (container DNS). Avoid `host.docker.internal:11434` on Linux — hairpin to a sibling container often fails. | empty |
-| `LUX_LLM_API_KEY` | Provider API key (optional for Ollama; encrypted in SQLite when saved in UI) | empty |
-| `LUX_LLM_MODEL` | Chat model id; also default model pulled by Compose `ollama` profile. See [assistant.md § Model recommendations](assistant.md#model-recommendations) | `qwen2.5:14b` |
-| `LUX_OLLAMA_HOST_PORT` | Host port published for Ollama (`profile ollama`) | `11434` |
-| `LUX_OLLAMA_NVIDIA_VISIBLE_DEVICES` | NVIDIA devices visible to the Ollama container (`all`, `0`, …). Needs [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) + Compose `gpus: all`. | `all` |
-| `LUX_INTERNAL_ORIGIN` | Origin for server-side LUX tool calls (default `http://127.0.0.1:3000`) | — |
-
-**Compose:** `docker compose --profile ollama up -d` starts Ollama, binds **`11434` on the LUX host**, and pre-pulls `LUX_LLM_MODEL` (default `qwen2.5:14b`). First pull is large. Set `LUX_LLM_BASE_URL=http://ollama:11434/v1` so the app container reaches Ollama on the Compose network. Host/LAN tools can use `http://127.0.0.1:11434`. Mount `./skills` → `/app/skills` for skill context. Model recommendations and caveats: [assistant.md](assistant.md#model-recommendations).
-
 ## TLS / HTTPS
 
 **Docker Compose:** TLS terminates at the **`nginx`** service (`ludus-ux-web`). The host publishes **443→443** only; place **`docker/nginx/certificates/cert.pem`** and **`docker/nginx/certificates/key.pem`** on the LUX host (or let nginx generate self-signed files on first boot). The **`ludus-ux`** container listens on **plain HTTP :3000** inside the Docker network; **`DISABLE_HTTPS=true`** and **`TRUST_PROXY_TLS=true`** are the compose defaults so session cookies and HSTS still match HTTPS in the browser.

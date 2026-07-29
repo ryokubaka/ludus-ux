@@ -48,9 +48,6 @@ export async function assertRouterTemplateReady(
         template,
         reason: "list_failed",
         error: `Refused: could not verify router template (${tplRes.error})`,
-        assistant_hint:
-          `Could not list Ludus templates before deploy. Fix API access, then confirm ${template} is built:true. ` +
-          "Do not deploy until the router template is verified.",
       }
     }
     return checkRouterTemplateBuilt(parseBuiltMap(tplRes.data), template)
@@ -61,8 +58,6 @@ export async function assertRouterTemplateReady(
       template,
       reason: "list_failed",
       error: `Refused: could not verify router template (${msg})`,
-      assistant_hint:
-        `Could not list Ludus templates before deploy. Fix connectivity, then confirm ${template} is built:true.`,
     }
   }
 }

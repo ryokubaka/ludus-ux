@@ -50,7 +50,6 @@ import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
 import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus-version"
-import { AiSettingsPanel } from "@/components/settings/ai-settings-panel"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -69,10 +68,6 @@ interface Settings {
   proxmoxSshUser?: string
   proxmoxSshPassword?: string
   proxmoxSshKeyPath?: string
-  aiAssistantEnabled?: boolean
-  llmBaseUrl?: string
-  llmApiKey?: string
-  llmModel?: string
 }
 
 interface SessionInfo {
@@ -726,7 +721,6 @@ function SettingsContent() {
     () => [
       { value: "general", label: "General" },
       { value: "ssh", label: "SSH & GOAD" },
-      { value: "ai", label: "AI" },
       ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
       { value: "about", label: "About" },
     ],
@@ -1170,18 +1164,6 @@ function SettingsContent() {
               </Button>
             </div>
           )}
-        </TabsContent>
-
-        {/* ── AI ──────────────────────────────────────────────────────── */}
-        <TabsContent value="ai" className="space-y-4 mt-0">
-          <AiSettingsPanel
-            draft={draft}
-            setDraft={setDraft}
-            isAdmin={!!session?.isAdmin}
-            onSave={handleSave}
-            saving={saving}
-            isDirty={!!isDirty}
-          />
         </TabsContent>
 
         {/* ── Branding ────────────────────────────────────────────────── */}

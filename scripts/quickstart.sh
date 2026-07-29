@@ -466,6 +466,16 @@ lux_action_docker_up_build() {
   if ! lux_require_compose_tools; then
     return 1
   fi
+  lux_require_env_for_actions || return 1
+  local profiles cfile
+  profiles="$(lux_read_env_kv COMPOSE_PROFILES)"
+  cfile="$(lux_read_env_kv COMPOSE_FILE)"
+  if [[ -n "$profiles" ]]; then
+    echo "Using COMPOSE_PROFILES=${profiles} from .env"
+  fi
+  if [[ -n "$cfile" ]]; then
+    echo "Using COMPOSE_FILE=${cfile} from .env"
+  fi
   lux_compose up -d --build
   echo ""
   echo "Compose stack updated."
@@ -500,6 +510,7 @@ lux_action_print_ssh_env_hints() {
   echo ""
 }
 
+
 lux_run_action_menu() {
   while true; do
     echo ""
@@ -507,7 +518,7 @@ lux_run_action_menu() {
     echo "  1) Ensure 'sudo' on Ludus SSH host (required for GOAD automation)"
     echo "  2) Append SSH_KEY_PATH/id_rsa pubkey → authorized_keys (sshpass; chown key if unreadable)"
     echo "  3) docker compose up -d --build (needs Docker available here)"
-    echo "  4) Print Ludus / SSH / GOAD fields from .env (mask password)"
+    echo "  4) Print Ludus / SSH / GOAD fields from .env (mask secrets)"
     echo "  0) Exit menu"
     read -r -p "Choose [0-4] [0]: " _ac
     _ac="${_ac:-0}"
@@ -616,10 +627,34 @@ echo "Root SSH to the Ludus/Proxmox host (for pvesh, admin tunnel, etc.):"
 echo "  1) Fetch private key from the server (scp as root; non-root + /root/ uses sshpass + sudo -S when needed — install sshpass if prompted)"
 echo "  2) Copy from a file already on this machine"
 echo "  3) Use password only (PROXMOX_SSH_PASSWORD)"
-read -r -p "Choose [1/2/3]: " auth_choice
+_existing_key=0
+if [[ -s "$KEY_DIR/id_rsa" ]] && grep -qE 'BEGIN.*PRIVATE KEY' "$KEY_DIR/id_rsa" 2>/dev/null; then
+  _existing_key=1
+  echo "  4) Keep existing private key at $KEY_DIR/id_rsa"
+  read -r -p "Choose [1/2/3/4] [4]: " auth_choice
+  auth_choice="${auth_choice:-4}"
+else
+  read -r -p "Choose [1/2/3]: " auth_choice
+  auth_choice="${auth_choice:-1}"
+fi
 root_ssh_key_auth=0
 
-case "${auth_choice:-1}" in
+case "$auth_choice" in
+  4)
+    if [[ "$_existing_key" != "1" ]]; then
+      echo "Error: no usable private key at $KEY_DIR/id_rsa — pick 1, 2, or 3." >&2
+      exit 1
+    fi
+    echo "Keeping existing key: $KEY_DIR/id_rsa"
+    chmod 600 "$KEY_DIR/id_rsa" 2>/dev/null || true
+    read -r -p "PROXMOX_SSH_USER [root]: " px_user
+    px_user="${px_user:-root}"
+    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$px_user"
+    set_kv "PROXMOX_SSH_USER" "$px_user"
+    set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+    # Do not clear PROXMOX_SSH_PASSWORD — may still be set later via optional prompt.
+    root_ssh_key_auth=1
+    ;;
   1)
     read -r -p "SSH user on Ludus host to connect as [root]: " scp_user
     scp_user="${scp_user:-root}"
@@ -767,6 +802,7 @@ if [[ ! "${eg,,}" =~ ^n ]]; then
   echo ""
   lux_ensure_remote_sudo_for_goad || true
 fi
+
 
 echo ""
 read -r -p "Run 'docker compose up -d --build' now? [Y/n] " do_up

@@ -16,7 +16,6 @@ export type RouterTemplateCheck =
       template: string
       reason: "missing" | "need_build" | "list_failed"
       error: string
-      assistant_hint: string
     }
 
 /** Prepend router template so audits / UI chips always include it. */
@@ -45,10 +44,6 @@ export function checkRouterTemplateBuilt(
       template,
       reason: "missing",
       error: `Refused: Ludus router template not registered: ${template}`,
-      assistant_hint:
-        `${template} is required for every Ludus/GOAD range (router VM). ` +
-        `Call LUX listTemplateSources → addTemplates for "${template}", then buildTemplates, wait until built:true on /templates. ` +
-        "Do not createRange / deployRange / executeGoad until the router template is built.",
     }
   }
   if (!builtMap.get(template)) {
@@ -57,9 +52,6 @@ export function checkRouterTemplateBuilt(
       template,
       reason: "need_build",
       error: `Refused: Ludus router template not built: ${template}`,
-      assistant_hint:
-        `${template} is registered but built:false. Packer-build it via buildTemplates { templates: ["${template}"] }, ` +
-        "watch /templates until built:true. Every range needs this router template — block deploy until ready.",
     }
   }
   return { ok: true, template }

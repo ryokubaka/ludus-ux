@@ -477,39 +477,6 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON lux_login_continuations(expires_at);
       `)
     },
-
-    // v17 — In-app AI Assistant conversation history (survives refresh).
-    (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS assistant_conversations (
-          id                   TEXT    PRIMARY KEY,
-          username             TEXT    NOT NULL,
-          title                TEXT    NOT NULL,
-          rows_json            TEXT    NOT NULL,
-          pending_confirm_json TEXT,
-          status               TEXT    NOT NULL DEFAULT 'idle',
-          created_at           INTEGER NOT NULL,
-          updated_at           INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_assistant_conversations_user_updated
-          ON assistant_conversations(username, updated_at DESC);
-      `)
-    },
-
-    // v18 — Track active background assistant run id.
-    (db) => {
-      db.exec(`ALTER TABLE assistant_conversations ADD COLUMN active_run_id TEXT`)
-    },
-
-    // v19 — User-renamed conversation titles stay put.
-    (db) => {
-      db.exec(`ALTER TABLE assistant_conversations ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0`)
-    },
-
-    // v20 — Per-conversation destructive-tool allowlist (assistant confirm policy).
-    (db) => {
-      db.exec(`ALTER TABLE assistant_conversations ADD COLUMN confirm_policy_json TEXT`)
-    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

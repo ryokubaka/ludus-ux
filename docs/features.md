@@ -77,16 +77,8 @@ When you redeploy an existing GOAD instance (as opposed to creating a new one):
 
 This is the recommended way to recover from a broken install or update the lab after a GOAD version upgrade.
 
-### AI assistant (beta)
-
-- **Beta** — early feature; expect bugs. Report issues at [GitHub Issues](https://github.com/ryokubaka/ludus-ux/issues) (include steps, model, and a copied Assistant session when possible)
-- **Settings → AI** — enable OpenAI-compatible LLM (BYO or optional Compose `ollama` profile with default **`qwen2.5:14b`**); model list / Ollama pull
-- **Assistant** chat (`/assistant`) — streams replies; session tools for Ludus `/api/v2` and LUX `/api/*`; destructive calls need UI confirm; skill context from `skills/ludus-ux`
-- **Model choice matters** — see [assistant.md § Model recommendations](assistant.md#model-recommendations). Default is a **minimum starting point**; lab workflows are **not thoroughly validated** yet
-- See [assistant.md](assistant.md)
-
 ### Settings & branding
 
-- Runtime settings persisted in SQLite (URLs, SSH, GOAD path, secrets, LLM config)
+- Runtime settings persisted in SQLite (URLs, SSH, GOAD path, secrets)
 - Custom logo upload
 - Ludus API and SSH connectivity tests

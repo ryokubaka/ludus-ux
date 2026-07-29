@@ -21,7 +21,6 @@ export async function GET(request: NextRequest) {
       rootApiKey: _r,
       proxmoxSshUser: _u,
       proxmoxSshKeyPath: _k,
-      llmApiKey: _l,
       ...safeSettings
     } = settings
     return NextResponse.json(safeSettings)
@@ -60,10 +59,6 @@ export async function POST(request: NextRequest) {
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
   if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
-  if (typeof body.aiAssistantEnabled === "boolean") patch.aiAssistantEnabled = body.aiAssistantEnabled
-  if (typeof body.llmBaseUrl === "string") patch.llmBaseUrl = body.llmBaseUrl.trim()
-  if (typeof body.llmApiKey === "string") patch.llmApiKey = body.llmApiKey
-  if (typeof body.llmModel === "string") patch.llmModel = body.llmModel.trim()
 
   const updated = updateSettings(patch)
   // Invalidate cached catalog if goadPath changed

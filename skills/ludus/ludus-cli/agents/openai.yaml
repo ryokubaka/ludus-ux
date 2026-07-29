@@ -1,4 +1,0 @@
-interface:
-  display_name: "Ludus CLI"
-  short_description: "Run and understand Ludus CLI commands and workflows"
-  default_prompt: "Use $ludus-cli to show the exact Ludus CLI commands for my task and explain each step."

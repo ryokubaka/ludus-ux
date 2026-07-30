@@ -174,7 +174,7 @@ async function addTemplate(
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
-  const addCmd = buildLudusTemplateAddCmd(destDir, ctx.linuxUser, ctx.ludusApiKey)
+  const addCmd = buildLudusTemplateAddCmd(destDir, ctx.ludusApiKey)
   const addResult = await sshExec(`${addCmd} 2>&1`)
   const rawMsg = (addResult.stdout + addResult.stderr).trim()
 

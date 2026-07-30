@@ -32,7 +32,7 @@ Use the **all / built / unbuilt** filter and row checkboxes to select what to bu
 
 ### Build
 
-**Build Selected** or the per-row play button calls Ludus `POST /templates/build` with the chosen template name(s).
+**Build Selected** or the per-row play button calls Ludus `POST /templates` with body `{ "templates": ["<name>", ...] }`.
 
 What happens on the Ludus server:
 
@@ -65,7 +65,7 @@ After a successful add, the template appears as **Not Built** until you run **Bu
 
 ### Delete
 
-The trash icon removes a user-owned template via Ludus `DELETE /template/{name}`. Built-in templates under `/opt/ludus/packer/` are not deleted this way.
+The trash icon removes a template via LUX `DELETE /api/templates/delete`: Ludus API delete (for built Proxmox VMs) plus **root SSH** cleanup of `/opt/ludus/packer/<name>` and `/opt/ludus/users/*/packer/<name>`. Ludus alone returns HTTP 200 for shared-packer installs but refuses to remove the folder (“included template”) — LUX treats that as needing disk cleanup, not success.
 
 ---
 
@@ -225,7 +225,8 @@ When LUX has root SSH configured, it runs this repair after Ludus API ansible in
 **Common causes:**
 
 1. **List filter** — New templates are **Not Built**. Use the **all** or **added** filter on the Templates page (not **built** only).
-2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX installs under `/opt/ludus/packer/<name>/` and registers as the logged-in Ludus user.
+2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX installs under `/opt/ludus/packer/<name>/` and registers as the logged-in Ludus user (via `sudo` / `runuser` / `su` — hosts without `sudo` are supported).
+
 3. **Stale UI** — Click the refresh icon on Templates after add; LUX invalidates cache on success but a long `staleTime` can lag briefly.
 
 **Diagnose on the Ludus host** (as a normal Ludus user, not root):

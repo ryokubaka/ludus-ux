@@ -15,6 +15,17 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.2.0] - 2026-07-29
+
+**LUX**
+- [Add] **Range config / GOAD** — Ludus 2.3.0+ top-level `ludus_extensions` is preserved across GOAD Provide/provision (sidecar + CLI wrapper + post-run restore), same pattern as `network:`. Config page notes when the key is available vs when the connected Ludus is older.
+- [Improve] **Router template gate** — Block GOAD/`deployRange` until `debian-11-x64-server-template` is Packer-built (Ludus range router). Enforced in proxy, Dashboard Deploy, range wizards, and `executeGoad`; included in GOAD `templateAudit`.
+- [Improve] **Sources** — Source ID always shown (Ludus 2.3.0+ may auto-prefix with userID); register dialog documents that behavior.
+- [Improve] **Settings** — Ansible verbose + force quirk warning only when connected Ludus is ≤2.2.3 (or version unknown).
+- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/**` and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
+- [Fix] **GOAD venv / exit code** — Recreate broken `~/.goad/.venv` (missing activate) and pip-install when `rich` missing; preserve `goad.sh` exit status so failures are not reported as EXIT 0.
+- [Docs] Features / environment notes for `ludus_extensions` preservation and version-gated verbose warning.
+
 ## [1.1.11] - 2026-07-14
 
 **LUX**

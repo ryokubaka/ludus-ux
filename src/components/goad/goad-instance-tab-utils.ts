@@ -1,4 +1,6 @@
 /** Tab classification for Ludus range deploy vs GOAD-terminal-only actions. */
+import { withRouterTemplateRequired } from "@/lib/ludus-router-template"
+
 export const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
 export const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])
 export const RANGE_YAML_TOUCHING_ACTIONS = new Set([
@@ -74,10 +76,11 @@ export function checkTemplates(
   missingAbsent: string[]
   ready: boolean
 } {
+  const req = withRouterTemplateRequired(required)
   const present: string[] = []
   const missingUnbuilt: string[] = []
   const missingAbsent: string[] = []
-  for (const t of required) {
+  for (const t of req) {
     if (builtNames.has(t)) present.push(t)
     else if (allNames.has(t)) missingUnbuilt.push(t)
     else missingAbsent.push(t)

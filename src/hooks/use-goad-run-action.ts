@@ -12,6 +12,12 @@ import {
   networkSectionEqual,
   type NetworkSnapshot,
 } from "@/lib/network-rules"
+import {
+  extractLudusExtensions,
+  applyLudusExtensions,
+  ludusExtensionsEqual,
+  type LudusExtensionsSnapshot,
+} from "@/lib/ludus-extensions-config"
 import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
 import { queryKeys } from "@/lib/query-keys"
@@ -83,30 +89,35 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
       clearRangeLogs()
       const rangeIdForRestore = instance?.ludusRangeId
       let networkSnapshot: NetworkSnapshot | null = null
+      let extensionsSnapshot: LudusExtensionsSnapshot | null = null
       if (RANGE_YAML_TOUCHING_ACTIONS.has(action) && rangeIdForRestore) {
         const cfg = await ludusApi.getRangeConfig(rangeIdForRestore)
         if (cfg.data?.result) {
           networkSnapshot = extractNetworkSection(cfg.data.result)
+          extensionsSnapshot = extractLudusExtensions(cfg.data.result)
         }
-        if (networkSnapshot) {
+        if (networkSnapshot || extensionsSnapshot != null) {
           try {
+            const body: Record<string, unknown> = {}
+            if (networkSnapshot) body.network = networkSnapshot
+            if (extensionsSnapshot != null) body.ludus_extensions = extensionsSnapshot
             const resp = await fetch(
               `/api/goad/instances/${encodeURIComponent(instanceId)}/sync-network`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ network: networkSnapshot }),
+                body: JSON.stringify(body),
               },
             )
             if (!resp.ok) {
-              const body = (await resp.json().catch(() => ({}))) as { error?: string }
+              const errBody = (await resp.json().catch(() => ({}))) as { error?: string }
               console.warn(
-                "[LUX] Pre-inject of network: into GOAD workspace config.yml failed:",
-                body.error ?? `HTTP ${resp.status}`,
+                "[LUX] Pre-inject of network:/ludus_extensions into GOAD workspace config.yml failed:",
+                errBody.error ?? `HTTP ${resp.status}`,
               )
             }
           } catch (err) {
-            console.warn("[LUX] Pre-inject of network: threw:", (err as Error).message)
+            console.warn("[LUX] Pre-inject of network:/ludus_extensions threw:", (err as Error).message)
           }
         }
       }
@@ -136,12 +147,26 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
       setCurrentAction(null)
       const completedTaskId = taskIdRef.current
       try {
-        if (networkSnapshot && rangeIdForRestore) {
+        if ((networkSnapshot || extensionsSnapshot != null) && rangeIdForRestore) {
           const after = await ludusApi.getRangeConfig(rangeIdForRestore)
           const yamlAfter = after.data?.result
           if (yamlAfter != null) {
-            const networkAlreadyCorrect = networkSectionEqual(yamlAfter, networkSnapshot)
-            const merged = networkAlreadyCorrect ? yamlAfter : applyNetworkSection(yamlAfter, networkSnapshot)
+            let workingYaml = yamlAfter
+            const networkAlreadyCorrect =
+              !networkSnapshot || networkSectionEqual(workingYaml, networkSnapshot)
+            if (networkSnapshot && !networkAlreadyCorrect) {
+              workingYaml = applyNetworkSection(workingYaml, networkSnapshot)
+            }
+            const extensionsAlreadyCorrect =
+              extensionsSnapshot == null ||
+              ludusExtensionsEqual(workingYaml, extensionsSnapshot)
+            if (extensionsSnapshot != null && !extensionsAlreadyCorrect) {
+              workingYaml = applyLudusExtensions(workingYaml, extensionsSnapshot)
+            }
+            const needsPut =
+              (networkSnapshot && !networkAlreadyCorrect) ||
+              (extensionsSnapshot != null && !extensionsAlreadyCorrect)
+            const merged = workingYaml
 
             const startNetworkTagDeploy = async (): Promise<string | null> => {
               postProcessingRef.current = true
@@ -195,7 +220,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
               return deployErr
             }
 
-            if (!networkAlreadyCorrect) {
+            if (needsPut) {
               let putErr: string | null = null
               for (let attempt = 0; attempt < 3; attempt++) {
                 let payload = merged
@@ -203,7 +228,11 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                   const fresh = await ludusApi.getRangeConfig(rangeIdForRestore)
                   const yamlNow = fresh.data?.result
                   if (yamlNow != null) {
-                    const mergedNow = applyNetworkSection(yamlNow, networkSnapshot)
+                    let mergedNow = yamlNow
+                    if (networkSnapshot) mergedNow = applyNetworkSection(mergedNow, networkSnapshot)
+                    if (extensionsSnapshot != null) {
+                      mergedNow = applyLudusExtensions(mergedNow, extensionsSnapshot)
+                    }
                     if (mergedNow === yamlNow) {
                       putErr = null
                       break
@@ -223,15 +252,18 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
               if (putErr) {
                 toast({
                   variant: "destructive",
-                  title: "Could not restore firewall settings",
+                  title: "Could not restore range-config settings",
                   description:
-                    `${putErr}. Your previous rules are printed to the browser console (F12) — copy them into Range Configuration to recover.`,
+                    `${putErr}. Previous network: / ludus_extensions snapshots are printed to the browser console (F12) — copy them into Range Configuration to recover.`,
                 })
                 try {
                   console.warn(
-                    "[LUX] Failed to restore network: snapshot after GOAD action. Snapshot YAML follows.",
+                    "[LUX] Failed to restore network:/ludus_extensions after GOAD action. Snapshots follow.",
                   )
-                  console.warn(JSON.stringify(networkSnapshot, null, 2))
+                  if (networkSnapshot) console.warn(JSON.stringify(networkSnapshot, null, 2))
+                  if (extensionsSnapshot != null) {
+                    console.warn(JSON.stringify(extensionsSnapshot, null, 2))
+                  }
                 } catch { /* ignore */ }
               } else if (networkFollowup) {
                 const deployErr = await startNetworkTagDeploy()
@@ -255,6 +287,12 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                       `GOAD exited ${code}, but your network: block was re-applied and a network-tag deploy is running to re-apply iptables.`,
                   })
                 }
+              } else if (extensionsSnapshot != null && !extensionsAlreadyCorrect && code === 0) {
+                toast({
+                  title: "ludus_extensions preserved",
+                  description:
+                    "Your ludus_extensions block was re-applied after GOAD refreshed range-config.",
+                })
               }
             } else if (networkAlreadyCorrect && networkFollowup) {
               const deployErr = await startNetworkTagDeploy()

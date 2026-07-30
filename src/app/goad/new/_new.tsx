@@ -59,20 +59,26 @@ import {
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
 } from "@/lib/goad-preview-config"
+import { buildGoadWizardInstallArgs } from "@/lib/goad-wizard-args"
 import {
   extensionAnsibleDepsReady,
   extensionMissingAnsibleRoles,
   parseAnsibleInstalledSets,
 } from "@/lib/goad-dependency-service"
+import {
+  LUDUS_DEFAULT_ROUTER_TEMPLATE,
+  withRouterTemplateRequired,
+} from "@/lib/ludus-router-template"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
 /** Returns { present, missing } template lists for a given set of required names */
 function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
+  const req = withRouterTemplateRequired(required)
   const present: string[] = []
   const missingUnbuilt: string[] = [] // installed but not yet built
   const missingAbsent: string[] = []  // not installed at all
-  for (const t of required) {
+  for (const t of req) {
     if (builtNames.has(t)) present.push(t)
     else if (allNames.has(t)) missingUnbuilt.push(t)
     else missingAbsent.push(t)
@@ -90,11 +96,12 @@ function TemplateChips({
   builtNames: Set<string>
   allNames: Set<string>
 }) {
-  if (required.length === 0) return null
+  const req = withRouterTemplateRequired(required)
+  if (req.length === 0) return null
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex flex-wrap gap-1 mt-1.5">
-        {required.map((t) => {
+        {req.map((t) => {
           const built = builtNames.has(t)
           const installed = allNames.has(t)
 
@@ -151,64 +158,12 @@ function TemplateChips({
 
 const STEPS = ["Select Lab Type", "Select Extensions", "Select Range", "Network Rules", "Review & Deploy"]
 
-function shellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, "'\\''")}'`
-}
-
 /** True when GOAD instance.json extensions match wizard selection (order-insensitive). */
 function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: string[]): boolean {
   if (!instanceExtensions || instanceExtensions.length !== wizard.length) return false
   const a = [...instanceExtensions].sort()
   const b = [...wizard].sort()
   return a.every((v, i) => v === b[i])
-}
-
-/**
- * Single stdin `--repl` session: after `set_extensions` + workspace (`create_empty` or `use`),
- * with extensions we run `provide` → `prepare_jumpbox` → `provision_lab` → one
- * `provision_extension` per ext (one Ludus deploy). We avoid REPL `install`, which
- * would call `install_extension` per ext and re-run `ludus range deploy` each time.
- *
- * Re-use path: same decomposed tail only if instance.json extensions already match
- * the wizard (otherwise `install` so GOAD can `enable_extension` + deploy for new ext).
- */
-function ludusWizardInstallArgs(
-  selectedLab: string,
-  exts: string[],
-  mode:
-    | { kind: "fresh" }
-    | { kind: "existing"; instanceId: string; useDecomposedExtensionProvisioning: boolean },
-): string {
-  if (exts.length === 0) {
-    return mode.kind === "existing"
-      ? `--repl "use ${shellQuote(mode.instanceId)};update_instance_files;install"`
-      : `-l ${shellQuote(selectedLab)} -p ludus -m local -t install`
-  }
-  const extList = exts.join(" ")
-  const postWorkspaceInstall = [
-    "provide",
-    "prepare_jumpbox",
-    "provision_lab",
-    ...exts.map((e) => `provision_extension ${e}`),
-  ].join(";")
-
-  if (mode.kind === "existing") {
-    // instance.json is synced via refresh-workspace API before GOAD runs; REPL then
-    // reloads the instance and update_instance_files regenerates config.yml + inventories.
-    const head = `unload;use ${mode.instanceId};set_extensions ${extList};update_instance_files`
-    const tail = mode.useDecomposedExtensionProvisioning ? postWorkspaceInstall : "install"
-    return `--repl "${head};${tail}"`
-  }
-
-  const setup = [
-    "unload",
-    `set_lab ${selectedLab}`,
-    "set_provider ludus",
-    "set_provisioning_method local",
-    `set_extensions ${extList}`,
-    "create_empty",
-  ].join(";")
-  return `--repl "${setup};${postWorkspaceInstall}"`
 }
 
 export function NewGoadInstancePageClient() {
@@ -571,6 +526,14 @@ export function NewGoadInstancePageClient() {
       })
       return
     }
+    if (!builtNames.has(LUDUS_DEFAULT_ROUTER_TEMPLATE)) {
+      toast({
+        variant: "destructive",
+        title: "Router template required",
+        description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+      })
+      return
+    }
 
     const deployConfigYaml = reviewConfigYaml.trim()
     const useWizardYaml = deployConfigYaml.length > 0
@@ -757,7 +720,7 @@ export function NewGoadInstancePageClient() {
       // 2. Run GOAD: one REPL session — decomposed `provide` + `provision_lab` +
       // `provision_extension` per ext when instance extensions match wizard (else `install`).
       const useDecomposed = extensionSetsEqual(existingInstance.extensions, exts)
-      const args = ludusWizardInstallArgs(selectedLab, exts, {
+      const args = buildGoadWizardInstallArgs(selectedLab, exts, {
         kind: "existing",
         instanceId: existingId,
         useDecomposedExtensionProvisioning: useDecomposed,
@@ -868,7 +831,7 @@ export function NewGoadInstancePageClient() {
         }
       }
 
-      const args = ludusWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
+      const args = buildGoadWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
       goadChainDebug("goad_install_issued", {
         path: "fresh-install",
         rangeId: rangeId ?? null,
@@ -1077,7 +1040,7 @@ export function NewGoadInstancePageClient() {
               {catalog.labs.map((lab) => {
                 const ludusOk  = lab.ludusSupported !== false  // treat missing field as true (older catalog)
                 const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
-                const tplOk    = tpl.ready || (lab.requiredTemplates ?? []).length === 0
+                const tplOk    = tpl.ready
                 const canSelect = ludusOk && tplOk
                 const isSelected = selectedLab === lab.name
                 return (
@@ -1118,7 +1081,7 @@ export function NewGoadInstancePageClient() {
                               <PackageX className="h-2.5 w-2.5" /> Missing templates
                             </Badge>
                           )}
-                          {canSelect && (lab.requiredTemplates ?? []).length > 0 && (
+                          {canSelect && (
                             <Badge variant="success" className="text-xs gap-1">
                               <PackageCheck className="h-2.5 w-2.5" /> Ready
                             </Badge>
@@ -1131,10 +1094,9 @@ export function NewGoadInstancePageClient() {
                           <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">
                             No <code>providers/ludus/</code> directory — this lab cannot be deployed with Ludus
                           </p>
-                        ) : (lab.requiredTemplates ?? []).length > 0
-                          ? <TemplateChips required={lab.requiredTemplates} builtNames={builtNames} allNames={allNames} />
-                          : <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">No template requirements detected — hit Refresh if this seems wrong</p>
-                        }
+                        ) : (
+                          <TemplateChips required={lab.requiredTemplates ?? []} builtNames={builtNames} allNames={allNames} />
+                        )}
                       </div>
                       {isSelected && (
                         <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
@@ -1182,7 +1144,7 @@ export function NewGoadInstancePageClient() {
                 const ansibleReady = extensionAnsibleReady(ext)
                 const missingAnsible = extensionMissingAnsible(ext)
                 const canEnable =
-                  (tpl.ready || (ext.requiredTemplates ?? []).length === 0) &&
+                  tpl.ready &&
                   ansibleReady &&
                   !ansibleInstalledLoading
                 const isSelected = selectedExtensions.has(ext.name)
@@ -1551,14 +1513,13 @@ export function NewGoadInstancePageClient() {
 
           {/* Template readiness summary */}
           {(() => {
-            const allRequired = [
+            const allRequired = withRouterTemplateRequired([
               ...(labInfo?.requiredTemplates ?? []),
               ...Array.from(selectedExtensions).flatMap(
                 (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
               ),
-            ]
+            ])
             const unique = [...new Set(allRequired)]
-            if (unique.length === 0) return null
             const summary = checkTemplates(unique, builtNames, allNames)
             return (
               <Card className={cn(
@@ -1630,7 +1591,8 @@ export function NewGoadInstancePageClient() {
                 !!configPreviewError ||
                 !yamlValidation.valid ||
                 !reviewConfigYaml.trim() ||
-                !ansibleDepsReady
+                !ansibleDepsReady ||
+                !builtNames.has(LUDUS_DEFAULT_ROUTER_TEMPLATE)
               }
               className="min-w-36"
             >

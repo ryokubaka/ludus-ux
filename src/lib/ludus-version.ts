@@ -28,6 +28,22 @@ export function ludusSupportsSources(version: string): boolean {
   return ludusVersionAtLeast(version, 2, 2, 0)
 }
 
+/** Ludus 2.3.0+ allows top-level `ludus_extensions` in range-config YAML. */
+export function ludusSupportsExtensionsKey(version: string): boolean {
+  return ludusVersionAtLeast(version, 2, 3, 0)
+}
+
+/**
+ * Stock Ludus ≤2.2.3 may ignore deploy `verbose` when `force` is set
+ * (server passes `force` as Ansible verbosity). Show warning when version
+ * is known and below 2.2.4; if version unknown, treat as possibly affected.
+ */
+export function ludusMayIgnoreDeployVerboseWhenForce(version: string): boolean {
+  const v = parseLudusSemver(version)
+  if (!v) return true
+  return !ludusVersionAtLeast(version, 2, 2, 4)
+}
+
 /**
  * Older Ludus ignores action: remove and runs install — ansible then reports
  * "already installed" / "nothing to do".

@@ -45,7 +45,7 @@ describe("buildEnsureGoadVenvShell", () => {
     expect(sh).toContain(`_LUX_GOAD_ROOT='${goadRoot}'`)
     expect(sh).toContain('$_LUX_GOAD_ROOT/ansible/roles:')
     expect(sh).toContain('"$HOME/.goad/.venv"')
-    expect(sh).toContain('"$HOME/.goad/.venv/bin/pip"')
+    expect(sh).toContain('$_LUX_VENV/bin/pip')
     expect(sh).not.toContain("ansible-galaxy")
     expect(sh).not.toContain("collection install")
   })
@@ -60,5 +60,13 @@ describe("buildEnsureGoadVenvShell", () => {
     const sh = buildEnsureGoadVenvShell(goadPathFromEnv(), ludusInstallPathFromEnv())
     expect(sh).not.toMatch(/then;\s*;/)
     expect(sh).not.toContain("then;   _LUX_VER")
+  })
+
+  it("recreates broken venv and pip-installs when rich missing", () => {
+    const sh = buildEnsureGoadVenvShell(goadPathFromEnv(), ludusInstallPathFromEnv())
+    expect(sh).toContain('rm -rf "$_LUX_VENV"')
+    expect(sh).toContain("import rich")
+    expect(sh).toContain("Failed to create GOAD venv")
+    expect(sh).toContain("exit 1")
   })
 })

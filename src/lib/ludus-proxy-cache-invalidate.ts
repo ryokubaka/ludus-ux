@@ -54,7 +54,7 @@ export function revalidateAfterLudusProxyMutation(
     return
   }
 
-  if (path.startsWith("/templates")) {
+  if (path.startsWith("/templates") || path.startsWith("/template/") || path === "/template") {
     revalidateLudusResource("templates")
     revalidateLudusScopeResource(scopeTag, "templates")
     return

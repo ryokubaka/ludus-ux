@@ -191,15 +191,25 @@ export function Sidebar() {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
     if (cachedGoad !== null) setGoadEnabled(cachedGoad !== "false")
 
-    fetch("/api/settings")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data && typeof data.goadEnabled === "boolean") {
-          setGoadEnabled(data.goadEnabled)
-          sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
-        }
-      })
-      .catch(() => {})
+    const refreshNavFlags = () => {
+      fetch("/api/settings")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && typeof data.goadEnabled === "boolean") {
+            setGoadEnabled(data.goadEnabled)
+            sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
+          }
+        })
+        .catch(() => {})
+    }
+
+    refreshNavFlags()
+    window.addEventListener("lux-settings-updated", refreshNavFlags)
+    window.addEventListener("focus", refreshNavFlags)
+    return () => {
+      window.removeEventListener("lux-settings-updated", refreshNavFlags)
+      window.removeEventListener("focus", refreshNavFlags)
+    }
   }, [])
 
   useEffect(() => {

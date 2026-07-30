@@ -35,7 +35,7 @@ import {
   History,
   ArrowLeft,
 } from "lucide-react"
-import { ludusApi, del } from "@/lib/api"
+import { ludusApi } from "@/lib/api"
 import { LogHistoryList } from "@/components/range/log-history-list"
 import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
 import { cn, extractArray } from "@/lib/utils"
@@ -575,7 +575,7 @@ export function TemplatesPageClient() {
     setBuildHistoryLines([])
   }, [])
 
-  // Template list — cached for fast subsequent loads
+  // Template list — refetch when a Packer build finishes (invalidate below).
   const { data: templates = [], isLoading: loading } = useQuery({
     queryKey: queryKeys.templates(scopeTag),
     queryFn: async () => {
@@ -613,58 +613,51 @@ export function TemplatesPageClient() {
     }
   }, [])
 
-  // Template build status — polls every 3 s while building, otherwise only checks on mount
-  useQuery({
+  // Always poll Packer status while this page is open so builds started from
+  // the assistant (or another tab) still flip Built status without a manual refresh.
+  const wasBuildingRef = useRef(false)
+  const { data: statusActive } = useQuery({
     queryKey: queryKeys.templateStatus(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getTemplateStatus()
-      return result.data ?? null
+      const data = result.data ?? null
+      if (result.error && data == null) return false
+      return Array.isArray(data) ? data.length > 0 : data != null
     },
-    refetchInterval: building ? 3000 : false,
+    refetchInterval: 3000,
     staleTime: 0,
-    select: (data) => {
-      const isActive = Array.isArray(data) ? data.length > 0 : data != null
-      return isActive
-    },
   })
 
-  // Detect and resume an in-progress build on mount / page navigation
   useEffect(() => {
-    const checkBuildStatus = async () => {
-      const statusResult = await ludusApi.getTemplateStatus()
-      const isActive = Array.isArray(statusResult.data)
-        ? statusResult.data.length > 0
-        : statusResult.data != null && !statusResult.error
-      if (isActive) {
-        setBuilding(true)
-        setShowLogs(true)
-        fetchLogs()
-      }
+    if (statusActive === undefined) return
+    if (statusActive) {
+      wasBuildingRef.current = true
+      setBuilding(true)
+      setShowLogs(true)
+      return
     }
-    checkBuildStatus()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    setBuilding(false)
+    if (!wasBuildingRef.current) return
+    wasBuildingRef.current = false
+    void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
+    // Ludus can lag a beat after /templates/status clears — second pass.
+    const t = window.setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
+    }, 2500)
+    return () => window.clearTimeout(t)
+  }, [statusActive, queryClient, scopeTag])
 
-  // Poll logs + check completion while building
+  // Poll live Packer logs while a build is active
   useEffect(() => {
     if (!building) return
-
-    const interval = setInterval(async () => {
-      fetchLogs()
-
-      const statusResult = await ludusApi.getTemplateStatus()
-      const stillBuilding = Array.isArray(statusResult.data)
-        ? statusResult.data.length > 0
-        : statusResult.data != null && !statusResult.error
-      if (!stillBuilding) {
-        setBuilding(false)
-        queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
-      }
+    void fetchLogs()
+    const interval = setInterval(() => {
+      void fetchLogs()
     }, 3000)
-
     return () => clearInterval(interval)
-  }, [building, fetchLogs, queryClient])
+  }, [building, fetchLogs])
 
   const toggleSelect = (name: string) => {
     setSelectedTemplates((prev) => {
@@ -728,12 +721,29 @@ export function TemplatesPageClient() {
   const handleAbort = () => confirm("Abort the running template build?", doAbort)
 
   const doDelete = async (name: string) => {
-    const result = await del(`/template/${encodeURIComponent(name)}`)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
-    } else {
-      toast({ title: "Template deleted" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    try {
+      const res = await fetch("/api/templates/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title: "Delete failed",
+          description: data.error || `HTTP ${res.status}`,
+        })
+        return
+      }
+      toast({ title: "Template deleted", description: data.message || name })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Delete failed",
+        description: (err as Error).message,
+      })
     }
   }
   const handleDelete = (name: string) =>

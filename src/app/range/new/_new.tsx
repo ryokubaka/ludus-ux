@@ -37,6 +37,7 @@ import {
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
 import { applyBlueprintToRange } from "@/lib/blueprint-apply"
@@ -572,6 +573,17 @@ export function NewRangePageClient() {
     setDeploying(true)
     setDeployResult(null)
     setDeployStatus("")
+
+    if (!templates.some((t) => t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE)) {
+      toast({
+        variant: "destructive",
+        title: "Router template required",
+        description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+      })
+      setDeploying(false)
+      setDeployStatus("")
+      return
+    }
 
     const configToUpload =
       configMethod === "yaml"

@@ -582,7 +582,8 @@ export function SourcesPageClient() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted-foreground">
-          Register git repositories as Ludus Sources to sync blueprints, templates, and bundled Ansible content.{" "}
+          Register git repositories as Ludus Sources to sync blueprints, templates, and bundled Ansible content.
+          On Ludus 2.3.0+, source IDs may be auto-prefixed with your userID.{" "}
           <a
             href={LUDUS_SOURCES_DOCS_URL}
             target="_blank"
@@ -641,6 +642,11 @@ export function SourcesPageClient() {
                         <CardTitle className="text-sm font-semibold leading-tight">
                           {source.name || sid}
                         </CardTitle>
+                        {sid && (
+                          <p className="text-[10px] font-mono text-muted-foreground truncate mt-0.5">
+                            ID: {sid}
+                          </p>
+                        )}
                         {source.url && (
                           <p className="text-xs text-muted-foreground truncate">{source.url}</p>
                         )}
@@ -705,6 +711,9 @@ export function SourcesPageClient() {
           <DialogHeader>
             <DialogTitle>Register Git Source</DialogTitle>
           </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Ludus 2.3.0+ may prefix the registered source ID with your userID. LUX lists that ID below the source name after registration.
+          </p>
           <div className="space-y-3">
             <div>
               <Label htmlFor="source-url">Repository URL</Label>

@@ -20,11 +20,18 @@
 - **Templates** — List, build, stop, delete Packer templates; install from official Ludus GitLab or custom sources
 - **Blueprints** — Save/share/deploy range configs; user & group ACLs, unshare, apply-to-range workflow
 - **Ansible Roles** — Galaxy roles and collections (add with version pin, list, remove)
+- **Security Onion sniff** — On deploy of SO labs, LUX attaches a Proxmox sniff NIC + hub-mode bridge via root SSH; reverses on range/VM delete (Proxmox is source of truth)
 
 ### VM access
 
 - **Consoles** — noVNC in browser (uses the logged-in user's PAM password with Proxmox HTTP API on port 8006); SPICE / VNC `.vv` via `pvesh` over SSH (works with key-based root SSH)
 - **Console range picker** — Choose any accessible range and VM from the Consoles page
+
+### LudusHound integration
+
+- **Overview** — `/ludushound` host readiness (repo, binary, collection, BloodHound CE role) with one-click install actions; workspace list under `LUDUSHOUND_PATH/workspaces`
+- **Deploy wizard** — Full AD replica (live Neo4j or FilesMapJson) or Attack Path JSON → SSH-run LudusHound → review YAML → Packer template gate → `setRangeConfig` + deploy
+- **Credits** — [LudusHound](https://github.com/bagelByt3s/LudusHound) (bagelByt3s; idea Erik Hunstad); BloodHound CE role by Bad Sector Labs. See `NOTICE`.
 
 ### GOAD integration
 

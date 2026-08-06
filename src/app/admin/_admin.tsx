@@ -38,7 +38,7 @@ import {
   Share2,
   Play,
 } from "lucide-react"
-import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
+import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete, cleanupSoSniffBeforeRangeDelete } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -330,6 +330,10 @@ export function AdminPageClient() {
       const statusRes = await ludusApi.getRangeStatus(rangeID)
       const ipsForHosts =
         statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
+      await cleanupSoSniffBeforeRangeDelete(rangeID, {
+        rangeNumber: statusRes.data?.rangeNumber,
+        vmNames: statusRes.data?.VMs?.map((v) => v.name).filter((n) => typeof n === "string"),
+      })
       const res = await ludusApi.deleteRange(rangeID)
       if (res.error) {
         if (

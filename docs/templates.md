@@ -65,7 +65,13 @@ After a successful add, the template appears as **Not Built** until you run **Bu
 
 ### Delete
 
-The trash icon removes a template via LUX `DELETE /api/templates/delete`: Ludus API delete (for built Proxmox VMs) plus **root SSH** cleanup of `/opt/ludus/packer/<name>` and `/opt/ludus/users/*/packer/<name>`. Ludus alone returns HTTP 200 for shared-packer installs but refuses to remove the folder (“included template”) — LUX treats that as needing disk cleanup, not success.
+The trash icon removes a template via LUX `DELETE /api/templates/delete`:
+
+1. Ludus API `DELETE /template/{name}` (clears built Proxmox VM when possible)
+2. `ludus templates rm -n …` over root SSH (unregisters when API soft-refuses)
+3. Disk cleanup of `/opt/ludus/packer/<aliases>`, `/opt/ludus/users/*/packer/<aliases>`, and `/opt/ludus/sources/*/templates/<aliases>`
+
+Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
 
 ---
 

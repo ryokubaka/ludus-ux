@@ -5,6 +5,11 @@ export function resolveGoadPath(): string {
   return getSettings().goadPath.trim()
 }
 
+/** LudusHound install root on the Ludus host (`LUDUSHOUND_PATH` / Settings). */
+export function resolveLudushoundPath(): string {
+  return getSettings().ludushoundPath.trim()
+}
+
 /** Ludus install root on the Ludus host (`LUDUS_INSTALL_PATH` / Settings). */
 export function resolveLudusInstallPath(): string {
   return getSettings().ludusInstallPath.trim()

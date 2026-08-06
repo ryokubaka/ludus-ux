@@ -55,6 +55,7 @@ interface NavItem {
   icon: React.FC<React.SVGProps<SVGSVGElement>>
   adminOnly?: boolean
   goadOnly?: boolean
+  ludushoundOnly?: boolean
   /** Ludus 2.2.0+ Sources API — hidden on older servers */
   ludusSources?: boolean
 }
@@ -100,6 +101,7 @@ const navGroups: NavGroup[] = [
     label: "Integrations",
     items: [
       { href: "/goad", label: "GOAD Management", icon: Terminal, goadOnly: true },
+      { href: "/ludushound", label: "LudusHound", icon: GitBranch, ludushoundOnly: true },
     ],
   },
   {
@@ -126,13 +128,20 @@ function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null
 
 const ADMIN_CACHE_KEY = "ludus-sidebar-is-admin"
 const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
+const LUDUSHOUND_CACHE_KEY = "ludus-sidebar-ludushound-enabled"
 
 function navItemVisible(
   item: NavItem,
-  ctx: { isAdmin: boolean; goadEnabled: boolean; sourcesSupported: boolean },
+  ctx: {
+    isAdmin: boolean
+    goadEnabled: boolean
+    ludushoundEnabled: boolean
+    sourcesSupported: boolean
+  },
 ): boolean {
   if (item.adminOnly && !ctx.isAdmin) return false
   if (item.goadOnly && !ctx.goadEnabled) return false
+  if (item.ludushoundOnly && !ctx.ludushoundEnabled) return false
   if (item.ludusSources && !ctx.sourcesSupported) return false
   return true
 }
@@ -148,6 +157,7 @@ export function Sidebar() {
   // Prefer server shell snapshot (no /api/auth/session); fall back to fetch if absent.
   const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   const [goadEnabled, setGoadEnabled] = useState(true)
+  const [ludushoundEnabled, setLudushoundEnabled] = useState(true)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
@@ -163,8 +173,8 @@ export function Sidebar() {
   const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
   const sourcesSupported = ludusVersion !== "" && ludusSupportsSources(ludusVersion)
   const navCtx = useMemo(
-    () => ({ isAdmin, goadEnabled, sourcesSupported }),
-    [isAdmin, goadEnabled, sourcesSupported],
+    () => ({ isAdmin, goadEnabled, ludushoundEnabled, sourcesSupported }),
+    [isAdmin, goadEnabled, ludushoundEnabled, sourcesSupported],
   )
 
   useEffect(() => {
@@ -190,6 +200,8 @@ export function Sidebar() {
   useEffect(() => {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
     if (cachedGoad !== null) setGoadEnabled(cachedGoad !== "false")
+    const cachedLh = sessionStorage.getItem(LUDUSHOUND_CACHE_KEY)
+    if (cachedLh !== null) setLudushoundEnabled(cachedLh !== "false")
 
     const refreshNavFlags = () => {
       fetch("/api/settings")
@@ -198,6 +210,10 @@ export function Sidebar() {
           if (data && typeof data.goadEnabled === "boolean") {
             setGoadEnabled(data.goadEnabled)
             sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
+          }
+          if (data && typeof data.ludushoundEnabled === "boolean") {
+            setLudushoundEnabled(data.ludushoundEnabled)
+            sessionStorage.setItem(LUDUSHOUND_CACHE_KEY, String(data.ludushoundEnabled))
           }
         })
         .catch(() => {})

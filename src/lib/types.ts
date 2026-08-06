@@ -396,3 +396,29 @@ export interface GoadCommand {
   args?: string[]
   instanceId?: string
 }
+
+// ── LudusHound ────────────────────────────────────────────────────────────────
+
+export type LudushoundMode = "full" | "attackpath"
+export type LudushoundBloodhoundSource = "external" | "filesmap" | "none"
+
+export interface LudushoundWorkspace {
+  id: string
+  rangeId?: string
+  mtime?: string
+  mode?: LudushoundMode
+}
+
+export interface LudushoundStatus {
+  configured: boolean
+  enabled: boolean
+  ludushoundPath: string
+  repoPresent: boolean
+  binaryPresent: boolean
+  goAvailable: boolean
+  collectionInstalled: boolean
+  collectionTarballPresent: boolean
+  collectionTarballPath: string
+  message?: string
+  error?: string
+}

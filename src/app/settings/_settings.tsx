@@ -59,8 +59,10 @@ interface Settings {
   sshHost: string
   sshPort: number
   goadPath: string
+  ludushoundPath: string
   ludusInstallPath: string
   goadEnabled: boolean
+  ludushoundEnabled: boolean
   ludusAnsibleVerbose: boolean
   rootApiKey?: string
   /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
@@ -987,9 +989,9 @@ function SettingsContent() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Terminal className="h-4 w-4 text-status-success" />
-                <CardTitle className="text-base">SSH &amp; GOAD Integration</CardTitle>
+                <CardTitle className="text-base">SSH, GOAD &amp; LudusHound</CardTitle>
               </div>
-              <CardDescription>SSH server used for user login and GOAD command execution</CardDescription>
+              <CardDescription>SSH server used for user login, GOAD, and LudusHound command execution</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
@@ -1000,6 +1002,15 @@ function SettingsContent() {
                   </p>
                 </div>
                 <Switch checked={draft?.goadEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, goadEnabled: v } : d)} disabled={!session?.isAdmin} />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">LudusHound Integration</p>
+                  <p className="text-xs text-muted-foreground">
+                    Show or hide LudusHound in the sidebar. Set <code className="text-primary">ENABLE_LUDUSHOUND=false</code> in <code className="text-primary">.env</code> to disable permanently.
+                  </p>
+                </div>
+                <Switch checked={draft?.ludushoundEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, ludushoundEnabled: v } : d)} disabled={!session?.isAdmin} />
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
@@ -1040,6 +1051,20 @@ function SettingsContent() {
                   <span className="ml-2 text-xs text-muted-foreground font-normal">GOAD_PATH</span>
                 </Label>
                 <Input id="goad-path" value={draft?.goadPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, goadPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/GOAD" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ludushound-path">
+                  LudusHound Installation Path
+                  <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUSHOUND_PATH</span>
+                </Label>
+                <Input id="ludushound-path" value={draft?.ludushoundPath || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludushoundPath: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="/opt/LudusHound" />
+                <p className="text-xs text-muted-foreground">
+                  Clone{" "}
+                  <a href="https://github.com/bagelByt3s/LudusHound" target="_blank" rel="noreferrer" className="text-primary underline">
+                    bagelByt3s/LudusHound
+                  </a>{" "}
+                  here; LUX builds the binary and installs the Ansible collection.
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="ludus-install-path">

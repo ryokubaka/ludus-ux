@@ -112,15 +112,39 @@ export async function GET(request: NextRequest) {
   const sourceId = searchParams.get("sourceId") || ""
   const repoUrl = searchParams.get("repoUrl") || ""
 
+  // Registered sources: resolve against that source only — never fall back to BSL GitHub.
+  if (source === "registered" && sourceId) {
+    try {
+      const { apiKey } = await requireSourcesSession(request)
+      if (!apiKey) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+      }
+      // Resolves Ludus API + that source's own git URL (not BSL).
+      const ludusBlueprints = await fetchLudusBlueprintCatalogBySourceId(
+        apiKey,
+        sourceId,
+        searchParams.get("ref") || BADSL_REF,
+        BADSL_BASE,
+      )
+      return NextResponse.json({
+        blueprints: ludusBlueprints ?? [],
+        catalogSource: "ludus",
+        registeredSourceId: sourceId,
+      })
+    } catch (err) {
+      const msg = (err as Error).message
+      return NextResponse.json(
+        { error: `Failed to fetch blueprint source: ${msg}` },
+        { status: 502 },
+      )
+    }
+  }
+
   let apiBase: string
   let blueprintsPath: string
   let ref: string
 
-  if (source === "registered" && sourceId) {
-    apiBase = BADSL_BASE
-    blueprintsPath = "blueprints"
-    ref = searchParams.get("ref") || BADSL_REF
-  } else if (source === "badsectorlabs") {
+  if (source === "badsectorlabs") {
     apiBase = BADSL_BASE
     blueprintsPath = "blueprints"
     ref = BADSL_REF
@@ -139,30 +163,14 @@ export async function GET(request: NextRequest) {
   try {
     const { apiKey } = await requireSourcesSession(request)
     if (apiKey) {
-      if (source === "registered" && sourceId) {
-        const ludusBlueprints = await fetchLudusBlueprintCatalogBySourceId(
-          apiKey,
-          sourceId,
-          ref,
-          apiBase,
-        )
+      const gitUrl =
+        source === "badsectorlabs"
+          ? resolveBadslCatalogMeta().gitUrl
+          : apiBaseToGitUrl(apiBase)
+      if (gitUrl) {
+        const ludusBlueprints = await fetchLudusBlueprintCatalog(apiKey, gitUrl, ref, apiBase)
         if (ludusBlueprints && ludusBlueprints.length > 0) {
-          return NextResponse.json({
-            blueprints: ludusBlueprints,
-            catalogSource: "ludus",
-            registeredSourceId: sourceId,
-          })
-        }
-      } else {
-        const gitUrl =
-          source === "badsectorlabs"
-            ? resolveBadslCatalogMeta().gitUrl
-            : apiBaseToGitUrl(apiBase)
-        if (gitUrl) {
-          const ludusBlueprints = await fetchLudusBlueprintCatalog(apiKey, gitUrl, ref, apiBase)
-          if (ludusBlueprints && ludusBlueprints.length > 0) {
-            return NextResponse.json({ blueprints: ludusBlueprints, catalogSource: "ludus" })
-          }
+          return NextResponse.json({ blueprints: ludusBlueprints, catalogSource: "ludus" })
         }
       }
     }

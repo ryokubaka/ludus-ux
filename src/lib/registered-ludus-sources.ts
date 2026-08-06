@@ -16,6 +16,11 @@ export function mapRegisteredSources(
       ref: r.ref,
     }))
     .filter((r) => r.id)
+    .sort((a, b) =>
+      registeredSourceLabel(a).localeCompare(registeredSourceLabel(b), undefined, {
+        sensitivity: "base",
+      }),
+    )
 }
 
 export function pickDefaultRegisteredSource(

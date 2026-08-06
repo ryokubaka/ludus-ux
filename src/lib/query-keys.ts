@@ -87,4 +87,10 @@ export const queryKeys = {
     [...queryKeys.goadTasks(), scopeTag, "for-instance", instanceId] as const,
   /** GOAD home: recent tasks for impersonation bucket. */
   goadTasksForUser: (scopeTag: string, impUser: string) => [...queryKeys.goadTasks(), scopeTag, impUser] as const,
+
+  // ── LudusHound ────────────────────────────────────────────────────────────
+  ludushoundStatus: () => ["ludushound", "status"] as const,
+  ludushoundStatusScoped: (scopeTag: string) => [...queryKeys.ludushoundStatus(), scopeTag] as const,
+  ludushoundWorkspaces: () => ["ludushound", "workspaces"] as const,
+  ludushoundWorkspacesList: (scopeTag: string) => [...queryKeys.ludushoundWorkspaces(), scopeTag] as const,
 }

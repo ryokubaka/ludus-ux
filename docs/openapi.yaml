@@ -4,8 +4,8 @@ info:
   description: |
     REST API for the Ludus UX web application — a Next.js frontend for managing
     [Ludus](https://ludus.cloud) cyber range infrastructure, including VM ranges,
-    templates, user management, VNC/SPICE console access, and GOAD (Game of
-    Active Directory) lab orchestration.
+    templates, user management, VNC/SPICE console access, GOAD (Game of
+    Active Directory) lab orchestration, and LudusHound BloodHound→Ludus deploys.
 
     ## Authentication
 
@@ -51,6 +51,8 @@ tags:
     description: SPICE/VNC console access for Proxmox VMs
   - name: GOAD
     description: GOAD (Game of Active Directory) lab orchestration
+  - name: LudusHound
+    description: LudusHound BloodHound→Ludus YAML generate and deploy
 
 # ---------------------------------------------------------------------------
 # Reusable components
@@ -1671,6 +1673,110 @@ paths:
                   vmName:
                     type: string
                 required: [token, ticket]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # --------------------------------------------------------------------------
+  # LudusHound
+  # --------------------------------------------------------------------------
+  /api/ludushound/status:
+    get:
+      tags: [LudusHound]
+      summary: LudusHound host readiness
+      operationId: getLudushoundStatus
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Repo/binary/collection/BloodHound CE role status
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/clone-repo:
+    post:
+      tags: [LudusHound]
+      summary: Clone or git-pull LudusHound on the Ludus host (LUDUSHOUND_PATH)
+      operationId: cloneLudushoundRepo
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Clone or pull succeeded
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/install-collection:
+    post:
+      tags: [LudusHound]
+      summary: Install bagelByt3s.ludushound from local tarball (auto-installs Go + builds binary if needed)
+      operationId: installLudushoundCollection
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Install result
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/install-go:
+    post:
+      tags: [LudusHound]
+      summary: Install official Go toolchain on Ludus host under /usr/local/go
+      operationId: installLudushoundGo
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Go install result
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/probe-neo4j:
+    post:
+      tags: [LudusHound]
+      summary: Probe Neo4j :7474 from the Ludus host
+      operationId: probeLudushoundNeo4j
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Probe OK
+        '502':
+          description: Probe failed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/generate:
+    post:
+      tags: [LudusHound]
+      summary: Run LudusHound CLI and return generated YAML + template audit
+      operationId: generateLudushoundYaml
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Generated YAML
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/deploy:
+    post:
+      tags: [LudusHound]
+      summary: Upload YAML and deploy range (template + collection gates)
+      operationId: deployLudushoundRange
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Deploy started
+        '409':
+          description: Missing collection or Packer templates
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/ludushound/workspaces:
+    get:
+      tags: [LudusHound]
+      summary: List LudusHound workspaces on the Ludus host
+      operationId: listLudushoundWorkspaces
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Workspace list
         '401':
           $ref: '#/components/responses/Unauthorized'
 

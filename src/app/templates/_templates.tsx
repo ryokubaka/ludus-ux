@@ -46,6 +46,7 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
   buildCatalogTemplatePresenceMap,
   getCatalogTemplatePresence,
+  resolveInstalledTemplateName,
   type CatalogTemplatePresence,
 } from "@/lib/template-install-match"
 import { SourceCatalogBanner } from "@/components/sources/source-catalog-banner"
@@ -77,8 +78,13 @@ const BUILTIN_SOURCE = {
 
 // ── Add from Source panel ─────────────────────────────────────────────────────
 
-function AddFromSource({ templatePresence, onAdded }: {
+function AddFromSource({
+  templatePresence,
+  ludusTemplates,
+  onAdded,
+}: {
   templatePresence: Map<string, CatalogTemplatePresence>
+  ludusTemplates: Array<{ name: string; built: boolean }>
   onAdded: () => void
 }) {
   const { toast } = useToast()
@@ -299,9 +305,12 @@ function AddFromSource({ templatePresence, onAdded }: {
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
                   value={registeredSourceId}
                   onChange={(e) => {
-                    setRegisteredSourceId(e.target.value)
+                    const nextId = e.target.value
+                    setRegisteredSourceId(nextId)
                     setSourceTemplates([])
+                    setCatalogSource(null)
                     setAddResults([])
+                    setSourceError(null)
                     autoFetchedRef.current = false
                   }}
                 >
@@ -414,6 +423,9 @@ function AddFromSource({ templatePresence, onAdded }: {
                 {sourceTemplates.map((t) => {
                   const presence = presenceOf(t.name)
                   const onLudus = presence !== "none"
+                  const ludusName = onLudus
+                    ? resolveInstalledTemplateName(t.name, ludusTemplates)
+                    : null
                   const result = addResults.find((r) => r.name === t.name)
                   return (
                     <button
@@ -460,9 +472,11 @@ function AddFromSource({ templatePresence, onAdded }: {
                         )}
                       </div>
                       <p className="text-muted-foreground/70 truncate pl-5">
-                        {t.version
-                          ? `v${t.version}`
-                          : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
+                        {ludusName && ludusName !== t.name
+                          ? `as ${ludusName}`
+                          : t.version
+                            ? `v${t.version}`
+                            : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
                       </p>
                     </button>
                   )
@@ -857,7 +871,11 @@ export function TemplatesPageClient() {
       )}
 
       {/* Add from Source */}
-      <AddFromSource templatePresence={templatePresence} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
+      <AddFromSource
+        templatePresence={templatePresence}
+        ludusTemplates={templates}
+        onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })}
+      />
 
       {/* Build History */}
       <Card>

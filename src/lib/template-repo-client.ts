@@ -45,6 +45,32 @@ export function apiBaseToGitUrl(apiBase: string): string | null {
   return null
 }
 
+/**
+ * Map a git clone / browse URL to a GitHub or GitLab repository API base.
+ * Used when listing/installing from a Ludus registered source URL.
+ */
+export function gitUrlToRepoApiBase(gitUrl: string): string | null {
+  const normalized = gitUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "")
+  if (!normalized) return null
+
+  const gh = normalized.match(/github\.com\/([^/]+\/[^/]+)/i)
+  if (gh) return `https://api.github.com/repos/${gh[1]}`
+
+  const glBrowse = normalized.match(
+    /^(https:\/\/[^/]*gitlab[^/]*)\/([^/]+\/[^/]+?)(?:\/-\/.*)?$/i,
+  )
+  if (glBrowse) {
+    return `${glBrowse[1]}/api/v4/projects/${encodeURIComponent(glBrowse[2])}/repository`
+  }
+
+  // Already an API base
+  if (isGitHubApiBase(normalized) || /\/api\/v4\/projects\//.test(normalized)) {
+    return normalized
+  }
+
+  return null
+}
+
 /** Raw file URL for GitHub repos (apiBase = https://api.github.com/repos/owner/repo). */
 export function githubRawFileUrl(apiBase: string, path: string, ref: string): string {
   const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)

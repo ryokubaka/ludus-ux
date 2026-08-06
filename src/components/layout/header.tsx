@@ -38,6 +38,8 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   "/admin/app-logs": { title: "Application Logs", description: "Live auth and application event log (admin only)" },
   "/logs": { title: "Range Logs", description: "Live and historical range deployment logs" },
   "/goad": { title: "GOAD Management", description: "Manage Game of Active Directory lab instances" },
+  "/ludushound": { title: "LudusHound", description: "Deploy AD replicas from BloodHound data via LudusHound" },
+  "/ludushound/new": { title: "Deploy LudusHound", description: "Generate and deploy a LudusHound range" },
   "/settings": { title: "Settings", description: "Configure Ludus connection and preferences" },
   "/account": { title: "User Settings", description: "Profile picture and password" },
 }

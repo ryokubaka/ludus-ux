@@ -15,6 +15,16 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.2.1] - 2026-08-05
+
+**LUX**
+- [Add] **LudusHound** — Integrations track (`/ludushound`) wraps [bagelByt3s/LudusHound](https://github.com/bagelByt3s/LudusHound): Full AD replica (external Neo4j / FilesMap) and Attack Path JSON → generate Ludus YAML → `setRangeConfig` + deploy. Feature flag `ENABLE_LUDUSHOUND` / Settings path `LUDUSHOUND_PATH` (default `/opt/LudusHound`).
+- [Add] **LudusHound preflight** — Status + one-click clone/update, Go install when missing, `bagelByt3s.ludushound` collection from local tarball + `go build`.
+- [Add] **BloodHound source** — External Neo4j (probe from Ludus host) or FilesMapJson; Attack Path skips live BH.
+- [Add] **Template gate** — Parse Packer templates from generated YAML (+ router); block deploy until built.
+- [Remove] **Managed BloodHound CE** — Dropped in-range `ludus_bloodhound_ce` path (use existing Neo4j / FilesMap instead).
+- [Docs] NOTICE credit for LudusHound; workflows / environment notes.
+
 ## [1.2.0] - 2026-07-29
 
 **LUX**

@@ -40,6 +40,15 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). Settings UI hides that warning when the connected server reports ≥2.2.4. | `true` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
 
+## LudusHound
+
+| Variable | Description | Default |
+|---|---|---|
+| `ENABLE_LUDUSHOUND` | Show LudusHound in the UI (`false` to hide) | `true` |
+| `LUDUSHOUND_PATH` | Path to the cloned [LudusHound](https://github.com/bagelByt3s/LudusHound) repo on the Ludus server | `/opt/LudusHound` |
+
+Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go when missing, builds the binary, and installs the local Ansible collection tarball. SSH uses the same `LUDUS_SSH_*` settings as GOAD.
+
 ## TLS / HTTPS
 
 **Docker Compose:** TLS terminates at the **`nginx`** service (`ludus-ux-web`). The host publishes **443→443** only; place **`docker/nginx/certificates/cert.pem`** and **`docker/nginx/certificates/key.pem`** on the LUX host (or let nginx generate self-signed files on first boot). The **`ludus-ux`** container listens on **plain HTTP :3000** inside the Docker network; **`DISABLE_HTTPS=true`** and **`TRUST_PROXY_TLS=true`** are the compose defaults so session cookies and HSTS still match HTTPS in the browser.

@@ -3,14 +3,14 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.2.0-green)]()
+[![Version](https://img.shields.io/badge/version-1.2.1-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
-**LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations: design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD), and handle day-two tasks (snapshots, testing mode, templates, blueprints) in the browser while keeping the stack self-hosted and inspectable.
+**LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations: design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD) and [LudusHound](https://github.com/bagelByt3s/LudusHound), and handle day-two tasks (snapshots, testing mode, templates, blueprints) in the browser while keeping the stack self-hosted and inspectable.
 
 > [!WARNING]
-> **This project was largely AI-assisted and has not undergone a formal security audit.** It handles sensitive credentials and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source before production use.** Not affiliated with or endorsed by Ludus or GOAD.
+> **This project was largely AI-assisted and has not undergone a formal security audit.** It handles sensitive credentials and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source before production use.** Not affiliated with or endorsed by Ludus, GOAD, or LudusHound.
 
 ## Documentation
 
@@ -54,6 +54,7 @@ Full behavior, prerequisites, and downgrade notes: [Upgrade and downgrade](docs/
 | **Ludus** | v2.x, API **8080**, SSH **22** |
 | **Host** | Docker + Compose (v2 plugin or `docker-compose`) |
 | **GOAD** (optional) | GOAD repo on the Ludus server + `python3.11-venv` |
+| **LudusHound** (optional) | Clone [LudusHound](https://github.com/bagelByt3s/LudusHound) to `/opt/LudusHound` + `go` for first build |
 
 ## License & author
 

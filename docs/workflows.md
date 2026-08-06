@@ -144,3 +144,51 @@ LUX runs post-deploy coordination (range linkage, firewall rule application) on 
 - Lose your network connection
 
 ...the GOAD install continues on the Ludus server, and LUX's server-side workflow applies your firewall rules and links the new instance to your range when GOAD finishes. You can return to the instance page at any time to see the current status.
+
+---
+
+## What is LudusHound?
+
+**[LudusHound](https://github.com/bagelByt3s/LudusHound)** (bagelByt3s) turns BloodHound data into a Ludus range YAML that Ansible roles use to rebuild AD objects and relationships. Unlike GOAD (which runs a long provisioner), LudusHound **generates config**; Ludus then deploys VMs and runs the roles.
+
+**Operator prerequisite:** clone the repo on the Ludus host:
+
+```bash
+git clone https://github.com/bagelByt3s/LudusHound /opt/LudusHound
+```
+
+LUX builds the binary and installs `bagelByt3s.ludushound` from the local collection tarball. Packer templates named in the generated YAML (plus the Ludus router template) must be built before deploy.
+
+## Deploying with LudusHound (step by step)
+
+1. Go to **Integrations → LudusHound**
+2. Install collection (+ build binary if needed) from the readiness card — LUX installs Go on the Ludus host under `/usr/local/go` when missing
+3. **Deploy New** — pick Full replica or Attack Path
+4. For Full + live Neo4j: choose **External**, **Managed CE**, or **FilesMap**; probe Neo4j when using live mode
+5. Enter AliveComputers / Attack Path JSON + DomainController
+6. Pick or create a Ludus range → **Generate YAML** → confirm templates are built → **Deploy range**
+
+Live Neo4j must already contain SharpHound data (or use FilesMap / Attack Path instead).
+
+---
+
+## Security Onion sniff lifecycle
+
+Labs from [ludus-source-meow](https://github.com/ryokubaka/ludus-source-meow) (`securityonion-lab` / `securityonion3-lab`) need a second Proxmox NIC for packet sniffing. Ludus only attaches one NIC per VM, so **LUX** owns the host-side mutation:
+
+**On deploy** (`POST /range/deploy` via the Ludus proxy):
+
+1. LUX starts a background watcher if root Proxmox SSH is configured
+2. When the `*-so` VM appears, LUX sets `bridge-ageing 0` on `vmbr10XX` (hub mode — see [Ludus Packet Capture](https://docs.ludus.cloud/docs/networking))
+3. LUX adds `net1` tagged to the sniff VLAN (default 10), firewall off
+4. Optional audit marker: `/opt/ludus/lux/so-sniff/<rangeId>.json` on the Proxmox host
+
+**Source of truth is Proxmox** (`qm config` + bridge ageing), not LUX SQLite. Markers are convenience only; cleanup rediscovers from live state.
+
+**On range delete / destroy-all-VMs:**
+
+1. Remove matching sniff `net1`
+2. If no remaining sniff NICs on that bridge → restore ageing to **300** seconds
+3. Delete the host marker if present
+
+The Ansible role `ludus_securityonion` waits for the second NIC, then runs `so-setup iso standalone-net`. No manual SSH to Proxmox is required in the happy path.

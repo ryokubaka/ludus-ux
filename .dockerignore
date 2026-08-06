@@ -1,12 +1,40 @@
+﻿# Git / VCS
 .git
+**/.git
 .gitignore
+.gitattributes
+.github
+
+# Secrets & local state (mounted at runtime)
 .env
-.env.local
-node_modules
-.next
-npm-debug.log
-README.md
+.env.*
+!.env.example
 ssh/
 data/
+
+# Dependencies & build output (installed/built inside image)
+**/node_modules/
+node_modules
+.next
+out
+dist
+coverage
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# Dev tooling / IDE (not needed in image)
+.cursor
+.vscode
+.idea
+e2e/
+ci/
+
+# Large / unused in image (docs + CHANGELOG are COPY'd — keep them)
+images/
 *.pem
 *.key
+
+# Nextcloud sync junk (breaks Docker Desktop tar: unknown file mode ?rwxr-xr-x)
+**/*conflicted copy*
+**/*(conflicted*

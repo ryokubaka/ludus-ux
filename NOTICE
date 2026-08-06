@@ -19,6 +19,13 @@ interfaces (no source code from these projects is incorporated):
   Copyright (C) Orange Cyberdefense
   Licensed under the GNU General Public License v3.0
 
+  LudusHound — https://github.com/bagelByt3s/LudusHound
+  Copyright (C) bagelByt3s / Beyviel David and contributors
+  Licensed under the GNU General Public License v3.0
+  Idea credit: Erik Hunstad (@kernel-sanders). Design contributors include
+  Jonathan Owens (@DragoQCC), Zach Stein (@Synzack), and Garrett Foster
+  (@unsigned_sh0rt).
+
 -------------------------------------------------------------------------------
 This product includes software developed by third parties and distributed
 under MIT-compatible licenses:

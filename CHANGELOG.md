@@ -22,7 +22,6 @@ Each bullet uses a single tag:
 - [Add] **LudusHound preflight** — Status + one-click clone/update, Go install when missing, `bagelByt3s.ludushound` collection from local tarball + `go build`.
 - [Add] **BloodHound source** — External Neo4j (probe from Ludus host) or FilesMapJson; Attack Path skips live BH.
 - [Add] **Template gate** — Parse Packer templates from generated YAML (+ router); block deploy until built.
-- [Remove] **Managed BloodHound CE** — Dropped in-range `ludus_bloodhound_ce` path (use existing Neo4j / FilesMap instead).
 - [Docs] NOTICE credit for LudusHound; workflows / environment notes.
 
 ## [1.2.0] - 2026-07-29

@@ -17,34 +17,39 @@ Each bullet uses a single tag:
 
 ## [1.3.0] - 2026-08-09
 
-**LUX**
-- [Add] **Source content re-sync** — Installed Ansible / Templates / Blueprints show a **Sync** tile (**In sync** / **Out of sync**) with per-item **Re-sync** (and Sources catalog expand always offers **Re-sync** for installed items / bulk **Re-sync outdated**). Out of sync when catalog tip differs from installed/pin version, or catalog tip is known but installed version is missing. Uses `POST /sources/{id}/install` with `force` (Sync still refreshes catalog only).
-- [Add] **Source install version pins** — After successful install/re-sync, LUX stores catalog tip versions (`source_content_pins`) and compares them to the live git tip so bumps show **Update available** even when Ludus omits installed versions. Re-sync clears the gap by refreshing the pin.
-- [Add] **Sources auto-sync** — LUX re-pulls git-backed Ludus sources on a timer (default **5 minutes**, `SOURCE_AUTO_SYNC_INTERVAL_MS`) and when a catalog view is stale / before install+force. Background loop uses the stored admin service key (seeded when an admin opens Sources). Manual **Sync** still forces an immediate pull.
-- [Fix] **Source provenance on Ansible table** — Normalize cached `/api/sources` rows (`sourceID` → `id`) so installed-from-source roles get repo link + Sync controls (was stuck on `galaxy` / `—` when prefetch hydrated raw Ludus rows).
-- [Fix] **Sticky “Update available”** — Stop trusting Ludus catalog `upgrade_available` alone; clear via LUX pin matching catalog tip after re-sync.
-- [Add] **Source role/blueprint versions from git** — Catalog versions prefer git tip (`meta/version.yml` / `blueprint.yml`) over Ludus sync cache so bumps show after push; Sources blueprint rows display the catalog version.
-- [Fix] **Source git ref** — Git catalog reads / version enrichment always use the branch/tag/commit from the Sources tab registration (aliases normalized); no silent fallback to `main`/`master` when a ref is set. Catalog APIs return `catalogRef`; Sources expand shows it.
-- [Add] **Source repo link** — Installed items matched to a registered Ludus source show a link to that source’s git URL (Ansible/Templates Source column, Blueprint cards).
-- [Add] **Blueprints installed version** — Blueprint cards / Sources catalog show `installed → catalog`. When Ludus list omits version, LUX loads `GET /blueprints/{id}` detail to fill the installed side.
-- [Fix] **Source catalog git fetch** — GitHub/raw reads use `cache: "no-store"` so version bumps on the Sources-tab branch (e.g. `seconion`) show without waiting on Next.js fetch cache.
-- [Fix] **Source template name collision message** — Ludus “matches a built-in template name” is rewritten: usually Packer `vm_name` already exists on the host (not necessarily a Ludus core template). SO templates are not in core/BSL.
-- [Add] **Blueprints — template dependencies** — Apply dialog and range wizard also parse `template:` fields from blueprint range-config and block apply until each template is registered and Packer-built (same semantics as GOAD / LudusHound template gates). Missing templates link to the Templates page.
-- [Add] **LudusHound** — Integrations track (`/ludushound`) wraps [bagelByt3s/LudusHound](https://github.com/bagelByt3s/LudusHound): Full AD replica (external Neo4j / FilesMap) and Attack Path JSON → generate Ludus YAML → `setRangeConfig` + deploy. Feature flag `ENABLE_LUDUSHOUND` / Settings path `LUDUSHOUND_PATH` (default `/opt/LudusHound`).
-- [Add] **LudusHound preflight** — Status + one-click clone/update, Go install when missing, `bagelByt3s.ludushound` collection from local tarball + `go build`.
+**Sources**
+- [Add] **Content re-sync** — Installed Ansible / Templates / Blueprints show a **Sync** tile (**In sync** / **Out of sync**) with per-item **Re-sync** (Sources catalog expand always offers **Re-sync** for installed items / bulk **Re-sync outdated**). Out of sync when catalog tip differs from installed/pin version, or catalog tip is known but installed version is missing. Uses `POST /sources/{id}/install` with `force` (Sync still refreshes catalog only). Misleading Ludus “built-in template name” install warnings are rewritten (usually Packer `vm_name` already on the host).
+- [Add] **Install version pins** — After successful install/re-sync, LUX stores catalog tip versions (`source_content_pins`) and compares them to the live git tip so bumps show **Update available** even when Ludus omits installed versions. Re-sync refreshes the pin (does not trust sticky Ludus `upgrade_available` alone).
+- [Add] **Auto-sync** — Re-pulls git-backed Ludus sources on a timer (default **5 minutes**, `SOURCE_AUTO_SYNC_INTERVAL_MS`) and when a catalog view is stale / before install+force. Background loop uses the stored admin service key (seeded when an admin opens Sources). Manual **Sync** still forces an immediate pull.
+- [Add] **Versions from git tip** — Catalog versions prefer git tip (`meta/version.yml` / `blueprint.yml`) on the Sources-tab ref (no silent `main`/`master` fallback; `cache: "no-store"`) over Ludus sync cache so bumps show after push.
+- [Add] **Repo link + installed → catalog** — Installed items matched to a registered source show the git URL; blueprint cards / Sources rows show `installed → catalog` (detail fetch when Ludus list omits version).
+
+**LudusHound**
+- [Add] **Integrations track** — `/ludushound` wraps [bagelByt3s/LudusHound](https://github.com/bagelByt3s/LudusHound): Full AD replica (external Neo4j / FilesMap) and Attack Path JSON → generate Ludus YAML → `setRangeConfig` + deploy. Feature flag `ENABLE_LUDUSHOUND` / Settings path `LUDUSHOUND_PATH` (default `/opt/LudusHound`).
+- [Add] **Preflight** — Status + one-click clone/update, Go install when missing, `bagelByt3s.ludushound` collection from local tarball + `go build`.
 - [Add] **BloodHound source** — External Neo4j (probe from Ludus host) or FilesMapJson; Attack Path skips live BH.
 - [Add] **Template gate** — Parse Packer templates from generated YAML (+ router); block deploy until built.
-- [Add] **Ranges Overview — VM Management** — Tab listing all range VMs across users with template/range/owner/power filters; power on/off, noVNC console, .vv download, and bulk destroy (deep-link from template delete errors via `?tab=vms&template=`).
-- [Add] **Range config — Add VM wizard** — Dialog on Configuration page to append one or more VMs from built templates (hostname, VLAN, IP, CPU/RAM) without hand-editing YAML.
-- [Fix] **Blueprints — Ansible dependencies** — Apply dialog and range wizard treat a role as installed when Ludus has the namespaced Galaxy name (e.g. `ryokubaka.ludus_securityonion`) but the blueprint references the short name (`ludus_securityonion`). Matches the same FQCN/short-name logic as the Ansible catalog page.
-- [Fix] **Ansible — local source roles** — “Installed” badges and role counts now follow `GET /ansible` only; stale Ludus source-catalog `state: installed` no longer marks roles installed when they are missing. SSR prefetch also includes the full ansible list so a hard refresh no longer drops Galaxy roles/collections to source-catalog-only counts.
-- [Fix] **Template delete** — Detect linked-clone blockers when a template still has range VMs; show a short error with a link to VM Management instead of raw SSH output.
-- [Fix] **VM Management — range link** — Clicking a range switches the active range (via `selectRange`, not stale sessionStorage), opens the dashboard, and auto-impersonates the range owner when needed.
+
+**Ranges**
+- [Add] **VM Management** — Ranges Overview tab listing all range VMs across users with template/range/owner/power filters; power on/off, noVNC console, .vv download, and bulk destroy. Range row opens that range’s dashboard (with impersonation when needed). Template-delete linked-clone errors deep-link via `?tab=vms&template=`.
+- [Add] **Add VM wizard** — Configuration page dialog to append one or more VMs from built templates (hostname, VLAN, IP, CPU/RAM) without hand-editing YAML.
 - [Fix] **Deploy log SSE auto-reconnect** — Transient EventSource blips no longer kill the stream; backoff reconnect with `snapshotStart=false`, preserve lines, skip reconnect after intentional stop / `[DONE]` / `[ERROR]`.
-- [Fix] **Stale UI state** — Re-enable `refetchOnWindowFocus`; stop persisting volatile queries (range status/logs, ranges list, template build status, GOAD tasks) to localStorage; invalidate those keys when the browser tab becomes visible again.
 - [Fix] **SO sniff watcher shell** — Proxmox `qm set` helper script escaped `\$` variables correctly; inject bridge/tag literals into `case` patterns so net1 detection works (fixes empty VMID/VMBR and spurious qm errors during deploy).
-- [Docs] **OpenAPI** — Document Sources API (`/api/sources`, sync, catalog lists, install) including install `force` for content re-sync (`docs/openapi.yaml` 1.0.5).
-- [Docs] NOTICE credit for LudusHound; workflows / environment notes.
+
+**Blueprints & Ansible**
+- [Add] **Template dependencies** — Apply dialog and range wizard parse `template:` fields from blueprint range-config and block apply until each template is registered and Packer-built (same semantics as GOAD / LudusHound template gates). Missing templates link to the Templates page.
+- [Fix] **Ansible dependencies** — Treat a role as installed when Ludus has the namespaced Galaxy name (e.g. `ryokubaka.ludus_securityonion`) but the blueprint references the short name (`ludus_securityonion`). Matches Ansible catalog FQCN/short-name logic.
+- [Fix] **Local source roles** — “Installed” badges and role counts follow `GET /ansible` only; stale Ludus source-catalog `state: installed` no longer marks roles installed when missing. SSR prefetch includes the full ansible list so a hard refresh no longer drops Galaxy roles/collections to source-catalog-only counts.
+
+**Templates**
+- [Fix] **Delete — linked clones** — Detect blockers when a template still has range VMs; short error with link to VM Management instead of raw SSH output.
+
+**Reliability**
+- [Fix] **Stale UI state** — Re-enable `refetchOnWindowFocus`; stop persisting volatile queries (range status/logs, ranges list, template build status, GOAD tasks) to localStorage; invalidate those keys when the browser tab becomes visible again.
+
+**Docs**
+- [Docs] **OpenAPI** — Document Sources API (`/api/sources`, sync, catalog lists, install `force`, `autoSyncIntervalMs`) and align `info.version` with the app release (`docs/openapi.yaml` **1.3.0**). `/api/health` returns `version`.
+- [Docs] NOTICE credit for LudusHound; workflows / environment notes (`SOURCE_AUTO_SYNC_*`).
 
 ## [1.2.0] - 2026-07-29
 

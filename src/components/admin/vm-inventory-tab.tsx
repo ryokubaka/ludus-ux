@@ -134,7 +134,7 @@ export function VmInventoryTab() {
     [adminUsersData?.users],
   )
 
-  const vms = data?.vms ?? []
+  const vms = useMemo(() => data?.vms ?? [], [data?.vms])
 
   const templateOptions = useMemo(() => {
     const set = new Set<string>()

@@ -300,10 +300,16 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     [ansibleData, rolePayload?.pins, collectionPayload?.pins],
   )
 
-  const blueprints = blueprintPayload?.items ?? []
-  const templates = templatePayload?.items ?? []
-  const roles = rolePayload?.items ?? []
-  const collections = collectionPayload?.items ?? []
+  const blueprints = useMemo(
+    () => blueprintPayload?.items ?? [],
+    [blueprintPayload?.items],
+  )
+  const templates = useMemo(() => templatePayload?.items ?? [], [templatePayload?.items])
+  const roles = useMemo(() => rolePayload?.items ?? [], [rolePayload?.items])
+  const collections = useMemo(
+    () => collectionPayload?.items ?? [],
+    [collectionPayload?.items],
+  )
   const catalogFromGit = [blueprintPayload, templatePayload, rolePayload, collectionPayload].some(
     (p) => p?.catalogSource === "github",
   )

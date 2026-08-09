@@ -23,6 +23,19 @@ import { useImpersonation } from "@/lib/impersonation-context"
 import type { LudushoundStatus } from "@/lib/types"
 import { useState } from "react"
 
+function HostReadyFlag({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      {ok ? (
+        <CheckCircle2 className="h-4 w-4 text-status-success" />
+      ) : (
+        <XCircle className="h-4 w-4 text-status-error" />
+      )}
+      <span>{label}</span>
+    </div>
+  )
+}
+
 export function LudushoundPageClient() {
   const scopeTag = useEffectiveScopeTag()
   const queryClient = useQueryClient()
@@ -72,17 +85,6 @@ export function LudushoundPageClient() {
       setBusy(null)
     }
   }
-
-  const Flag = ({ ok, label }: { ok: boolean; label: string }) => (
-    <div className="flex items-center gap-2 text-sm">
-      {ok ? (
-        <CheckCircle2 className="h-4 w-4 text-status-success" />
-      ) : (
-        <XCircle className="h-4 w-4 text-status-error" />
-      )}
-      <span>{label}</span>
-    </div>
-  )
 
   return (
     <div className="space-y-6 p-6 max-w-5xl">
@@ -149,11 +151,17 @@ export function LudushoundPageClient() {
           ) : (
             <>
               <div className="grid gap-2 sm:grid-cols-2">
-                <Flag ok={!!status?.repoPresent} label="Repo present" />
-                <Flag ok={!!status?.binaryPresent} label="Binary built" />
-                <Flag ok={!!status?.goAvailable} label="Go toolchain available" />
-                <Flag ok={!!status?.collectionTarballPresent} label="Collection tarball present" />
-                <Flag ok={!!status?.collectionInstalled} label="bagelByt3s.ludushound installed" />
+                <HostReadyFlag ok={!!status?.repoPresent} label="Repo present" />
+                <HostReadyFlag ok={!!status?.binaryPresent} label="Binary built" />
+                <HostReadyFlag ok={!!status?.goAvailable} label="Go toolchain available" />
+                <HostReadyFlag
+                  ok={!!status?.collectionTarballPresent}
+                  label="Collection tarball present"
+                />
+                <HostReadyFlag
+                  ok={!!status?.collectionInstalled}
+                  label="bagelByt3s.ludushound installed"
+                />
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button

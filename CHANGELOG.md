@@ -51,6 +51,12 @@ Each bullet uses a single tag:
 - [Docs] **OpenAPI** — Document Sources API (`/api/sources`, sync, catalog lists, install `force`, `autoSyncIntervalMs`) and align `info.version` with the app release (`docs/openapi.yaml` **1.3.0**). `/api/health` returns `version`.
 - [Docs] NOTICE credit for LudusHound; workflows / environment notes (`SOURCE_AUTO_SYNC_*`).
 
+**Security**
+- [Security] **js-yaml** 4.3.1 — GHSA-5p4m-2wfm-xmqj (!!omap quadratic CPU).
+- [Security] **nanoid** 3.3.18 — CVE-2026-67213 / GHSA-2v37-7h3g-55p8 (zero-size generator loop).
+- [Security] **brace-expansion** 5.0.9 — GHSA-rgw5-rvv9-x895 (DoS via unbounded intermediate arrays).
+- [Security] **postcss** 8.5.26 — direct dep + override (GHSA-fxqj-rqcc-2cmp); Next may still nest an older postcss (moderate only).
+
 ## [1.2.0] - 2026-07-29
 
 **LUX**

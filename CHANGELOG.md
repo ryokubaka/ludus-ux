@@ -42,7 +42,7 @@ Each bullet uses a single tag:
 - [Fix] **Local source roles** — “Installed” badges and role counts follow `GET /ansible` only; stale Ludus source-catalog `state: installed` no longer marks roles installed when missing. SSR prefetch includes the full ansible list so a hard refresh no longer drops Galaxy roles/collections to source-catalog-only counts.
 
 **Templates**
-- [Fix] **Delete — linked clones** — Detect blockers when a template still has range VMs; short error with link to VM Management instead of raw SSH output.
+- [Add] **Delete — linked clones** — Detect blockers when a template still has range VMs; short error with link to VM Management instead of raw SSH output.
 
 **Reliability**
 - [Fix] **Stale UI state** — Re-enable `refetchOnWindowFocus`; stop persisting volatile queries (range status/logs, ranges list, template build status, GOAD tasks) to localStorage; invalidate those keys when the browser tab becomes visible again.

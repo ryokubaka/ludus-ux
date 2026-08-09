@@ -10,6 +10,7 @@ import {
   listSources,
   type SourceBlueprintRow,
 } from "@/lib/ludus-source-client"
+import { DEFAULT_SOURCE_GIT_REF, ludusSourceGitRef } from "@/lib/ludus-source-ref"
 import { blueprintShortName } from "@/lib/registered-ludus-sources"
 import { fetchGitBlueprintManifest } from "@/lib/source-git-catalog"
 import { gitUrlToRepoApiBase } from "@/lib/template-repo-client"
@@ -105,11 +106,11 @@ async function resolveRegisteredSourceMeta(
     const want = sourceID.trim().toLowerCase()
     const src =
       sources.find((s) => (s.sourceID || s.id || "").trim().toLowerCase() === want) ?? null
-    const ref = (src?.ref || fallbackRef || "main").trim() || "main"
+    const ref = ludusSourceGitRef(src, fallbackRef)
     const fromUrl = src?.url ? gitUrlToRepoApiBase(src.url) : null
     return { ref, apiBase: fromUrl || fallbackApiBase }
   } catch {
-    return { ref: fallbackRef || "main", apiBase: fallbackApiBase }
+    return { ref: fallbackRef || DEFAULT_SOURCE_GIT_REF, apiBase: fallbackApiBase }
   }
 }
 

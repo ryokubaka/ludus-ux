@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest"
-import { gitCatalogEntryNames } from "@/lib/source-git-catalog"
+import { gitCatalogEntryNames, parseAnsibleRoleVersionYaml } from "@/lib/source-git-catalog"
 import type { RepoTreeItem } from "@/lib/template-repo-client"
+
+describe("parseAnsibleRoleVersionYaml", () => {
+  it("reads meta/version.yml", () => {
+    expect(parseAnsibleRoleVersionYaml("version: 1.0.0\n")).toBe("1.0.0")
+    expect(parseAnsibleRoleVersionYaml("version: 1.0.0")).toBe("1.0.0")
+  })
+
+  it("reads galaxy_info.version from meta/main.yml", () => {
+    expect(
+      parseAnsibleRoleVersionYaml(
+        ["galaxy_info:", "  role_name: ludus_securityonion", '  version: "1.0.0"', ""].join("\n"),
+      ),
+    ).toBe("1.0.0")
+  })
+})
 
 describe("gitCatalogEntryNames", () => {
   it("lists only directories under blueprints", () => {

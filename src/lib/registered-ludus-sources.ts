@@ -1,3 +1,5 @@
+import { ludusSourceGitRef } from "@/lib/ludus-source-ref"
+
 export interface RegisteredLudusSource {
   id: string
   name?: string
@@ -6,14 +8,25 @@ export interface RegisteredLudusSource {
 }
 
 export function mapRegisteredSources(
-  rows: Array<{ sourceID?: string; id?: string; name?: string; url?: string; ref?: string }>,
+  rows: Array<{
+    sourceID?: string
+    id?: string
+    name?: string
+    url?: string
+    ref?: string
+    Ref?: string
+    branch?: string
+    Branch?: string
+    gitRef?: string
+    git_ref?: string
+  }>,
 ): RegisteredLudusSource[] {
   return rows
     .map((r) => ({
       id: (r.sourceID || r.id || "").trim(),
       name: r.name,
       url: r.url,
-      ref: r.ref,
+      ref: ludusSourceGitRef(r),
     }))
     .filter((r) => r.id)
     .sort((a, b) =>

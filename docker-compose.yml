@@ -41,6 +41,9 @@ services:
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
       - ENABLE_LUDUSHOUND=${ENABLE_LUDUSHOUND:-true}
       - LUDUS_ANSIBLE_VERBOSE=${LUDUS_ANSIBLE_VERBOSE:-true}
+      # Re-pull git Ludus sources so catalog tip stays current (default 5m).
+      - SOURCE_AUTO_SYNC_ENABLED=${SOURCE_AUTO_SYNC_ENABLED:-true}
+      - SOURCE_AUTO_SYNC_INTERVAL_MS=${SOURCE_AUTO_SYNC_INTERVAL_MS:-300000}
       # TLS terminates at nginx; app listens on plain HTTP (see TRUST_PROXY_TLS).
       - DISABLE_HTTPS=${DISABLE_HTTPS:-true}
       - TRUST_PROXY_TLS=${TRUST_PROXY_TLS:-true}

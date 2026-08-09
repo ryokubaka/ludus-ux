@@ -27,6 +27,7 @@ import {
   buildInstalledAnsibleNames,
   sourceCatalogAnsibleInstallState,
 } from "@/lib/source-catalog-presence"
+import { postSourceInstall } from "@/lib/source-install-client"
 import { Download, GitBranch, ChevronDown, ChevronRight, Loader2, Package, Search, Zap } from "lucide-react"
 import { groupGalaxySearchHits } from "@/lib/ansible-galaxy-search"
 
@@ -35,6 +36,7 @@ interface SourceRole {
   scope?: string
   state?: string
   fqcn?: string
+  version?: string
 }
 
 interface SourceCollection {
@@ -42,6 +44,7 @@ interface SourceCollection {
   scope?: string
   state?: string
   fqcn?: string
+  version?: string
 }
 
 interface GalaxyHit {
@@ -94,16 +97,18 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
   }, [open, registeredSources])
 
   const sid = registeredSourceId
+  const selectedSourceRef =
+    registeredSources.find((s) => s.id === sid)?.ref?.trim() || undefined
 
   const { data: rolePayload, isLoading: rolesLoading } = useQuery({
-    queryKey: queryKeys.sourceRoles(scopeTag, sid),
+    queryKey: queryKeys.sourceRoles(scopeTag, sid, selectedSourceRef),
     queryFn: () => fetchSourceCatalog<SourceRole>(sid, "roles"),
     enabled: open && tab === "source" && !!sid,
     staleTime: STALE.long,
   })
 
   const { data: collPayload, isLoading: collsLoading } = useQuery({
-    queryKey: queryKeys.sourceCollections(scopeTag, sid),
+    queryKey: queryKeys.sourceCollections(scopeTag, sid, selectedSourceRef),
     queryFn: () => fetchSourceCatalog<SourceCollection>(sid, "collections"),
     enabled: open && tab === "source" && !!sid,
     staleTime: STALE.long,
@@ -134,9 +139,9 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
   )
 
   const roleInstalled = (role: SourceRole) =>
-    sourceCatalogAnsibleInstallState(role, installedAnsibleNames) === "installed"
+    sourceCatalogAnsibleInstallState(role, installedAnsibleNames) !== "not_installed"
   const collectionInstalled = (coll: SourceCollection) =>
-    sourceCatalogAnsibleInstallState(coll, installedAnsibleNames) === "installed"
+    sourceCatalogAnsibleInstallState(coll, installedAnsibleNames) !== "not_installed"
 
   const handleInstallFromSource = async () => {
     if (!sid || (selectedRoles.size === 0 && selectedCollections.size === 0)) return
@@ -156,15 +161,7 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
       )
 
       if (localRoles.length > 0 || localCollections.length > 0) {
-        const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/install`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            selection: { localRoles, localCollections },
-          }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+        await postSourceInstall(sid, { localRoles, localCollections })
       }
 
       for (const name of subRoles) {

@@ -28,6 +28,7 @@ import {
   Shield,
   Filter,
   ListChecks,
+  Plus,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
 import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
@@ -50,6 +51,7 @@ import { cn } from "@/lib/utils"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
 import { ludusSupportsExtensionsKey } from "@/lib/ludus-version"
+import { AddVmWizardDialog } from "@/components/range/add-vm-wizard-dialog"
 
 const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]
 const TAG_DESCRIPTIONS = LUDUS_DEPLOY_TAG_DESCRIPTIONS
@@ -107,6 +109,7 @@ export function RangeConfigPageClient() {
   const [showNetworkRules, setShowNetworkRules] = useState(false)
   /** Ludus blocks config PUT and range deploy in testing mode unless force is set (CLI `--force`). */
   const [forceLudus, setForceLudus] = useState(false)
+  const [showAddVmWizard, setShowAddVmWizard] = useState(false)
 
   const { lines, isStreaming, startStreaming, stopStreaming, clearLogs } = useDeployLogs({
     onComplete: () => setDeploying(false),
@@ -391,6 +394,9 @@ export function RangeConfigPageClient() {
 
   const isDirty = config !== originalConfig
 
+  const selectedRangeMeta = ranges.find((r) => r.rangeID === selectedRangeId)
+  const selectedRangeNumber = selectedRangeMeta?.rangeNumber
+
   // No range available yet (either still hydrating or the user actually has
   // zero ranges). Bail out before rendering the editor rather than firing
   // `/range/config` against no rangeID (→ 404 on the default range lookup).
@@ -461,6 +467,15 @@ export function RangeConfigPageClient() {
             <Button onClick={handleSave} disabled={saving || !isDirty} variant={isDirty ? "default" : "outline"}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {saving ? "Saving..." : "Save Config"}
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => setShowAddVmWizard(true)}
+              disabled={!selectedRangeId || !!pendingAction}
+            >
+              <Plus className="h-4 w-4" />
+              Add VM
             </Button>
 
             {saveSuccess && (
@@ -747,6 +762,23 @@ export function RangeConfigPageClient() {
           )}
         </CardContent>
       </Card>
+
+      {selectedRangeId && (
+        <AddVmWizardDialog
+          open={showAddVmWizard}
+          onOpenChange={setShowAddVmWizard}
+          configYaml={config}
+          rangeId={selectedRangeId}
+          rangeNumber={selectedRangeNumber}
+          onApply={(mergedYaml, addedCount) => {
+            setConfig(mergedYaml)
+            toast({
+              title: `${addedCount} VM${addedCount !== 1 ? "s" : ""} added to config`,
+              description: "Review the YAML below, then Save Config before deploying.",
+            })
+          }}
+        />
+      )}
 
     </div>
   )

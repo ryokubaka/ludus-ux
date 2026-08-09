@@ -80,7 +80,18 @@ import {
   registeredSourceLabel,
   type RegisteredLudusSource,
 } from "@/lib/registered-ludus-sources"
-import { buildInstalledBlueprintIds, isBlueprintCatalogEntryInstalled } from "@/lib/source-catalog-presence"
+import {
+  buildInstalledBlueprintIds,
+  formatVersionTransition,
+  isBlueprintCatalogEntryInstalled,
+  isMissingOrUnknownVersion,
+} from "@/lib/source-catalog-presence"
+import { useInstalledBlueprintVersions } from "@/hooks/use-installed-blueprint-versions"
+import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
+import {
+  SourceRepoLink,
+  SourceSyncControls,
+} from "@/components/sources/source-installed-controls"
 import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
 import { parseBlueprintBulkErrors } from "@/lib/blueprint-bulk-response"
 import { isSourceCatalogBlueprintId, normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
@@ -808,6 +819,28 @@ export function BlueprintsPageClient() {
     () => buildInstalledBlueprintIds(blueprints),
     [blueprints],
   )
+  const installedBlueprintVersions = useInstalledBlueprintVersions(blueprints)
+  const blueprintInstalledForProvenance = useMemo(
+    () =>
+      blueprints.map((bp) => {
+        const id = (bp.id || bp.blueprintID || "").trim()
+        const fromDetail =
+          installedBlueprintVersions.get(id) ||
+          (id.includes("/")
+            ? installedBlueprintVersions.get(id.slice(id.lastIndexOf("/") + 1))
+            : undefined)
+        return {
+          id,
+          name: bp.name,
+          sourceID: bp.sourceID,
+          version: bp.version || fromDetail,
+        }
+      }),
+    [blueprints, installedBlueprintVersions],
+  )
+  const sourceProvenance = useSourceInstalledProvenance({
+    blueprints: blueprintInstalledForProvenance,
+  })
 
   const listReady = !loading && blueprintGateReady
 
@@ -1049,8 +1082,8 @@ export function BlueprintsPageClient() {
     if (!blueprintDepsReady) {
       toast({
         variant: "destructive",
-        title: "Missing Ansible dependencies",
-        description: "Install required roles and collections before applying this blueprint.",
+        title: "Missing dependencies",
+        description: "Install required Ansible items and build Packer templates before applying this blueprint.",
       })
       return
     }
@@ -1088,8 +1121,8 @@ export function BlueprintsPageClient() {
     if (!blueprintDepsReady) {
       toast({
         variant: "destructive",
-        title: "Missing Ansible dependencies",
-        description: "Install required roles and collections before applying this blueprint.",
+        title: "Missing dependencies",
+        description: "Install required Ansible items and build Packer templates before applying this blueprint.",
       })
       return
     }
@@ -1414,6 +1447,43 @@ export function BlueprintsPageClient() {
                         )}
                         {bp.access && accessBadge(bp.access)}
                       </div>
+                      {(() => {
+                        const src = sourceProvenance.blueprint(bpId)
+                        const installedVer =
+                          src?.installedVersion ||
+                          bp.version ||
+                          installedBlueprintVersions.get(bpId) ||
+                          (bpId.includes("/")
+                            ? installedBlueprintVersions.get(bpId.slice(bpId.lastIndexOf("/") + 1))
+                            : undefined)
+                        const transition = src
+                          ? formatVersionTransition(installedVer, src.catalogVersion)
+                          : !isMissingOrUnknownVersion(installedVer)
+                            ? formatVersionTransition(installedVer, installedVer)
+                            : null
+                        return (
+                          <>
+                            {transition && (
+                              <p className="text-xs text-muted-foreground mt-1 font-mono" title="installed → catalog">
+                                {transition}
+                              </p>
+                            )}
+                            {src ? (
+                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                                <SourceRepoLink match={src} />
+                                <SourceSyncControls
+                                  match={src}
+                                  onResynced={() =>
+                                    queryClient.invalidateQueries({
+                                      queryKey: queryKeys.blueprints(scopeTag),
+                                    })
+                                  }
+                                />
+                              </div>
+                            ) : null}
+                          </>
+                        )
+                      })()}
                       {entry.primaryId !== entry.typeKey && (
                         <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">
                           {entry.primaryId}

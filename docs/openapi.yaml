@@ -4,8 +4,9 @@ info:
   description: |
     REST API for the Ludus UX web application — a Next.js frontend for managing
     [Ludus](https://ludus.cloud) cyber range infrastructure, including VM ranges,
-    templates, user management, VNC/SPICE console access, GOAD (Game of
-    Active Directory) lab orchestration, and LudusHound BloodHound→Ludus deploys.
+    content sources (sync / force re-install), templates, user management,
+    VNC/SPICE console access, GOAD (Game of Active Directory) lab orchestration,
+    and LudusHound BloodHound→Ludus deploys.
 
     ## Authentication
 
@@ -17,7 +18,7 @@ info:
     - `X-Impersonate-Apikey` — target user's Ludus API key
     - `X-Ludus-Admin: true` — route to admin API port (8081)
     - `X-Ludus-User` — override Ludus user context
-  version: 1.0.4
+  version: 1.0.5
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -45,6 +46,8 @@ tags:
     description: User credential operations (admin only)
   - name: Range
     description: Range lifecycle, configuration, and domain allow-list management
+  - name: Sources
+    description: Ludus content sources (git catalogs, sync, install / force re-sync)
   - name: Templates
     description: VM template discovery and installation
   - name: Console
@@ -270,6 +273,147 @@ components:
         apiBase:
           type: string
           format: uri
+
+    # ---- Sources (Ludus ≥2.2.0) ----
+    LudusSource:
+      type: object
+      properties:
+        id:
+          type: string
+        sourceID:
+          type: string
+          description: Canonical Ludus source identifier (preferred over `id`).
+        name:
+          type: string
+        description:
+          type: string
+        url:
+          type: string
+          format: uri
+        ref:
+          type: string
+          description: Tracked git branch, tag, or commit.
+        lastSyncedAt:
+          type: string
+        lastSyncStatus:
+          type: string
+        lastSyncError:
+          type: string
+      additionalProperties: true
+
+    SourceCatalogInstallState:
+      type: string
+      description: |
+        Ludus catalog install hint. LUX treats `upgrade_available` (or a catalog
+        vs installed version mismatch) as outdated content that can be force-reinstalled.
+      enum: [not_installed, installed, upgrade_available]
+
+    SourceInstallSelection:
+      type: object
+      description: |
+        Items to install from a registered source. At least one array must be non-empty.
+      properties:
+        blueprints:
+          type: array
+          items:
+            type: string
+          description: Blueprint names / source blueprint IDs.
+        templates:
+          type: array
+          items:
+            type: string
+          description: Packer template names as listed in the source catalog.
+        localRoles:
+          type: array
+          items:
+            type: string
+          description: Source-bundled Ansible role names.
+        localCollections:
+          type: array
+          items:
+            type: string
+          description: Source-bundled Ansible collection FQCNs or names.
+
+    SourceInstallRequest:
+      type: object
+      properties:
+        selection:
+          $ref: '#/components/schemas/SourceInstallSelection'
+        force:
+          type: boolean
+          default: false
+          description: |
+            When `true`, overwrite already-installed templates and local/galaxy
+            roles/collections from the source catalog (Ludus `--force`). Used by
+            LUX **Re-sync** when catalog content is newer than installed.
+            Without `force`, re-installing existing blueprints for non-admins may
+            only sync access (no overwrite).
+        blueprints:
+          type: array
+          items:
+            type: string
+          description: Convenience alias — same as `selection.blueprints` when `selection` is omitted.
+        templates:
+          type: array
+          items:
+            type: string
+        localRoles:
+          type: array
+          items:
+            type: string
+        localCollections:
+          type: array
+          items:
+            type: string
+
+    SourceInstallResponse:
+      type: object
+      properties:
+        warnings:
+          type: array
+          items:
+            type: string
+        data:
+          type: object
+          additionalProperties: true
+          description: Upstream Ludus install payload (shape varies by selection).
+
+    SourceSyncRequest:
+      type: object
+      properties:
+        globalRoles:
+          type: boolean
+          description: Admin — prefer global role/collection scope on sync-related ops.
+        force:
+          type: boolean
+          description: |
+            Passed through to Ludus `POST /sources/{id}/sync`. Refreshes the git
+            catalog; does **not** reinstall/overwrite installed content (use
+            install with `force` for that).
+        dryRun:
+          type: boolean
+
+    SourceCatalogItem:
+      type: object
+      properties:
+        name:
+          type: string
+        fqcn:
+          type: string
+        version:
+          type: string
+        state:
+          $ref: '#/components/schemas/SourceCatalogInstallState'
+        scope:
+          type: string
+          description: e.g. `local` or `subscription` for Ansible items.
+        description:
+          type: string
+        sourceBlueprintID:
+          type: string
+        min_ludus_version:
+          type: string
+      additionalProperties: true
 
     # ---- GOAD ----
     GoadLabDef:
@@ -1588,6 +1732,434 @@ paths:
                         message:
                           type: string
                       required: [name, success, message]
+
+  # --------------------------------------------------------------------------
+  # Sources (Ludus ≥2.2.0)
+  # --------------------------------------------------------------------------
+  /api/sources:
+    get:
+      tags: [Sources]
+      summary: List registered Ludus sources
+      description: |
+        Proxies Ludus `GET /sources`. When the connected Ludus lacks the Sources
+        API (pre-2.2.0), returns `{ sources: [], available: false }` instead of an error.
+      operationId: listSources
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Registered sources.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sources:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LudusSource'
+                  available:
+                    type: boolean
+                    description: "false when Ludus has no Sources API."
+                required: [sources, available]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Sources]
+      summary: Register a git source
+      description: |
+        Registers a git repository as a Ludus source (`ludus source add`).
+        Does not install catalog items; use install or the Add-from-Source UIs.
+      operationId: registerSource
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: HTTPS or SSH git URL.
+                ref:
+                  type: string
+                  default: main
+                  description: Branch, tag, or commit to track.
+      responses:
+        '200':
+          description: Source registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sourceID:
+                    type: string
+                  message:
+                    type: string
+        '400':
+          description: Missing/invalid URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ludus Sources API unavailable (need ≥2.2.0).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}:
+    delete:
+      tags: [Sources]
+      summary: Delete a registered source
+      description: |
+        Removes the source registration. Installed templates/roles/collections
+        remain on disk unless `purge` is true (Ludus purge semantics).
+      operationId: deleteSource
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                purge:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Source deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ludus Sources API unavailable or source missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/sync:
+    post:
+      tags: [Sources]
+      summary: Sync source git catalog
+      description: |
+        Re-pulls the git source and refreshes the catalog cache. **Does not**
+        overwrite installed blueprints, templates, or Ansible content. To
+        reinstall outdated items, use `POST /api/sources/{sourceId}/install`
+        with `force: true`.
+      operationId: syncSource
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceSyncRequest'
+      responses:
+        '200':
+          description: Sync result from Ludus.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    description: Upstream Ludus sync payload.
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ludus Sources API unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/install:
+    post:
+      tags: [Sources]
+      summary: Install (or force re-sync) content from a source
+      description: |
+        Proxies Ludus `POST /sources/{id}/install` for the given selection.
+
+        - Default (`force` omitted/false): additive install; already-present
+          community blueprints for non-admins may only sync access.
+        - `force: true`: overwrite already-installed templates and local/galaxy
+          roles/collections from the source (Ludus `--force`). Used by LUX
+          **Re-sync** / **Re-sync outdated** when catalog versions differ or
+          Ludus reports `upgrade_available`.
+
+        Community source blueprints that are not yet installed still require an
+        admin session (403 for non-admins).
+      operationId: installFromSource
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceInstallRequest'
+            examples:
+              installRoles:
+                summary: Install roles (additive)
+                value:
+                  selection:
+                    localRoles: [ludus_securityonion]
+              forceResync:
+                summary: Force re-sync outdated role
+                value:
+                  force: true
+                  selection:
+                    localRoles: [ludus_securityonion]
+                    localCollections: []
+                    templates: []
+                    blueprints: []
+      responses:
+        '200':
+          description: Install completed (may include warnings).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceInstallResponse'
+        '400':
+          description: No items selected or invalid body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Non-admin attempted to install a missing community blueprint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Ludus Sources API unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream Ludus install error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/blueprints:
+    get:
+      tags: [Sources]
+      summary: List blueprints in a source catalog
+      operationId: listSourceBlueprints
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Catalog blueprints.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  blueprints:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SourceCatalogItem'
+                  catalogSource:
+                    type: string
+                    description: e.g. `ludus` or `github` fallback listing.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ludus Sources API unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/templates:
+    get:
+      tags: [Sources]
+      summary: List templates in a source catalog
+      operationId: listSourceTemplates
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Catalog templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SourceCatalogItem'
+                  catalogSource:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Upstream error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/roles:
+    get:
+      tags: [Sources]
+      summary: List Ansible roles in a source catalog
+      operationId: listSourceRoles
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Catalog roles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roles:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SourceCatalogItem'
+                  catalogSource:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Upstream error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/collections:
+    get:
+      tags: [Sources]
+      summary: List Ansible collections in a source catalog
+      operationId: listSourceCollections
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Catalog collections.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  collections:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SourceCatalogItem'
+                  catalogSource:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '502':
+          description: Upstream error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # --------------------------------------------------------------------------
   # Console

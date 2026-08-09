@@ -45,6 +45,8 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | Variable | Description | Default |
 |---|---|---|
 | `ENABLE_LUDUSHOUND` | Show LudusHound in the UI (`false` to hide) | `true` |
+| `SOURCE_AUTO_SYNC_ENABLED` | Periodically re-pull registered git Ludus sources (`false` to disable). Also syncs a source when its catalog is opened and last sync is older than the interval. | `true` |
+| `SOURCE_AUTO_SYNC_INTERVAL_MS` | Auto-sync interval / staleness threshold in milliseconds (minimum `60000`) | `300000` (5 min) |
 | `LUDUSHOUND_PATH` | Path to the cloned [LudusHound](https://github.com/bagelByt3s/LudusHound) repo on the Ludus server | `/opt/LudusHound` |
 
 Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go when missing, builds the binary, and installs the local Ansible collection tarball. SSH uses the same `LUDUS_SSH_*` settings as GOAD.

@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server"
+import { rememberBlueprintOperator } from "@/lib/blueprint-global-install"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { createGitSource, isHttp404Error, listSources } from "@/lib/ludus-source-client"
+import { DEFAULT_SOURCE_GIT_REF } from "@/lib/ludus-source-ref"
+import {
+  ensureSourceAutoSyncLoopStarted,
+  ensureSourcesFresh,
+  sourceAutoSyncIntervalMs,
+} from "@/lib/source-auto-sync"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { logAndSafeError } from "@/lib/safe-client-error"
@@ -16,8 +23,22 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    ensureSourceAutoSyncLoopStarted()
+    // Seed service key so the background auto-sync loop can run without a browser tab.
+    if (session.isAdmin && apiKey) {
+      void rememberBlueprintOperator(apiKey)
+    }
+
     const sources = await listSources(apiKey)
-    return NextResponse.json({ sources, available: true })
+    // Refresh stale git trees in the background; don't block the list response.
+    void ensureSourcesFresh(apiKey, sources).catch((err) => {
+      console.warn("[sources/list] auto-sync failed", err)
+    })
+    return NextResponse.json({
+      sources,
+      available: true,
+      autoSyncIntervalMs: sourceAutoSyncIntervalMs(),
+    })
   } catch (err) {
     if (isHttp404Error(err)) {
       return NextResponse.json({ sources: [], available: false })
@@ -52,7 +73,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: safe.error }, { status: 400 })
   }
 
-  const ref = body.ref?.trim() || "main"
+  const ref = body.ref?.trim() || DEFAULT_SOURCE_GIT_REF
 
   try {
     const sourceID = await createGitSource(apiKey, url, ref)

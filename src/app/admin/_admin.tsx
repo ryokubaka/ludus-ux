@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -45,6 +45,8 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { saveImpersonation } from "@/lib/impersonation-context"
 import { ludusImpersonationFields } from "@/lib/ludus-user-from-profile"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { VmInventoryTab } from "@/components/admin/vm-inventory-tab"
 
 interface ImpersonateTarget {
   fields: ReturnType<typeof ludusImpersonationFields>
@@ -59,8 +61,25 @@ const _pinnedAssignments = new Map<string, string>() // rangeID → userID
 export function AdminPageClient() {
   const { toast } = useToast()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
+
+  const adminTab = searchParams.get("tab") === "vms" ? "vms" : "overview"
+  const setAdminTab = useCallback(
+    (tab: "overview" | "vms") => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (tab === "overview") {
+        params.delete("tab")
+        params.delete("template")
+      } else {
+        params.set("tab", "vms")
+      }
+      const qs = params.toString()
+      router.replace(qs ? `/admin?${qs}` : "/admin", { scroll: false })
+    },
+    [router, searchParams],
+  )
 
   // ── Ranges + users data (replaces fetchData + useState) ───────────────────
   const {
@@ -534,6 +553,14 @@ export function AdminPageClient() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
+
+      <Tabs value={adminTab} onValueChange={(v) => setAdminTab(v as "overview" | "vms")}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="vms">VM Management</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-6 mt-4">
 
       {/* Summary stats */}
       <div className="grid grid-cols-4 gap-4">
@@ -1142,6 +1169,13 @@ export function AdminPageClient() {
           )}
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        <TabsContent value="vms" className="mt-4">
+          <VmInventoryTab />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

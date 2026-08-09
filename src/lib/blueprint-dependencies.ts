@@ -1,7 +1,13 @@
 import yaml from "js-yaml"
 import type { AnsibleItem } from "./types"
+import type { TemplateObject } from "./types"
+import {
+  buildInstalledAnsibleNames,
+  isAnsibleCatalogNameInstalled,
+} from "./source-catalog-presence"
+import { parseTemplatesFromLudusYaml } from "./ludushound-templates"
 
-export type BlueprintDepKind = "role" | "collection"
+export type BlueprintDepKind = "role" | "collection" | "template"
 
 export interface BlueprintRequirement {
   kind: BlueprintDepKind
@@ -9,6 +15,8 @@ export interface BlueprintRequirement {
   version?: string
   /** FQCN or config reference that implied this requirement */
   referencedBy?: string
+  /** template only — registered on Ludus but Packer not finished */
+  templateStatus?: "absent" | "unbuilt"
 }
 
 function reqKey(kind: BlueprintDepKind, name: string): string {
@@ -137,7 +145,46 @@ export function extractConfigRoleRefs(configYaml: string): string[] {
 }
 
 export function requirementsFromConfigYaml(configYaml: string): BlueprintRequirement[] {
-  return extractConfigRoleRefs(configYaml).flatMap(roleRefToRequirements)
+  return [
+    ...extractConfigRoleRefs(configYaml).flatMap(roleRefToRequirements),
+    ...templateRequirementsFromConfigYaml(configYaml),
+  ]
+}
+
+/** Unique `template:` values from Ludus range-config YAML. */
+export function extractConfigTemplates(configYaml: string): string[] {
+  return parseTemplatesFromLudusYaml(configYaml)
+}
+
+export function templateRequirementsFromConfigYaml(configYaml: string): BlueprintRequirement[] {
+  return extractConfigTemplates(configYaml).map((name) => ({
+    kind: "template",
+    name,
+  }))
+}
+
+export function findMissingTemplateRequirements(
+  required: BlueprintRequirement[],
+  templates: TemplateObject[],
+): BlueprintRequirement[] {
+  const built = new Set(templates.filter((t) => t.built).map((t) => t.name))
+  const all = new Set(templates.map((t) => t.name))
+  const missing: BlueprintRequirement[] = []
+
+  for (const req of required) {
+    if (req.kind !== "template") continue
+    if (built.has(req.name)) continue
+    missing.push({
+      ...req,
+      templateStatus: all.has(req.name) ? "unbuilt" : "absent",
+    })
+  }
+
+  return missing
+}
+
+export function ansibleRequirementsOnly(required: BlueprintRequirement[]): BlueprintRequirement[] {
+  return required.filter((r) => r.kind === "role" || r.kind === "collection")
 }
 
 /** Merge requirement lists; requirements.yml wins for version when duplicate. */
@@ -161,7 +208,9 @@ export function mergeBlueprintRequirements(...lists: BlueprintRequirement[][]): 
   }
 
   return [...byKey.values()].sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "collection" ? -1 : 1
+    const kindOrder = (k: BlueprintDepKind) => (k === "template" ? 0 : k === "collection" ? 1 : 2)
+    const ko = kindOrder(a.kind) - kindOrder(b.kind)
+    if (ko !== 0) return ko
     return a.name.localeCompare(b.name)
   })
 }
@@ -170,12 +219,9 @@ export function findMissingRequirements(
   installed: AnsibleItem[],
   required: BlueprintRequirement[],
 ): BlueprintRequirement[] {
-  const installedRoles = new Set(
-    installed.filter((i) => ansibleItemType(i) === "role").map(ansibleItemName),
-  )
-  const installedCollections = new Set(
-    installed.filter((i) => ansibleItemType(i) === "collection").map(ansibleItemName),
-  )
+  const roles = installed.filter((i) => ansibleItemType(i) === "role")
+  const collections = installed.filter((i) => ansibleItemType(i) === "collection")
+  const installedNames = buildInstalledAnsibleNames(roles, collections)
 
   const missing: BlueprintRequirement[] = []
   const seen = new Set<string>()
@@ -185,9 +231,9 @@ export function findMissingRequirements(
     if (seen.has(key)) continue
     seen.add(key)
 
-    const isInstalled =
-      req.kind === "role" ? installedRoles.has(req.name) : installedCollections.has(req.name)
-    if (!isInstalled) missing.push(req)
+    if (!isAnsibleCatalogNameInstalled(req.name, installedNames)) {
+      missing.push(req)
+    }
   }
 
   return missing

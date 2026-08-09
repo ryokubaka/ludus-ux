@@ -27,6 +27,9 @@ interface GitHubTreeItem {
 
 const FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.github+json" }
 
+/** Next.js caches `fetch` by default — source version pins must always hit the tip. */
+const NO_STORE = { cache: "no-store" as const }
+
 export function isGitHubApiBase(apiBase: string): boolean {
   return apiBase.includes("api.github.com/repos/")
 }
@@ -88,7 +91,7 @@ export async function listRepoDirectory(
       ? `/${dirPath.split("/").map(encodeURIComponent).join("/")}`
       : ""
     const url = `${apiBase}/contents${segment}?ref=${encodeURIComponent(ref)}`
-    const res = await fetch(url, { headers: FETCH_HEADERS })
+    const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
     if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url}`)
     const items = (await res.json()) as GitHubContentItem | GitHubContentItem[]
     const list = Array.isArray(items) ? items : [items]
@@ -100,7 +103,7 @@ export async function listRepoDirectory(
   }
 
   const url = `${apiBase}/tree?path=${encodeURIComponent(dirPath)}&ref=${encodeURIComponent(ref)}&per_page=100`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`GitLab API ${res.status} for ${url}`)
   const items = (await res.json()) as GitLabTreeItem[]
   return items.map((item) => ({ name: item.name, path: item.path, type: item.type }))
@@ -115,6 +118,7 @@ export async function fetchAllRepoBlobs(
   if (isGitHubApiBase(apiBase)) {
     const commitRes = await fetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
       headers: FETCH_HEADERS,
+      ...NO_STORE,
     })
     if (!commitRes.ok) {
       throw new Error(`Could not resolve GitHub ref "${ref}" (HTTP ${commitRes.status})`)
@@ -124,6 +128,7 @@ export async function fetchAllRepoBlobs(
 
     const treeRes = await fetch(`${apiBase}/git/trees/${treeSha}?recursive=1`, {
       headers: FETCH_HEADERS,
+      ...NO_STORE,
     })
     if (!treeRes.ok) throw new Error(`Could not list GitHub tree (HTTP ${treeRes.status})`)
     const treeData = (await treeRes.json()) as { tree: GitHubTreeItem[] }
@@ -144,7 +149,7 @@ export async function fetchAllRepoBlobs(
     const url =
       `${apiBase}/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}` +
       `&per_page=100&recursive=true&page=${page}`
-    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
     if (!res.ok) throw new Error(`Could not list template tree (HTTP ${res.status})`)
     const items = (await res.json()) as GitLabTreeItem[]
     blobs.push(...items.filter((item) => item.type === "blob"))
@@ -158,7 +163,7 @@ export async function fetchRepoRawFile(apiBase: string, path: string, ref: strin
   const url = isGitHubApiBase(apiBase)
     ? githubRawFileUrl(apiBase, path, ref)
     : `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
   return res.text()
 }

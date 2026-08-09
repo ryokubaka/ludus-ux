@@ -53,7 +53,14 @@ import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
 import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
 import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
+import { type NetworkRule, extractNetworkRules } from "@/lib/network-rules"
+import {
+  type VMEntry,
+  defaultsForTemplate,
+  generateYaml,
+  inferOS,
+  parseConfigYaml,
+} from "@/lib/range-vm-wizard"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
@@ -80,123 +87,6 @@ const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "R
 // YAML path:
 // step 2 : YAML Config
 // step 3 : Review & Deploy
-
-interface VMEntry {
-  id: string
-  template: string
-  vmName: string
-  hostname: string
-  vlan: number
-  ipLastOctet: number
-  ramGb: number
-  cpus: number
-  isLinux: boolean
-  isWindows: boolean
-  isServer: boolean
-  domainRole: "none" | "primary-dc" | "alt-dc" | "member"
-  testingSnapshot: boolean
-  testingBlockInternet: boolean
-  showAdvanced: boolean
-}
-
-function inferOS(templateName: string): { isLinux: boolean; isWindows: boolean; isServer: boolean } {
-  const lower = templateName.toLowerCase()
-  const isWindows = lower.includes("win")
-  const isLinux = !isWindows
-  const isServer = isWindows && (lower.includes("server") || lower.includes("dc"))
-  return { isLinux, isWindows, isServer }
-}
-
-function defaultsForTemplate(template: string): VMEntry {
-  const { isLinux, isWindows, isServer } = inferOS(template)
-  const shortName = template.replace(/-template$/, "").replace(/-x64|-x86/g, "")
-  const windowsShort = isWindows
-    ? shortName.replace(/-?workstation$/i, "-ws").replace(/-?server$/i, "-srv")
-    : shortName
-  const hostnameSuffix = windowsShort.slice(0, isWindows ? 15 : 50)
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-    template,
-    vmName: `{{ range_id }}-${hostnameSuffix}`,
-    hostname: hostnameSuffix,
-    vlan: 10,
-    ipLastOctet: 10,
-    ramGb: isServer ? 8 : isLinux ? 4 : 8,
-    cpus: isServer ? 4 : 2,
-    isLinux,
-    isWindows,
-    isServer,
-    domainRole: "none",
-    testingSnapshot: true,
-    testingBlockInternet: true,
-    showAdvanced: true,
-  }
-}
-
-function generateYaml(vms: VMEntry[], domainFqdn: string | null, networkRules: NetworkRule[]): string {
-  const lines: string[] = ["ludus:"]
-  for (const vm of vms) {
-    const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
-    const hostname = `{{ range_id }}-${vm.hostname}`
-    lines.push(`  - vm_name: "${vmName}"`)
-    lines.push(`    hostname: "${hostname}"`)
-    lines.push(`    template: ${vm.template}`)
-    lines.push(`    vlan: ${vm.vlan}`)
-    lines.push(`    ip_last_octet: ${vm.ipLastOctet}`)
-    lines.push(`    ram_gb: ${vm.ramGb}`)
-    lines.push(`    cpus: ${vm.cpus}`)
-    if (vm.isLinux) lines.push(`    linux: true`)
-    if (vm.isWindows) {
-      lines.push(`    windows:`)
-      lines.push(`      sysprep: false`)
-    }
-    if (domainFqdn && vm.domainRole !== "none") {
-      lines.push(`    domain:`)
-      lines.push(`      fqdn: ${domainFqdn}`)
-      lines.push(`      role: ${vm.domainRole}`)
-    }
-    lines.push(`    testing:`)
-    lines.push(`      snapshot: ${vm.testingSnapshot}`)
-    lines.push(`      block_internet: ${vm.testingBlockInternet}`)
-    lines.push("")
-  }
-  return lines.join("\n") + buildNetworkYaml(networkRules)
-}
-
-function parseConfigYaml(yamlText: string): VMEntry[] {
-  const entries: VMEntry[] = []
-  const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
-  for (const block of blocks) {
-    const get = (key: string): string => {
-      const m = block.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"))
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
-    }
-    const vmName = get("vm_name")
-    if (!vmName) continue
-    const template = get("template")
-    const { isLinux, isWindows, isServer } = inferOS(template || vmName)
-    const rawHostname = get("hostname") || vmName
-    const hostnameSuffix = rawHostname.replace(/^\{\{\s*range_id\s*\}\}-/, "")
-    entries.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      template: template || vmName,
-      vmName,
-      hostname: hostnameSuffix.slice(0, isWindows ? 10 : 50),
-      vlan: parseInt(get("vlan")) || 10,
-      ipLastOctet: parseInt(get("ip_last_octet")) || 10,
-      ramGb: parseInt(get("ram_gb")) || 4,
-      cpus: parseInt(get("cpus")) || 2,
-      isLinux,
-      isWindows,
-      isServer,
-      domainRole: (get("role") as VMEntry["domainRole"]) || "none",
-      testingSnapshot: get("snapshot") === "true",
-      testingBlockInternet: get("block_internet") === "true",
-      showAdvanced: false,
-    })
-  }
-  return entries
-}
 
 export function NewRangePageClient() {
   const router = useRouter()
@@ -657,8 +547,8 @@ export function NewRangePageClient() {
             const depCheck = await checkBlueprintDependencies(selectedBlueprintId)
             if (!depCheck.ready) {
               toast({
-                title: "Missing Ansible dependencies",
-                description: "Install required roles and collections before deploying.",
+                title: "Missing dependencies",
+                description: "Install required Ansible items and build Packer templates before deploying.",
                 variant: "destructive",
               })
               setDeploying(false)

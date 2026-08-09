@@ -5,6 +5,11 @@ import {
   gitUrlToGithubApiBase,
 } from "@/lib/source-git-catalog"
 import { getSettings } from "@/lib/settings-store"
+import { ludusSourceGitRef, normalizeLudusSourceRef } from "@/lib/ludus-source-ref"
+import {
+  rewriteSourceInstallWarning,
+  rewriteSourceInstallWarnings,
+} from "@/lib/source-install-warnings"
 import { extractLudusList } from "@/lib/utils"
 
 const BADSL_GIT_URL = "https://github.com/badsectorlabs/ludus-source-bsl"
@@ -186,7 +191,7 @@ export async function listSources(apiKey: string): Promise<LudusSourceRow[]> {
       `Failed to list sources (HTTP ${res.status})`
     throw new Error(msg)
   }
-  return ludusRows<LudusSourceRow>(res.data)
+  return ludusRows<LudusSourceRow>(res.data).map((row) => normalizeLudusSourceRef(row))
 }
 
 /** Register a new git source explicitly (does not dedupe). */
@@ -198,7 +203,7 @@ export async function createGitSource(
   const form = new FormData()
   form.append("type", "git")
   form.append("url", gitUrl.replace(/\/$/, ""))
-  form.append("ref", ref || "main")
+  form.append("ref", ludusSourceGitRef({ ref }))
 
   const created = await ludusJson<{ sourceID?: string; error?: string }>("/sources", apiKey, {
     method: "POST",
@@ -415,7 +420,7 @@ async function normalizeInstallSelection(
   if (needsGit) {
     const src = await findRegisteredSourceRow(apiKey, sourceID)
     if (src?.url && gitUrlToGithubApiBase(src.url)) {
-      mapped = await enrichCollectionInstallNames(src.url, src.ref || "main", mapped)
+      mapped = await enrichCollectionInstallNames(src.url, ludusSourceGitRef(src), mapped)
     }
   }
 
@@ -434,21 +439,24 @@ function collectInstallWarnings(data: InstallResponse | null): string[] {
       warnings.push(`Role ${r.name ?? "?"}: ${r.error ?? "failed"}`)
     }
   }
-  return warnings
+  return rewriteSourceInstallWarnings(warnings)
 }
 
 async function installSourceSelection(
   apiKey: string,
   sourceID: string,
   selection: SourceInstallSelection,
+  options?: { force?: boolean },
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
+  const body: { selection: SourceInstallSelection; force?: boolean } = { selection }
+  if (options?.force) body.force = true
   const res = await ludusJson<InstallResponse>(
     `/sources/${encodeURIComponent(sourceID)}/install`,
     apiKey,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selection }),
+      body: JSON.stringify(body),
     },
   )
   if (!res.ok) {
@@ -458,7 +466,7 @@ async function installSourceSelection(
         ? String((res.data as { result?: string }).result)
         : null) ||
       `Source install failed (HTTP ${res.status})`
-    throw new Error(msg)
+    throw new Error(rewriteSourceInstallWarning(msg))
   }
   return { warnings: collectInstallWarnings(res.data), data: res.data }
 }
@@ -468,8 +476,9 @@ export async function installSourceBlueprints(
   apiKey: string,
   sourceID: string,
   blueprintIds: string[],
+  options?: { force?: boolean },
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
-  return installSourceSelection(apiKey, sourceID, { blueprints: blueprintIds })
+  return installSourceSelection(apiKey, sourceID, { blueprints: blueprintIds }, options)
 }
 
 /** Install selected templates from a registered Ludus source. */
@@ -477,8 +486,9 @@ export async function installSourceTemplates(
   apiKey: string,
   sourceID: string,
   templateNames: string[],
+  options?: { force?: boolean },
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
-  return installSourceSelection(apiKey, sourceID, { templates: templateNames })
+  return installSourceSelection(apiKey, sourceID, { templates: templateNames }, options)
 }
 
 /** Install arbitrary selection from a registered Ludus source. */
@@ -486,9 +496,10 @@ export async function installFromSource(
   apiKey: string,
   sourceID: string,
   selection: SourceInstallSelection,
+  options?: { force?: boolean },
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
   const normalized = await normalizeInstallSelection(apiKey, sourceID, selection)
-  return installSourceSelection(apiKey, sourceID, normalized)
+  return installSourceSelection(apiKey, sourceID, normalized, options)
 }
 
 export function blueprintPublicId(sourceKey: string, blueprintName: string): string {

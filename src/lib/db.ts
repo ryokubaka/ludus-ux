@@ -477,6 +477,23 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON lux_login_continuations(expires_at);
       `)
     },
+
+    // v17 — Last successful source-install versions (Ludus often omits installed versions).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS source_content_pins (
+          source_id    TEXT NOT NULL,
+          kind         TEXT NOT NULL,
+          name         TEXT NOT NULL,
+          version      TEXT NOT NULL,
+          catalog_ref  TEXT,
+          updated_at   INTEGER NOT NULL,
+          PRIMARY KEY (source_id, kind, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_source_content_pins_source
+          ON source_content_pins(source_id);
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

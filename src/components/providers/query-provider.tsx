@@ -12,6 +12,7 @@ import { QueryClientProvider, dehydrate, useQueryClient } from "@tanstack/react-
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
 import { makeQueryClient } from "@/lib/query-client"
 import { LEGACY_LUX_QUERY_CACHE_KEY, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
+import { isVolatileQueryKey } from "@/lib/query-keys"
 import {
   EffectiveScopeProvider,
   useEffectiveScopeTag,
@@ -52,6 +53,7 @@ function QueryPersistenceLayer() {
           for (const q of stored.clientState?.queries ?? []) {
             if (
               q.state.status === "success" &&
+              !isVolatileQueryKey(q.queryKey) &&
               queryClient.getQueryData(q.queryKey) === undefined
             ) {
               queryClient.setQueryData(q.queryKey, q.state.data)
@@ -70,7 +72,8 @@ function QueryPersistenceLayer() {
     const persist = () => {
       try {
         const state = dehydrate(queryClient, {
-          shouldDehydrateQuery: (q) => q.state.status === "success",
+          shouldDehydrateQuery: (q) =>
+            q.state.status === "success" && !isVolatileQueryKey(q.queryKey),
         })
         localStorage.setItem(
           CACHE_KEY,
@@ -95,6 +98,24 @@ function QueryPersistenceLayer() {
   return null
 }
 
+/** Refetch live Ludus state when the tab becomes visible again. */
+function QueryVisibilityRefresh() {
+  const queryClient = useQueryClient()
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return
+      void queryClient.invalidateQueries({
+        predicate: (q) => isVolatileQueryKey(q.queryKey),
+      })
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => document.removeEventListener("visibilitychange", onVisible)
+  }, [queryClient])
+
+  return null
+}
+
 function QueryProviderMounted({
   children,
   initialScopeTag,
@@ -111,6 +132,7 @@ function QueryProviderMounted({
       <EffectiveScopeProvider initialScopeTag={initialScopeTag}>
         <ShellSessionProvider value={shellSession}>
           <QueryPersistenceLayer />
+          <QueryVisibilityRefresh />
           {children}
         </ShellSessionProvider>
         {process.env.NODE_ENV === "development" ? (

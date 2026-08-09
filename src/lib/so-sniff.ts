@@ -97,47 +97,45 @@ export async function enableSoSniffOnVm(args: {
   const script = `
 set -euo pipefail
 VMID=${args.vmid}
-VMBR=${shellQuote(vmbr)}
-TAG=${sniffTag}
 NETSPEC=${shellQuote(netSpec)}
 MARKER=${shellQuote(markerPath)}
 RANGE_ID=${shellQuote(args.rangeId)}
 VM_NAME=${shellQuote(args.vmName)}
 
-if ! qm status "$VMID" >/dev/null 2>&1; then
-  echo "VM $VMID not found"
+if ! qm status "\$VMID" >/dev/null 2>&1; then
+  echo "VM \$VMID not found"
   exit 2
 fi
 
-CFG=$(qm config "$VMID")
-NET1=$(echo "$CFG" | sed -n 's/^net1: //p' | head -1 || true)
+CFG=\$(qm config "\$VMID")
+NET1=\$(echo "\$CFG" | sed -n 's/^net1: //p' | head -1 || true)
 
-if [ -n "$NET1" ]; then
-  case "$NET1" in
-    *bridge=$VMBR*tag=$TAG*)
+if [ -n "\$NET1" ]; then
+  case "\$NET1" in
+    *bridge=${vmbr}*tag=${sniffTag}*)
       echo "net1 already sniff-ready"
       ;;
     *)
-      echo "net1 already set to unexpected value: $NET1"
+      echo "net1 already set to unexpected value: \$NET1"
       exit 3
       ;;
   esac
 else
-  qm set "$VMID" -net1 "$NETSPEC"
-  echo "added net1=$NETSPEC"
+  qm set "\$VMID" -net1 "\$NETSPEC"
+  echo "added net1=\$NETSPEC"
 fi
 
 # Hub mode for Ludus packet capture
 if command -v brctl >/dev/null 2>&1; then
-  brctl setageing "$VMBR" 0 || true
+  brctl setageing ${shellQuote(vmbr)} 0 || true
 fi
-ip link set dev "$VMBR" type bridge ageing_time 0 2>/dev/null || true
+ip link set dev ${shellQuote(vmbr)} type bridge ageing_time 0 2>/dev/null || true
 
 mkdir -p ${shellQuote(SO_SNIFF_MARKER_DIR)}
-cat > "$MARKER" <<EOF
-{"rangeId":"$RANGE_ID","vmid":$VMID,"vmName":"$VM_NAME","vmbr":"$VMBR","sniffTag":$TAG,"updatedAt":"$(date -Iseconds)"}
+cat > "\$MARKER" <<EOF
+{"rangeId":"\$RANGE_ID","vmid":\$VMID,"vmName":"\$VM_NAME","vmbr":"${vmbr}","sniffTag":${sniffTag},"updatedAt":"\$(date -Iseconds)"}
 EOF
-echo "marker written $MARKER"
+echo "marker written \$MARKER"
 `.trim()
 
   const res = await withSsh(args.creds ?? null, script)

@@ -33,7 +33,7 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   "/ansible": { title: "Ansible Galaxy", description: "Manage Ansible Galaxy roles and collections" },
   "/users": { title: "Users", description: "Manage Ludus users (admin only)" },
   "/groups": { title: "Groups", description: "Manage groups and range access" },
-  "/admin": { title: "Ranges Overview", description: "All ranges and shared services (admin only)" },
+  "/admin": { title: "Ranges Overview", description: "All ranges, shared services, and cross-range VM management (admin only)" },
   "/admin/performance": { title: "Ludus Performance", description: "Live Proxmox node metrics (admin only)" },
   "/admin/app-logs": { title: "Application Logs", description: "Live auth and application event log (admin only)" },
   "/logs": { title: "Range Logs", description: "Live and historical range deployment logs" },

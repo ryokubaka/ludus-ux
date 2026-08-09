@@ -42,17 +42,27 @@ export const queryKeys = {
 
   // ── Sources (Ludus 2.2.0+) ────────────────────────────────────────────────
   sources: (scopeTag: string) => sc(scopeTag, ["sources"]),
-  sourceBlueprints: (scopeTag: string, sourceId: string) =>
-    sc(scopeTag, ["sources", sourceId, "blueprints"]),
-  sourceTemplates: (scopeTag: string, sourceId: string) =>
-    sc(scopeTag, ["sources", sourceId, "templates"]),
-  sourceRoles: (scopeTag: string, sourceId: string) =>
-    sc(scopeTag, ["sources", sourceId, "roles", "catalog"]),
-  sourceCollections: (scopeTag: string, sourceId: string) =>
-    sc(scopeTag, ["sources", sourceId, "collections", "catalog"]),
+  /** Pass `ref` when fetching so cache separates branches; omit when invalidating (prefix match). */
+  sourceBlueprints: (scopeTag: string, sourceId: string, ref?: string) =>
+    ref
+      ? sc(scopeTag, ["sources", sourceId, "blueprints", ref])
+      : sc(scopeTag, ["sources", sourceId, "blueprints"]),
+  sourceTemplates: (scopeTag: string, sourceId: string, ref?: string) =>
+    ref
+      ? sc(scopeTag, ["sources", sourceId, "templates", ref])
+      : sc(scopeTag, ["sources", sourceId, "templates"]),
+  sourceRoles: (scopeTag: string, sourceId: string, ref?: string) =>
+    ref
+      ? sc(scopeTag, ["sources", sourceId, "roles", "catalog", ref])
+      : sc(scopeTag, ["sources", sourceId, "roles", "catalog"]),
+  sourceCollections: (scopeTag: string, sourceId: string, ref?: string) =>
+    ref
+      ? sc(scopeTag, ["sources", sourceId, "collections", "catalog", ref])
+      : sc(scopeTag, ["sources", sourceId, "collections", "catalog"]),
 
   // ── Blueprints ────────────────────────────────────────────────────────────
   blueprints: (scopeTag: string) => sc(scopeTag, ["blueprints"]),
+  blueprintDetail: (scopeTag: string, id: string) => sc(scopeTag, ["blueprints", "detail", id]),
   blueprintSharing: (scopeTag: string, id: string) => sc(scopeTag, ["blueprints", id, "sharing"]),
 
   // ── Groups ────────────────────────────────────────────────────────────────
@@ -69,6 +79,7 @@ export const queryKeys = {
   // ── Admin ─────────────────────────────────────────────────────────────────
   adminRangesData: (scopeTag: string) => sc(scopeTag, ["admin", "ranges-data"]),
   adminSharedVms: (scopeTag: string) => sc(scopeTag, ["admin", "shared-vms"]),
+  adminRangeVms: (scopeTag: string) => sc(scopeTag, ["admin", "range-vms"]),
 
   // ── Version ───────────────────────────────────────────────────────────────
   version: (scopeTag: string) => sc(scopeTag, ["version"]),
@@ -93,4 +104,26 @@ export const queryKeys = {
   ludushoundStatusScoped: (scopeTag: string) => [...queryKeys.ludushoundStatus(), scopeTag] as const,
   ludushoundWorkspaces: () => ["ludushound", "workspaces"] as const,
   ludushoundWorkspacesList: (scopeTag: string) => [...queryKeys.ludushoundWorkspaces(), scopeTag] as const,
+}
+
+/** Keys that change during deploy/build — do not persist to localStorage. */
+export function isVolatileQueryKey(queryKey: readonly unknown[]): boolean {
+  const parts = queryKey[0] === "@sc" ? queryKey.slice(2) : queryKey
+  const head = String(parts[0] ?? "")
+  const sub = String(parts[1] ?? "")
+
+  if (head === "range") {
+    return sub === "status" || sub === "logs" || sub === "pb-status-dot"
+  }
+  if (head === "ranges") {
+    return sub === "accessible" || sub === "owned" || sub === "all"
+  }
+  if (head === "templates") {
+    return sub === "status" || sub === "logs"
+  }
+  if (head === "goad" && sub === "tasks") return true
+  if (head === "vm-operation-log") return true
+  if (head === "admin" && (sub === "range-vms" || sub === "shared-vms")) return true
+  if (queryKey[0] === "goad" && queryKey[1] === "tasks") return true
+  return false
 }

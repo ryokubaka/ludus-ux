@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import Link from "next/link"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
@@ -44,17 +44,29 @@ import {
 } from "@/lib/source-catalog-client"
 import { sourceBlueprintInstallId } from "@/lib/registered-ludus-sources"
 import { ludusApi } from "@/lib/api"
-import type { BlueprintListItem, TemplateObject } from "@/lib/types"
+import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
+import { useInstalledBlueprintVersions } from "@/hooks/use-installed-blueprint-versions"
+import type { TemplateObject } from "@/lib/types"
 import {
   buildCatalogTemplatePresenceMap,
   getCatalogTemplatePresence,
 } from "@/lib/template-install-match"
 import {
   buildInstalledAnsibleNames,
+  buildInstalledAnsibleVersions,
   buildInstalledBlueprintIds,
-  isSourceCatalogAnsibleInstalled,
-  isSourceCatalogBlueprintInstalled,
+  buildInstalledTemplateVersions,
+  formatVersionTransition,
+  lookupInstalledAnsibleVersion,
+  lookupInstalledBlueprintVersion,
+  lookupInstalledTemplateVersion,
+  mergeInstalledVersionsWithPins,
+  sourceCatalogAnsibleInstallState,
+  sourceCatalogBlueprintInstallState,
+  sourceCatalogTemplateInstallState,
 } from "@/lib/source-catalog-presence"
+import { postSourceInstall } from "@/lib/source-install-client"
+import type { SourceInstallSelection } from "@/lib/ludus-source-client"
 
 interface LudusSource {
   id?: string
@@ -74,12 +86,14 @@ interface SourceBlueprint {
   name?: string
   description?: string
   version?: string
+  state?: string
   min_ludus_version?: string
 }
 
 interface SourceTemplate {
   name?: string
   version?: string
+  state?: string
 }
 
 interface SourceRole {
@@ -135,63 +149,85 @@ function CatalogSectionHeader({
 }
 
 function SourceDetailPanel({ source }: { source: LudusSource }) {
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
   const sid = sourceId(source)
+  const [resyncingKey, setResyncingKey] = useState<string | null>(null)
+  const [bulkResyncing, setBulkResyncing] = useState(false)
+
+  const sourceRef = (source.ref || "").trim()
 
   const { data: blueprintPayload, isLoading: bpLoading } = useQuery({
-    queryKey: queryKeys.sourceBlueprints(scopeTag, sid),
+    queryKey: queryKeys.sourceBlueprints(scopeTag, sid, sourceRef),
     queryFn: async () => {
-      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/blueprints`)
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/blueprints`, {
+        cache: "no-store",
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       return {
         items: (data.blueprints ?? []) as SourceBlueprint[],
         catalogSource: data.catalogSource as string | undefined,
+        catalogRef: data.catalogRef as string | undefined,
+        pins: (data.pins ?? {}) as Record<string, string>,
       }
     },
-    staleTime: STALE.long,
+    staleTime: STALE.short,
   })
 
   const { data: templatePayload, isLoading: tplLoading } = useQuery({
-    queryKey: queryKeys.sourceTemplates(scopeTag, sid),
+    queryKey: queryKeys.sourceTemplates(scopeTag, sid, sourceRef),
     queryFn: async () => {
-      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/templates`)
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/templates`, {
+        cache: "no-store",
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       return {
         items: (data.templates ?? []) as SourceTemplate[],
         catalogSource: data.catalogSource as string | undefined,
+        catalogRef: data.catalogRef as string | undefined,
+        pins: (data.pins ?? {}) as Record<string, string>,
       }
     },
-    staleTime: STALE.long,
+    staleTime: STALE.short,
   })
 
   const { data: rolePayload, isLoading: roleLoading } = useQuery({
-    queryKey: queryKeys.sourceRoles(scopeTag, sid),
+    queryKey: queryKeys.sourceRoles(scopeTag, sid, sourceRef),
     queryFn: async () => {
-      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/roles`)
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/roles`, {
+        cache: "no-store",
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       return {
         items: (data.roles ?? []) as SourceRole[],
         catalogSource: data.catalogSource as string | undefined,
+        catalogRef: data.catalogRef as string | undefined,
+        pins: (data.pins ?? {}) as Record<string, string>,
       }
     },
-    staleTime: STALE.long,
+    staleTime: STALE.short,
   })
 
   const { data: collectionPayload, isLoading: collLoading } = useQuery({
-    queryKey: queryKeys.sourceCollections(scopeTag, sid),
+    queryKey: queryKeys.sourceCollections(scopeTag, sid, sourceRef),
     queryFn: async () => {
-      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/collections`)
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/collections`, {
+        cache: "no-store",
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
       return {
         items: (data.collections ?? []) as SourceCollection[],
         catalogSource: data.catalogSource as string | undefined,
+        catalogRef: data.catalogRef as string | undefined,
+        pins: (data.pins ?? {}) as Record<string, string>,
       }
     },
-    staleTime: STALE.long,
+    staleTime: STALE.short,
   })
 
   const { data: ludusTemplates = [] } = useQuery({
@@ -207,7 +243,7 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     queryKey: queryKeys.blueprints(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.listBlueprints()
-      return extractArray<BlueprintListItem>(result.data as unknown)
+      return normalizeBlueprintList(result.data)
     },
     staleTime: STALE.long,
   })
@@ -234,10 +270,34 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     () => buildInstalledBlueprintIds(ludusBlueprints),
     [ludusBlueprints],
   )
+  const ludusBlueprintVersions = useInstalledBlueprintVersions(ludusBlueprints)
+  const installedBlueprintVersions = useMemo(
+    () => mergeInstalledVersionsWithPins(ludusBlueprintVersions, blueprintPayload?.pins),
+    [ludusBlueprintVersions, blueprintPayload?.pins],
+  )
+  const installedTemplateVersions = useMemo(
+    () =>
+      mergeInstalledVersionsWithPins(
+        buildInstalledTemplateVersions(ludusTemplates),
+        templatePayload?.pins,
+      ),
+    [ludusTemplates, templatePayload?.pins],
+  )
 
   const installedAnsibleNames = useMemo(
     () => buildInstalledAnsibleNames(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
     [ansibleData],
+  )
+  const installedAnsibleVersions = useMemo(
+    () =>
+      mergeInstalledVersionsWithPins(
+        buildInstalledAnsibleVersions(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
+        {
+          ...(rolePayload?.pins ?? {}),
+          ...(collectionPayload?.pins ?? {}),
+        },
+      ),
+    [ansibleData, rolePayload?.pins, collectionPayload?.pins],
   )
 
   const blueprints = blueprintPayload?.items ?? []
@@ -247,13 +307,176 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
   const catalogFromGit = [blueprintPayload, templatePayload, rolePayload, collectionPayload].some(
     (p) => p?.catalogSource === "github",
   )
+  const catalogRef =
+    blueprintPayload?.catalogRef ||
+    templatePayload?.catalogRef ||
+    rolePayload?.catalogRef ||
+    collectionPayload?.catalogRef ||
+    sourceRef ||
+    undefined
+
+  const invalidateInstalled = useCallback(() => {
+    // Prefix matches list + blueprintDetail caches.
+    queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
+    // Prefix keys (no ref) so all branch-scoped catalog caches clear.
+    queryClient.invalidateQueries({ queryKey: queryKeys.sourceBlueprints(scopeTag, sid) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.sourceTemplates(scopeTag, sid) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.sourceRoles(scopeTag, sid) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.sourceCollections(scopeTag, sid) })
+  }, [queryClient, scopeTag, sid])
+
+  const handleResync = async (key: string, selection: SourceInstallSelection) => {
+    setResyncingKey(key)
+    try {
+      const { warnings } = await postSourceInstall(sid, selection, { force: true })
+      if (warnings.length > 0) {
+        toast({
+          variant: "destructive",
+          title: "Re-synced with warnings",
+          description: warnings.slice(0, 3).join(" · "),
+        })
+      } else {
+        toast({ title: "Re-synced", description: key })
+      }
+      invalidateInstalled()
+    } catch (err) {
+      toast({ variant: "destructive", title: "Re-sync failed", description: (err as Error).message })
+    } finally {
+      setResyncingKey(null)
+    }
+  }
+
+  const outdatedSelection = useMemo(() => {
+    const selection: SourceInstallSelection = {
+      blueprints: [],
+      templates: [],
+      localRoles: [],
+      localCollections: [],
+    }
+    for (const bp of blueprints) {
+      const state = sourceCatalogBlueprintInstallState(
+        bp,
+        sid,
+        installedBlueprintIds,
+        installedBlueprintVersions,
+      )
+      if (state === "upgrade_available" && (bp.name || bp.sourceBlueprintID)) {
+        selection.blueprints!.push(bp.name || bp.sourceBlueprintID!)
+      }
+    }
+    for (const tpl of templates) {
+      if (!tpl.name) continue
+      const tplName = tpl.name
+      const presence = getCatalogTemplatePresence(tplName, templatePresence)
+      const installedVer = lookupInstalledTemplateVersion(
+        tplName,
+        ludusTemplates,
+        installedTemplateVersions,
+      )
+      const state = sourceCatalogTemplateInstallState(
+        { name: tplName, version: tpl.version, state: tpl.state },
+        presence !== "none",
+        installedVer,
+      )
+      if (state === "upgrade_available") selection.templates!.push(tplName)
+    }
+    for (const role of roles) {
+      if (!role.name || role.scope === "subscription") continue
+      if (
+        sourceCatalogAnsibleInstallState(role, installedAnsibleNames, installedAnsibleVersions) ===
+        "upgrade_available"
+      ) {
+        selection.localRoles!.push(role.name)
+      }
+    }
+    for (const coll of collections) {
+      if (!coll.name || coll.scope === "subscription") continue
+      if (
+        sourceCatalogAnsibleInstallState(coll, installedAnsibleNames, installedAnsibleVersions) ===
+        "upgrade_available"
+      ) {
+        selection.localCollections!.push(coll.name)
+      }
+    }
+    return selection
+  }, [
+    blueprints,
+    templates,
+    roles,
+    collections,
+    sid,
+    installedBlueprintIds,
+    installedBlueprintVersions,
+    templatePresence,
+    ludusTemplates,
+    installedTemplateVersions,
+    installedAnsibleNames,
+    installedAnsibleVersions,
+  ])
+
+  const outdatedCount =
+    (outdatedSelection.blueprints?.length ?? 0) +
+    (outdatedSelection.templates?.length ?? 0) +
+    (outdatedSelection.localRoles?.length ?? 0) +
+    (outdatedSelection.localCollections?.length ?? 0)
+
+  const handleBulkResync = async () => {
+    if (outdatedCount === 0) return
+    setBulkResyncing(true)
+    try {
+      const { warnings } = await postSourceInstall(sid, outdatedSelection, { force: true })
+      toast({
+        variant: warnings.length > 0 ? "destructive" : "default",
+        title: warnings.length > 0 ? "Re-synced with warnings" : "Re-synced outdated items",
+        description:
+          warnings.length > 0
+            ? warnings.slice(0, 3).join(" · ")
+            : `${outdatedCount} item${outdatedCount === 1 ? "" : "s"} overwritten from catalog`,
+      })
+      invalidateInstalled()
+    } catch (err) {
+      toast({ variant: "destructive", title: "Re-sync failed", description: (err as Error).message })
+    } finally {
+      setBulkResyncing(false)
+    }
+  }
 
   return (
     <div className="mt-3 space-y-4 border-t border-border pt-3">
+      <p className="text-[11px] text-muted-foreground">
+        <span className="font-medium text-foreground">Sync</span> refreshes the git catalog only.{" "}
+        <span className="font-medium text-foreground">Re-sync</span> overwrites installed content from
+        the catalog when a newer version is available.
+      </p>
+      {outdatedCount > 0 && (
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={bulkResyncing || resyncingKey !== null}
+            onClick={() => void handleBulkResync()}
+          >
+            {bulkResyncing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            Re-sync outdated ({outdatedCount})
+          </Button>
+        </div>
+      )}
+      {catalogRef && (
+        <p className="text-xs text-muted-foreground">
+          Git catalog ref:{" "}
+          <code className="font-mono text-foreground">{catalogRef}</code>
+          {catalogFromGit ? " (tree read from this branch/tag — Ludus sync cache empty for some categories)" : null}
+        </p>
+      )}
       {catalogFromGit && (
         <p className="text-xs text-muted-foreground rounded border border-border bg-muted/30 px-3 py-2">
-          Catalog listed from the Git repository tree — Ludus sync cache returned no items for some
-          categories. Install from the{" "}
+          Install from the{" "}
           <Link href="/blueprints" className="text-primary underline underline-offset-2">
             Blueprints
           </Link>
@@ -289,7 +512,21 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                 .map((bp) => {
                   const name = bp.name || bp.sourceBlueprintID || ""
                   const key = sourceBlueprintInstallId(bp, sid)
-                  const installed = isSourceCatalogBlueprintInstalled(bp, sid, installedBlueprintIds)
+                  const state = sourceCatalogBlueprintInstallState(
+                    bp,
+                    sid,
+                    installedBlueprintIds,
+                    installedBlueprintVersions,
+                  )
+                  const installed = state !== "not_installed"
+                  const upgrade = state === "upgrade_available"
+                  const installedVer = lookupInstalledBlueprintVersion(
+                    bp,
+                    sid,
+                    installedBlueprintVersions,
+                  )
+                  const transition = formatVersionTransition(installedVer, bp.version)
+                  const resyncKey = `bp:${name}`
                   return (
                     <div
                       key={key}
@@ -306,12 +543,41 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                           </Badge>
                         )}
                       </div>
-                      <Badge
-                        variant={installed ? "success" : "outline"}
-                        className="text-[10px] shrink-0"
-                      >
-                        {installed ? "Installed" : "Not installed"}
-                      </Badge>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {transition && (
+                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
+                            {transition}
+                          </span>
+                        )}
+                        {upgrade ? (
+                          <Badge variant="warning" className="text-[10px]">Update available</Badge>
+                        ) : (
+                          <Badge
+                            variant={installed ? "success" : "outline"}
+                            className="text-[10px]"
+                          >
+                            {installed ? "Installed" : "Not installed"}
+                          </Badge>
+                        )}
+                        {installed && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[10px]"
+                            disabled={resyncingKey === resyncKey || bulkResyncing}
+                            title="Overwrite installed blueprint from source catalog"
+                            onClick={() => void handleResync(resyncKey, { blueprints: [name] })}
+                          >
+                            {resyncingKey === resyncKey ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3" />
+                            )}
+                            Re-sync
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -338,22 +604,75 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                 .map((tpl) => {
                   const name = tpl.name || ""
                   const presence = getCatalogTemplatePresence(name, templatePresence)
+                  const installedVer = lookupInstalledTemplateVersion(
+                    name,
+                    ludusTemplates,
+                    installedTemplateVersions,
+                  )
+                  const state = sourceCatalogTemplateInstallState(
+                    { name, version: tpl.version, state: tpl.state },
+                    presence !== "none",
+                    installedVer,
+                  )
+                  const upgrade = state === "upgrade_available"
+                  const transition = formatVersionTransition(installedVer, tpl.version)
+                  const resyncKey = `tpl:${name}`
                   return (
                     <div
                       key={name}
                       className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
                     >
                       <code className="text-xs font-mono text-primary truncate">{name}</code>
-                      {tpl.version && (
-                        <span className="text-[10px] text-muted-foreground shrink-0">{tpl.version}</span>
-                      )}
-                      {presence === "built" ? (
-                        <Badge variant="success" className="text-[10px] ml-auto shrink-0">Built</Badge>
-                      ) : presence === "added" ? (
-                        <Badge variant="warning" className="text-[10px] ml-auto shrink-0">Added</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[10px] ml-auto shrink-0">Not added</Badge>
-                      )}
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        {transition && (
+                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
+                            {transition}
+                          </span>
+                        )}
+                        {upgrade ? (
+                          <>
+                            <Badge variant="warning" className="text-[10px]">Update available</Badge>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              disabled={resyncingKey === resyncKey || bulkResyncing}
+                              onClick={() => void handleResync(resyncKey, { templates: [name] })}
+                            >
+                              {resyncingKey === resyncKey ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-3 w-3" />
+                              )}
+                              Re-sync
+                            </Button>
+                          </>
+                        ) : presence === "built" ? (
+                          <Badge variant="success" className="text-[10px]">Built</Badge>
+                        ) : presence === "added" ? (
+                          <>
+                            <Badge variant="warning" className="text-[10px]">Added</Badge>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              disabled={resyncingKey === resyncKey || bulkResyncing}
+                              onClick={() => void handleResync(resyncKey, { templates: [name] })}
+                            >
+                              {resyncingKey === resyncKey ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-3 w-3" />
+                              )}
+                              Re-sync
+                            </Button>
+                          </>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">Not added</Badge>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -379,7 +698,19 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
                 .map((role) => {
                   const name = role.name || ""
-                  const installed = isSourceCatalogAnsibleInstalled(role, installedAnsibleNames)
+                  const state = sourceCatalogAnsibleInstallState(
+                    role,
+                    installedAnsibleNames,
+                    installedAnsibleVersions,
+                  )
+                  const installed = state !== "not_installed"
+                  const upgrade = state === "upgrade_available"
+                  const installedVer = lookupInstalledAnsibleVersion(
+                    role.fqcn || name,
+                    installedAnsibleVersions,
+                  )
+                  const transition = formatVersionTransition(installedVer, role.version)
+                  const resyncKey = `role:${name}`
                   return (
                     <div
                       key={name}
@@ -391,12 +722,43 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                           {role.scope}
                         </Badge>
                       )}
-                      <Badge
-                        variant={installed ? "success" : "outline"}
-                        className="text-[10px] ml-auto shrink-0"
-                      >
-                        {installed ? "Installed" : "Not installed"}
-                      </Badge>
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        {transition && (
+                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
+                            {transition}
+                          </span>
+                        )}
+                        {upgrade ? (
+                          <Badge variant="warning" className="text-[10px]" title={transition || undefined}>
+                            Update available
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant={installed ? "success" : "outline"}
+                            className="text-[10px]"
+                          >
+                            {installed ? "Installed" : "Not installed"}
+                          </Badge>
+                        )}
+                        {installed && role.scope !== "subscription" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[10px]"
+                            disabled={resyncingKey === resyncKey || bulkResyncing}
+                            title="Overwrite installed role from source catalog"
+                            onClick={() => void handleResync(resyncKey, { localRoles: [name] })}
+                          >
+                            {resyncingKey === resyncKey ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3" />
+                            )}
+                            Re-sync
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -422,7 +784,19 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
                 .map((coll) => {
                   const name = coll.name || ""
-                  const installed = isSourceCatalogAnsibleInstalled(coll, installedAnsibleNames)
+                  const state = sourceCatalogAnsibleInstallState(
+                    coll,
+                    installedAnsibleNames,
+                    installedAnsibleVersions,
+                  )
+                  const installed = state !== "not_installed"
+                  const upgrade = state === "upgrade_available"
+                  const installedVer = lookupInstalledAnsibleVersion(
+                    coll.fqcn || name,
+                    installedAnsibleVersions,
+                  )
+                  const transition = formatVersionTransition(installedVer, coll.version)
+                  const resyncKey = `coll:${name}`
                   return (
                     <div
                       key={name}
@@ -434,12 +808,45 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                           {coll.scope}
                         </Badge>
                       )}
-                      <Badge
-                        variant={installed ? "success" : "outline"}
-                        className="text-[10px] ml-auto shrink-0"
-                      >
-                        {installed ? "Installed" : "Not installed"}
-                      </Badge>
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        {transition && (
+                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
+                            {transition}
+                          </span>
+                        )}
+                        {upgrade ? (
+                          <Badge variant="warning" className="text-[10px]" title={transition || undefined}>
+                            Update available
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant={installed ? "success" : "outline"}
+                            className="text-[10px]"
+                          >
+                            {installed ? "Installed" : "Not installed"}
+                          </Badge>
+                        )}
+                        {installed && coll.scope !== "subscription" && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[10px]"
+                            disabled={resyncingKey === resyncKey || bulkResyncing}
+                            title="Overwrite installed collection from source catalog"
+                            onClick={() =>
+                              void handleResync(resyncKey, { localCollections: [name] })
+                            }
+                          >
+                            {resyncingKey === resyncKey ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3" />
+                            )}
+                            Re-sync
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -583,6 +990,7 @@ export function SourcesPageClient() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted-foreground">
           Register git repositories as Ludus Sources to sync blueprints, templates, and bundled Ansible content.
+          LUX auto-syncs git sources about every 5 minutes (and on catalog view when stale) so tip versions stay current — Sync is still available for an immediate pull.
           On Ludus 2.3.0+, source IDs may be auto-prefixed with your userID.{" "}
           <a
             href={LUDUS_SOURCES_DOCS_URL}
@@ -672,6 +1080,7 @@ export function SourcesPageClient() {
                       <Button
                         size="sm"
                         variant="outline"
+                        title="Refresh git catalog only — does not overwrite installed roles/templates/blueprints"
                         onClick={() => handleSync(source)}
                         disabled={syncingId === sid}
                       >

@@ -9,8 +9,15 @@ import {
 } from "@/lib/blueprint-global-install"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
-import { installFromSource, isSourcesApiUnavailableError, type SourceInstallSelection } from "@/lib/ludus-source-client"
+import {
+  installFromSource,
+  isSourcesApiUnavailableError,
+  listSources,
+  type SourceInstallSelection,
+} from "@/lib/ludus-source-client"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { ensureSourceFresh, sourceIdOf } from "@/lib/source-auto-sync"
+import { pinSourceInstallSelection } from "@/lib/source-content-pins"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
@@ -31,9 +38,18 @@ export async function POST(
   }
 
   let selection: SourceInstallSelection = {}
+  let force = false
   try {
     const body = await request.json()
-    selection = body?.selection ?? body ?? {}
+    force = Boolean(body?.force)
+    if (body?.selection && typeof body.selection === "object") {
+      selection = body.selection as SourceInstallSelection
+    } else {
+      const { force: _force, ...rest } = (body ?? {}) as SourceInstallSelection & {
+        force?: boolean
+      }
+      selection = rest
+    }
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
   }
@@ -94,22 +110,44 @@ export async function POST(
           { status: 403 },
         )
       }
-      const scopeTag = effectiveScopeTagFromSession(session)
-      revalidateAfterSourceMutation(scopeTag)
-      logLuxRouteAction(request, session, {
-        outcome: "success",
-        detail: `install-source=${sourceId} access-sync`,
-      })
-      return NextResponse.json({
-        warnings: repairWarnings,
-        data: { result: "Blueprint access synced for all users" },
-      })
+      // Without force, existing blueprints only need access sync (no overwrite).
+      if (!force) {
+        const scopeTag = effectiveScopeTagFromSession(session)
+        revalidateAfterSourceMutation(scopeTag)
+        logLuxRouteAction(request, session, {
+          outcome: "success",
+          detail: `install-source=${sourceId} access-sync`,
+        })
+        return NextResponse.json({
+          warnings: repairWarnings,
+          data: { result: "Blueprint access synced for all users" },
+        })
+      }
     }
 
     const installApiKey =
       installingBlueprints && isAdminInstall && adminInstallKey ? adminInstallKey : apiKey
 
-    const { warnings, data } = await installFromSource(installApiKey, sourceId, selection)
+    // Pull tip before install/re-sync so Ludus applies current git tree, not a stale sync.
+    try {
+      const sources = await listSources(installApiKey)
+      const want = sourceId.trim().toLowerCase()
+      const src = sources.find((s) => sourceIdOf(s).toLowerCase() === want)
+      if (src) await ensureSourceFresh(installApiKey, src, { force })
+    } catch (syncErr) {
+      console.warn("[sources/install] pre-install sync failed", syncErr)
+    }
+
+    const { warnings, data } = await installFromSource(installApiKey, sourceId, selection, {
+      force,
+    })
+
+    // Record catalog tip versions so future bumps show Update available without Ludus versions.
+    try {
+      await pinSourceInstallSelection(installApiKey, sourceId, selection)
+    } catch (pinErr) {
+      console.error("[sources/install] pin failed", pinErr)
+    }
 
     const shareWarnings: string[] = []
     if (installingBlueprints && globalLookupApiKey) {

@@ -93,11 +93,17 @@ export function startSoSniffWatcher(args: {
         const vms = vmList(status)
         const soVms = vms.filter((v) => isSoVmName(v.name || v.vmName || "", rangeId))
         for (const vm of soVms) {
-          const vmid = vm.proxmoxID || vm.ID
-          if (!vmid) continue
+          const rawId = vm.proxmoxID ?? vm.ID
+          const vmid = typeof rawId === "number" ? rawId : Number.parseInt(String(rawId ?? ""), 10)
+          if (!Number.isFinite(vmid) || vmid <= 0) continue
+          const rangeNumber = Number(status.rangeNumber ?? vm.rangeNumber ?? 0)
+          if (!Number.isFinite(rangeNumber) || rangeNumber <= 0) {
+            console.warn(`[so-sniff] skip vmid=${vmid}: unknown rangeNumber`)
+            continue
+          }
           const result = await enableSoSniffOnVm({
             vmid,
-            rangeNumber: status.rangeNumber ?? vm.rangeNumber,
+            rangeNumber,
             rangeId,
             vmName: vm.name || vm.vmName || `${rangeId}-so`,
             sniffTag: args.sniffTag ?? SO_DEFAULT_SNIFF_TAG,

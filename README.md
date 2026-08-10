@@ -65,7 +65,17 @@ LUX is a small Docker stack (Next.js app + nginx + SQLite). Heavy work (VMs, Pac
 | **CPU** | 2 vCPU | 2–4 vCPU |
 | **RAM** | 2 GiB | 4 GiB |
 | **Disk** | ~10 GiB free (image + `./data` + logs) | ~20 GiB free |
-| **Network** | Reach Ludus API (`:8080` / `:8081`) and SSH (`:22`); optional root SSH to Proxmox for sniff / privileged ops | Same |
+| **Network** | Reach Ludus API (`:8080`, and `:8081` or tunnel) + SSH (`:22`) on the Ludus/Proxmox host | Same |
+
+**Root SSH (strongly recommended):** mount a root private key under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). LUX treats this as the privileged channel to the **same** Ludus/Proxmox box. Without it, API-only browsing still works; most automation does not.
+
+| Without root SSH | With root SSH |
+|---|---|
+| Login, range config/status via Ludus user API, deploy via API | Admin API tunnel (`8081` loopback), `pvesh` (SPICE `.vv`, node metrics, some admin VM ops) |
+| In-browser noVNC (user PAM password) | SO sniff hub-mode / `net1` attach + cleanup; GOAD `PROXMOX_*` inject for extension ansible |
+| | Sources ownership repair, template add/rm CLI, GOAD workspace/`sudo -u` impersonation, testing-mode preflight, ansible dir permissions, sync-ips / enable-extension host file writes |
+
+Details: [SSH and auth](docs/ssh-and-auth.md), [Getting started](docs/getting-started.md).
 
 Notes:
 

@@ -349,6 +349,13 @@ components:
             LUX **Re-sync** when catalog content is newer than installed.
             Without `force`, re-installing existing blueprints for non-admins may
             only sync access (no overwrite).
+        noDeps:
+          type: boolean
+          description: |
+            Ludus `noDeps` — skip blueprint ansible role/collection dependencies.
+            Defaults to `true` when `force` is set so per-item Re-sync only
+            touches the selection (not the blueprint's requirements closure).
+            First-time installs omit `force` and still pull deps.
         blueprints:
           type: array
           items:
@@ -1789,6 +1796,9 @@ paths:
       summary: Register a git source
       description: |
         Registers a git repository as a Ludus source (`ludus source add`).
+        Passes a distinct Ludus `id` (defaults to org-repo[-ref]) so the same
+        URL can be registered once per branch/tag. If URL+ref already exists,
+        returns that sourceID without creating a duplicate.
         Does not install catalog items; use install or the Add-from-Source UIs.
       operationId: registerSource
       security:
@@ -1809,9 +1819,14 @@ paths:
                   type: string
                   default: main
                   description: Branch, tag, or commit to track.
+                id:
+                  type: string
+                  description: |
+                    Optional Ludus source id. Defaults to a slug of org/repo,
+                    with `-<ref>` appended when ref is not main/master.
       responses:
         '200':
-          description: Source registered.
+          description: Source registered (or already present for URL+ref).
           content:
             application/json:
               schema:
@@ -1843,6 +1858,72 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
 
   /api/sources/{sourceId}:
+    patch:
+      tags: [Sources]
+      summary: Update a registered source
+      description: |
+        Change source metadata. When only `ref` is set, LUX deletes the source
+        (no purge) and re-registers it for the new branch/tag — Ludus clones are
+        often single-branch, so a bare PATCH+sync fails with git pathspec errors.
+        Response may include a new `sourceID` and `recreated: true`.
+      operationId: updateSource
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ref:
+                  type: string
+                  description: New branch, tag, or commit.
+                url:
+                  type: string
+                  format: uri
+                  description: New remote URL for git-type sources.
+      responses:
+        '200':
+          description: Source updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: updated
+                  sourceID:
+                    type: string
+                  ref:
+                    type: string
+        '400':
+          description: Missing ref/url.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Ludus Sources API unavailable or source missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       tags: [Sources]
       summary: Delete a registered source
@@ -1889,6 +1970,68 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '502':
           description: Upstream Ludus error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/sources/{sourceId}/refs:
+    get:
+      tags: [Sources]
+      summary: List remote branches and tags for a source
+      description: |
+        Resolves the registered source URL and lists branches (and tags when
+        `tags=1`) via the GitHub or GitLab API for the Change-ref picker.
+      operationId: listSourceRefs
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["1"]
+          description: Include tags when set to `1`.
+      responses:
+        '200':
+          description: Remote refs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sourceID:
+                    type: string
+                  url:
+                    type: string
+                  currentRef:
+                    type: string
+                  refs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        kind:
+                          type: string
+                          enum: [branch, tag]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Source missing or Sources API unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream git host or Ludus error.
           content:
             application/json:
               schema:
@@ -1956,7 +2099,9 @@ paths:
         - `force: true`: overwrite already-installed templates and local/galaxy
           roles/collections from the source (Ludus `--force`). Used by LUX
           **Re-sync** / **Re-sync outdated** when catalog versions differ or
-          Ludus reports `upgrade_available`.
+          Ludus reports `upgrade_available`. Implies `noDeps: true` unless
+          `noDeps` is explicitly set, so blueprint re-sync does not reinstall
+          ansible deps outside the selection.
 
         Community source blueprints that are not yet installed still require an
         admin session (403 for non-admins).
@@ -1985,11 +2130,16 @@ paths:
                 summary: Force re-sync outdated role
                 value:
                   force: true
+                  noDeps: true
                   selection:
                     localRoles: [ludus_securityonion]
-                    localCollections: []
-                    templates: []
-                    blueprints: []
+              forceResyncBlueprint:
+                summary: Force re-sync blueprint only (no ansible deps)
+                value:
+                  force: true
+                  noDeps: true
+                  selection:
+                    blueprints: [securityonion-lab]
       responses:
         '200':
           description: Install completed (may include warnings).
@@ -2690,6 +2840,54 @@ paths:
                     type: array
                     items:
                       type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/goad/instances/{instanceId}/enable-extension:
+    post:
+      tags: [GOAD]
+      summary: Enable a GOAD extension on an instance
+      description: |
+        Appends an extension name to `workspace/<instanceId>/instance.json` so a
+        subsequent provide regenerates Ludus config and inventories. Used by
+        Install Extension before provide/provision.
+      operationId: enableGoadExtension
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/impersonateApikey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [extension]
+              properties:
+                extension:
+                  type: string
+                  example: securityonion
+      responses:
+        '200':
+          description: Extension enabled (or already present).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  added:
+                    type: boolean
+                  already:
+                    type: boolean
+                  extension:
+                    type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
 

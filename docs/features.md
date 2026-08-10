@@ -20,7 +20,7 @@
 - **Templates** — List, build, stop, delete Packer templates; install from official Ludus GitLab or custom sources
 - **Blueprints** — Save/share/deploy range configs; user & group ACLs, unshare, apply-to-range workflow
 - **Ansible Roles** — Galaxy roles and collections (add with version pin, list, remove)
-- **Security Onion sniff** — On deploy of SO labs, LUX attaches a Proxmox sniff NIC + hub-mode bridge via root SSH; reverses on range/VM delete (Proxmox is source of truth)
+- **Security Onion sniff** — On SO lab deploy, LUX enables bridge hub-mode during deploy and ensures sniff `net1` after IP config (never before — same-VLAN collision); reverses on range/VM delete (Proxmox is source of truth)
 
 ### VM access
 

@@ -33,6 +33,17 @@ import { clearSessionEfiStopPreview } from "@/lib/testing-stop-efi-session"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 
+/** Options for {@link useGoadRunAction}'s `runAction`. */
+export type GoadRunActionOptions = {
+  /**
+   * When true: still snapshot/restore `network:` / `ludus_extensions` in range-config
+   * after GOAD, but do **not** start a Ludus `network` tag deploy.
+   * Use for mid-chain steps (e.g. Install Extension's intermediate `provide`) so a
+   * failed/quick provide cannot kick off firewall redeploy and block the next deploy.
+   */
+  skipNetworkFollowup?: boolean
+}
+
 export interface UseGoadRunActionParams {
   instance: GoadInstance | null
   instanceId: string
@@ -83,7 +94,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
   } = params
 
   const runAction = useCallback(
-    async (action: string, goadArgs: string) => {
+    async (action: string, goadArgs: string, options?: GoadRunActionOptions) => {
       setCurrentAction(action)
       clear()
       clearRangeLogs()
@@ -129,7 +140,10 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
       } else if (TERMINAL_TAB_ACTIONS.has(action)) {
         setActiveTab("terminal")
       }
-      const networkFollowup = networkSnapshotNeedsRedeploy(networkSnapshot)
+      // Failed/quick provide still exits 0; without skip, we used to start a
+      // network-tag deploy that blocked the next `ludus range deploy`.
+      const networkFollowup =
+        !options?.skipNetworkFollowup && networkSnapshotNeedsRedeploy(networkSnapshot)
 
       goadChainDebug("goad_action_start", {
         action,
@@ -265,7 +279,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                     console.warn(JSON.stringify(extensionsSnapshot, null, 2))
                   }
                 } catch { /* ignore */ }
-              } else if (networkFollowup) {
+              } else if (networkFollowup && code === 0) {
                 const deployErr = await startNetworkTagDeploy()
                 if (deployErr) {
                   toast({
@@ -274,17 +288,11 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                     description:
                       `Range config has your rules again, but auto-deploy of the "network" tag failed (${deployErr}). Iptables on the router is NOT yet updated. Run Range Configuration → Deploy (tag "network") to apply them.`,
                   })
-                } else if (code === 0) {
+                } else {
                   toast({
                     title: "Firewall rules preserved",
                     description:
                       "Your network: block was re-applied and a fast network-tag deploy was kicked off so iptables picks up the rules. Watch Range Logs to confirm.",
-                  })
-                } else {
-                  toast({
-                    title: "Firewall rules restored despite GOAD error",
-                    description:
-                      `GOAD exited ${code}, but your network: block was re-applied and a network-tag deploy is running to re-apply iptables.`,
                   })
                 }
               } else if (extensionsSnapshot != null && !extensionsAlreadyCorrect && code === 0) {
@@ -294,7 +302,9 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                     "Your ludus_extensions block was re-applied after GOAD refreshed range-config.",
                 })
               }
-            } else if (networkAlreadyCorrect && networkFollowup) {
+            } else if (networkAlreadyCorrect && networkFollowup && code === 0) {
+              // Only after successful GOAD — do not start network-tag deploy when
+              // provide failed (often exit 0) or YAML was untouched mid-chain.
               const deployErr = await startNetworkTagDeploy()
               if (deployErr) {
                 toast({
@@ -303,17 +313,11 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                   description:
                     `Your network: block is already in range-config, but auto-deploy of the "network" tag failed (${deployErr}). Run Range Configuration → Deploy (tag "network") to apply router firewall rules.`,
                 })
-              } else if (code === 0) {
+              } else {
                 toast({
                   title: "Firewall rules refreshed",
                   description:
                     "Range-config already had your network: block; a network-tag deploy was started so the router reapplies iptables. Watch Range Logs to confirm.",
-                })
-              } else {
-                toast({
-                  title: "Firewall redeploy running after GOAD error",
-                  description:
-                    `GOAD exited ${code}; your network: block was unchanged in Ludus, but a network-tag deploy was started to re-sync the router.`,
                 })
               }
             }

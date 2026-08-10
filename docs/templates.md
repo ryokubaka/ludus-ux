@@ -192,6 +192,18 @@ If you copied template directories in as root, `chown -R ludus:ludus` the templa
 
 Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Linux user (`ANSIBLE_HOME` and `ANSIBLE_SSH_CONTROL_PATH_DIR` point at `/opt/ludus/users/<username>/.ansible` — see [Ludus roles docs](https://docs.ludus.cloud/docs/roles) and [GET/POST `/ansible`](https://api-docs.ludus.cloud/retrieve-available-ansible-roles-and-collections-24251967e0)). SSH ControlPath lives at `…/.ansible/cp`, which must be writable by **`ludus`**, not the range owner.
 
+### Sources Sync fails: `insufficient permission for adding an object` under `.git/objects`
+
+Ludus sync runs `git fetch` as the **`ludus`** Linux user inside `/opt/ludus/sources/<id>/`. If any files there were created as **root** (manual `git` as root, older LUX writing into `sources/…/templates/`, etc.), fetch dies with `insufficient permission for adding an object to repository database .git/objects`.
+
+**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over root SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
+
+**Manual repair** (if root SSH is unavailable to LUX):
+
+```bash
+chown -R ludus:ludus /opt/ludus/sources
+```
+
 **Right after a Galaxy install via the Ludus API, `ludus:ludus` ownership is normal (transient).** Ludus runs `ansible-galaxy` as the service user, then may attempt a recursive chown to the range owner — that can fail or leave a mixed tree. LUX normalizes to the **split layout** below on every install and before GOAD / range deploy.
 
 | Path | Steady-state owner | Mode |

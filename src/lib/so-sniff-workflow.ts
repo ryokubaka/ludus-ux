@@ -1,6 +1,10 @@
 /**
- * During Ludus DEPLOYING, attach SO sniff NIC + hub-mode as soon as the SO VM exists.
- * Idempotent; Proxmox is source of truth.
+ * During Ludus DEPLOYING: hub-mode only (bridge ageing).
+ * After deploy leaves DEPLOYING/WAITING: attach SO sniff net1 if missing.
+ *
+ * Never add net1 while Ludus is still configuring IPs — a second NIC on the same
+ * VLAN tag makes Ludus's MAC→interface lookup pick the sniff NIC and fail with
+ * "Could not find the interface name for VM …".
  */
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
@@ -9,6 +13,7 @@ import type { RangeObject, VMObject } from "@/lib/types"
 import {
   cleanupSoSniffForRange,
   enableSoSniffOnVm,
+  ensureSoSniffHubMode,
   isSoVmName,
   rangeConfigNeedsSoSniff,
   SO_DEFAULT_SNIFF_TAG,
@@ -21,6 +26,11 @@ const WATCH_INTERVAL_MS = 10_000
 
 function vmList(range: RangeObject): VMObject[] {
   return range.VMs ?? range.vms ?? []
+}
+
+function isDeployInProgress(state: string | undefined): boolean {
+  const s = (state || "").trim().toUpperCase()
+  return s === "DEPLOYING" || s === "WAITING"
 }
 
 async function fetchRangeConfigYaml(apiKey: string, rangeId: string): Promise<string | null> {
@@ -68,7 +78,8 @@ export function startSoSniffWatcher(args: {
   void (async () => {
     const started = Date.now()
     let needsSo: boolean | null = null
-    let enabledCount = 0
+    let hubModeDone = false
+    let nicEnabledCount = 0
 
     console.info(`[so-sniff] watcher start range=${rangeId}`)
     try {
@@ -90,34 +101,51 @@ export function startSoSniffWatcher(args: {
           continue
         }
 
+        const state = status.rangeState
+        const deploying = isDeployInProgress(state)
         const vms = vmList(status)
         const soVms = vms.filter((v) => isSoVmName(v.name || v.vmName || "", rangeId))
-        for (const vm of soVms) {
-          const rawId = vm.proxmoxID ?? vm.ID
-          const vmid = typeof rawId === "number" ? rawId : Number.parseInt(String(rawId ?? ""), 10)
-          if (!Number.isFinite(vmid) || vmid <= 0) continue
-          const rangeNumber = Number(status.rangeNumber ?? vm.rangeNumber ?? 0)
-          if (!Number.isFinite(rangeNumber) || rangeNumber <= 0) {
-            console.warn(`[so-sniff] skip vmid=${vmid}: unknown rangeNumber`)
-            continue
+        const rangeNumber = Number(status.rangeNumber ?? 0)
+
+        if (soVms.length > 0 && Number.isFinite(rangeNumber) && rangeNumber > 0) {
+          if (deploying) {
+            // Hub-mode only — role (or post-deploy backstop) attaches net1 after IP config.
+            if (!hubModeDone) {
+              const hub = await ensureSoSniffHubMode({
+                rangeNumber,
+                creds: ssh.creds,
+              })
+              if (hub.ok) hubModeDone = true
+            }
+          } else {
+            for (const vm of soVms) {
+              const rawId = vm.proxmoxID ?? vm.ID
+              const vmid =
+                typeof rawId === "number" ? rawId : Number.parseInt(String(rawId ?? ""), 10)
+              if (!Number.isFinite(vmid) || vmid <= 0) continue
+              const vmRangeNumber = Number(status.rangeNumber ?? vm.rangeNumber ?? rangeNumber)
+              if (!Number.isFinite(vmRangeNumber) || vmRangeNumber <= 0) {
+                console.warn(`[so-sniff] skip vmid=${vmid}: unknown rangeNumber`)
+                continue
+              }
+              const result = await enableSoSniffOnVm({
+                vmid,
+                rangeNumber: vmRangeNumber,
+                rangeId,
+                vmName: vm.name || vm.vmName || `${rangeId}-so`,
+                sniffTag: args.sniffTag ?? SO_DEFAULT_SNIFF_TAG,
+                attachNic: true,
+                creds: ssh.creds,
+              })
+              if (result.ok) nicEnabledCount += 1
+            }
           }
-          const result = await enableSoSniffOnVm({
-            vmid,
-            rangeNumber,
-            rangeId,
-            vmName: vm.name || vm.vmName || `${rangeId}-so`,
-            sniffTag: args.sniffTag ?? SO_DEFAULT_SNIFF_TAG,
-            creds: ssh.creds,
-          })
-          if (result.ok) enabledCount += 1
         }
 
-        const state = status.rangeState
         if (
           soVms.length > 0 &&
-          enabledCount > 0 &&
-          state !== "DEPLOYING" &&
-          state !== "WAITING"
+          !deploying &&
+          nicEnabledCount > 0
         ) {
           console.info(`[so-sniff] watcher done ${rangeId} state=${state}`)
           break
@@ -125,8 +153,7 @@ export function startSoSniffWatcher(args: {
         if (
           needsSo === true &&
           soVms.length === 0 &&
-          state !== "DEPLOYING" &&
-          state !== "WAITING" &&
+          !deploying &&
           state !== "NEVER DEPLOYED"
         ) {
           console.info(`[so-sniff] watcher stop ${rangeId}: no SO VMs in ${state}`)

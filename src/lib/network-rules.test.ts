@@ -11,6 +11,10 @@ import {
   networkSnapshotNeedsRedeploy,
   networkSectionEqual,
   blankRule,
+  normalizeIpLastOctet,
+  sanitizeNetworkIpOctetsInYaml,
+  sanitizeNetworkPortsInYaml,
+  normalizePorts,
   type NetworkRule,
 } from "./network-rules"
 
@@ -121,6 +125,91 @@ network:
     const rules = extractNetworkRules(yaml)
     expect(rules[0].ip_last_octet_src).toBe("5")
     expect(rules[0].ip_last_octet_dst).toBe("10")
+  })
+
+  it("coerces full IPv4 ip_last_octet_* to last octet", () => {
+    const yaml = `
+network:
+  rules:
+    - name: Allow DC to SO SOC HTTPS
+      vlan_src: 10
+      vlan_dst: 20
+      protocol: tcp
+      ports: "443"
+      action: ACCEPT
+      ip_last_octet_dst: 10.1.20.20
+`
+    const rules = extractNetworkRules(yaml)
+    expect(rules[0].ip_last_octet_dst).toBe("20")
+  })
+})
+
+describe("normalizeIpLastOctet", () => {
+  it("keeps single octet and ranges", () => {
+    expect(normalizeIpLastOctet("20")).toBe("20")
+    expect(normalizeIpLastOctet("21-25")).toBe("21-25")
+  })
+
+  it("strips full IPv4 to last octet", () => {
+    expect(normalizeIpLastOctet("10.1.20.20")).toBe("20")
+  })
+})
+
+describe("sanitizeNetworkIpOctetsInYaml", () => {
+  it("rewrites full IP on ip_last_octet_dst without dumping whole doc", () => {
+    const yaml = `ludus:\n  - vm_name: x\nnetwork:\n  rules:\n    - name: r\n      ip_last_octet_dst: 10.1.20.20\n`
+    const out = sanitizeNetworkIpOctetsInYaml(yaml)
+    expect(out).toContain("ip_last_octet_dst: 20")
+    expect(out).toContain("vm_name: x")
+    expect(out).not.toContain("10.1.20.20")
+  })
+
+  it("unquotes single-octet strings for Ludus integer anyOf", () => {
+    const yaml = `network:\n  rules:\n    - ip_last_octet_dst: "20"\n`
+    const out = sanitizeNetworkIpOctetsInYaml(yaml)
+    expect(out).toContain("ip_last_octet_dst: 20")
+    expect(out).not.toContain('"20"')
+  })
+
+  it("keeps range as string", () => {
+    const yaml = `network:\n  rules:\n    - ip_last_octet_dst: 21-25\n`
+    expect(sanitizeNetworkIpOctetsInYaml(yaml)).toContain("ip_last_octet_dst: 21-25")
+  })
+})
+
+describe("normalizePorts / sanitizeNetworkPortsInYaml", () => {
+  it("joins array ports", () => {
+    expect(normalizePorts([8220, 5055, 8443])).toBe("8220,5055,8443")
+  })
+
+  it("rewrites YAML list ports to comma string", () => {
+    const yaml = `network:\n  rules:\n    - name: fleet\n      ports:\n        - 8220\n        - 5055\n        - 8443\n      action: ACCEPT\n`
+    const out = sanitizeNetworkPortsInYaml(yaml)
+    expect(out).toContain('ports: "8220,5055,8443"')
+    expect(out).not.toMatch(/ports:\s*\n\s*-/)
+  })
+
+  it("rewrites flow-array ports", () => {
+    const yaml = `      ports: [8220, 5055, 8443]\n`
+    expect(sanitizeNetworkPortsInYaml(yaml)).toContain('ports: "8220,5055,8443"')
+  })
+})
+
+describe("injectNetworkRules octets", () => {
+  it("dumps single octet as YAML integer not quoted string", () => {
+    const result = injectNetworkRules("ludus: []\n", [
+      {
+        name: "r",
+        vlan_src: 10,
+        vlan_dst: 20,
+        protocol: "tcp",
+        ports: "443",
+        action: "ACCEPT",
+        ip_last_octet_dst: "20",
+      },
+    ])
+    expect(result).toMatch(/ip_last_octet_dst:\s*20\b/)
+    expect(result).not.toMatch(/ip_last_octet_dst:\s*["']20["']/)
   })
 })
 

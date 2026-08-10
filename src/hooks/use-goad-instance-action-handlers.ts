@@ -14,11 +14,13 @@ import { clearRangeAborting } from "@/lib/range-aborting"
 import { queryKeys } from "@/lib/query-keys"
 import type { GoadCatalog, GoadExtensionDef, GoadInstance } from "@/lib/types"
 import type { useToast } from "@/hooks/use-toast"
+import type { GoadRunActionOptions } from "@/hooks/use-goad-run-action"
 import {
   buildGoadProvisionReplCommand,
   provisionModeLabel,
   type GoadProvisionMode,
 } from "@/lib/goad-provision-target"
+import { withLuxInstallExtension } from "@/lib/lux-goad-args-meta"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 type ConfirmFn = (label: string, fn: () => void, key?: string) => void
@@ -27,7 +29,11 @@ export interface UseGoadInstanceActionHandlersParams {
   instance: GoadInstance | null
   instanceId: string
   catalog: GoadCatalog | null
-  runAction: (action: string, goadArgs: string) => Promise<number | null>
+  runAction: (
+    action: string,
+    goadArgs: string,
+    options?: GoadRunActionOptions,
+  ) => Promise<number | null>
   confirm: ConfirmFn
   toast: ToastFn
   impersonationHeaders: () => Record<string, string>
@@ -241,13 +247,96 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     const def = extMap[name]
     const noNewVms = def ? extensionIsProvisionOnly(def) : false
     const skipDeploy = noNewVms && goadSupportsProvisionOnlyExtensions(catalog)
+
     confirm(
       skipDeploy
         ? `Enable "${name}" and run Ansible only (no Ludus range deploy)?`
         : noNewVms
         ? `Install "${name}"? This extension adds no VMs, but GOAD at ${catalog?.goadPath ?? "your server"} does not support provision-only install_extension — a full Ludus range deploy will run.`
-        : `Install "${name}"? Deploys new VMs and runs Ansible.`,
-      () => runAction("install-extension", `--repl "use ${instanceId};install_extension ${name}"`),
+        : `Install "${name}"? Waits for Ludus idle, then one run: provide + Ansible (Ansible only if provide exits 0).`,
+      async () => {
+        try {
+          const en = await fetch(
+            `/api/goad/instances/${encodeURIComponent(instanceId)}/enable-extension`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+              body: JSON.stringify({ extensionName: name }),
+            },
+          )
+          const enData = await en.json().catch(() => ({}))
+          if (!en.ok || enData.error) {
+            toast({
+              variant: "destructive",
+              title: "Enable extension failed",
+              description: enData.error ?? `HTTP ${en.status}`,
+            })
+            return
+          }
+        } catch (err) {
+          toast({
+            variant: "destructive",
+            title: "Enable extension failed",
+            description: (err as Error).message,
+          })
+          return
+        }
+
+        const rangeId = await ensureRangeIsolation()
+        if (!rangeId && !skipDeploy) return
+
+        if (rangeId) {
+          toast({ title: "Waiting for Ludus", description: "Range must be idle before GOAD provide/provision…" })
+          const { waitUntilLudusRangeNotDeploying } = await import("@/lib/wait-ludus-range-state")
+          await waitUntilLudusRangeNotDeploying(
+            () => ludusApi.getRangeStatus(rangeId),
+            { pollMs: 5_000 },
+          )
+        }
+
+        // Skip provide only when extension VMs already exist in Ludus.
+        // GOAD "provided" alone is insufficient (deploy can still be in-flight).
+        let extVmsPresent = false
+        if (rangeId && !skipDeploy && !noNewVms) {
+          const st = await ludusApi.getRangeStatus(rangeId)
+          const vms = st.data?.VMs ?? st.data?.vms ?? []
+          extVmsPresent =
+            matchingVmIdsForExtension(name, def?.machines ?? [], vms).length > 0
+        }
+        const provisionOnly = skipDeploy || extVmsPresent
+
+        if (provisionOnly) {
+          try {
+            await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/sync-ips`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+              body: JSON.stringify({ ludusRangeId: rangeId ?? instance?.ludusRangeId }),
+            })
+          } catch { /* non-fatal */ }
+          await runAction(
+            "install-extension",
+            withLuxInstallExtension(
+              `--repl "use ${instanceId};update_instance_files;provision_extension ${name}"`,
+              name,
+            ),
+          )
+          return
+        }
+
+        // One LUX task: provide then provision_extension. goad-ssh splits the REPL
+        // and only runs Ansible when provide exits 0 (GOAD otherwise continues).
+        toast({
+          title: "Install extension",
+          description: `Deploy ${name} VMs (provide) then Ansible — one run…`,
+        })
+        await runAction(
+          "install-extension",
+          withLuxInstallExtension(
+            `--repl "use ${instanceId};update_instance_files;provide;provision_extension ${name}"`,
+            name,
+          ),
+        )
+      },
       `ext-install:${name}`,
     )
   }

@@ -167,3 +167,86 @@ export async function fetchRepoRawFile(apiBase: string, path: string, ref: strin
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
   return res.text()
 }
+
+export type RepoRefKind = "branch" | "tag"
+
+export interface RepoRef {
+  name: string
+  kind: RepoRefKind
+}
+
+/** List remote branches (and optionally tags) for a GitHub/GitLab clone URL. */
+export async function listRepoRefs(
+  gitUrl: string,
+  opts?: { includeTags?: boolean },
+): Promise<RepoRef[]> {
+  const apiBase = gitUrlToRepoApiBase(gitUrl)
+  if (!apiBase) {
+    throw new Error("Unsupported git host — only GitHub and GitLab URLs are supported")
+  }
+
+  const refs: RepoRef[] = []
+
+  if (isGitHubApiBase(apiBase)) {
+    let page = 1
+    while (page <= 10) {
+      const url = `${apiBase}/branches?per_page=100&page=${page}`
+      const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+      if (!res.ok) throw new Error(`GitHub branches API ${res.status}`)
+      const rows = (await res.json()) as Array<{ name?: string }>
+      for (const row of rows) {
+        if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "branch" })
+      }
+      if (rows.length < 100) break
+      page += 1
+    }
+    if (opts?.includeTags) {
+      let tagPage = 1
+      while (tagPage <= 5) {
+        const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
+        const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+        if (!res.ok) break
+        const rows = (await res.json()) as Array<{ name?: string }>
+        for (const row of rows) {
+          if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "tag" })
+        }
+        if (rows.length < 100) break
+        tagPage += 1
+      }
+    }
+  } else {
+    // GitLab: apiBase ends with …/repository
+    let page = 1
+    while (page <= 10) {
+      const url = `${apiBase}/branches?per_page=100&page=${page}`
+      const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+      if (!res.ok) throw new Error(`GitLab branches API ${res.status}`)
+      const rows = (await res.json()) as Array<{ name?: string }>
+      for (const row of rows) {
+        if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "branch" })
+      }
+      if (rows.length < 100) break
+      page += 1
+    }
+    if (opts?.includeTags) {
+      let tagPage = 1
+      while (tagPage <= 5) {
+        const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
+        const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+        if (!res.ok) break
+        const rows = (await res.json()) as Array<{ name?: string }>
+        for (const row of rows) {
+          if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "tag" })
+        }
+        if (rows.length < 100) break
+        tagPage += 1
+      }
+    }
+  }
+
+  refs.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "branch" ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  return refs
+}

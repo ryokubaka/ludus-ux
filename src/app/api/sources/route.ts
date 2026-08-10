@@ -4,7 +4,12 @@ import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { createGitSource, isHttp404Error, listSources } from "@/lib/ludus-source-client"
-import { DEFAULT_SOURCE_GIT_REF } from "@/lib/ludus-source-ref"
+import {
+  DEFAULT_SOURCE_GIT_REF,
+  ludusSourceGitRef,
+  normalizeGitSourceUrl,
+  suggestedLudusSourceId,
+} from "@/lib/ludus-source-ref"
 import {
   ensureSourceAutoSyncLoopStarted,
   ensureSourcesFresh,
@@ -56,7 +61,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  let body: { url?: string; ref?: string }
+  let body: { url?: string; ref?: string; id?: string }
   try {
     body = await request.json()
   } catch {
@@ -74,9 +79,31 @@ export async function POST(request: NextRequest) {
   }
 
   const ref = body.ref?.trim() || DEFAULT_SOURCE_GIT_REF
+  const wantRef = ludusSourceGitRef({ ref })
+  const target = normalizeGitSourceUrl(url)
+  const id = body.id?.trim() || suggestedLudusSourceId(url, wantRef)
 
   try {
-    const sourceID = await createGitSource(apiKey, url, ref)
+    const existing = await listSources(apiKey)
+    const hit = existing.find(
+      (s) =>
+        !!s.url &&
+        normalizeGitSourceUrl(s.url) === target &&
+        ludusSourceGitRef(s) === wantRef,
+    )
+    if (hit) {
+      const sourceID = hit.sourceID || hit.id || ""
+      logLuxRouteAction(request, session, {
+        outcome: "success",
+        detail: `source=${sourceID} already-registered`,
+      })
+      return NextResponse.json({
+        sourceID,
+        message: "Source already registered for this URL and ref",
+      })
+    }
+
+    const sourceID = await createGitSource(apiKey, url, wantRef, { id })
     const scopeTag = effectiveScopeTagFromSession(session)
     revalidateAfterSourceMutation(scopeTag)
     logLuxRouteAction(request, session, { outcome: "success", detail: `source=${sourceID}` })

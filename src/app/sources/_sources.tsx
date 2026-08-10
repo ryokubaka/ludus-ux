@@ -33,8 +33,11 @@ import {
   ExternalLink,
   Zap,
   BookOpen,
+  Pencil,
+  Check,
   type LucideIcon,
 } from "lucide-react"
+import { suggestedLudusSourceId } from "@/lib/ludus-source-ref"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import { LUDUS_SOURCES_DOCS_URL } from "@/components/sources/source-catalog-banner"
@@ -453,8 +456,8 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     <div className="mt-3 space-y-4 border-t border-border pt-3">
       <p className="text-[11px] text-muted-foreground">
         <span className="font-medium text-foreground">Sync</span> refreshes the git catalog only.{" "}
-        <span className="font-medium text-foreground">Re-sync</span> overwrites installed content from
-        the catalog when a newer version is available.
+        <span className="font-medium text-foreground">Re-sync</span> overwrites only the selected
+        item(s) from the catalog (blueprint re-sync skips ansible deps — re-sync roles separately).
       </p>
       {outdatedCount > 0 && (
         <div className="flex items-center gap-2">
@@ -871,12 +874,24 @@ export function SourcesPageClient() {
   const [addOpen, setAddOpen] = useState(false)
   const [newUrl, setNewUrl] = useState("https://github.com/badsectorlabs/ludus-source-bsl")
   const [newRef, setNewRef] = useState("main")
+  const [newId, setNewId] = useState("")
+  const [idTouched, setIdTouched] = useState(false)
   const [adding, setAdding] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<LudusSource | null>(null)
   const [purgeOnDelete, setPurgeOnDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [refTarget, setRefTarget] = useState<LudusSource | null>(null)
+  const [editRef, setEditRef] = useState("")
+  const [updatingRef, setUpdatingRef] = useState(false)
+  const [showCustomRef, setShowCustomRef] = useState(false)
+
+  const suggestedId = useMemo(
+    () => suggestedLudusSourceId(newUrl, newRef.trim() || "main"),
+    [newUrl, newRef],
+  )
+  const registerId = idTouched ? newId.trim() : suggestedId
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: queryKeys.sources(scopeTag),
@@ -892,6 +907,37 @@ export function SourcesPageClient() {
     staleTime: STALE.long,
   })
 
+  const refTargetId = refTarget ? sourceId(refTarget) : ""
+  const {
+    data: remoteRefsData,
+    isLoading: remoteRefsLoading,
+    isError: remoteRefsError,
+    error: remoteRefsErr,
+    refetch: refetchRemoteRefs,
+  } = useQuery({
+    queryKey: queryKeys.sourceRefs(scopeTag, refTargetId),
+    queryFn: async () => {
+      const res = await fetch(`/api/sources/${encodeURIComponent(refTargetId)}/refs?tags=1`)
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      return json as {
+        refs: Array<{ name: string; kind: "branch" | "tag" }>
+        currentRef?: string
+      }
+    },
+    enabled: !!refTargetId,
+    staleTime: STALE.short,
+  })
+
+  const remoteBranches = useMemo(
+    () => (remoteRefsData?.refs ?? []).filter((r) => r.kind === "branch"),
+    [remoteRefsData],
+  )
+  const remoteTags = useMemo(
+    () => (remoteRefsData?.refs ?? []).filter((r) => r.kind === "tag"),
+    [remoteRefsData],
+  )
+
   const sources = data?.sources ?? []
   const sourcesAvailable = data?.available ?? false
 
@@ -905,12 +951,18 @@ export function SourcesPageClient() {
       const res = await fetch("/api/sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: newUrl.trim(), ref: newRef.trim() || "main" }),
+        body: JSON.stringify({
+          url: newUrl.trim(),
+          ref: newRef.trim() || "main",
+          id: registerId || undefined,
+        }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
       toast({ title: "Source registered", description: json.sourceID || newUrl })
       setAddOpen(false)
+      setIdTouched(false)
+      setNewId("")
       invalidateSources()
     } catch (err) {
       toast({ variant: "destructive", title: "Registration failed", description: (err as Error).message })
@@ -940,6 +992,44 @@ export function SourcesPageClient() {
       toast({ variant: "destructive", title: "Sync failed", description: (err as Error).message })
     } finally {
       setSyncingId(null)
+    }
+  }
+
+  const handleUpdateRef = async () => {
+    if (!refTarget || !editRef.trim()) return
+    const sid = sourceId(refTarget)
+    setUpdatingRef(true)
+    try {
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: editRef.trim() }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const nextId = (json.sourceID as string) || sid
+      toast({
+        title: json.recreated ? "Source re-registered for new ref" : "Ref unchanged",
+        description: json.recreated
+          ? `${sid} → ${nextId} @ ${editRef.trim()} (Ludus single-branch clone requires a fresh register)`
+          : `${sid} already on ${editRef.trim()}`,
+      })
+      setRefTarget(null)
+      setExpanded(nextId)
+      invalidateSources()
+      if (!json.recreated) {
+        await handleSync({ ...refTarget, ref: editRef.trim() })
+      } else {
+        // changeGitSourceRef already synced; refresh catalog queries for new id.
+        queryClient.invalidateQueries({ queryKey: queryKeys.sourceBlueprints(scopeTag, nextId) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.sourceTemplates(scopeTag, nextId) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.sourceRoles(scopeTag, nextId) })
+        queryClient.invalidateQueries({ queryKey: queryKeys.sourceCollections(scopeTag, nextId) })
+      }
+    } catch (err) {
+      toast({ variant: "destructive", title: "Ref update failed", description: (err as Error).message })
+    } finally {
+      setUpdatingRef(false)
     }
   }
 
@@ -1084,6 +1174,18 @@ export function SourcesPageClient() {
                     </button>
                     <div className="flex items-center gap-1 shrink-0 self-center">
                       <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        title="Change tracked branch / tag"
+                        onClick={() => {
+                          setRefTarget(source)
+                          setEditRef(source.ref || "main")
+                          setShowCustomRef(false)
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
                         size="sm"
                         variant="outline"
                         title="Refresh git catalog only — does not overwrite installed roles/templates/blueprints"
@@ -1121,13 +1223,23 @@ export function SourcesPageClient() {
         </div>
       )}
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open)
+          if (!open) {
+            setIdTouched(false)
+            setNewId("")
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Register Git Source</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">
-            Ludus 2.3.0+ may prefix the registered source ID with your userID. LUX lists that ID below the source name after registration.
+            Same repo + different branch needs a distinct source ID (ref is appended for non-main).
+            Ludus 2.3.0+ may also prefix with your userID.
           </p>
           <div className="space-y-3">
             <div>
@@ -1148,12 +1260,171 @@ export function SourcesPageClient() {
                 placeholder="main"
               />
             </div>
+            <div>
+              <Label htmlFor="source-id">Source ID</Label>
+              <Input
+                id="source-id"
+                value={idTouched ? newId : suggestedId}
+                onChange={(e) => {
+                  setIdTouched(true)
+                  setNewId(e.target.value)
+                }}
+                placeholder={suggestedId}
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                e.g. register <code className="text-primary">elastic</code> →{" "}
+                <code className="text-primary">…-meow-elastic</code> so it does not replace{" "}
+                <code className="text-primary">main</code>.
+              </p>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setAddOpen(false)}>Cancel</Button>
             <Button onClick={handleRegister} disabled={adding || !newUrl.trim()}>
               {adding && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Register
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={!!refTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRefTarget(null)
+            setShowCustomRef(false)
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change source ref</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Pick a branch/tag for{" "}
+            <code className="text-primary">{refTarget ? sourceId(refTarget) : ""}</code>.
+            Ludus clones are single-branch — LUX re-registers (no purge) for the new ref.
+          </p>
+
+          {remoteRefsLoading ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading branches…
+            </div>
+          ) : remoteRefsError ? (
+            <div className="space-y-2">
+              <p className="text-xs text-status-error">
+                {(remoteRefsErr as Error)?.message || "Failed to list branches"}
+              </p>
+              <Button size="sm" variant="outline" onClick={() => refetchRemoteRefs()}>
+                Retry
+              </Button>
+              <div>
+                <Label htmlFor="edit-source-ref">Ref (manual)</Label>
+                <Input
+                  id="edit-source-ref"
+                  value={editRef}
+                  onChange={(e) => setEditRef(e.target.value)}
+                  placeholder="main"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">Branches</Label>
+                <div className="mt-1 max-h-48 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                  {remoteBranches.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">No branches found</p>
+                  ) : (
+                    remoteBranches.map((branch) => {
+                      const selected = editRef === branch.name
+                      const current = (refTarget?.ref || "") === branch.name
+                      return (
+                        <button
+                          key={`branch-${branch.name}`}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/60",
+                            selected && "bg-muted",
+                          )}
+                          onClick={() => setEditRef(branch.name)}
+                        >
+                          <span className="font-mono text-xs truncate">{branch.name}</span>
+                          <span className="flex items-center gap-1 shrink-0">
+                            {current && (
+                              <Badge variant="secondary" className="text-[10px]">
+                                current
+                              </Badge>
+                            )}
+                            {selected && <Check className="h-3.5 w-3.5 text-primary" />}
+                          </span>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+
+              {remoteTags.length > 0 && (
+                <div>
+                  <Label className="text-xs text-muted-foreground">Tags</Label>
+                  <div className="mt-1 max-h-32 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                    {remoteTags.map((tag) => {
+                      const selected = editRef === tag.name
+                      return (
+                        <button
+                          key={`tag-${tag.name}`}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted/60",
+                            selected && "bg-muted",
+                          )}
+                          onClick={() => setEditRef(tag.name)}
+                        >
+                          <span className="font-mono text-xs truncate">{tag.name}</span>
+                          {selected && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                onClick={() => setShowCustomRef((v) => !v)}
+              >
+                {showCustomRef ? "Hide custom ref" : "Use custom ref (commit SHA…)"}
+              </button>
+              {showCustomRef && (
+                <div>
+                  <Label htmlFor="edit-source-ref">Custom ref</Label>
+                  <Input
+                    id="edit-source-ref"
+                    value={editRef}
+                    onChange={(e) => setEditRef(e.target.value)}
+                    placeholder="commit SHA or other ref"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setRefTarget(null)}>Cancel</Button>
+            <Button
+              onClick={handleUpdateRef}
+              disabled={
+                updatingRef ||
+                !editRef.trim() ||
+                editRef.trim() === (refTarget?.ref || "")
+              }
+            >
+              {updatingRef && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save &amp; Sync
             </Button>
           </DialogFooter>
         </DialogContent>

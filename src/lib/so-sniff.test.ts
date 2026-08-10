@@ -5,9 +5,20 @@ import {
   rangeBridgeName,
   rangeConfigNeedsSoSniff,
   sniffNetSpec,
+  wrapRemoteBashScript,
 } from "@/lib/so-sniff"
 
 describe("so-sniff helpers", () => {
+  it("wraps remote bash so $vars survive sshExec JSON double-quoting", () => {
+    const wrapped = wrapRemoteBashScript('echo "$HOME"; if [ -f "$MARKER" ]; then true; fi')
+    expect(wrapped).toMatch(/^echo '[A-Za-z0-9+/]+=*' \| base64 -d \| bash -l$/)
+    expect(wrapped).not.toContain("$HOME")
+    expect(wrapped).not.toContain("$MARKER")
+    const b64 = wrapped.match(/^echo '([^']+)'/)?.[1]
+    expect(b64).toBeTruthy()
+    expect(Buffer.from(b64!, "base64").toString("utf8")).toContain('echo "$HOME"')
+  })
+
   it("builds Ludus user bridge name", () => {
     expect(rangeBridgeName(2)).toBe("vmbr1002")
   })

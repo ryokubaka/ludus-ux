@@ -46,17 +46,96 @@ function normalizeAction(v: unknown): RuleAction {
   return "ACCEPT"
 }
 
+/**
+ * Ludus `ip_last_octet_*` is ONLY the last octet (or N-M range), never a full IP.
+ * UI users often paste `10.1.20.20` — coerce to `20` so schema validation passes.
+ */
+export function normalizeIpLastOctet(raw: unknown): string | undefined {
+  if (raw == null) return undefined
+  const s = String(raw).trim()
+  if (!s) return undefined
+
+  // Full IPv4 → last octet
+  const ipv4 = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const last = Number(ipv4[4])
+    if (Number.isInteger(last) && last >= 0 && last <= 255) return String(last)
+  }
+
+  // Single octet 0–255
+  if (/^\d{1,3}$/.test(s)) {
+    const n = Number(s)
+    if (Number.isInteger(n) && n >= 0 && n <= 255) return String(n)
+  }
+
+  // Range N-M (Ludus docs: ip_last_octet_src: 21-25)
+  const range = s.match(/^(\d{1,3})\s*-\s*(\d{1,3})$/)
+  if (range) {
+    const a = Number(range[1])
+    const b = Number(range[2])
+    if (
+      Number.isInteger(a) &&
+      Number.isInteger(b) &&
+      a >= 0 &&
+      a <= 255 &&
+      b >= 0 &&
+      b <= 255 &&
+      a <= b
+    ) {
+      return `${a}-${b}`
+    }
+  }
+
+  // Leave as-is for caller/schema to reject; do not invent a value
+  return s
+}
+
+/**
+ * Ludus schema anyOf: integer single octet OR string range `N-M`.
+ * JS string `"20"` dumps as YAML `"20"` and fails both branches — use number.
+ */
+export function octetForYaml(raw: unknown): number | string | undefined {
+  const n = normalizeIpLastOctet(raw)
+  if (n == null) return undefined
+  if (/^\d{1,3}$/.test(n)) return Number(n)
+  return n
+}
+
+/**
+ * Ludus `ports`: integer | "all" | "start:end" | "a,b,c" — not a YAML array.
+ * Arrays (common blueprint mistake) → comma-separated string.
+ */
+export function normalizePorts(raw: unknown): string {
+  if (raw == null) return "all"
+  if (Array.isArray(raw)) {
+    const parts = raw.map((p) => String(p).trim()).filter(Boolean)
+    return parts.length > 0 ? parts.join(",") : "all"
+  }
+  const s = String(raw).trim()
+  return s || "all"
+}
+
+/** YAML dump form: bare int for single port; string for lists / ranges / all. */
+export function portsForYaml(raw: unknown): number | string {
+  const s = normalizePorts(raw)
+  if (s === "all") return "all"
+  if (/^\d+$/.test(s)) return Number(s)
+  return s
+}
+
 function rawToRule(r: Record<string, unknown>): NetworkRule {
   const rule: NetworkRule = {
     name: String(r.name ?? ""),
     vlan_src: normalizeVlan(r.vlan_src),
     vlan_dst: normalizeVlan(r.vlan_dst),
     protocol: normalizeProtocol(r.protocol),
-    ports: r.ports != null ? String(r.ports) : "all",
+    ports: normalizePorts(r.ports),
     action: normalizeAction(r.action),
   }
-  if (r.ip_last_octet_src != null) rule.ip_last_octet_src = String(r.ip_last_octet_src)
-  if (r.ip_last_octet_dst != null) rule.ip_last_octet_dst = String(r.ip_last_octet_dst)
+  const src = normalizeIpLastOctet(r.ip_last_octet_src)
+  const dst = normalizeIpLastOctet(r.ip_last_octet_dst)
+  if (src != null) rule.ip_last_octet_src = src
+  if (dst != null) rule.ip_last_octet_dst = dst
   return rule
 }
 
@@ -96,11 +175,13 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
     vlan_src: rule.vlan_src,
     vlan_dst: rule.vlan_dst,
     protocol: rule.protocol,
-    ports: rule.protocol === "all" ? "all" : rule.ports,
+    ports: rule.protocol === "all" ? "all" : portsForYaml(rule.ports),
     action: rule.action,
   }
-  if (rule.ip_last_octet_src) obj.ip_last_octet_src = rule.ip_last_octet_src
-  if (rule.ip_last_octet_dst) obj.ip_last_octet_dst = rule.ip_last_octet_dst
+  const src = octetForYaml(rule.ip_last_octet_src)
+  const dst = octetForYaml(rule.ip_last_octet_dst)
+  if (src !== undefined) obj.ip_last_octet_src = src
+  if (dst !== undefined) obj.ip_last_octet_dst = dst
   return obj
 }
 
@@ -124,6 +205,58 @@ const YAML_DUMP_OPTS = {
   noRefs: true,
   quotingType: '"' as const,
   forceQuotes: false,
+}
+
+/**
+ * Fix `ip_last_octet_*` for Ludus schema:
+ * - full IPv4 → last octet as bare integer
+ * - quoted single octet `"20"` → bare `20` (string fails integer anyOf branch)
+ * Surgical replace — preserves comments/formatting.
+ */
+export function sanitizeNetworkIpOctetsInYaml(yamlText: string): string {
+  return yamlText.replace(
+    /^(\s*ip_last_octet_(?:src|dst):\s*)(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/gm,
+    (_m, prefix: string, dq?: string, sq?: string, bare?: string) => {
+      const raw = dq ?? sq ?? bare ?? ""
+      const out = octetForYaml(raw)
+      if (out === undefined) return _m
+      return `${prefix}${out}`
+    },
+  )
+}
+
+/**
+ * Coerce YAML list / flow-array `ports` under network rules to Ludus comma-string.
+ *   ports:\n  - 8220\n  - 5055  →  ports: "8220,5055"
+ *   ports: [8220, 5055]         →  ports: "8220,5055"
+ */
+export function sanitizeNetworkPortsInYaml(yamlText: string): string {
+  let out = yamlText.replace(
+    /^([ \t]*)ports:[ \t]*\n((?:[ \t]*-[ \t]*\d+[ \t]*(?:#[^\n]*)?\n?)+)/gm,
+    (_m, indent: string, listBlock: string) => {
+      const ports = [...listBlock.matchAll(/-[ \t]*(\d+)/g)].map((x) => x[1])
+      if (ports.length === 0) return _m
+      return `${indent}ports: "${ports.join(",")}"\n`
+    },
+  )
+  out = out.replace(
+    /^([ \t]*)ports:[ \t]*\[([^\]]*)\][ \t]*$/gm,
+    (_m, indent: string, inner: string) => {
+      const ports = inner
+        .split(",")
+        .map((p) => p.trim().replace(/^["']|["']$/g, ""))
+        .filter((p) => /^\d+$/.test(p))
+      if (ports.length === 0) return _m
+      if (ports.length === 1) return `${indent}ports: ${ports[0]}`
+      return `${indent}ports: "${ports.join(",")}"`
+    },
+  )
+  return out
+}
+
+/** All surgical Ludus network.rules coercions before PUT. */
+export function sanitizeNetworkRulesYaml(yamlText: string): string {
+  return sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText))
 }
 
 export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): string {

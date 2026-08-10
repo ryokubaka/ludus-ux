@@ -167,6 +167,11 @@ export async function POST(
   // Always also replace the GOAD default fallback so the button works even
   // when instance.json already had the correct prefix but inventories didn't.
   sedCmds.push(`${findInventories} -exec sed -i "s|192\\.168\\.56|${newIpRange}|g" {} +`)
+  // Security Onion Ludus VMs sit on vlan 20 (10.R.20.20), not vlan 10.
+  // Prefix rewrite above turns {{ip_range}}.20 into 10.R.10.20 — fix third octet.
+  sedCmds.push(
+    `find '${workspacePath}' -maxdepth 1 -type f -name 'securityonion*_inventory' -exec sed -i "s|ansible_host=10\\.${rangeNumber}\\.10\\.20|ansible_host=10.${rangeNumber}.20.20|g" {} +`,
+  )
   sedCmds.push(`echo "[+] Inventory sync complete"`)
 
   const inventoryUpdateCmd = sedCmds.join(" && ")

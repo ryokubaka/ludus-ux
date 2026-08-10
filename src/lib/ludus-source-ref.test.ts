@@ -2,8 +2,38 @@ import { describe, expect, it } from "vitest"
 import {
   DEFAULT_SOURCE_GIT_REF,
   ludusSourceGitRef,
+  normalizeGitSourceUrl,
   normalizeLudusSourceRef,
+  suggestedLudusSourceId,
 } from "@/lib/ludus-source-ref"
+
+describe("suggestedLudusSourceId", () => {
+  it("keeps repo-only id for main/master", () => {
+    expect(suggestedLudusSourceId("https://github.com/ryokubaka/ludus-source-meow", "main")).toBe(
+      "ryokubaka-ludus-source-meow",
+    )
+    expect(suggestedLudusSourceId("https://github.com/ryokubaka/ludus-source-meow.git", "master")).toBe(
+      "ryokubaka-ludus-source-meow",
+    )
+  })
+
+  it("appends non-default ref so same-repo branches stay distinct", () => {
+    expect(suggestedLudusSourceId("https://github.com/ryokubaka/ludus-source-meow", "elastic")).toBe(
+      "ryokubaka-ludus-source-meow-elastic",
+    )
+    expect(suggestedLudusSourceId("https://github.com/ryokubaka/ludus-source-meow", "feature/so")).toBe(
+      "ryokubaka-ludus-source-meow-feature-so",
+    )
+  })
+})
+
+describe("normalizeGitSourceUrl", () => {
+  it("strips .git and trailing slash", () => {
+    expect(normalizeGitSourceUrl("https://GitHub.com/Org/Repo.git/")).toBe(
+      "https://github.com/org/repo",
+    )
+  })
+})
 
 describe("ludusSourceGitRef", () => {
   it("prefers configured ref over default main", () => {

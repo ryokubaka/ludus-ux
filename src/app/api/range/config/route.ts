@@ -4,6 +4,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { sanitizeNetworkRulesYaml } from "@/lib/network-rules"
 
 export const maxDuration = 120
 
@@ -70,7 +71,9 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "Missing 'config' in request body" }, { status: 400 })
   }
 
-  const { config, rangeId, force } = body as { config: string; rangeId?: string; force?: boolean }
+  const { config: rawConfig, rangeId, force } = body as { config: string; rangeId?: string; force?: boolean }
+  // Ludus schema coercions: octet ints, ports comma-string (not YAML arrays)
+  const config = sanitizeNetworkRulesYaml(rawConfig)
   const ludusPath = rangeId ? `/range/config?rangeID=${encodeURIComponent(rangeId)}` : "/range/config"
 
   const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey

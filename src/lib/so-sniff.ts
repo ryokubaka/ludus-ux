@@ -59,9 +59,18 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
+/**
+ * Run a multi-line bash script on the host without the SSH/`bash -c "..."` layer
+ * expanding `$vars` (JSON.stringify wraps the payload in double quotes).
+ */
+export function wrapRemoteBashScript(script: string): string {
+  const b64 = Buffer.from(script, "utf8").toString("base64")
+  return `echo ${shellQuote(b64)} | base64 -d | bash -l`
+}
+
 async function withSsh(
   creds: SoSniffCreds | null,
-  command: string,
+  script: string,
 ): Promise<{ ok: true; out: string } | { ok: false; error: string }> {
   const c =
     creds ??
@@ -74,11 +83,45 @@ async function withSsh(
     return { ok: false, error: "Proxmox root SSH not configured" }
   }
   try {
-    const out = await sshExec(c.sshHost, c.sshPort, c.sshUser, c.sshPass, command)
+    const out = await sshExec(
+      c.sshHost,
+      c.sshPort,
+      c.sshUser,
+      c.sshPass,
+      wrapRemoteBashScript(script),
+    )
     return { ok: true, out }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/**
+ * Hub-mode only (bridge ageing 0). Safe during Ludus DEPLOYING — does not add net1.
+ * Adding net1 before configure-ip breaks Ludus MAC→iface lookup when mgmt + sniff share a VLAN tag.
+ */
+export async function ensureSoSniffHubMode(args: {
+  rangeNumber: number
+  creds?: SoSniffCreds | null
+}): Promise<{ ok: boolean; detail: string }> {
+  const vmbr = rangeBridgeName(args.rangeNumber)
+  const script = `
+set -euo pipefail
+VMBR=${shellQuote(vmbr)}
+if command -v brctl >/dev/null 2>&1; then
+  brctl setageing "$VMBR" 0 || true
+fi
+ip link set dev "$VMBR" type bridge ageing_time 0 2>/dev/null || true
+echo "hub-mode on $VMBR"
+`.trim()
+
+  const res = await withSsh(args.creds ?? null, script)
+  if (!res.ok) {
+    console.warn(`[so-sniff] hub-mode failed vmbr=${vmbr}: ${res.error}`)
+    return { ok: false, detail: res.error }
+  }
+  console.info(`[so-sniff] hub-mode ok vmbr=${vmbr}`)
+  return { ok: true, detail: res.out }
 }
 
 export async function enableSoSniffOnVm(args: {
@@ -87,12 +130,19 @@ export async function enableSoSniffOnVm(args: {
   rangeId: string
   vmName: string
   sniffTag?: number
+  /** When false, only ensure hub-mode (no net1). Default true. */
+  attachNic?: boolean
   creds?: SoSniffCreds | null
 }): Promise<{ ok: boolean; detail: string; already?: boolean }> {
   const sniffTag = args.sniffTag ?? SO_DEFAULT_SNIFF_TAG
+  const attachNic = args.attachNic !== false
   const vmbr = rangeBridgeName(args.rangeNumber)
   const netSpec = sniffNetSpec(vmbr, sniffTag)
   const markerPath = `${SO_SNIFF_MARKER_DIR}/${args.rangeId}.json`
+
+  if (!attachNic) {
+    return ensureSoSniffHubMode({ rangeNumber: args.rangeNumber, creds: args.creds })
+  }
 
   const script = `
 set -euo pipefail
@@ -102,27 +152,27 @@ MARKER=${shellQuote(markerPath)}
 RANGE_ID=${shellQuote(args.rangeId)}
 VM_NAME=${shellQuote(args.vmName)}
 
-if ! qm status "\$VMID" >/dev/null 2>&1; then
-  echo "VM \$VMID not found"
+if ! qm status "$VMID" >/dev/null 2>&1; then
+  echo "VM $VMID not found"
   exit 2
 fi
 
-CFG=\$(qm config "\$VMID")
-NET1=\$(echo "\$CFG" | sed -n 's/^net1: //p' | head -1 || true)
+CFG=$(qm config "$VMID")
+NET1=$(echo "$CFG" | sed -n 's/^net1: //p' | head -1 || true)
 
-if [ -n "\$NET1" ]; then
-  case "\$NET1" in
+if [ -n "$NET1" ]; then
+  case "$NET1" in
     *bridge=${vmbr}*tag=${sniffTag}*)
       echo "net1 already sniff-ready"
       ;;
     *)
-      echo "net1 already set to unexpected value: \$NET1"
+      echo "net1 already set to unexpected value: $NET1"
       exit 3
       ;;
   esac
 else
-  qm set "\$VMID" -net1 "\$NETSPEC"
-  echo "added net1=\$NETSPEC"
+  qm set "$VMID" -net1 "$NETSPEC"
+  echo "added net1=$NETSPEC"
 fi
 
 # Hub mode for Ludus packet capture
@@ -132,10 +182,10 @@ fi
 ip link set dev ${shellQuote(vmbr)} type bridge ageing_time 0 2>/dev/null || true
 
 mkdir -p ${shellQuote(SO_SNIFF_MARKER_DIR)}
-cat > "\$MARKER" <<EOF
-{"rangeId":"\$RANGE_ID","vmid":\$VMID,"vmName":"\$VM_NAME","vmbr":"${vmbr}","sniffTag":${sniffTag},"updatedAt":"\$(date -Iseconds)"}
+cat > "$MARKER" <<EOF
+{"rangeId":"$RANGE_ID","vmid":$VMID,"vmName":"$VM_NAME","vmbr":"${vmbr}","sniffTag":${sniffTag},"updatedAt":"$(date -Iseconds)"}
 EOF
-echo "marker written \$MARKER"
+echo "marker written $MARKER"
 `.trim()
 
   const res = await withSsh(args.creds ?? null, script)
@@ -164,15 +214,17 @@ export async function cleanupSoSniffForRange(args: {
       ? rangeBridgeName(args.rangeNumber)
       : ""
 
+  const markerPath = `${SO_SNIFF_MARKER_DIR}/${rangeId}.json`
   const namesJson = JSON.stringify(args.vmNames ?? [])
+  const ageingCs = SO_BRIDGE_AGEING_DEFAULT_SEC * 100
   const script = `
 set -euo pipefail
 RANGE_ID=${shellQuote(rangeId)}
 TAG=${sniffTag}
 VMBR_HINT=${shellQuote(vmbrHint)}
-MARKER_DIR=${shellQuote(SO_SNIFF_MARKER_DIR)}
-MARKER="$MARKER_DIR/$RANGE_ID.json"
+MARKER=${shellQuote(markerPath)}
 AGEING_DEFAULT=${SO_BRIDGE_AGEING_DEFAULT_SEC}
+AGEING_CS=${ageingCs}
 NAMES_JSON=${shellQuote(namesJson)}
 
 VMIDS=""
@@ -196,7 +248,7 @@ while IFS= read -r line; do
       ;;
   esac
   # also match explicit names from LUX
-  echo "$NAMES_JSON" | grep -Fq "\"$NAME\"" && VMIDS="$VMIDS $ID" || true
+  echo "$NAMES_JSON" | grep -Fq "\\"$NAME\\"" && VMIDS="$VMIDS $ID" || true
 done < <(qm list 2>/dev/null | awk 'NR>1 {print $1" "$2}' || true)
 
 if [ -n "$VMBR_HINT" ]; then
@@ -244,7 +296,7 @@ for VMBR in $VMBRS; do
     if command -v brctl >/dev/null 2>&1; then
       brctl setageing "$VMBR" "$AGEING_DEFAULT" || true
     fi
-    ip link set dev "$VMBR" type bridge ageing_time $((AGEING_DEFAULT * 100)) 2>/dev/null || true
+    ip link set dev "$VMBR" type bridge ageing_time "$AGEING_CS" 2>/dev/null || true
     rm -f "/etc/network/interfaces.d/lux-so-sniff-$VMBR" 2>/dev/null || true
     echo "restored ageing on $VMBR"
   else

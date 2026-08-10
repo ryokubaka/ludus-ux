@@ -39,14 +39,17 @@ export async function POST(
 
   let selection: SourceInstallSelection = {}
   let force = false
+  let noDeps: boolean | undefined
   try {
     const body = await request.json()
     force = Boolean(body?.force)
+    if (typeof body?.noDeps === "boolean") noDeps = body.noDeps
     if (body?.selection && typeof body.selection === "object") {
       selection = body.selection as SourceInstallSelection
     } else {
-      const { force: _force, ...rest } = (body ?? {}) as SourceInstallSelection & {
+      const { force: _force, noDeps: _noDeps, ...rest } = (body ?? {}) as SourceInstallSelection & {
         force?: boolean
+        noDeps?: boolean
       }
       selection = rest
     }
@@ -138,8 +141,10 @@ export async function POST(
       console.warn("[sources/install] pre-install sync failed", syncErr)
     }
 
+    // Force re-sync defaults to noDeps so blueprint re-sync does not reinstall roles.
     const { warnings, data } = await installFromSource(installApiKey, sourceId, selection, {
       force,
+      noDeps: noDeps ?? (force ? true : undefined),
     })
 
     // Record catalog tip versions so future bumps show Update available without Ludus versions.

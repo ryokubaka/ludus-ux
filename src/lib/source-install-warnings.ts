@@ -1,4 +1,17 @@
-/** Rewrite Ludus source-install template messages for accuracy. */
+/**
+ * Ludus reports Packer vm_name collisions as “built-in template name”.
+ * That is usually wrong for source templates (e.g. securityonion-*-template already
+ * on the host from a prior install). Treat those as benign noise.
+ */
+
+const BUILTIN_NAME_COLLISION =
+  /matches a built-in template name and cannot be installed from a source/i
+
+export function isBenignBuiltInTemplateNameCollision(message: string): boolean {
+  return BUILTIN_NAME_COLLISION.test(message.trim())
+}
+
+/** Rewrite Ludus source-install template messages for accuracy (non-benign leftovers). */
 export function rewriteSourceInstallWarning(message: string): string {
   const m = message.trim()
   const builtin = m.match(
@@ -21,6 +34,49 @@ export function rewriteSourceInstallWarning(message: string): string {
   return m
 }
 
+/** Drop false-positive built-in-name collisions from install warning lists. */
 export function rewriteSourceInstallWarnings(warnings: string[]): string[] {
-  return warnings.map(rewriteSourceInstallWarning)
+  return warnings
+    .filter((w) => !isBenignBuiltInTemplateNameCollision(w))
+    .map(rewriteSourceInstallWarning)
+}
+
+function splitSyncErrorParts(error: string): string[] {
+  return error
+    .split(/\n+/)
+    .flatMap((line) => line.split(/(?<=\S);\s+/))
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Clean Ludus lastSyncStatus / lastSyncError for UI + auto-sync.
+ * When the only sync complaint is a false “built-in template” collision, treat as ok.
+ */
+export function sanitizeSourceSyncPresentation(row: {
+  lastSyncStatus?: string
+  lastSyncError?: string
+}): { lastSyncStatus?: string; lastSyncError?: string } {
+  const status = row.lastSyncStatus
+  const err = (row.lastSyncError ?? "").trim()
+  if (!err) {
+    return { lastSyncStatus: status, lastSyncError: row.lastSyncError }
+  }
+
+  const remaining = splitSyncErrorParts(err).filter(
+    (part) => !isBenignBuiltInTemplateNameCollision(part),
+  )
+
+  if (remaining.length === 0) {
+    const s = (status || "").trim().toLowerCase()
+    if (s === "partial" || s === "warning" || s === "error") {
+      return { lastSyncStatus: "ok", lastSyncError: undefined }
+    }
+    return { lastSyncStatus: status, lastSyncError: undefined }
+  }
+
+  return {
+    lastSyncStatus: status,
+    lastSyncError: remaining.map(rewriteSourceInstallWarning).join("; "),
+  }
 }

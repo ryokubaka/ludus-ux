@@ -42,6 +42,9 @@ export const queryKeys = {
 
   // ── Sources (Ludus 2.2.0+) ────────────────────────────────────────────────
   sources: (scopeTag: string) => sc(scopeTag, ["sources"]),
+  sourceRefs: (scopeTag: string, sourceId: string) =>
+    sc(scopeTag, ["sources", sourceId, "refs"]),
+
   /** Pass `ref` when fetching so cache separates branches; omit when invalidating (prefix match). */
   sourceBlueprints: (scopeTag: string, sourceId: string, ref?: string) =>
     ref

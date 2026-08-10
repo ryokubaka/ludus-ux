@@ -56,6 +56,22 @@ Full behavior, prerequisites, and downgrade notes: [Upgrade and downgrade](docs/
 | **GOAD** (optional) | GOAD repo on the Ludus server + `python3.11-venv` |
 | **LudusHound** (optional) | Clone [LudusHound](https://github.com/bagelByt3s/LudusHound) to `/opt/LudusHound` + `go` for first build |
 
+### LUX host hardware
+
+LUX is a small Docker stack (Next.js app + nginx + SQLite). Heavy work (VMs, Packer, Ansible, Security Onion) runs on the **Ludus / Proxmox** side, not inside LUX.
+
+| | **Minimum** | **Recommended** |
+|---|---|---|
+| **CPU** | 2 vCPU | 2–4 vCPU |
+| **RAM** | 2 GiB | 4 GiB |
+| **Disk** | ~10 GiB free (image + `./data` + logs) | ~20 GiB free |
+| **Network** | Reach Ludus API (`:8080` / `:8081`) and SSH (`:22`); optional root SSH to Proxmox for sniff / privileged ops | Same |
+
+Notes:
+
+- Co-locating LUX on the Ludus server is fine; give the host enough headroom for Ludus itself.
+- Lab size (e.g. Security Onion + AD) is bounded by **Proxmox** capacity, not LUX. See [Ludus docs](https://docs.ludus.cloud) and your blueprint/role READMEs for range VM RAM/CPU.
+
 ## License & author
 
 [Apache-2.0](LICENSE) — 2026 LUX Contributors. Third-party notices: [NOTICE](NOTICE).

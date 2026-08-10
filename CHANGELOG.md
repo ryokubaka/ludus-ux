@@ -15,7 +15,7 @@ Each bullet uses a single tag:
 
 ---
 
-## [1.3.0] - 2026-08-09
+## [1.3.0] - 2026-08-10
 
 **Sources**
 - [Add] **Content re-sync** — Installed Ansible / Templates / Blueprints show **In sync** / **Out of sync** with per-item **Re-sync** (and bulk **Re-sync outdated**). Uses `POST /sources/{id}/install` with `force`. False Ludus “built-in template name” collisions are filtered / rewritten (usually Packer `vm_name` already on the host).

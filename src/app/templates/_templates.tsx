@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, Fragment, useRef } from "react"
+import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -40,14 +41,22 @@ import { LogHistoryList } from "@/components/range/log-history-list"
 import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
 import { cn, extractArray } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
+import { ToastAction } from "@/components/ui/toast"
+import type { TemplateDeleteErrorCode } from "@/lib/template-delete-errors"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
   buildCatalogTemplatePresenceMap,
   getCatalogTemplatePresence,
+  resolveInstalledTemplateName,
   type CatalogTemplatePresence,
 } from "@/lib/template-install-match"
+import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
+import {
+  SourceRepoLink,
+  SourceSyncControls,
+} from "@/components/sources/source-installed-controls"
 import { SourceCatalogBanner } from "@/components/sources/source-catalog-banner"
 import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
 import {
@@ -66,6 +75,7 @@ interface SourceTemplate {
   apiBase: string
   ref:     string
   version?: string
+  state?: string
   catalogSource?: "ludus" | "github"
 }
 
@@ -77,8 +87,13 @@ const BUILTIN_SOURCE = {
 
 // ── Add from Source panel ─────────────────────────────────────────────────────
 
-function AddFromSource({ templatePresence, onAdded }: {
+function AddFromSource({
+  templatePresence,
+  ludusTemplates,
+  onAdded,
+}: {
   templatePresence: Map<string, CatalogTemplatePresence>
+  ludusTemplates: Array<{ name: string; built: boolean; version?: string }>
   onAdded: () => void
 }) {
   const { toast } = useToast()
@@ -231,7 +246,6 @@ function AddFromSource({ templatePresence, onAdded }: {
   const presenceOf = (name: string) => getCatalogTemplatePresence(name, templatePresence)
   const inLudus = (name: string) => presenceOf(name) !== "none"
 
-  const available = sourceTemplates.filter((t) => !inLudus(t.name))
   const alreadyAdded = sourceTemplates.filter((t) => presenceOf(t.name) === "added")
   const alreadyBuilt = sourceTemplates.filter((t) => presenceOf(t.name) === "built")
 
@@ -299,9 +313,12 @@ function AddFromSource({ templatePresence, onAdded }: {
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
                   value={registeredSourceId}
                   onChange={(e) => {
-                    setRegisteredSourceId(e.target.value)
+                    const nextId = e.target.value
+                    setRegisteredSourceId(nextId)
                     setSourceTemplates([])
+                    setCatalogSource(null)
                     setAddResults([])
+                    setSourceError(null)
                     autoFetchedRef.current = false
                   }}
                 >
@@ -414,6 +431,9 @@ function AddFromSource({ templatePresence, onAdded }: {
                 {sourceTemplates.map((t) => {
                   const presence = presenceOf(t.name)
                   const onLudus = presence !== "none"
+                  const ludusName = onLudus
+                    ? resolveInstalledTemplateName(t.name, ludusTemplates)
+                    : null
                   const result = addResults.find((r) => r.name === t.name)
                   return (
                     <button
@@ -460,9 +480,11 @@ function AddFromSource({ templatePresence, onAdded }: {
                         )}
                       </div>
                       <p className="text-muted-foreground/70 truncate pl-5">
-                        {t.version
-                          ? `v${t.version}`
-                          : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
+                        {ludusName && ludusName !== t.name
+                          ? `as ${ludusName}`
+                          : t.version
+                            ? `v${t.version}`
+                            : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
                       </p>
                     </button>
                   )
@@ -526,6 +548,7 @@ function OsBadge({ os }: { os?: LudusOS }) {
 
 export function TemplatesPageClient() {
   const { toast } = useToast()
+  const router = useRouter()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
@@ -584,6 +607,15 @@ export function TemplatesPageClient() {
     },
     staleTime: STALE.long,
   })
+
+  const templateInstalled = useMemo(
+    () => templates.map((t) => ({ name: t.name, version: t.version })),
+    [templates],
+  )
+  const sourceProvenance = useSourceInstalledProvenance({ templates: templateInstalled })
+  const invalidateTemplates = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+  }, [queryClient, scopeTag])
 
   // Names of every template currently known to Ludus. Used to decide which
   // rows in /templates/logs/history are actual packer builds vs range deploys.
@@ -727,12 +759,30 @@ export function TemplatesPageClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       })
-      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        message?: string
+        code?: TemplateDeleteErrorCode
+        actionUrl?: string
+      }
       if (!res.ok) {
         toast({
           variant: "destructive",
-          title: "Delete failed",
+          title:
+            data.code === "TEMPLATE_IN_USE_BY_VMS"
+              ? "Template in use"
+              : data.code === "TEMPLATE_INCLUDED"
+                ? "Cannot delete built-in template"
+                : "Delete failed",
           description: data.error || `HTTP ${res.status}`,
+          action: data.actionUrl ? (
+            <ToastAction
+              altText="View blocking VMs"
+              onClick={() => router.push(data.actionUrl!)}
+            >
+              View blocking VMs
+            </ToastAction>
+          ) : undefined,
         })
         return
       }
@@ -857,7 +907,11 @@ export function TemplatesPageClient() {
       )}
 
       {/* Add from Source */}
-      <AddFromSource templatePresence={templatePresence} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
+      <AddFromSource
+        templatePresence={templatePresence}
+        ludusTemplates={templates}
+        onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })}
+      />
 
       {/* Build History */}
       <Card>
@@ -998,6 +1052,8 @@ export function TemplatesPageClient() {
                     </th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Template Name</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">OS</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Source</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Sync</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
                     <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
                   </tr>
@@ -1005,7 +1061,7 @@ export function TemplatesPageClient() {
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                      <td colSpan={7} className="p-8 text-center text-muted-foreground">
                         <BookTemplate className="h-8 w-8 mx-auto mb-2 opacity-40" />
                         <p>No templates found</p>
                       </td>
@@ -1016,6 +1072,7 @@ export function TemplatesPageClient() {
                       const scopeDelete = `tpl-delete:${template.name}`
                       const rowHasPending =
                         pendingAction?.key === scopeBuild || pendingAction?.key === scopeDelete
+                      const src = sourceProvenance.template(template.name)
                       return (
                         <Fragment key={template.name}>
                           <tr
@@ -1038,6 +1095,23 @@ export function TemplatesPageClient() {
                             </td>
                             <td className="p-3">
                               <OsBadge os={template.os} />
+                            </td>
+                            <td className="p-3">
+                              {src ? (
+                                <SourceRepoLink match={src} />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {src ? (
+                                <SourceSyncControls
+                                  match={src}
+                                  onResynced={invalidateTemplates}
+                                />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
                             </td>
                             <td className="p-3">
                               {template.built ? (
@@ -1075,7 +1149,7 @@ export function TemplatesPageClient() {
                           </tr>
                           {rowHasPending && (
                             <tr className="border-b border-border/50 last:border-0">
-                              <td colSpan={5} className="p-2">
+                              <td colSpan={7} className="p-2">
                                 <ConfirmBar
                                   pending={pendingAction}
                                   scope={scopeBuild}

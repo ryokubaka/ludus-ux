@@ -4,6 +4,31 @@ function norm(name: string): string {
   return name.trim().toLowerCase()
 }
 
+function stripTemplateSuffix(name: string): string {
+  return name.endsWith(TEMPLATE_NAME_SUFFIX)
+    ? name.slice(0, -TEMPLATE_NAME_SUFFIX.length)
+    : name
+}
+
+/**
+ * Catalog dirs are often shorter than Ludus Packer names, e.g.
+ * `securityonion-3` → `securityonion-3-x64-template`.
+ */
+export function catalogMatchesInstalledName(catalogName: string, installedName: string): boolean {
+  const catalog = norm(catalogName)
+  const installed = norm(installedName)
+  if (!catalog || !installed) return false
+  if (catalog === installed) return true
+  if (installed === `${catalog}${TEMPLATE_NAME_SUFFIX}`) return true
+  if (catalog === `${installed}${TEMPLATE_NAME_SUFFIX}`) return true
+
+  const installedBase = stripTemplateSuffix(installed)
+  if (installedBase === catalog) return true
+  // Prefix + hyphen: securityonion-3 ↔ securityonion-3-x64[-template]
+  if (installedBase.startsWith(`${catalog}-`)) return true
+  return false
+}
+
 /** Ludus registers templates as `*-template`; source catalogs often use directory names. */
 export function templateCatalogNamesForInstalled(installedName: string): string[] {
   const n = norm(installedName)
@@ -19,9 +44,8 @@ export function isTemplateCatalogNameInstalled(
   catalogName: string,
   installedNames: Iterable<string>,
 ): boolean {
-  const candidates = new Set(templateCatalogNamesForInstalled(catalogName))
   for (const installed of installedNames) {
-    if (candidates.has(norm(installed))) return true
+    if (catalogMatchesInstalledName(catalogName, installed)) return true
   }
   return false
 }
@@ -49,17 +73,44 @@ export function buildCatalogTemplatePresenceMap(
       const existing = out.get(alias)
       if (!existing || presence === "built") out.set(alias, presence)
     }
+    // Keep full Ludus name so prefix matching can find securityonion-3-x64-template
+    const full = norm(t.name)
+    if (full) {
+      const existing = out.get(full)
+      if (!existing || presence === "built") out.set(full, presence)
+    }
   }
   return out
+}
+
+/** Resolve which Ludus template name a catalog entry maps to (for UI hints). */
+export function resolveInstalledTemplateName(
+  catalogName: string,
+  ludusTemplates: Iterable<{ name: string }>,
+): string | null {
+  const catalog = norm(catalogName)
+  if (!catalog) return null
+  let hit: string | null = null
+  for (const t of ludusTemplates) {
+    if (!catalogMatchesInstalledName(catalog, t.name)) continue
+    // Prefer longer / more specific Ludus names when several match
+    if (!hit || t.name.length > hit.length) hit = t.name
+  }
+  return hit
 }
 
 export function getCatalogTemplatePresence(
   catalogName: string,
   presenceMap: Map<string, CatalogTemplatePresence>,
 ): CatalogTemplatePresence {
-  for (const alias of templateCatalogNamesForInstalled(catalogName)) {
-    const hit = presenceMap.get(alias)
-    if (hit) return hit
+  const catalog = norm(catalogName)
+  if (!catalog) return "none"
+
+  let best: CatalogTemplatePresence = "none"
+  for (const [key, presence] of presenceMap) {
+    if (!catalogMatchesInstalledName(catalog, key)) continue
+    if (presence === "built") return "built"
+    if (best === "none") best = presence
   }
-  return "none"
+  return best
 }

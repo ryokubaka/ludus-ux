@@ -1,6 +1,8 @@
 import { ludusApi } from "@/lib/api"
 import {
+  ansibleRequirementsOnly,
   findMissingRequirements,
+  findMissingTemplateRequirements,
   mergeBlueprintRequirements,
   parseRequirementsYaml,
   requirementsFromConfigYaml,
@@ -63,18 +65,23 @@ async function fetchBlueprintConfigYaml(blueprintId: string): Promise<string> {
   return yaml
 }
 
-/** Compare blueprint requirements against installed Ansible roles/collections. */
+/** Compare blueprint requirements against installed Ansible + built templates. */
 export async function checkBlueprintDependencies(
   blueprintId: string,
 ): Promise<BlueprintDependencyCheck> {
-  const [installed, detail, configYaml] = await Promise.all([
+  const [installed, detail, configYaml, templatesRes] = await Promise.all([
     fetchInstalledAnsible(),
     fetchBlueprintRequirementsYaml(blueprintId),
     fetchBlueprintConfigYaml(blueprintId),
+    ludusApi.listTemplates(),
   ])
 
+  if (templatesRes.error) throw new Error(templatesRes.error)
+
   const required = resolveBlueprintRequirements(configYaml, detail.requirementsYaml)
-  const missing = findMissingRequirements(installed, required)
+  const missingAnsible = findMissingRequirements(installed, ansibleRequirementsOnly(required))
+  const missingTemplates = findMissingTemplateRequirements(required, templatesRes.data ?? [])
+  const missing = [...missingAnsible, ...missingTemplates]
 
   return {
     blueprintId,
@@ -119,7 +126,8 @@ export async function installBlueprintDependencies(
   blueprintId: string,
   missing: BlueprintRequirement[],
 ): Promise<InstallBlueprintDepsResult> {
-  if (missing.length === 0) {
+  const ansibleMissing = ansibleRequirementsOnly(missing)
+  if (ansibleMissing.length === 0) {
     return { ok: true, installed: [], failed: [], usedBulkInstall: false }
   }
 
@@ -129,7 +137,7 @@ export async function installBlueprintDependencies(
     if (parsed.ok) return parsed
 
     const installed = await fetchInstalledAnsible()
-    const stillMissing = findMissingRequirements(installed, missing)
+    const stillMissing = findMissingRequirements(installed, ansibleMissing)
     if (stillMissing.length === 0) {
       return { ...parsed, ok: true }
     }
@@ -143,7 +151,7 @@ export async function installBlueprintDependencies(
   }
 
   if (bulk.error && !isHttp404(bulk.error)) {
-    const individual = await installMissingAnsibleRequirements(missing)
+    const individual = await installMissingAnsibleRequirements(ansibleMissing)
     if (individual.ok || individual.installed.length > 0) {
       return { ...individual, usedBulkInstall: false }
     }
@@ -155,7 +163,7 @@ export async function installBlueprintDependencies(
     }
   }
 
-  const individual = await installMissingAnsibleRequirements(missing)
+  const individual = await installMissingAnsibleRequirements(ansibleMissing)
   return { ...individual, usedBulkInstall: false }
 }
 
@@ -164,10 +172,13 @@ export async function refreshBlueprintDependencyCheck(
   blueprintId: string,
   requirementsYaml?: string,
 ): Promise<BlueprintDependencyCheck> {
-  const [installed, configYaml] = await Promise.all([
+  const [installed, configYaml, templatesRes] = await Promise.all([
     fetchInstalledAnsible(),
     fetchBlueprintConfigYaml(blueprintId),
+    ludusApi.listTemplates(),
   ])
+
+  if (templatesRes.error) throw new Error(templatesRes.error)
 
   let reqYaml = requirementsYaml
   if (!reqYaml) {
@@ -176,7 +187,9 @@ export async function refreshBlueprintDependencyCheck(
   }
 
   const required = resolveBlueprintRequirements(configYaml, reqYaml)
-  const missing = findMissingRequirements(installed, required)
+  const missingAnsible = findMissingRequirements(installed, ansibleRequirementsOnly(required))
+  const missingTemplates = findMissingTemplateRequirements(required, templatesRes.data ?? [])
+  const missing = [...missingAnsible, ...missingTemplates]
 
   return {
     blueprintId,

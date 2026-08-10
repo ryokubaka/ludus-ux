@@ -14,9 +14,13 @@ import {
   type SourceRoleRow,
   type SourceTemplateRow,
 } from "@/lib/ludus-source-client"
+import { ludusSourceGitRef } from "@/lib/ludus-source-ref"
 import { blueprintShortName } from "@/lib/registered-ludus-sources"
+import { ensureSourceFresh } from "@/lib/source-auto-sync"
 import {
   enrichCollectionInstallNames,
+  enrichRoleVersionsFromGit,
+  fetchGitBlueprintManifest,
   gitUrlToGithubApiBase,
   listGitSourceBlueprints,
   listGitSourceCollections,
@@ -25,7 +29,38 @@ import {
   resolveGitCollectionFqcn,
 } from "@/lib/source-git-catalog"
 
+/** Prefer git tip blueprint.yml over Ludus sync-cache versions (often stale). */
+async function enrichBlueprintVersionsFromGit(
+  items: SourceBlueprintRow[],
+  gitUrl: string,
+  ref: string,
+): Promise<SourceBlueprintRow[]> {
+  const apiBase = gitUrlToGithubApiBase(gitUrl)
+  if (!apiBase || items.length === 0) return items
+  return Promise.all(
+    items.map(async (item) => {
+      const short = blueprintShortName(item)
+      if (!short) return item
+      const manifest = await fetchGitBlueprintManifest(apiBase, ref, short)
+      if (!manifest) return item
+      return {
+        ...item,
+        version: manifest.version || item.version,
+        description: item.description || manifest.description,
+        min_ludus_version: item.min_ludus_version || manifest.min_ludus_version,
+      }
+    }),
+  )
+}
+
 export type SourceCatalogOrigin = "ludus" | "github"
+
+export type SourceCatalogResolveResult<T> = {
+  items: T[]
+  catalogSource: SourceCatalogOrigin
+  /** Git ref from the Sources tab registration (branch/tag/commit). */
+  catalogRef: string
+}
 
 async function findRegisteredSource(
   apiKey: string,
@@ -36,6 +71,16 @@ async function findRegisteredSource(
   return (
     sources.find((s) => (s.sourceID || s.id || "").trim().toLowerCase() === want) ?? null
   )
+}
+
+/** Resolve source row and re-pull git working tree when last sync is stale. */
+async function prepareRegisteredSource(
+  apiKey: string,
+  sourceID: string,
+): Promise<LudusSourceRow | null> {
+  const src = await findRegisteredSource(apiKey, sourceID)
+  if (src) await ensureSourceFresh(apiKey, src)
+  return src
 }
 
 async function ludusCatalogOrEmpty<T>(fn: () => Promise<T[]>): Promise<T[]> {
@@ -77,7 +122,7 @@ async function enrichCollectionRows(
     items.map(async (item) => {
       const name = item.name?.trim() || ""
       if (!name || name.includes(".")) return item
-      const fqcn = await resolveGitCollectionFqcn(apiBase, ref || "main", name)
+      const fqcn = await resolveGitCollectionFqcn(apiBase, ref, name)
       return { ...item, name: fqcn, fqcn }
     }),
   )
@@ -139,108 +184,129 @@ function mergeSourceBlueprintRows(
 export async function resolveSourceBlueprints(
   apiKey: string,
   sourceID: string,
-): Promise<{ items: SourceBlueprintRow[]; catalogSource: SourceCatalogOrigin }> {
+): Promise<SourceCatalogResolveResult<SourceBlueprintRow>> {
+  const src = await prepareRegisteredSource(apiKey, sourceID)
+  const catalogRef = ludusSourceGitRef(src)
   const ludus = await ludusCatalogOrEmpty(() => listSourceBlueprints(apiKey, sourceID))
-  const src = await findRegisteredSource(apiKey, sourceID)
 
   let git: Array<{ name: string; sourceBlueprintID: string }> = []
   if (src?.url) {
-    git = await listGitSourceBlueprints(src.url, src.ref || "main", sourceID)
+    git = await listGitSourceBlueprints(src.url, catalogRef, sourceID)
   }
+
+  let items: SourceBlueprintRow[] = []
+  let catalogSource: SourceCatalogOrigin = "ludus"
 
   if (ludus.length === 0 && git.length === 0) {
-    return { items: [], catalogSource: "ludus" }
+    return { items: [], catalogSource: "ludus", catalogRef }
   }
   if (git.length === 0) {
-    return {
-      items: ludus.map((r) => normalizeSourceBlueprintRow(r, sourceID)),
-      catalogSource: "ludus",
-    }
-  }
-  if (ludus.length === 0) {
-    return {
-      items: git.map((g) => ({
-        name: g.name,
-        sourceBlueprintID: g.sourceBlueprintID,
-        sourceID,
-      })),
-      catalogSource: "github",
-    }
+    items = ludus.map((r) => normalizeSourceBlueprintRow(r, sourceID))
+  } else if (ludus.length === 0) {
+    items = git.map((g) => ({
+      name: g.name,
+      sourceBlueprintID: g.sourceBlueprintID,
+      sourceID,
+    }))
+    catalogSource = "github"
+  } else {
+    items = mergeSourceBlueprintRows(ludus, git, sourceID)
   }
 
-  return {
-    items: mergeSourceBlueprintRows(ludus, git, sourceID),
-    catalogSource: "ludus",
+  if (src?.url && items.length > 0) {
+    items = await enrichBlueprintVersionsFromGit(items, src.url, catalogRef)
   }
+
+  return { items, catalogSource, catalogRef }
 }
 
 export async function resolveSourceTemplates(
   apiKey: string,
   sourceID: string,
-): Promise<{ items: SourceTemplateRow[]; catalogSource: SourceCatalogOrigin }> {
+): Promise<SourceCatalogResolveResult<SourceTemplateRow>> {
+  const src = await prepareRegisteredSource(apiKey, sourceID)
+  const catalogRef = ludusSourceGitRef(src)
   const ludus = await ludusCatalogOrEmpty(() => listSourceTemplates(apiKey, sourceID))
-  if (ludus.length > 0) return { items: ludus, catalogSource: "ludus" }
+  if (ludus.length > 0) return { items: ludus, catalogSource: "ludus", catalogRef }
 
-  const src = await findRegisteredSource(apiKey, sourceID)
   if (src?.url) {
-    const git = await listGitSourceTemplates(src.url, src.ref || "main")
-    if (git.length > 0) return { items: git, catalogSource: "github" }
+    const git = await listGitSourceTemplates(src.url, catalogRef)
+    if (git.length > 0) return { items: git, catalogSource: "github", catalogRef }
   }
-  return { items: [], catalogSource: "ludus" }
+  return { items: [], catalogSource: "ludus", catalogRef }
 }
 
 export async function resolveSourceRoles(
   apiKey: string,
   sourceID: string,
-): Promise<{ items: SourceRoleRow[]; catalogSource: SourceCatalogOrigin }> {
+): Promise<SourceCatalogResolveResult<SourceRoleRow>> {
+  const src = await prepareRegisteredSource(apiKey, sourceID)
+  const catalogRef = ludusSourceGitRef(src)
   const catalog = await getSourceCatalog(apiKey, sourceID)
+
+  let items: SourceRoleRow[] = []
+  let catalogSource: SourceCatalogOrigin = "ludus"
+
   if (catalog?.localRoles?.length) {
-    return { items: catalog.localRoles.map(mapCatalogRole), catalogSource: "ludus" }
+    items = catalog.localRoles.map(mapCatalogRole)
+  } else {
+    const ludus = await ludusCatalogOrEmpty(() => listSourceRoles(apiKey, sourceID))
+    if (ludus.length > 0) {
+      items = ludus
+    } else if (src?.url) {
+      const git = await listGitSourceRoles(src.url, catalogRef)
+      if (git.length > 0) {
+        items = git
+        catalogSource = "github"
+      }
+    }
   }
 
-  const ludus = await ludusCatalogOrEmpty(() => listSourceRoles(apiKey, sourceID))
-  if (ludus.length > 0) return { items: ludus, catalogSource: "ludus" }
-
-  const src = await findRegisteredSource(apiKey, sourceID)
-  if (src?.url) {
-    const git = await listGitSourceRoles(src.url, src.ref || "main")
-    if (git.length > 0) return { items: git, catalogSource: "github" }
+  // Prefer git tip (Sources-tab ref) over Ludus sync cache.
+  if (src?.url && items.length > 0) {
+    items = (await enrichRoleVersionsFromGit(items, src.url, catalogRef)) as SourceRoleRow[]
   }
-  return { items: [], catalogSource: "ludus" }
+
+  return { items, catalogSource, catalogRef }
 }
 
 export async function resolveSourceCollections(
   apiKey: string,
   sourceID: string,
-): Promise<{ items: SourceCollectionRow[]; catalogSource: SourceCatalogOrigin }> {
+): Promise<SourceCatalogResolveResult<SourceCollectionRow>> {
+  const src = await prepareRegisteredSource(apiKey, sourceID)
+  const catalogRef = ludusSourceGitRef(src)
   const catalog = await getSourceCatalog(apiKey, sourceID)
   if (catalog?.localCollections?.length) {
-    return { items: catalog.localCollections.map(mapCatalogCollection), catalogSource: "ludus" }
+    return {
+      items: catalog.localCollections.map(mapCatalogCollection),
+      catalogSource: "ludus",
+      catalogRef,
+    }
   }
 
-  const src = await findRegisteredSource(apiKey, sourceID)
   const ludus = await ludusCatalogOrEmpty(() => listSourceCollections(apiKey, sourceID))
   let items = ludus
   let catalogSource: SourceCatalogOrigin = "ludus"
 
   if (ludus.length === 0 && src?.url) {
-    const git = await listGitSourceCollections(src.url, src.ref || "main")
+    const git = await listGitSourceCollections(src.url, catalogRef)
     if (git.length > 0) {
       items = git
       catalogSource = "github"
     }
   } else if (src?.url && items.length > 0) {
-    items = await enrichCollectionRows(items, src.url, src.ref || "main")
+    items = await enrichCollectionRows(items, src.url, catalogRef)
   }
 
   if (src?.url && items.length > 0 && items.some((i) => !(i.name ?? "").includes("."))) {
     const names = await enrichCollectionInstallNames(
       src.url,
-      src.ref || "main",
+      catalogRef,
       items.map((i) => i.name || ""),
     )
     items = items.map((item, idx) => ({ ...item, name: names[idx], fqcn: names[idx] }))
   }
 
-  return { items, catalogSource }
+  return { items, catalogSource, catalogRef }
 }

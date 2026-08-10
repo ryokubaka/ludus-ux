@@ -81,24 +81,39 @@ export function isLudusTemplateDeleteRefused(message: string): boolean {
 }
 
 /**
- * Disk folder often lacks `-template` while Ludus list name comes from Packer `vm_name`.
- * Returns both forms so SSH cleanup can hit the real directory.
+ * Disk folder often lacks `-template` (and sometimes `-x64`) while Ludus list name
+ * comes from Packer `vm_name`. Example: list `securityonion-2.4-x64-template` vs
+ * source dir `securityonion-2.4`.
  */
 export function templateDirNameAliases(templateName: string): string[] {
   const n = templateName.trim()
   if (!n) return []
   const out = new Set<string>([n])
   const suffix = "-template"
+  let base = n
   if (n.endsWith(suffix) && n.length > suffix.length) {
-    out.add(n.slice(0, -suffix.length))
+    base = n.slice(0, -suffix.length)
+    out.add(base)
   } else {
     out.add(`${n}${suffix}`)
+  }
+  // Catalog dirs often omit arch: securityonion-2.4-x64 → securityonion-2.4
+  const noArch = base.replace(/-(x64|amd64|arm64)$/i, "")
+  if (noArch && noArch !== base) {
+    out.add(noArch)
   }
   return [...out]
 }
 
+/** Unregister template via Ludus CLI (needed when API soft-refuses shared packer). */
+export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: string): string {
+  const safeName = templateName.replace(/'/g, "'\\''")
+  const safeKey = ludusApiKey.replace(/'/g, "'\\''")
+  return `env LUDUS_VERSION=2 LUDUS_API_KEY='${safeKey}' ludus templates rm -n '${safeName}' 2>&1 || true`
+}
+
 /**
- * Root SSH: remove template dirs under shared packer and per-user packer trees.
+ * Root SSH: remove template dirs under shared packer, per-user packer, and source mirrors.
  * Matches list name and catalog-dir aliases; also finds dirs via Packer `vm_name`.
  * `templateName` must already match a safe charset (letters, digits, ._-).
  */
@@ -114,10 +129,11 @@ export function buildLudusTemplateDeleteCmd(ludusRoot: string, templateName: str
     `for name in $NAMES; do`,
     `  rm -rf "$ROOT/packer/$name" "$ROOT/packer/templates/$name"`,
     `  for d in "$ROOT/users"/*/packer; do [ -d "$d" ] && rm -rf "$d/$name"; done`,
+    `  for d in "$ROOT/sources"/*/templates; do [ -d "$d/$name" ] && rm -rf "$d/$name"; done`,
     `done`,
-    `for base in "$ROOT/packer" "$ROOT/packer/templates" "$ROOT/users"/*/packer; do`,
+    `for base in "$ROOT/packer" "$ROOT/packer/templates" "$ROOT/users"/*/packer "$ROOT/sources"/*/templates; do`,
     `  [ -d "$base" ] || continue`,
-    `  find "$base" -mindepth 1 -maxdepth 3 -type f \\( -name '*.pkr.hcl' -o -name '*.pkr.json' \\) 2>/dev/null | while read -r f; do`,
+    `  find "$base" -mindepth 1 -maxdepth 4 -type f \\( -name '*.pkr.hcl' -o -name '*.pkr.json' \\) 2>/dev/null | while read -r f; do`,
     `    for name in $NAMES; do`,
     `      if grep -qE "vm_name[[:space:]]*=[[:space:]]*\\"$name\\"|\\"vm_name\\"[[:space:]]*:[[:space:]]*\\"$name\\"" "$f" 2>/dev/null; then`,
     `        rm -rf "$(dirname "$f")"; break`,

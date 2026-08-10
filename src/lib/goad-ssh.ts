@@ -27,6 +27,7 @@ import {
 } from "./ludus-ansible-preflight"
 import { ensureAnsibleHomeLayoutAsRoot } from "./ansible-home-repair"
 import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
+import { stripLuxGoadArgsMeta } from "./lux-goad-args-meta"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -405,17 +406,19 @@ export function workspaceSshExecPlan(
 /** GOAD prints this after create_empty / load_instance. */
 const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
 
+type ReplExtensionSplit = {
+  phase1Parts: string[]
+  extensionLines: string[]
+  allParts: string[]
+}
+
 /**
  * When a piped REPL runs `provision_lab` then `provision_extension …`, ansible-playbook
  * may read the same stdin pipe as goad.py and consume remaining REPL lines (so only
  * lab playbooks run). Split: phase1 through `provision_lab`, then a fresh goad.sh
  * with `unload`, `use <id>`, then extension lines (each phase gets its own stdin pipe).
  */
-function trySplitReplAfterProvisionLab(rawCmds: string): {
-  phase1Parts: string[]
-  extensionLines: string[]
-  allParts: string[]
-} | null {
+function trySplitReplAfterProvisionLab(rawCmds: string): ReplExtensionSplit | null {
   const allParts = rawCmds
     .split(";")
     .map((s) => s.trim())
@@ -433,6 +436,38 @@ function trySplitReplAfterProvisionLab(rawCmds: string): {
   const extensionLines = afterLab.filter((p) => p.startsWith("provision_extension "))
   if (extensionLines.length === 0) return null
   return { phase1Parts: allParts.slice(0, labIdx + 1), extensionLines, allParts }
+}
+
+/**
+ * Install Extension: `…;provide;provision_extension X`. GOAD keeps reading stdin after
+ * a failed provide, so we split and only run the extension phase when provide exits 0
+ * (same SSH session — one LUX task / history row).
+ */
+function trySplitReplAfterProvide(rawCmds: string): ReplExtensionSplit | null {
+  const allParts = rawCmds
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+  let provideIdx = -1
+  for (let i = 0; i < allParts.length; i++) {
+    const p = allParts[i] ?? ""
+    if (p === "provide" || p.startsWith("provide ")) {
+      provideIdx = i
+      break
+    }
+  }
+  if (provideIdx < 0) return null
+  const after = allParts.slice(provideIdx + 1)
+  const extensionLines = after.filter((p) => p.startsWith("provision_extension "))
+  if (extensionLines.length === 0) return null
+  // Refuse if non-extension cmds remain after provide (unexpected chain).
+  if (after.some((p) => !p.startsWith("provision_extension "))) return null
+  return { phase1Parts: allParts.slice(0, provideIdx + 1), extensionLines, allParts }
+}
+
+/** Prefer lab→extension split; else provide→extension (Install Extension). */
+function trySplitReplForExtensionProvision(rawCmds: string): ReplExtensionSplit | null {
+  return trySplitReplAfterProvisionLab(rawCmds) ?? trySplitReplAfterProvide(rawCmds)
 }
 
 function extractUseInstanceIdFromReplParts(parts: string[]): string | null {
@@ -492,6 +527,9 @@ export async function streamGoadCommand(
    *  in this session (comma-joined list). */
   ludusOnlyRoles?: string[],
 ): Promise<() => void> {
+  // Keep full args (incl. --lux-install-extension=…) on the task row for history
+  // titles; never pass LUX meta flags into goad.sh.
+  goadArgs = stripLuxGoadArgsMeta(goadArgs)
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
@@ -587,6 +625,25 @@ export async function streamGoadCommand(
     }
   }
 
+  // Security Onion (and similar) GOAD extensions call Proxmox API during
+  // provision_extension. Ludus range-deploy injects PROXMOX_*; GOAD ansible
+  // does not. Load the same creds from the Ludus host when root SSH works.
+  let proxmoxEnvExports: string[] = []
+  try {
+    const { readLudusProxmoxDeployEnv, proxmoxDeployEnvExports } = await import(
+      "./ludus-proxmox-deploy-env"
+    )
+    const pve = await readLudusProxmoxDeployEnv()
+    if (pve) {
+      proxmoxEnvExports = proxmoxDeployEnvExports(pve)
+      onData(
+        "[+] Injecting Proxmox API env for GOAD ansible (PROXMOX_URL / TOKEN)…\n",
+      )
+    }
+  } catch {
+    // non-fatal — roles that need Proxmox will fail with a clear message
+  }
+
   const pyEnvParts = [
     "PYTHONUNBUFFERED=1",
     "LUDUS_VERSION=2",
@@ -602,6 +659,7 @@ export async function streamGoadCommand(
     ...(luxWizardConfigPath
       ? [`LUX_WIZARD_CONFIG_YML='${luxWizardConfigPath.replace(/'/g, "")}'`]
       : []),
+    ...proxmoxEnvExports,
   ]
   const pyEnv = pyEnvParts.join(" ")
 
@@ -750,15 +808,15 @@ export async function streamGoadCommand(
   // the piped input.  goad.py reads from stdin when no args are given, entering
   // interactive REPL mode where our commands are executed.
   //
-  // When the REPL runs `provision_lab` followed by `provision_extension` lines,
-  // ansible-playbook may read the same stdin pipe and swallow the extension
-  // commands.  We split into two piped goad.sh invocations on one SSH connection
-  // (see trySplitReplAfterProvisionLab).
+  // When the REPL runs `provision_lab`/`provide` followed by `provision_extension`
+  // lines, split into two piped goad.sh invocations on one SSH connection.
+  // Phase 2 runs only when phase 1 exits 0 (gates Install Extension Ansible on
+  // successful provide without a second LUX task).
   let replSplitTail: { extensionLines: string[]; allParts: string[] } | null = null
   let innerCommand: string
   if (goadArgs.startsWith("--repl ")) {
     const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "")
-    const split = trySplitReplAfterProvisionLab(rawCmds)
+    const split = trySplitReplForExtensionProvision(rawCmds)
     if (split) {
       const esc1 = [...split.phase1Parts, "exit"].join("\n").replace(/'/g, "'\\''")
       innerCommand = [
@@ -858,7 +916,7 @@ export async function streamGoadCommand(
           extractInstanceIdFromGoadOutput(captured.join("\n"))
         if (!id) {
           onData(
-            "[ERROR] LUX: could not resolve GOAD instance id after provision_lab; extension phase skipped.",
+            "[ERROR] LUX: could not resolve GOAD instance id after provide/provision_lab; extension phase skipped.",
           )
           conn.end()
           onClose(1)

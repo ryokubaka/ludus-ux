@@ -28,6 +28,10 @@ The result: you get a fully configured AD lab in an isolated network without man
 
 See [Workflows](workflows.md) for a plain-English walkthrough of the deploy process.
 
+## LudusHound and Ludus
+
+**[LudusHound](https://github.com/bagelByt3s/LudusHound)** (bagelByt3s) generates Ludus range YAML from BloodHound data (full replica or Attack Path). LUX runs the CLI over SSH, then uploads the YAML and deploys via the Ludus API. Credits and licenses: [NOTICE](../NOTICE).
+
 ## Future enhancements
 
 **Multi-extension batch install** — Install multiple GOAD extensions in a single queued session. Each extension would get its own Ludus deploy + GOAD task, with a progress indicator and the ability to cancel remaining items. Deferred until the single-extension flow is proven stable.

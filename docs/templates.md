@@ -65,7 +65,13 @@ After a successful add, the template appears as **Not Built** until you run **Bu
 
 ### Delete
 
-The trash icon removes a template via LUX `DELETE /api/templates/delete`: Ludus API delete (for built Proxmox VMs) plus **root SSH** cleanup of `/opt/ludus/packer/<name>` and `/opt/ludus/users/*/packer/<name>`. Ludus alone returns HTTP 200 for shared-packer installs but refuses to remove the folder (“included template”) — LUX treats that as needing disk cleanup, not success.
+The trash icon removes a template via LUX `DELETE /api/templates/delete`:
+
+1. Ludus API `DELETE /template/{name}` (clears built Proxmox VM when possible)
+2. `ludus templates rm -n …` over root SSH (unregisters when API soft-refuses)
+3. Disk cleanup of `/opt/ludus/packer/<aliases>`, `/opt/ludus/users/*/packer/<aliases>`, and `/opt/ludus/sources/*/templates/<aliases>`
+
+Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
 
 ---
 
@@ -185,6 +191,18 @@ If you copied template directories in as root, `chown -R ludus:ludus` the templa
 ### GOAD / range deploy fails: `Cannot write to ControlPath …/.ansible/cp`
 
 Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Linux user (`ANSIBLE_HOME` and `ANSIBLE_SSH_CONTROL_PATH_DIR` point at `/opt/ludus/users/<username>/.ansible` — see [Ludus roles docs](https://docs.ludus.cloud/docs/roles) and [GET/POST `/ansible`](https://api-docs.ludus.cloud/retrieve-available-ansible-roles-and-collections-24251967e0)). SSH ControlPath lives at `…/.ansible/cp`, which must be writable by **`ludus`**, not the range owner.
+
+### Sources Sync fails: `insufficient permission for adding an object` under `.git/objects`
+
+Ludus sync runs `git fetch` as the **`ludus`** Linux user inside `/opt/ludus/sources/<id>/`. If any files there were created as **root** (manual `git` as root, older LUX writing into `sources/…/templates/`, etc.), fetch dies with `insufficient permission for adding an object to repository database .git/objects`.
+
+**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over root SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
+
+**Manual repair** (if root SSH is unavailable to LUX):
+
+```bash
+chown -R ludus:ludus /opt/ludus/sources
+```
 
 **Right after a Galaxy install via the Ludus API, `ludus:ludus` ownership is normal (transient).** Ludus runs `ansible-galaxy` as the service user, then may attempt a recursive chown to the range owner — that can fail or leave a mixed tree. LUX normalizes to the **split layout** below on every install and before GOAD / range deploy.
 

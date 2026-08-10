@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest"
 import {
   buildInstalledAnsibleNames,
+  buildInstalledAnsibleVersions,
   buildInstalledBlueprintIds,
+  buildInstalledBlueprintVersions,
+  catalogVersionsDiffer,
+  formatVersionTransition,
   isAnsibleCatalogNameInstalled,
   isBlueprintCatalogEntryInstalled,
   isSourceCatalogAnsibleInstalled,
   isSourceCatalogBlueprintInstalled,
+  sourceCatalogAnsibleInstallState,
+  sourceCatalogBlueprintInstallState,
 } from "@/lib/source-catalog-presence"
 
 describe("source-catalog-presence", () => {
@@ -57,13 +63,116 @@ describe("source-catalog-presence", () => {
     expect(isSourceCatalogAnsibleInstalled({ name: "ludus_windows_utils" }, installed)).toBe(true)
   })
 
-  it("prefers Ludus catalog install state when present", () => {
+  it("ignores stale Ludus catalog install state when GET /ansible has no match", () => {
     const installed = new Set<string>()
     expect(
       isSourceCatalogAnsibleInstalled(
-        { name: "badsectorlabs.ludus_windows_utils", state: "installed" },
+        { name: "ryokubaka.ludus_securityonion", scope: "local", state: "installed" },
         installed,
       ),
-    ).toBe(true)
+    ).toBe(false)
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ryokubaka.ludus_securityonion", state: "upgrade_available", version: "2.0.0" },
+        installed,
+        new Map([["ryokubaka.ludus_securityonion", "1.0.0"]]),
+      ),
+    ).toBe("not_installed")
+  })
+
+  it("marks ansible upgrade_available only from real version diff", () => {
+    const installed = buildInstalledAnsibleNames(
+      [{ name: "ryokubaka.ludus_securityonion", version: "1.0.0", type: "role" }],
+      [],
+    )
+    const versions = buildInstalledAnsibleVersions(
+      [{ name: "ryokubaka.ludus_securityonion", version: "1.0.0", type: "role" }],
+      [],
+    )
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ryokubaka.ludus_securityonion", version: "1.1.0" },
+        installed,
+        versions,
+      ),
+    ).toBe("upgrade_available")
+    // Sticky Ludus catalog state alone must not keep Update available after re-sync
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ryokubaka.ludus_securityonion", version: "1.0.0", state: "upgrade_available" },
+        installed,
+        versions,
+      ),
+    ).toBe("installed")
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ryokubaka.ludus_securityonion", version: "1.0.0" },
+        installed,
+        versions,
+      ),
+    ).toBe("installed")
+  })
+
+  it("does not treat unequal when either side empty (raw differ helper)", () => {
+    expect(catalogVersionsDiffer("1.0.0", "")).toBe(false)
+    expect(catalogVersionsDiffer(undefined, "1.0.0")).toBe(false)
+    expect(formatVersionTransition("1.0.0", "1.1.0")).toBe("1.0.0 → 1.1.0")
+    expect(formatVersionTransition("1.0.1", "1.0.2")).toBe("1.0.1 → 1.0.2")
+    expect(formatVersionTransition("(unknown version)", "1.0.2")).toBe("— → 1.0.2")
+    expect(formatVersionTransition("1.0.1", "")).toBe("1.0.1 → —")
+  })
+
+  it("treats unknown installed version + catalog tip as upgrade until LUX pin exists", () => {
+    const installed = buildInstalledAnsibleNames(
+      [{ name: "ryokubaka.ludus_securityonion", version: "", type: "role" }],
+      [],
+    )
+    const versions = buildInstalledAnsibleVersions(
+      [{ name: "ryokubaka.ludus_securityonion", version: "", type: "role" }],
+      [],
+    )
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ludus_securityonion", version: "1.0.0" },
+        installed,
+        versions,
+      ),
+    ).toBe("upgrade_available")
+    // After re-sync, pin fills installedVersions → in sync
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ludus_securityonion", version: "1.0.0" },
+        installed,
+        new Map([["ludus_securityonion", "1.0.0"]]),
+      ),
+    ).toBe("installed")
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ludus_securityonion", version: "1.0.0", state: "upgrade_available" },
+        buildInstalledAnsibleNames(
+          [{ name: "ryokubaka.ludus_securityonion", version: "(unknown version)", type: "role" }],
+          [],
+        ),
+        buildInstalledAnsibleVersions(
+          [{ name: "ryokubaka.ludus_securityonion", version: "(unknown version)", type: "role" }],
+          [],
+        ),
+      ),
+    ).toBe("upgrade_available")
+  })
+
+  it("marks blueprint upgrade when catalog and installed versions differ", () => {
+    const ids = buildInstalledBlueprintIds([{ id: "meow/securityonion-lab", version: "1.0.0" }])
+    const versions = buildInstalledBlueprintVersions([
+      { id: "meow/securityonion-lab", version: "1.0.0" },
+    ])
+    expect(
+      sourceCatalogBlueprintInstallState(
+        { name: "securityonion-lab", version: "1.1.0" },
+        "meow",
+        ids,
+        versions,
+      ),
+    ).toBe("upgrade_available")
   })
 })

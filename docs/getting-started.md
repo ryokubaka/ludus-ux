@@ -13,6 +13,7 @@
 | Feature | Requires |
 |---|---|
 | GOAD lab management | [GOAD](https://github.com/Orange-Cyberdefense/GOAD) on the Ludus server + `python3.11-venv` + **`sudo`** (minimal Debian / Proxmox may not ship `sudo`; install with e.g. `apt install -y sudo` as root before using GOAD from LUX) |
+| LudusHound | On the Ludus server: **`git`** (for one-click clone from LUX) and Packer templates used by generated YAML. LUX can clone to `/opt/LudusHound` (or `LUDUSHOUND_PATH`), install Go when missing, build the binary, and install the Ansible collection from **Integrations → LudusHound**. Needs an existing Neo4j with SharpHound data (or FilesMap / Attack Path). |
 
 ## Verify Docker and Compose
 

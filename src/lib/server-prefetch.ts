@@ -353,6 +353,7 @@ export async function prefetchAnsibleData(session: ResolvedSession | null) {
       queryClient.setQueryData(queryKeys.ansible(scopeTag), {
         roles: ansible.filter((i) => (i.type || i.Type) === "role"),
         collections: ansible.filter((i) => (i.type || i.Type) === "collection"),
+        all: ansible,
       })
     }
 
@@ -534,6 +535,7 @@ export async function prefetchSourcesData(session: ResolvedSession | null) {
 
       const sources = await listSources(effectiveApiKey)
 
+      // Raw Ludus rows (`sourceID`); clients map via mapRegisteredSources.
       queryClient.setQueryData(queryKeys.sources(scopeTag), { sources, available: true })
 
     } catch (err) {

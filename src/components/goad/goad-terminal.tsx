@@ -469,22 +469,37 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     } finally {
       setIsRunning(false)
       if (streamExit === null && streamTaskIdRef.current) {
-        try {
-          const tid = streamTaskIdRef.current
-          const ex = getExtraHeadersRef.current?.() ?? {}
-          const res = await fetch(`/api/goad/tasks/${encodeURIComponent(tid)}`, {
-            credentials: "include",
-            headers: { ...ex },
-          })
-          if (res.ok) {
-            const task = (await res.json()) as { status?: string; exitCode?: number }
-            if (task.status !== "running" && typeof task.exitCode === "number") {
-              streamExit = task.exitCode
-              setExitCode(task.exitCode)
+        // SSE can end while the server task is still running (proxy idle cut,
+        // tab churn). Poll until terminal — do NOT return null early or callers
+        // treat `null !== 0` as failure and toast while Ludus is still deploying.
+        const tid = streamTaskIdRef.current
+        const ex = getExtraHeadersRef.current?.() ?? {}
+        const deadline = Date.now() + 24 * 60 * 60 * 1000
+        while (Date.now() < deadline) {
+          try {
+            const res = await fetch(`/api/goad/tasks/${encodeURIComponent(tid)}`, {
+              credentials: "include",
+              headers: { ...ex },
+            })
+            if (res.ok) {
+              const task = (await res.json()) as { status?: string; exitCode?: number }
+              if (task.status === "running") {
+                await new Promise((r) => setTimeout(r, 3_000))
+                continue
+              }
+              if (typeof task.exitCode === "number") {
+                streamExit = task.exitCode
+                setExitCode(task.exitCode)
+              } else {
+                streamExit = task.status === "success" || task.status === "completed" ? 0 : 1
+                setExitCode(streamExit)
+              }
+              break
             }
+          } catch {
+            /* ignore one poll */
           }
-        } catch {
-          /* ignore */
+          await new Promise((r) => setTimeout(r, 3_000))
         }
       }
     }

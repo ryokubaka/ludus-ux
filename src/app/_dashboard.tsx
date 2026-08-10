@@ -55,7 +55,7 @@ import {
   ExternalLink,
   ShieldAlert,
 } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete, cleanupSoSniffBeforeRangeDelete } from "@/lib/api"
 import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
 import {
   goadTaskShortKind,
@@ -648,6 +648,14 @@ export function DashboardPageClient() {
   const doDeleteRange = async (rangeId: string, _vmCount: number, ipsForKnownHosts?: string[]) => {
     setDeletingRangeId(rangeId)
     try {
+      const statusSnap = await ludusApi.getRangeStatus(rangeId)
+      const soVmNames =
+        statusSnap.data?.VMs?.map((v) => v.name).filter((n) => typeof n === "string") ?? []
+      await cleanupSoSniffBeforeRangeDelete(rangeId, {
+        rangeNumber: statusSnap.data?.rangeNumber,
+        vmNames: soVmNames,
+      })
+
       const result = await ludusApi.deleteRange(rangeId)
       if (result.error) {
         if (
@@ -712,6 +720,11 @@ export function DashboardPageClient() {
   const doDestroyAllVms = async (rangeId: string, ipsForKnownHosts: string[] | undefined, vmCount: number) => {
     setDestroyingAllVmsRangeId(rangeId)
     try {
+      const statusSnap = await ludusApi.getRangeStatus(rangeId)
+      await cleanupSoSniffBeforeRangeDelete(rangeId, {
+        rangeNumber: statusSnap.data?.rangeNumber,
+        vmNames: statusSnap.data?.VMs?.map((v) => v.name).filter((n) => typeof n === "string"),
+      })
       const result = await ludusApi.deleteRangeVMs(rangeId)
       if (result.error) {
         if (

@@ -123,6 +123,33 @@ export async function pruneKnownHosts(hosts: string[]): Promise<void> {
  * Resolves instance via `/api/goad/by-range` (SQLite + SSH enrichment), then POST force-delete
  * with `skipRangeDeletion` because Ludus already dropped the range.
  */
+/**
+ * Reverse Security Onion sniff NIC / bridge-ageing on Proxmox before range teardown.
+ * Non-fatal; Proxmox is source of truth.
+ */
+export async function cleanupSoSniffBeforeRangeDelete(
+  rangeId: string,
+  options?: { rangeNumber?: number; vmNames?: string[] },
+): Promise<void> {
+  const rid = rangeId?.trim()
+  if (!rid) return
+  const imp = getImpersonationHeaders()
+  try {
+    await fetch("/api/so-sniff/cleanup", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...imp },
+      body: JSON.stringify({
+        rangeId: rid,
+        rangeNumber: options?.rangeNumber,
+        vmNames: options?.vmNames,
+      }),
+    })
+  } catch {
+    /* non-fatal */
+  }
+}
+
 export async function cleanupGoadWorkspaceAfterRangeDelete(
   rangeId: string,
   options?: { adminGlobalInstances?: boolean },

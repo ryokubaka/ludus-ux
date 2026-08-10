@@ -12,5 +12,8 @@ export async function register() {
     if (secretErr) {
       throw new Error(`[ludus-ux] ${secretErr}`)
     }
+    // Periodic Ludus source git pulls so catalog/install tip stays current.
+    const { startSourceAutoSyncLoop } = await import("@/lib/source-auto-sync")
+    startSourceAutoSyncLoop()
   }
 }

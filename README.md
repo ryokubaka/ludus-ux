@@ -3,14 +3,14 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.2.0-green)]()
+[![Version](https://img.shields.io/badge/version-1.3.0-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
-**LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations: design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD), and handle day-two tasks (snapshots, testing mode, templates, blueprints) in the browser while keeping the stack self-hosted and inspectable.
+**LUX** is an open-source web front end for [Ludus](https://docs.ludus.cloud) cyber-range operations: design ranges, run deployments, manage users and groups, integrate [GOAD](https://github.com/Orange-Cyberdefense/GOAD) and [LudusHound](https://github.com/bagelByt3s/LudusHound), and handle day-two tasks (snapshots, testing mode, templates, blueprints) in the browser while keeping the stack self-hosted and inspectable.
 
 > [!WARNING]
-> **This project was largely AI-assisted and has not undergone a formal security audit.** It handles sensitive credentials and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source before production use.** Not affiliated with or endorsed by Ludus or GOAD.
+> **This project was largely AI-assisted and has not undergone a formal security audit.** It handles sensitive credentials and runs privileged operations against your Ludus/Proxmox infrastructure. **Review the source before production use.** Not affiliated with or endorsed by Ludus, GOAD, or LudusHound.
 
 ## Documentation
 
@@ -54,6 +54,27 @@ Full behavior, prerequisites, and downgrade notes: [Upgrade and downgrade](docs/
 | **Ludus** | v2.x, API **8080**, SSH **22** |
 | **Host** | Docker + Compose (v2 plugin or `docker-compose`) |
 | **GOAD** (optional) | GOAD repo on the Ludus server + `python3.11-venv` |
+| **LudusHound** (optional) | Clone [LudusHound](https://github.com/bagelByt3s/LudusHound) to `/opt/LudusHound` + `go` for first build |
+
+### LUX host hardware
+
+LUX is a small Docker stack (Next.js app + nginx + SQLite). Heavy work (VMs, Packer, Ansible, Security Onion) runs on the **Ludus / Proxmox** side, not inside LUX.
+
+| | **Minimum** | **Recommended** |
+|---|---|---|
+| **CPU** | 2 vCPU | 2–4 vCPU |
+| **RAM** | 2 GiB | 4 GiB |
+| **Disk** | ~10 GiB free (image + `./data` + logs) | ~20 GiB free |
+| **Network** | Reach Ludus API (`:8080`, and `:8081` or tunnel) + SSH (`:22`) on the Ludus/Proxmox host | Same |
+
+**Root SSH (strongly recommended):** mount a root private key under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). LUX treats this as the privileged channel to the **same** Ludus/Proxmox box. Without it, API-only browsing still works; most automation does not.
+
+Details: [SSH and auth](docs/ssh-and-auth.md), [Getting started](docs/getting-started.md).
+
+Notes:
+
+- Co-locating LUX on the Ludus server is fine; give the host enough headroom for Ludus itself.
+- Lab size (e.g. Security Onion + AD) is bounded by **Proxmox** capacity, not LUX. See [Ludus docs](https://docs.ludus.cloud) and your blueprint/role READMEs for range VM RAM/CPU.
 
 ## License & author
 

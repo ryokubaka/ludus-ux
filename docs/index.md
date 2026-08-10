@@ -5,7 +5,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | Topic | Description |
 |--------|----------------|
 | [About LUX](about.md) | Why use it, Ludus Pro vs LUX, GOAD/Ludus relationship |
-| [Workflows](workflows.md) | **How it works** — Ludus ranges, GOAD instances, deploy steps, redeployment, firewall queue, impersonation (start here if you're new) |
+| [Workflows](workflows.md) | **How it works** — Ludus ranges, GOAD instances, LudusHound, deploy steps, redeployment, firewall queue, impersonation (start here if you're new) |
 | [Getting started](getting-started.md) | Requirements, Docker, install (quickstart or manual), upgrade |
 | [SSH and authentication](ssh-and-auth.md) | Root vs session auth, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |

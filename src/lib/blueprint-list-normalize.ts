@@ -31,6 +31,7 @@ export function normalizeBlueprintListItem(raw: unknown): BlueprintListItem | nu
     blueprintID: id,
     name: row.name != null ? String(row.name) : undefined,
     description: row.description != null ? String(row.description) : undefined,
+    version: row.version != null ? String(row.version) : undefined,
     ownerID: String(row.ownerUserID ?? row.ownerID ?? "").trim() || undefined,
     access,
     sharedUsers: sharedUsers.count,

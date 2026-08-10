@@ -15,6 +15,62 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.3.0] - 2026-08-10
+
+**Sources**
+- [Add] **Content re-sync** — Installed Ansible / Templates / Blueprints show **In sync** / **Out of sync** with per-item **Re-sync** (and bulk **Re-sync outdated**). Uses `POST /sources/{id}/install` with `force`. False Ludus “built-in template name” collisions are filtered / rewritten (usually Packer `vm_name` already on the host).
+- [Add] **Install version pins** — Stores catalog tip versions (`source_content_pins`) so bumps show **Update available** even when Ludus omits installed versions.
+- [Add] **Versions from git tip** — Catalog prefers git tip (`meta/version.yml` / `blueprint.yml`) on the Sources-tab ref over Ludus sync cache.
+- [Add] **Repo link + installed → catalog** — Matched items show git URL and `installed → catalog` versions.
+- [Add] **Auto-sync** — Re-pulls git sources on a timer (default **5 minutes**, `SOURCE_AUTO_SYNC_INTERVAL_MS`) and when catalog is stale / before install+force.
+- [Improve] **Change ref picker** — Lists remote branches/tags from GitHub/GitLab (`GET /api/sources/{id}/refs`) instead of free-typing a branch name.
+- [Fix] **Same-repo multi-branch** — One git URL with different refs no longer collapses to a single source: distinct Ludus `id` (appends non-`main`/`master` ref), `ensureGitSource` matches URL+ref, register dialog shows suggested ID, **Change ref** (`PATCH`) then Sync so catalog tips follow the branch.
+- [Fix] **Change ref / pathspec** — Shallow/single-branch Ludus clones fail `checkout` after PATCH (`pathspec '…' did not match`). Change-ref deletes (no purge) and re-registers for the new ref; pathspec sync errors include a re-register hint.
+- [Fix] **Source sync git ownership** — Sync/auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over root SSH before pull, and retries once on `insufficient permission for adding an object` / `unpack-objects failed` (root-owned `.git/objects` from manual root git or older tooling).
+- [Fix] **Targeted Re-sync** — Per-item / force install sends Ludus `noDeps` so blueprint re-sync does not reinstall unrelated ansible deps.
+
+**LudusHound**
+- [Add] **Integrations track** — `/ludushound` wraps [bagelByt3s/LudusHound](https://github.com/bagelByt3s/LudusHound): Full AD replica (external Neo4j / FilesMap) and Attack Path JSON → generate Ludus YAML → `setRangeConfig` + deploy. Feature flag `ENABLE_LUDUSHOUND` / Settings path `LUDUSHOUND_PATH` (default `/opt/LudusHound`).
+- [Add] **Preflight** — Status + one-click clone/update, Go install when missing, `bagelByt3s.ludushound` collection from local tarball + `go build`.
+- [Add] **BloodHound source** — External Neo4j (probe from Ludus host) or FilesMapJson; Attack Path skips live BH.
+- [Add] **Template gate** — Parse Packer templates from generated YAML (+ router); block deploy until built.
+
+**Ranges**
+- [Add] **VM Management** — Ranges Overview tab listing all range VMs across users with template/range/owner/power filters; power on/off, noVNC console, .vv download, and bulk destroy. Range row opens that range’s dashboard (with impersonation when needed). Template-delete linked-clone errors deep-link via `?tab=vms&template=`.
+- [Add] **Add VM wizard** — Configuration page dialog to append one or more VMs from built templates (hostname, VLAN, IP, CPU/RAM) without hand-editing YAML.
+- [Fix] **Network rules YAML coerce** — Range config PUT normalizes `ip_last_octet_*` quoted strings and `ports` arrays to Ludus schema forms (integer octets / comma-separated port strings).
+- [Fix] **SO sniff timing** — Security Onion labs only. While range is `DEPLOYING`, only hub-mode (`bridge-ageing 0`); do **not** attach sniff `net1` yet (same-VLAN tag breaks Ludus MAC→iface lookup). Role / post-deploy backstop adds `net1` after IP config.
+- [Fix] **SO sniff SSH scripts** — Security Onion labs only. Pipe enable/cleanup bash via base64 so `sshExec`/`bash -c "..."` no longer strips `$vars` (empty `MARKER`/`VMID`, broken `qm`/`sed`). Cleanup restores bridge ageing in centiseconds.
+- [Fix] **Deploy log SSE auto-reconnect** — Transient EventSource blips no longer kill the stream; backoff reconnect with `snapshotStart=false`, preserve lines, skip reconnect after intentional stop / `[DONE]` / `[ERROR]`.
+
+**GOAD**
+- [Add] **Install Extension** — `POST /api/goad/instances/{id}/enable-extension` + provide→provision chain when extension VMs are missing; skip provide when VMs already exist. History labels show `Install extension: <name>`.
+- [Add] **Proxmox env for GOAD ansible** — Inject `PROXMOX_*` from Ludus host config/`token.cfg` so extension roles can attach NICs outside `ludus range deploy`.
+- [Fix] **SO inventory sync-ips** — After prefix rewrite, correct Security Onion vlan-20 hosts (`10.R.10.20` → `10.R.20.20`) in `securityonion*_inventory`.
+- [Fix] **Deploy↔GOAD history correlation** — Prefer closest start times over max overlap so a stale open Ludus deploy does not steal every live GOAD task.
+
+**Blueprints & Ansible**
+- [Add] **Template dependencies** — Apply dialog and range wizard parse `template:` fields from blueprint range-config and block apply until each template is registered and Packer-built (same semantics as GOAD / LudusHound template gates). Missing templates link to the Templates page.
+- [Fix] **Ansible dependencies** — Treat a role as installed when Ludus has the namespaced Galaxy name (e.g. `ryokubaka.ludus_securityonion`) but the blueprint references the short name (`ludus_securityonion`). Matches Ansible catalog FQCN/short-name logic.
+- [Fix] **Local source roles** — “Installed” badges and role counts follow `GET /ansible` only; stale Ludus source-catalog `state: installed` no longer marks roles installed when missing. SSR prefetch includes the full ansible list so a hard refresh no longer drops Galaxy roles/collections to source-catalog-only counts.
+- [Fix] **Ansible log coloring** — Shared log viewer (range deploy + GOAD): do not paint task names containing “fail”/“failed” as errors; color only structural failures (`fatal:`, `failed: [`, `FAILED!`, `"failed": true`).
+
+**Templates**
+- [Add] **Delete — linked clones** — Detect blockers when a template still has range VMs; short error with link to VM Management instead of raw SSH output.
+
+**Reliability**
+- [Fix] **Stale UI state** — Re-enable `refetchOnWindowFocus`; stop persisting volatile queries (range status/logs, ranges list, template build status, GOAD tasks) to localStorage; invalidate those keys when the browser tab becomes visible again.
+
+**Docs**
+- [Docs] **OpenAPI** — Sources API (sync, catalog, install `force`, `autoSyncIntervalMs`, `PATCH` ref, `GET …/refs`), GOAD `enable-extension`, `info.version` **1.3.0**; `/api/health` returns `version`.
+- [Docs] Features / workflows for SO sniff timing; NOTICE credit for LudusHound; `SOURCE_AUTO_SYNC_*` env notes.
+
+**Security**
+- [Security] **js-yaml** 4.3.1 — GHSA-5p4m-2wfm-xmqj (!!omap quadratic CPU).
+- [Security] **nanoid** 3.3.18 — CVE-2026-67213 / GHSA-2v37-7h3g-55p8 (zero-size generator loop).
+- [Security] **brace-expansion** 5.0.9 — GHSA-rgw5-rvv9-x895 (DoS via unbounded intermediate arrays).
+- [Security] **postcss** 8.5.26 — direct dep + override (GHSA-fxqj-rqcc-2cmp); Next may still nest an older postcss (moderate only).
+
 ## [1.2.0] - 2026-07-29
 
 **LUX**

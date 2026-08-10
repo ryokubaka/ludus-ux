@@ -23,6 +23,7 @@ import {
   type Protocol,
   type RuleAction,
   blankRule,
+  normalizeIpLastOctet,
 } from "@/lib/network-rules"
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -268,7 +269,10 @@ function RuleRow({
                 onChange={(e) =>
                   update({ ip_last_octet_src: e.target.value || undefined })
                 }
-                placeholder="Single or range; e.g., 21 or 21-25"
+                onBlur={(e) => {
+                  update({ ip_last_octet_src: normalizeIpLastOctet(e.target.value) })
+                }}
+                placeholder="Last octet only; e.g. 20 or 21-25 (not 10.1.20.20)"
                 className="h-8 text-sm font-mono text-center"
               />
             </div>
@@ -282,7 +286,10 @@ function RuleRow({
                 onChange={(e) =>
                   update({ ip_last_octet_dst: e.target.value || undefined })
                 }
-                placeholder="Single or range; e.g., 31 or 31-35"
+                onBlur={(e) => {
+                  update({ ip_last_octet_dst: normalizeIpLastOctet(e.target.value) })
+                }}
+                placeholder="Last octet only; e.g. 20 or 21-25 (not 10.1.20.20)"
                 className="h-8 text-sm font-mono text-center"
               />
             </div>

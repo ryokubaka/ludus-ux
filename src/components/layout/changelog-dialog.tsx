@@ -176,10 +176,11 @@ function parseChangelog(md: string): ParsedVersion[] {
       current.sections.push(currentSection)
       continue
     }
-    // **LUX** / **GOAD** — subgroup headings used instead of ### (current CHANGELOG style)
-    const luxGoad = /^\*\*(LUX|GOAD)\*\*$/.exec(line.trim())
-    if (luxGoad && current) {
-      currentSection = { heading: luxGoad[1], items: [] }
+    // **Sources** / **LUX** / **GOAD** / **Docs** — thematic subgroup headings
+    // (same convention as Settings changelog parser).
+    const groupHeading = /^\*\*(.+?)\*\*$/.exec(line.trim())
+    if (groupHeading && current) {
+      currentSection = { heading: groupHeading[1], items: [] }
       current.sections.push(currentSection)
       continue
     }
@@ -187,14 +188,6 @@ function parseChangelog(md: string): ParsedVersion[] {
     // - bullet
     if (line.startsWith("- ")) {
       currentSection.items.push({ kind: "bullet", text: line.slice(2) })
-      continue
-    }
-    // **Group heading** on its own line — used inside Added/Fixed/Changed
-    // to visually chunk long sections (GOAD / History / …).
-    const trimmed = line.trim()
-    const m = /^\*\*(.+?)\*\*$/.exec(trimmed)
-    if (m) {
-      currentSection.items.push({ kind: "sub", text: m[1] })
       continue
     }
   }

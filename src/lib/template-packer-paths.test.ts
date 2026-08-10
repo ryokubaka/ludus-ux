@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildLudusTemplateAddCmd,
   buildLudusTemplateDeleteCmd,
+  buildLudusTemplateRmCliCmd,
   derivePackerRootFromPkrPath,
   isLudusCliTemplateAddFailure,
   isLudusTemplateDeleteRefused,
@@ -98,14 +99,31 @@ describe("templateDirNameAliases", () => {
       "ubuntu-24.04-x64-desktop-template",
     ])
   })
+
+  it("maps SO list name to source folder securityonion-2.4", () => {
+    expect(templateDirNameAliases("securityonion-2.4-x64-template")).toEqual([
+      "securityonion-2.4-x64-template",
+      "securityonion-2.4-x64",
+      "securityonion-2.4",
+    ])
+  })
+})
+
+describe("buildLudusTemplateRmCliCmd", () => {
+  it("runs ludus templates rm with API key", () => {
+    const cmd = buildLudusTemplateRmCliCmd("securityonion-2.4-x64-template", "USER.key")
+    expect(cmd).toContain("ludus templates rm -n 'securityonion-2.4-x64-template'")
+    expect(cmd).toContain("LUDUS_API_KEY='USER.key'")
+  })
 })
 
 describe("buildLudusTemplateDeleteCmd", () => {
-  it("removes both list-name and catalog-dir aliases under packer", () => {
+  it("removes both list-name and catalog-dir aliases under packer and sources", () => {
     const cmd = buildLudusTemplateDeleteCmd("/opt/ludus", "ubuntu-24.04-x64-desktop-template")
     expect(cmd).toContain("rm -rf")
     expect(cmd).toContain("/packer/")
     expect(cmd).toContain('"$ROOT/users"')
+    expect(cmd).toContain("sources")
     expect(cmd).toContain("ubuntu-24.04-x64-desktop-template")
     expect(cmd).toContain("ubuntu-24.04-x64-desktop")
     expect(cmd).toContain("vm_name")

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
   extractConfigRoleRefs,
+  extractConfigTemplates,
   findMissingRequirements,
+  findMissingTemplateRequirements,
   mergeBlueprintRequirements,
   parseRequirementsYaml,
   resolveBlueprintRequirements,
   roleRefToRequirements,
+  templateRequirementsFromConfigYaml,
 } from "./blueprint-dependencies"
 import type { AnsibleItem } from "./types"
 
@@ -95,6 +98,16 @@ describe("findMissingRequirements", () => {
     )
     expect(missing.some((m) => m.name === "badsectorlabs.ludus_elastic_container")).toBe(false)
   })
+
+  it("matches short role name when namespaced role is installed", () => {
+    const installedNs: AnsibleItem[] = [
+      { name: "ryokubaka.ludus_securityonion", version: "1.0.0", type: "role" },
+    ]
+    const missing = findMissingRequirements(installedNs, [
+      { kind: "role", name: "ludus_securityonion" },
+    ])
+    expect(missing).toEqual([])
+  })
 })
 
 describe("mergeBlueprintRequirements", () => {
@@ -105,5 +118,39 @@ describe("mergeBlueprintRequirements", () => {
     )
     const coll = merged.find((m) => m.name === "badsectorlabs.ludus_windows_utils")
     expect(coll?.version).toBe(">=1.2.0")
+  })
+})
+
+const SO_CONFIG = `
+ludus:
+  - vm_name: "{{ range_id }}-so"
+    template: securityonion-2.4-x64-template
+  - vm_name: "{{ range_id }}-target"
+    template: debian-12-x64-server-template
+  - vm_name: "{{ range_id }}-kali"
+    template: kali-x64-desktop-template
+`
+
+describe("extractConfigTemplates", () => {
+  it("collects template fields from ludus VMs", () => {
+    expect(extractConfigTemplates(SO_CONFIG)).toEqual([
+      "debian-12-x64-server-template",
+      "kali-x64-desktop-template",
+      "securityonion-2.4-x64-template",
+    ])
+  })
+})
+
+describe("findMissingTemplateRequirements", () => {
+  it("flags absent and unbuilt templates", () => {
+    const required = templateRequirementsFromConfigYaml(SO_CONFIG)
+    const missing = findMissingTemplateRequirements(required, [
+      { name: "securityonion-2.4-x64-template", built: true },
+      { name: "debian-12-x64-server-template", built: false },
+    ])
+    expect(missing.map((m) => `${m.name}:${m.templateStatus}`)).toEqual([
+      "debian-12-x64-server-template:unbuilt",
+      "kali-x64-desktop-template:absent",
+    ])
   })
 })

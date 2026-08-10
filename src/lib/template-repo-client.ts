@@ -27,6 +27,9 @@ interface GitHubTreeItem {
 
 const FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.github+json" }
 
+/** Next.js caches `fetch` by default — source version pins must always hit the tip. */
+const NO_STORE = { cache: "no-store" as const }
+
 export function isGitHubApiBase(apiBase: string): boolean {
   return apiBase.includes("api.github.com/repos/")
 }
@@ -42,6 +45,32 @@ export function apiBaseToGitUrl(apiBase: string): string | null {
     const project = decodeURIComponent(gitlabMatch[2])
     return `${gitlabMatch[1]}/${project}`
   }
+  return null
+}
+
+/**
+ * Map a git clone / browse URL to a GitHub or GitLab repository API base.
+ * Used when listing/installing from a Ludus registered source URL.
+ */
+export function gitUrlToRepoApiBase(gitUrl: string): string | null {
+  const normalized = gitUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "")
+  if (!normalized) return null
+
+  const gh = normalized.match(/github\.com\/([^/]+\/[^/]+)/i)
+  if (gh) return `https://api.github.com/repos/${gh[1]}`
+
+  const glBrowse = normalized.match(
+    /^(https:\/\/[^/]*gitlab[^/]*)\/([^/]+\/[^/]+?)(?:\/-\/.*)?$/i,
+  )
+  if (glBrowse) {
+    return `${glBrowse[1]}/api/v4/projects/${encodeURIComponent(glBrowse[2])}/repository`
+  }
+
+  // Already an API base
+  if (isGitHubApiBase(normalized) || /\/api\/v4\/projects\//.test(normalized)) {
+    return normalized
+  }
+
   return null
 }
 
@@ -62,7 +91,7 @@ export async function listRepoDirectory(
       ? `/${dirPath.split("/").map(encodeURIComponent).join("/")}`
       : ""
     const url = `${apiBase}/contents${segment}?ref=${encodeURIComponent(ref)}`
-    const res = await fetch(url, { headers: FETCH_HEADERS })
+    const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
     if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url}`)
     const items = (await res.json()) as GitHubContentItem | GitHubContentItem[]
     const list = Array.isArray(items) ? items : [items]
@@ -74,7 +103,7 @@ export async function listRepoDirectory(
   }
 
   const url = `${apiBase}/tree?path=${encodeURIComponent(dirPath)}&ref=${encodeURIComponent(ref)}&per_page=100`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`GitLab API ${res.status} for ${url}`)
   const items = (await res.json()) as GitLabTreeItem[]
   return items.map((item) => ({ name: item.name, path: item.path, type: item.type }))
@@ -89,6 +118,7 @@ export async function fetchAllRepoBlobs(
   if (isGitHubApiBase(apiBase)) {
     const commitRes = await fetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
       headers: FETCH_HEADERS,
+      ...NO_STORE,
     })
     if (!commitRes.ok) {
       throw new Error(`Could not resolve GitHub ref "${ref}" (HTTP ${commitRes.status})`)
@@ -98,6 +128,7 @@ export async function fetchAllRepoBlobs(
 
     const treeRes = await fetch(`${apiBase}/git/trees/${treeSha}?recursive=1`, {
       headers: FETCH_HEADERS,
+      ...NO_STORE,
     })
     if (!treeRes.ok) throw new Error(`Could not list GitHub tree (HTTP ${treeRes.status})`)
     const treeData = (await treeRes.json()) as { tree: GitHubTreeItem[] }
@@ -118,7 +149,7 @@ export async function fetchAllRepoBlobs(
     const url =
       `${apiBase}/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}` +
       `&per_page=100&recursive=true&page=${page}`
-    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
     if (!res.ok) throw new Error(`Could not list template tree (HTTP ${res.status})`)
     const items = (await res.json()) as GitLabTreeItem[]
     blobs.push(...items.filter((item) => item.type === "blob"))
@@ -132,7 +163,90 @@ export async function fetchRepoRawFile(apiBase: string, path: string, ref: strin
   const url = isGitHubApiBase(apiBase)
     ? githubRawFileUrl(apiBase, path, ref)
     : `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" } })
+  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
   return res.text()
+}
+
+export type RepoRefKind = "branch" | "tag"
+
+export interface RepoRef {
+  name: string
+  kind: RepoRefKind
+}
+
+/** List remote branches (and optionally tags) for a GitHub/GitLab clone URL. */
+export async function listRepoRefs(
+  gitUrl: string,
+  opts?: { includeTags?: boolean },
+): Promise<RepoRef[]> {
+  const apiBase = gitUrlToRepoApiBase(gitUrl)
+  if (!apiBase) {
+    throw new Error("Unsupported git host — only GitHub and GitLab URLs are supported")
+  }
+
+  const refs: RepoRef[] = []
+
+  if (isGitHubApiBase(apiBase)) {
+    let page = 1
+    while (page <= 10) {
+      const url = `${apiBase}/branches?per_page=100&page=${page}`
+      const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+      if (!res.ok) throw new Error(`GitHub branches API ${res.status}`)
+      const rows = (await res.json()) as Array<{ name?: string }>
+      for (const row of rows) {
+        if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "branch" })
+      }
+      if (rows.length < 100) break
+      page += 1
+    }
+    if (opts?.includeTags) {
+      let tagPage = 1
+      while (tagPage <= 5) {
+        const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
+        const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+        if (!res.ok) break
+        const rows = (await res.json()) as Array<{ name?: string }>
+        for (const row of rows) {
+          if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "tag" })
+        }
+        if (rows.length < 100) break
+        tagPage += 1
+      }
+    }
+  } else {
+    // GitLab: apiBase ends with …/repository
+    let page = 1
+    while (page <= 10) {
+      const url = `${apiBase}/branches?per_page=100&page=${page}`
+      const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+      if (!res.ok) throw new Error(`GitLab branches API ${res.status}`)
+      const rows = (await res.json()) as Array<{ name?: string }>
+      for (const row of rows) {
+        if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "branch" })
+      }
+      if (rows.length < 100) break
+      page += 1
+    }
+    if (opts?.includeTags) {
+      let tagPage = 1
+      while (tagPage <= 5) {
+        const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
+        const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+        if (!res.ok) break
+        const rows = (await res.json()) as Array<{ name?: string }>
+        for (const row of rows) {
+          if (row.name?.trim()) refs.push({ name: row.name.trim(), kind: "tag" })
+        }
+        if (rows.length < 100) break
+        tagPage += 1
+      }
+    }
+  }
+
+  refs.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "branch" ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  return refs
 }

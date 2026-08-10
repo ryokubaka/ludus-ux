@@ -21,7 +21,7 @@ import {
   encryptSettingsValueAtRest,
   isSettingsValueAtRestEncrypted,
 } from "./settings-value-at-rest"
-import { goadPathFromEnv, ludusInstallPathFromEnv } from "./install-path-env"
+import { goadPathFromEnv, ludusInstallPathFromEnv, ludushoundPathFromEnv } from "./install-path-env"
 
 export interface RuntimeSettings {
   ludusUrl: string
@@ -29,10 +29,14 @@ export interface RuntimeSettings {
   sshHost: string
   sshPort: number
   goadPath: string
+  /** LudusHound install root on the Ludus host (cloned repo). */
+  ludushoundPath: string
   /** Ludus install root on the Ludus host (ranges, user ansible collections). */
   ludusInstallPath: string
   /** Whether the GOAD integration is shown in the UI. Defaults to true. */
   goadEnabled: boolean
+  /** Whether the LudusHound integration is shown in the UI. Defaults to true. */
+  ludushoundEnabled: boolean
   /**
    * Pass Ludus `--verbose-ansible` / API `verbose` on range deploy.
    * Default true. Stock Ludus ≤2.2.3 may ignore this and treat `force` as verbose.
@@ -81,8 +85,10 @@ function defaults(): RuntimeSettings {
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
     goadPath: goadPathFromEnv(),
+    ludushoundPath: ludushoundPathFromEnv(),
     ludusInstallPath: ludusInstallPathFromEnv(),
     goadEnabled: process.env.ENABLE_GOAD !== "false",
+    ludushoundEnabled: process.env.ENABLE_LUDUSHOUND !== "false",
     ludusAnsibleVerbose: process.env.LUDUS_ANSIBLE_VERBOSE !== "false",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
@@ -103,8 +109,10 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "sshHost",
   "sshPort",
   "goadPath",
+  "ludushoundPath",
   "ludusInstallPath",
   "goadEnabled",
+  "ludushoundEnabled",
   "ludusAnsibleVerbose",
   "rootApiKey",
   "blueprintOperatorApiKey",
@@ -152,7 +160,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled" || k === "ludusAnsibleVerbose") {
+      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)

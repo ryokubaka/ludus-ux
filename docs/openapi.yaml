@@ -19,7 +19,7 @@ info:
     - `X-Ludus-Admin: true` — route to admin API port (8081)
     - `X-Ludus-User` — override Ludus user context
   # Keep in sync with package.json / APP_VERSION (src/lib/changelog.ts).
-  version: 1.3.0
+  version: 1.3.1
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -847,14 +847,14 @@ paths:
                   version:
                     type: string
                     description: LUX app version (`package.json` / `APP_VERSION`).
-                    example: "1.3.0"
+                    example: "1.3.1"
                   timestamp:
                     type: string
                     format: date-time
                 required: [status, version, timestamp]
               example:
                 status: ok
-                version: "1.3.0"
+                version: "1.3.1"
                 timestamp: "2026-08-09T16:30:00.000Z"
 
   # --------------------------------------------------------------------------

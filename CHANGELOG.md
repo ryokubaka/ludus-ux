@@ -15,6 +15,11 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.3.1] - 2026-08-11
+
+**Security**
+- [Security] **postcss** — Close Dependabot [#19](https://github.com/ryokubaka/ludus-ux/security/dependabot/19) / [GHSA-fxqj-rqcc-2cmp](https://github.com/advisories/GHSA-fxqj-rqcc-2cmp) (CVE-2026-69153). Top-level was already 8.5.26; refresh lockfile so Next no longer nests vulnerable `postcss@8.5.18` (`overrides.next.postcss` → deduped 8.5.26).
+
 ## [1.3.0] - 2026-08-10
 
 **Sources**

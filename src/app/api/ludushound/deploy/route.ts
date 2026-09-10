@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const router = await assertRouterTemplateReady(ctx.apiKey)
+  const router = await assertRouterTemplateReady(ctx.apiKey, { configYaml: yaml })
   if (!router.ok) {
     return NextResponse.json(
       {

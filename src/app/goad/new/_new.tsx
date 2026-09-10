@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -66,15 +67,29 @@ import {
   parseAnsibleInstalledSets,
 } from "@/lib/goad-dependency-service"
 import {
-  LUDUS_DEFAULT_ROUTER_TEMPLATE,
+  type ResolveRouterTemplateOptions,
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
   withRouterTemplateRequired,
 } from "@/lib/ludus-router-template"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
 /** Returns { present, missing } template lists for a given set of required names */
-function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
-  const req = withRouterTemplateRequired(required)
+function checkTemplates(
+  required: string[],
+  builtNames: Set<string>,
+  allNames: Set<string>,
+  routerOpts?: Pick<ResolveRouterTemplateOptions, "ludusVersion" | "configYaml">,
+) {
+  const req = withRouterTemplateRequired(required, {
+    ludusVersion: routerOpts?.ludusVersion,
+    configYaml: routerOpts?.configYaml,
+    registeredTemplates: allNames,
+  })
   const present: string[] = []
   const missingUnbuilt: string[] = [] // installed but not yet built
   const missingAbsent: string[] = []  // not installed at all
@@ -91,12 +106,18 @@ function TemplateChips({
   required,
   builtNames,
   allNames,
+  routerOpts,
 }: {
   required: string[]
   builtNames: Set<string>
   allNames: Set<string>
+  routerOpts?: Pick<ResolveRouterTemplateOptions, "ludusVersion" | "configYaml">
 }) {
-  const req = withRouterTemplateRequired(required)
+  const req = withRouterTemplateRequired(required, {
+    ludusVersion: routerOpts?.ludusVersion,
+    configYaml: routerOpts?.configYaml,
+    registeredTemplates: allNames,
+  })
   if (req.length === 0) return null
   return (
     <TooltipProvider delayDuration={200}>
@@ -169,6 +190,16 @@ function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: st
 export function NewGoadInstancePageClient() {
   const router = useRouter()
   const { toast } = useToast()
+  const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
   const { impersonation, impersonationHeaders } = useImpersonation()
   const shell = useShellSession()
@@ -242,6 +273,18 @@ export function NewGoadInstancePageClient() {
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
+  const routerGateOpts = useMemo(
+    () => ({
+      ludusVersion,
+      configYaml: reviewConfigYaml,
+    }),
+    [ludusVersion, reviewConfigYaml],
+  )
+  const routerTemplateReady = isRouterTemplateReadyForDeploy({
+    builtNames,
+    allNames,
+    ...routerGateOpts,
+  })
 
   // Fetch the current effective username for range naming.
   // When impersonating, immediately use the impersonated user's ID rather than
@@ -526,11 +569,15 @@ export function NewGoadInstancePageClient() {
       })
       return
     }
-    if (!builtNames.has(LUDUS_DEFAULT_ROUTER_TEMPLATE)) {
+    if (!routerTemplateReady) {
+      const required = requiredRouterTemplateName({
+        ...routerGateOpts,
+        registeredTemplates: allNames,
+      })
       toast({
         variant: "destructive",
         title: "Router template required",
-        description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+        description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
       })
       return
     }
@@ -1039,7 +1086,7 @@ export function NewGoadInstancePageClient() {
             <div className="grid gap-2">
               {catalog.labs.map((lab) => {
                 const ludusOk  = lab.ludusSupported !== false  // treat missing field as true (older catalog)
-                const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
+                const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames, routerGateOpts)
                 const tplOk    = tpl.ready
                 const canSelect = ludusOk && tplOk
                 const isSelected = selectedLab === lab.name
@@ -1095,7 +1142,7 @@ export function NewGoadInstancePageClient() {
                             No <code>providers/ludus/</code> directory — this lab cannot be deployed with Ludus
                           </p>
                         ) : (
-                          <TemplateChips required={lab.requiredTemplates ?? []} builtNames={builtNames} allNames={allNames} />
+                          <TemplateChips required={lab.requiredTemplates ?? []} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
                         )}
                       </div>
                       {isSelected && (
@@ -1140,7 +1187,7 @@ export function NewGoadInstancePageClient() {
           ) : (
             <div className="grid gap-2">
               {compatExtensions.map((ext) => {
-                const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames, routerGateOpts)
                 const ansibleReady = extensionAnsibleReady(ext)
                 const missingAnsible = extensionMissingAnsible(ext)
                 const canEnable =
@@ -1195,7 +1242,7 @@ export function NewGoadInstancePageClient() {
                         <p className="text-xs text-muted-foreground/70 mt-0.5 italic">{ext.impact}</p>
                       )}
                       {(ext.requiredTemplates ?? []).length > 0 && (
-                        <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                        <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
                       )}
                       {missingAnsible.length > 0 && (
                         <p className="text-[10px] text-muted-foreground mt-1 font-mono">
@@ -1513,14 +1560,17 @@ export function NewGoadInstancePageClient() {
 
           {/* Template readiness summary */}
           {(() => {
-            const allRequired = withRouterTemplateRequired([
-              ...(labInfo?.requiredTemplates ?? []),
-              ...Array.from(selectedExtensions).flatMap(
-                (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
-              ),
-            ])
+            const allRequired = withRouterTemplateRequired(
+              [
+                ...(labInfo?.requiredTemplates ?? []),
+                ...Array.from(selectedExtensions).flatMap(
+                  (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
+                ),
+              ],
+              { ...routerGateOpts, registeredTemplates: allNames },
+            )
             const unique = [...new Set(allRequired)]
-            const summary = checkTemplates(unique, builtNames, allNames)
+            const summary = checkTemplates(unique, builtNames, allNames, routerGateOpts)
             return (
               <Card className={cn(
                 "border",
@@ -1540,7 +1590,7 @@ export function NewGoadInstancePageClient() {
                       Manage Templates →
                     </Link>
                   </div>
-                  <TemplateChips required={unique} builtNames={builtNames} allNames={allNames} />
+                  <TemplateChips required={unique} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
                 </CardContent>
               </Card>
             )
@@ -1592,7 +1642,7 @@ export function NewGoadInstancePageClient() {
                 !yamlValidation.valid ||
                 !reviewConfigYaml.trim() ||
                 !ansibleDepsReady ||
-                !builtNames.has(LUDUS_DEFAULT_ROUTER_TEMPLATE)
+                !routerTemplateReady
               }
               className="min-w-36"
             >

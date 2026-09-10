@@ -56,7 +56,10 @@ import {
   ShieldAlert,
 } from "lucide-react"
 import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete, cleanupSoSniffBeforeRangeDelete } from "@/lib/api"
-import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
+import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
@@ -577,18 +580,26 @@ export function DashboardPageClient() {
             Array.isArray((tplRes.data as { templates?: unknown }).templates)
           ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
           : []
-      const routerBuilt = rows.some(
-        (t) =>
-          t &&
-          typeof t === "object" &&
-          t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE &&
-          t.built === true,
+      const builtNames = new Set(
+        rows.filter((t) => t && typeof t === "object" && t.built === true).map((t) => t.name ?? ""),
       )
-      if (!routerBuilt) {
+      const allNames = new Set(
+        rows.filter((t) => t && typeof t === "object").map((t) => t.name ?? ""),
+      )
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion: version,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion: version,
+          registeredTemplates: allNames,
+        })
         toast({
           variant: "destructive",
           title: "Router template required",
-          description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any Ludus range deploy. Open Templates to add/build it.`,
+          description: `${required} must be Packer-built before any Ludus range deploy. Open Templates to add/build it.`,
         })
         return
       }

@@ -33,6 +33,11 @@ export function ludusSupportsExtensionsKey(version: string): boolean {
   return ludusVersionAtLeast(version, 2, 3, 0)
 }
 
+/** Ludus 2.3.2+ defaults the range router to Debian 13 (template + vm_name). */
+export function ludusDefaultRouterUsesDebian13(version: string): boolean {
+  return ludusVersionAtLeast(version, 2, 3, 2)
+}
+
 /**
  * Stock Ludus ≤2.2.3 may ignore deploy `verbose` when `force` is set
  * (server passes `force` as Ansible verbosity). Show warning when version

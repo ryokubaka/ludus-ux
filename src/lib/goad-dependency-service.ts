@@ -1,5 +1,7 @@
 import {
+  ansibleRequirementsOnly,
   findMissingRequirements,
+  findMissingTemplateRequirements,
   mergeBlueprintRequirements,
   requirementsFromConfigYaml,
   roleRefToRequirements,
@@ -11,7 +13,9 @@ import {
   installMissingAnsibleRequirements,
   type InstallAnsibleRequirementsResult,
 } from "@/lib/ansible-requirements-service"
-import type { AnsibleItem } from "@/lib/types"
+import { ludusApi } from "@/lib/api"
+import { extractArray } from "@/lib/utils"
+import type { AnsibleItem, TemplateObject } from "@/lib/types"
 
 export interface AnsibleInstalledSets {
   roles: Set<string>
@@ -101,7 +105,11 @@ export function requirementsFromExtensionRoleRefs(roleRefs: string[]): Blueprint
   return mergeBlueprintRequirements(...roleRefs.map((ref) => roleRefToRequirements(ref)))
 }
 
-/** Compare GOAD preview/review config YAML against installed Ansible roles/collections. */
+function parseTemplateList(data: unknown): TemplateObject[] {
+  return extractArray<TemplateObject>(data)
+}
+
+/** Compare GOAD preview/review config YAML against installed Ansible + built templates. */
 export async function checkGoadDeployDependencies(
   configYaml: string,
 ): Promise<GoadDependencyCheck> {
@@ -109,11 +117,17 @@ export async function checkGoadDeployDependencies(
     return { required: [], missing: [], ready: true }
   }
 
-  const [installed, required] = await Promise.all([
+  const [installed, templatesRes, required] = await Promise.all([
     fetchInstalledAnsible(),
+    ludusApi.listTemplates(),
     Promise.resolve(requirementsFromConfigYaml(configYaml)),
   ])
-  const missing = findMissingRequirements(installed, required)
+  if (templatesRes.error) throw new Error(templatesRes.error)
+
+  const templates = parseTemplateList(templatesRes.data)
+  const missingAnsible = findMissingRequirements(installed, ansibleRequirementsOnly(required))
+  const missingTemplates = findMissingTemplateRequirements(required, templates)
+  const missing = [...missingAnsible, ...missingTemplates]
 
   return {
     required,

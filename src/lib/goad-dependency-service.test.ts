@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
+  checkGoadDeployDependencies,
   requirementsFromExtensionRoleRefs,
   extensionAnsibleDepsReady,
   extensionAnsibleState,
@@ -107,6 +108,61 @@ describe("requirementsFromExtensionRoleRefs", () => {
     ])
     expect(required.some((r) => r.kind === "role" && r.name === "geerlingguy.docker")).toBe(true)
     expect(required.some((r) => r.kind === "role" && r.name === "brmkit.ludus_nemesis")).toBe(true)
+  })
+})
+
+vi.mock("@/lib/api", () => ({
+  ludusApi: {
+    listAnsible: vi.fn(),
+    listTemplates: vi.fn(),
+  },
+}))
+
+vi.mock("@/lib/ansible-requirements-service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ansible-requirements-service")>()
+  return {
+    ...actual,
+    fetchInstalledAnsible: vi.fn(),
+  }
+})
+
+import { ludusApi } from "@/lib/api"
+import { fetchInstalledAnsible } from "@/lib/ansible-requirements-service"
+
+const GOAD_CONFIG = `ludus:
+  - vm_name: "{{ range_id }}-GOAD-DC01"
+    template: win2019-server-x64-template
+`
+
+describe("checkGoadDeployDependencies", () => {
+  it("treats built Packer templates as satisfied", async () => {
+    vi.mocked(fetchInstalledAnsible).mockResolvedValue([])
+    vi.mocked(ludusApi.listTemplates).mockResolvedValue({
+      data: [{ name: "win2019-server-x64-template", built: true }],
+      status: 200,
+    })
+
+    const result = await checkGoadDeployDependencies(GOAD_CONFIG)
+    expect(result.ready).toBe(true)
+    expect(result.missing).toEqual([])
+  })
+
+  it("flags templates that are registered but not built", async () => {
+    vi.mocked(fetchInstalledAnsible).mockResolvedValue([])
+    vi.mocked(ludusApi.listTemplates).mockResolvedValue({
+      data: [{ name: "win2019-server-x64-template", built: false }],
+      status: 200,
+    })
+
+    const result = await checkGoadDeployDependencies(GOAD_CONFIG)
+    expect(result.ready).toBe(false)
+    expect(result.missing).toEqual([
+      {
+        kind: "template",
+        name: "win2019-server-x64-template",
+        templateStatus: "unbuilt",
+      },
+    ])
   })
 })
 

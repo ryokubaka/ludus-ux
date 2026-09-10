@@ -66,6 +66,8 @@ export interface GoadExtensionsTabProps {
   uninstalledExtensions: GoadExtensionDef[]
   builtNames: Set<string>
   allNames: Set<string>
+  ludusVersion?: string
+  configYaml?: string
   provisionOnlyExtensionsSupported: boolean
   isRunning: boolean
   pendingAction: ConfirmPendingAction

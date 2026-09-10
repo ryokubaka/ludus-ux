@@ -54,7 +54,7 @@ describe("buildRangeVmInventoryRows", () => {
         rangeID: "catshadowstep",
         name: "Primary",
         rangeNumber: 1,
-        rangeState: "DEPLOYED",
+        rangeState: "SUCCESS",
         VMs: [
           {
             ID: 1,
@@ -87,7 +87,7 @@ describe("groupInventoryRowsByRange", () => {
           rangeID: "a",
           name: "A",
           rangeNumber: 1,
-          rangeState: "DEPLOYED",
+          rangeState: "SUCCESS",
           VMs: [
             { ID: 1, proxmoxID: 1, rangeNumber: 1, name: "a-vm1", poweredOn: true, ip: "" },
             { ID: 2, proxmoxID: 2, rangeNumber: 1, name: "a-vm2", poweredOn: false, ip: "" },
@@ -97,7 +97,7 @@ describe("groupInventoryRowsByRange", () => {
           rangeID: "b",
           name: "B",
           rangeNumber: 2,
-          rangeState: "DEPLOYED",
+          rangeState: "SUCCESS",
           VMs: [{ ID: 3, proxmoxID: 3, rangeNumber: 2, name: "b-vm1", poweredOn: true, ip: "" }],
         },
       ],
@@ -118,7 +118,7 @@ describe("inventoryRowToVmObject", () => {
           rangeID: "lab",
           name: "Lab",
           rangeNumber: 1,
-          rangeState: "DEPLOYED",
+          rangeState: "SUCCESS",
           VMs: [{ ID: 9, proxmoxID: 9, rangeNumber: 1, name: "lab-kali", poweredOn: true, ip: "10.0.0.5" }],
         },
       ],

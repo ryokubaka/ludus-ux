@@ -25,12 +25,19 @@ ludus_non_domain:
     ])
   })
 
-  it("includes router template from yaml VMs", () => {
-    const req = buildLudushoundRequiredTemplates({
+  it("includes version-resolved router template from yaml VMs", () => {
+    const req232 = buildLudushoundRequiredTemplates({
       yamlText: "ludus:\n  - template: win2016-server-x64-template\n",
+      ludusVersion: "2.3.2",
     })
-    expect(req.required).toContain(LUDUS_DEFAULT_ROUTER_TEMPLATE)
-    expect(req.required).toContain("win2016-server-x64-template")
+    expect(req232.required).toContain(LUDUS_DEFAULT_ROUTER_TEMPLATE)
+    expect(req232.required).toContain("win2016-server-x64-template")
+
+    const req231 = buildLudushoundRequiredTemplates({
+      yamlText: "ludus:\n  - template: win2016-server-x64-template\n",
+      ludusVersion: "2.3.1",
+    })
+    expect(req231.required).toContain("debian-11-x64-server-template")
   })
 
   it("audits built vs absent", () => {

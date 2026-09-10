@@ -3,6 +3,7 @@
  */
 
 import yaml from "js-yaml"
+import { ludusDefaultRouterVmName } from "./ludus-router-template"
 import { isLudusRangeRouterVmName } from "./ludus-range-router-vm"
 
 const RANGE_ID_PLACEHOLDER = /\{\{\s*range_id\s*\}\}/gi
@@ -32,10 +33,7 @@ function dedupeSorted(hosts: string[]): string[] {
   )
 }
 
-/** Default Ludus router Proxmox vm_name when `router:` is omitted from range config. */
-export function ludusDefaultRouterVmName(rangeId: string): string {
-  return `${rangeId.trim()}-router-debian11-x64`
-}
+export { ludusDefaultRouterVmName } from "./ludus-router-template"
 
 /** Ludus default router label in config UI (`{range_id}-router` shorthand). */
 export function ludusDefaultRouterHostname(rangeId: string): string {
@@ -73,6 +71,7 @@ export function resolveRouterLimitVmNameForDeploy(
   configYaml: string,
   rangeId: string,
   deployedVms?: Array<{ name?: string }>,
+  ludusVersion?: string,
 ): string | null {
   if (!rangeId.trim()) return null
   if (deployedVms?.length) {
@@ -85,7 +84,7 @@ export function resolveRouterLimitVmNameForDeploy(
   if (explicit) {
     return resolveRangeIdInHost(explicit.vmName, rangeId)
   }
-  return ludusDefaultRouterVmName(rangeId)
+  return ludusDefaultRouterVmName(rangeId, { ludusVersion, configYaml })
 }
 
 function isRouterLimitShorthand(host: string, rangeId: string): boolean {
@@ -112,9 +111,10 @@ export function isDeployLimitRouterHost(
   configYaml: string,
   rangeId: string,
   deployedVms?: Array<{ name?: string }>,
+  ludusVersion?: string,
 ): boolean {
   if (!rangeId.trim()) return false
-  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms)
+  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms, ludusVersion)
   return hostMatchesRouterLimit(host, rangeId, routerVm)
 }
 
@@ -124,10 +124,11 @@ export function filterRouterFromDeployLimitHosts(
   configYaml: string,
   rangeId: string,
   deployedVms?: Array<{ name?: string }>,
+  ludusVersion?: string,
 ): string[] {
   if (!rangeId.trim()) return hosts
   return hosts.filter(
-    (h) => !isDeployLimitRouterHost(h, configYaml, rangeId, deployedVms),
+    (h) => !isDeployLimitRouterHost(h, configYaml, rangeId, deployedVms, ludusVersion),
   )
 }
 
@@ -137,11 +138,12 @@ export function normalizeLimitHostForDeploy(
   configYaml: string,
   rangeId: string,
   deployedVms?: Array<{ name?: string }>,
+  ludusVersion?: string,
 ): string {
   const trimmed = host.trim()
   if (!trimmed) return trimmed
   if (isRouterLimitShorthand(trimmed, rangeId) || isLudusRangeRouterVmName(trimmed)) {
-    return resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms) ?? trimmed
+    return resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms, ludusVersion) ?? trimmed
   }
   return trimmed
 }
@@ -155,11 +157,12 @@ export function expandDeployLimitHosts(
   configYaml: string,
   rangeId: string,
   deployedVms?: Array<{ name?: string }>,
+  ludusVersion?: string,
 ): string[] {
   if (selectedHosts.length === 0) return []
-  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms)
+  const routerVm = resolveRouterLimitVmNameForDeploy(configYaml, rangeId, deployedVms, ludusVersion)
   const normalized = selectedHosts.map((h) =>
-    normalizeLimitHostForDeploy(h, configYaml, rangeId, deployedVms),
+    normalizeLimitHostForDeploy(h, configYaml, rangeId, deployedVms, ludusVersion),
   )
   if (!routerVm) return dedupeSorted(normalized)
   const hasRouter = normalized.some((h) => hostMatchesRouterLimit(h, rangeId, routerVm))
@@ -377,6 +380,7 @@ export interface ResolveDeployLimitPatternOptions {
   rangeId?: string
   configYaml?: string
   deployedVms?: Array<{ name?: string }>
+  ludusVersion?: string
   /** When true (default), append range router vm_name if missing from selection. */
   includeRouter?: boolean
 }
@@ -395,12 +399,13 @@ export function resolveDeployLimitPattern(
   const rangeId = options?.rangeId?.trim()
   const configYaml = options?.configYaml ?? ""
 
+  const ludusVersion = options?.ludusVersion
   const hosts =
     includeRouter && rangeId
-      ? expandDeployLimitHosts(selectedHosts, configYaml, rangeId, options?.deployedVms)
+      ? expandDeployLimitHosts(selectedHosts, configYaml, rangeId, options?.deployedVms, ludusVersion)
       : selectedHosts.map((h) =>
           rangeId
-            ? normalizeLimitHostForDeploy(h, configYaml, rangeId, options?.deployedVms)
+            ? normalizeLimitHostForDeploy(h, configYaml, rangeId, options?.deployedVms, ludusVersion)
             : h.trim(),
         )
 

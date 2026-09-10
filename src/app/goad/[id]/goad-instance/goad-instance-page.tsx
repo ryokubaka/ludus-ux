@@ -69,8 +69,9 @@ import {
   parseAnsibleInstalledSets,
   type AnsibleInstalledSets,
 } from "@/lib/goad-dependency-service"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import {
@@ -104,6 +105,15 @@ function GoadInstancePage() {
   // renders inline next to the triggering row instead of jumping to the top.
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
   const goadListQueryBucket = impersonation?.username ?? "self"
@@ -1184,6 +1194,7 @@ function GoadInstancePage() {
           uninstalledExtensions={uninstalledExtensions}
           builtNames={builtNames}
           allNames={allNames}
+          ludusVersion={ludusVersion}
           provisionOnlyExtensionsSupported={provisionOnlyExtensionsSupported}
           isRunning={isRunning}
           pendingAction={pendingAction}

@@ -3,7 +3,10 @@
  */
 
 import yaml from "js-yaml"
-import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
+import {
+  resolveRequiredRouterTemplateFromConfig,
+  type ResolveRouterTemplateOptions,
+} from "@/lib/ludus-router-template"
 
 function collectTemplatesFromList(list: unknown, into: Set<string>): void {
   if (!Array.isArray(list)) return
@@ -34,13 +37,20 @@ export interface LudushoundTemplateRequirements {
 
 export function buildLudushoundRequiredTemplates(opts: {
   yamlText?: string
+  ludusVersion?: string | null
+  registeredTemplates?: ResolveRouterTemplateOptions["registeredTemplates"]
 }): LudushoundTemplateRequirements {
   const fromYaml = opts.yamlText ? parseTemplatesFromLudusYaml(opts.yamlText) : []
-  const required = new Set<string>([LUDUS_DEFAULT_ROUTER_TEMPLATE, ...fromYaml])
+  const routerResolution = resolveRequiredRouterTemplateFromConfig({
+    ludusVersion: opts.ludusVersion,
+    configYaml: opts.yamlText,
+    registeredTemplates: opts.registeredTemplates,
+  })
+  const required = new Set<string>([routerResolution.template, ...fromYaml])
   return {
     required: [...required].sort(),
     fromYaml,
-    router: LUDUS_DEFAULT_ROUTER_TEMPLATE,
+    router: routerResolution.template,
   }
 }
 

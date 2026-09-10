@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   ansibleMessageSummary,
   isCollectionRemoveMisroute,
+  ludusDefaultRouterUsesDebian13,
   ludusMayIgnoreDeployVerboseWhenForce,
   ludusSupportsCollectionRemove,
   ludusSupportsExtensionsKey,
@@ -33,6 +34,13 @@ describe("ludus-version", () => {
     expect(ludusSupportsExtensionsKey("2.3.1")).toBe(true)
     expect(ludusSupportsExtensionsKey("2.2.4")).toBe(false)
     expect(ludusSupportsExtensionsKey("Ludus Server 2.3.0+abc - community")).toBe(true)
+  })
+
+  it("detects Debian 13 default router (2.3.2+)", () => {
+    expect(ludusDefaultRouterUsesDebian13("2.3.1")).toBe(false)
+    expect(ludusDefaultRouterUsesDebian13("2.3.2")).toBe(true)
+    expect(ludusDefaultRouterUsesDebian13("v2.3.2-community")).toBe(true)
+    expect(ludusDefaultRouterUsesDebian13("Ludus Server 2.3.2+abc")).toBe(true)
   })
 
   it("flags deploy verbose+force quirk on Ludus ≤2.2.3", () => {

@@ -1,11 +1,11 @@
 /**
- * Server-only: live Ludus GET /templates check for router Packer template.
+ * Server-only: live Ludus GET /version + GET /templates check for router Packer template.
  */
 
 import { ludusRequest } from "@/lib/ludus-client"
 import {
-  LUDUS_DEFAULT_ROUTER_TEMPLATE,
   checkRouterTemplateBuilt,
+  extractLudusVersionString,
   type RouterTemplateCheck,
 } from "@/lib/ludus-router-template"
 
@@ -29,33 +29,58 @@ function parseBuiltMap(data: unknown): Map<string, boolean> {
   return map
 }
 
-/** Live Ludus GET /templates check — fail closed for deploy paths. */
+/** Live Ludus GET /version + GET /templates check — fail closed for deploy paths. */
 export async function assertRouterTemplateReady(
   apiKey: string,
-  opts?: { userOverride?: string; template?: string },
+  opts?: {
+    userOverride?: string
+    template?: string
+    configYaml?: string
+  },
 ): Promise<RouterTemplateCheck> {
-  const template = opts?.template ?? LUDUS_DEFAULT_ROUTER_TEMPLATE
   try {
-    const tplRes = await ludusRequest("/templates", {
-      method: "GET",
-      apiKey,
-      timeout: 60_000,
-      userOverride: opts?.userOverride,
-    })
+    const [versionRes, tplRes] = await Promise.all([
+      ludusRequest("/version", {
+        method: "GET",
+        apiKey,
+        timeout: 30_000,
+        userOverride: opts?.userOverride,
+      }),
+      ludusRequest("/templates", {
+        method: "GET",
+        apiKey,
+        timeout: 60_000,
+        userOverride: opts?.userOverride,
+      }),
+    ])
+
+    const ludusVersion = extractLudusVersionString(versionRes.data)
+    const resolveOpts = {
+      ludusVersion,
+      pinnedTemplate: opts?.template,
+      configYaml: opts?.configYaml,
+    }
+    const fallbackTemplate = checkRouterTemplateBuilt(new Map(), resolveOpts).template
+
     if (tplRes.error) {
       return {
         ok: false,
-        template,
+        template: fallbackTemplate,
         reason: "list_failed",
         error: `Refused: could not verify router template (${tplRes.error})`,
       }
     }
-    return checkRouterTemplateBuilt(parseBuiltMap(tplRes.data), template)
+
+    const builtMap = parseBuiltMap(tplRes.data)
+    return checkRouterTemplateBuilt(builtMap, {
+      ...resolveOpts,
+      registeredTemplates: builtMap,
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return {
       ok: false,
-      template,
+      template: "debian-13-x64-server-template",
       reason: "list_failed",
       error: `Refused: could not verify router template (${msg})`,
     }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -37,13 +37,17 @@ import {
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
-import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
+import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
 import { applyBlueprintToRange } from "@/lib/blueprint-apply"
 import { substituteRangeIdInConfig } from "@/lib/range-config-templates"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
@@ -94,6 +98,15 @@ export function NewRangePageClient() {
   const { toast } = useToast()
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
   const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const [step, setStep] = useState(0)
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
@@ -464,17 +477,6 @@ export function NewRangePageClient() {
     setDeployResult(null)
     setDeployStatus("")
 
-    if (!templates.some((t) => t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE)) {
-      toast({
-        variant: "destructive",
-        title: "Router template required",
-        description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
-      })
-      setDeploying(false)
-      setDeployStatus("")
-      return
-    }
-
     const configToUpload =
       configMethod === "yaml"
         ? yamlConfig
@@ -489,6 +491,34 @@ export function NewRangePageClient() {
           variant: "destructive",
           title: "Invalid configuration YAML",
           description: yamlCheck.error,
+        })
+        setDeploying(false)
+        setDeployStatus("")
+        return
+      }
+    }
+
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = extractArray<TemplateObject>(tplRes.data as unknown)
+      const builtNames = new Set(rows.filter((t) => t.built).map((t) => t.name))
+      const allNames = new Set(rows.map((t) => t.name))
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion,
+        configYaml: configToUpload,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion,
+          configYaml: configToUpload,
+          registeredTemplates: allNames,
+        })
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
         })
         setDeploying(false)
         setDeployStatus("")

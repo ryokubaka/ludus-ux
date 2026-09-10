@@ -223,7 +223,10 @@ ludus:
         { name: `${rid}-router-debian12-x64` },
       ]),
     ).toBe(`${rid}-router-debian12-x64`)
-    expect(resolveRouterLimitVmNameForDeploy("", rid)).toBe(`${rid}-router-debian11-x64`)
+    expect(resolveRouterLimitVmNameForDeploy("", rid)).toBe(`${rid}-router-debian13-x64`)
+    expect(resolveRouterLimitVmNameForDeploy("", rid, undefined, "2.3.1")).toBe(
+      `${rid}-router-debian11-x64`,
+    )
   })
 
   it("expandDeployLimitHosts appends router when missing", () => {

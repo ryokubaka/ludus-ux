@@ -20,8 +20,8 @@ describe("navigate-to-range-dashboard", () => {
 
   it("resolveOwnerUser finds user by userID", () => {
     const users: UserObject[] = [
-      { userID: "catshadowstep", name: "Cat", proxmoxUsername: "cat" },
-      { userID: "other", name: "Other", proxmoxUsername: "other" },
+      { userID: "catshadowstep", name: "Cat", proxmoxUsername: "cat", isAdmin: false },
+      { userID: "other", name: "Other", proxmoxUsername: "other", isAdmin: false },
     ]
     expect(resolveOwnerUser(users, "catshadowstep")?.name).toBe("Cat")
     expect(resolveOwnerUser(users, "missing")).toBeNull()

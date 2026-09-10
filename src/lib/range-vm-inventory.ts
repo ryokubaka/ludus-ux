@@ -4,7 +4,10 @@ import {
   resolveRangeIdInHost,
 } from "@/lib/ludus-deploy-limit"
 import { isLudusRangeRouterVmName } from "@/lib/ludus-range-router-vm"
-import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
+import {
+  inferRouterTemplateFromVmName,
+  resolveRequiredRouterTemplateFromConfig,
+} from "@/lib/ludus-router-template"
 import { templateDirNameAliases } from "@/lib/template-packer-paths"
 import type { RangeObject, VMObject } from "@/lib/types"
 
@@ -77,8 +80,12 @@ export function parseVmTemplateMapFromConfig(yamlText: string, rangeId: string):
 
   const router = asRecord(root.router)
   if (router) {
-    const routerVmName = scalarString(router.vm_name) || ludusDefaultRouterVmName(rangeId)
-    const routerTemplate = scalarString(router.template) || LUDUS_DEFAULT_ROUTER_TEMPLATE
+    const routerVmNameRaw = scalarString(router.vm_name)
+    const routerVmName = routerVmNameRaw || ludusDefaultRouterVmName(rangeId)
+    const routerTemplate =
+      scalarString(router.template) ||
+      (routerVmNameRaw ? inferRouterTemplateFromVmName(routerVmNameRaw) : null) ||
+      resolveRequiredRouterTemplateFromConfig({}).template
     addVmTemplateEntry(map, routerVmName, routerTemplate, rangeId)
   }
 

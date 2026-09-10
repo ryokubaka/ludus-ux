@@ -31,7 +31,10 @@ import {
   Plus,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
-import { LUDUS_DEFAULT_ROUTER_TEMPLATE } from "@/lib/ludus-router-template"
+import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
 import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
 import {
@@ -176,7 +179,9 @@ export function RangeConfigPageClient() {
   const deployLimitPatternPreview = resolveDeployLimitPattern(
     selectedLimitHosts,
     customLimitPattern,
-    selectedRangeId ? { rangeId: selectedRangeId, configYaml: config } : undefined,
+    selectedRangeId
+      ? { rangeId: selectedRangeId, configYaml: config, ludusVersion }
+      : undefined,
   )
   const limitSelectionCount = customLimitPattern.trim()
     ? 1
@@ -260,14 +265,28 @@ export function RangeConfigPageClient() {
         : tplRes.data && typeof tplRes.data === "object" && Array.isArray((tplRes.data as { templates?: unknown }).templates)
           ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
           : []
-      const routerBuilt = rows.some(
-        (t) => t && typeof t === "object" && t.name === LUDUS_DEFAULT_ROUTER_TEMPLATE && t.built === true,
+      const builtNames = new Set(
+        rows.filter((t) => t && typeof t === "object" && t.built === true).map((t) => t.name ?? ""),
       )
-      if (!routerBuilt) {
+      const allNames = new Set(
+        rows.filter((t) => t && typeof t === "object").map((t) => t.name ?? ""),
+      )
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion,
+        configYaml: config,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion,
+          configYaml: config,
+          registeredTemplates: allNames,
+        })
         toast({
           variant: "destructive",
           title: "Router template required",
-          description: `${LUDUS_DEFAULT_ROUTER_TEMPLATE} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+          description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
         })
         return
       }
@@ -288,7 +307,7 @@ export function RangeConfigPageClient() {
       selectedLimitHosts,
       customLimitPattern,
       selectedRangeId
-        ? { rangeId: selectedRangeId, configYaml: config, deployedVms }
+        ? { rangeId: selectedRangeId, configYaml: config, deployedVms, ludusVersion }
         : undefined,
     )
     const onlyRolesForLudus = resolveDeployOnlyRoles(selectedOnlyRoles, customOnlyRolesPattern)

@@ -46,6 +46,8 @@ export function GoadExtensionsTab({
   uninstalledExtensions,
   builtNames,
   allNames,
+  ludusVersion,
+  configYaml,
   provisionOnlyExtensionsSupported,
   isRunning,
   pendingAction,
@@ -237,7 +239,10 @@ export function GoadExtensionsTab({
               </p>
               <div className="grid gap-2">
                 {uninstalledExtensions.map((ext) => {
-                  const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                  const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames, {
+                    ludusVersion,
+                    configYaml,
+                  })
                   const templatesReady = tpl.ready
                   const ansibleState = extensionAnsibleState(
                     ext,

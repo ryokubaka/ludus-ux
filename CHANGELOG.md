@@ -15,6 +15,20 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.3.2] - 2026-09-10
+
+**LUX**
+- [Fix] **Router template gate (Ludus 2.3.2+)** — Require the version-correct Ludus router Packer template before GOAD/range deploy: Debian 13 on Ludus ≥2.3.2, Debian 11 on older hosts. Honors explicit `router.template` pins. Default deploy-limit router `vm_name` follows the same rules.
+- [Fix] **GOAD dependency check** — Missing-dependencies panel now verifies Packer templates against Ludus `/templates` (built status), not Ansible inventory; fixes false “missing” for templates like `win2019-server-x64-template` that are already built.
+
+**Security**
+- [Security] **Next.js** 16.3.4 — [GHSA-p293-qw3h-jr36](https://github.com/advisories/GHSA-p293-qw3h-jr36) (Windows-hosted RCE), [GHSA-2xp9-vwfh-vxw4](https://github.com/advisories/GHSA-2xp9-vwfh-vxw4) (AVIF image optimization RCE).
+- [Security] **js-yaml** 4.3.2 — [GHSA-2883-xcg3-v3hh](https://github.com/advisories/GHSA-2883-xcg3-v3hh) (merge-key CPU DoS).
+- [Security] **sharp** 0.35.4+ (override on Next optional dep) — [GHSA-rgj7-g3m4-5g8c](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c) (libheif CVEs inherited by image optimization).
+- [Security] **browserslist** — [GHSA-c83g-rgw3-j3cx](https://github.com/advisories/GHSA-c83g-rgw3-j3cx), [GHSA-73wf-gq98-2v4g](https://github.com/advisories/GHSA-73wf-gq98-2v4g) (OOM / crash via custom stats; transitive via autoprefixer).
+- [Security] **vitest** 4.1.11 — [GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9) (path traversal in `@vitest/mocker`; dev dependency only).
+- [Security] **baseline-browser-mapping**, **postcss-selector-parser** — refresh lockfile for moderate/low DoS advisories ([GHSA-w5vr-8v7q-w6rv](https://github.com/advisories/GHSA-w5vr-8v7q-w6rv), [GHSA-w9m9-85wc-3x92](https://github.com/advisories/GHSA-w9m9-85wc-3x92)).
+
 ## [1.3.1] - 2026-08-11
 
 **Security**

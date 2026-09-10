@@ -5,6 +5,7 @@
 import "server-only"
 
 import { ludusRequest } from "@/lib/ludus-client"
+import { extractLudusVersionString } from "@/lib/ludus-router-template"
 import {
   auditTemplates,
   buildLudushoundRequiredTemplates,
@@ -37,9 +38,13 @@ export async function assertLudushoundTemplatesReady(
   apiKey: string,
   opts: { yamlText?: string; userOverride?: string },
 ): Promise<{ ok: true; summary: TemplateAuditSummary } | { ok: false; summary: TemplateAuditSummary; error: string }> {
-  const req = buildLudushoundRequiredTemplates({
-    yamlText: opts.yamlText,
+  const versionRes = await ludusRequest("/version", {
+    method: "GET",
+    apiKey,
+    timeout: 30_000,
+    userOverride: opts.userOverride,
   })
+  const ludusVersion = extractLudusVersionString(versionRes.data)
 
   const tplRes = await ludusRequest("/templates", {
     method: "GET",
@@ -47,6 +52,14 @@ export async function assertLudushoundTemplatesReady(
     timeout: 60_000,
     userOverride: opts.userOverride,
   })
+
+  const inv = tplRes.error ? { built: [], all: [] } : parseTemplateInventory(tplRes.data)
+  const req = buildLudushoundRequiredTemplates({
+    yamlText: opts.yamlText,
+    ludusVersion,
+    registeredTemplates: inv.all,
+  })
+
   if (tplRes.error) {
     const summary = auditTemplates(req.required, [], [])
     return {
@@ -56,7 +69,6 @@ export async function assertLudushoundTemplatesReady(
     }
   }
 
-  const inv = parseTemplateInventory(tplRes.data)
   const summary = auditTemplates(req.required, inv.built, inv.all)
   if (!summary.ready) {
     const parts = [

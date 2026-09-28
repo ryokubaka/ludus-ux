@@ -131,12 +131,74 @@ export function buildStartUpgradeCmd(repoPath: string, tag: string): string {
   ].join("; ")
 }
 
-export function readLuxUpgradeLogTail(maxChars = 8000): string {
+const SWITCH_START_LINE = /^=== LUX switch to \S+ started[^\n]*\n?/gm
+
+function lastSwitchStartLine(raw: string): { start: number; end: number } | null {
+  let found: { start: number; end: number } | null = null
+  for (const match of raw.matchAll(SWITCH_START_LINE)) {
+    const start = match.index
+    if (start === undefined) continue
+    found = { start, end: start + match[0].length }
+  }
+  return found
+}
+
+function joinLogParts(left: string, right: string): string {
+  if (!left) return right
+  if (!right) return left
+  if (left.endsWith("\n") || right.startsWith("\n")) return left + right
+  return `${left}\n${right}`
+}
+
+export function windowLuxUpgradeLog(raw: string, maxChars = 8000): string {
+  if (maxChars <= 0) return ""
+  if (raw.length <= maxChars) return raw
+
+  const marker = lastSwitchStartLine(raw)
+  if (!marker) return raw.slice(-maxChars)
+
+  const fromMarker = raw.slice(marker.start)
+  if (fromMarker.length <= maxChars) return fromMarker
+
+  const markerText = raw.slice(marker.start, marker.end)
+  const half = Math.floor(maxChars / 2)
+  let headEnd = Math.min(raw.length, marker.start + Math.max(half, markerText.length))
+  if (headEnd < marker.end) headEnd = marker.end
+  if (headEnd < raw.length && raw[headEnd - 1] !== "\n") {
+    const back = raw.lastIndexOf("\n", headEnd - 1)
+    if (back + 1 >= marker.end) headEnd = back + 1
+  }
+  if (headEnd < marker.end) headEnd = marker.end
+  const head = raw.slice(marker.start, headEnd)
+
+  const exitPos = raw.lastIndexOf("LUX_UPGRADE_EXIT:")
+  let exitLine = ""
+  if (exitPos >= marker.start) {
+    const exitEnd = raw.indexOf("\n", exitPos)
+    exitLine = raw.slice(exitPos, exitEnd === -1 ? raw.length : exitEnd + 1)
+  }
+
+  const room = Math.max(0, maxChars - head.length)
+  let tail = ""
+  if (room > 0 && headEnd < raw.length) {
+    let tailStart = Math.max(headEnd, raw.length - room)
+    if (tailStart > headEnd && raw[tailStart - 1] !== "\n") {
+      const nl = raw.indexOf("\n", tailStart)
+      if (nl >= 0 && nl + 1 < raw.length) tailStart = nl + 1
+    }
+    tail = raw.slice(tailStart)
+  }
+
+  let combined = joinLogParts(head, tail)
+  if (exitLine && !combined.includes(exitLine)) combined = joinLogParts(combined, exitLine)
+  return combined
+}
+
+export function readLuxUpgradeLogTail(maxChars = 8000, logFile = luxUpgradeLogPath()): string {
   try {
-    const file = luxUpgradeLogPath()
-    if (!fs.existsSync(file)) return ""
-    const raw = fs.readFileSync(file, "utf8")
-    return raw.length <= maxChars ? raw : raw.slice(-maxChars)
+    if (!fs.existsSync(logFile)) return ""
+    const raw = fs.readFileSync(logFile, "utf8")
+    return windowLuxUpgradeLog(raw, maxChars)
   } catch {
     return ""
   }

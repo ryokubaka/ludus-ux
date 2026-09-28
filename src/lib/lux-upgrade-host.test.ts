@@ -4,11 +4,13 @@ import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpath
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { luxUpgradeFailureFromLog } from "./lux-version"
 import {
   buildHostProbeCmd,
   buildStartUpgradeCmd,
   isSafeLuxRepoPath,
   parseHostProbe,
+  readLuxUpgradeLogTail,
 } from "./lux-upgrade-host"
 
 describe("lux-upgrade-host", () => {
@@ -219,6 +221,67 @@ exit 1
     expect(cap.dirty).toBe(false)
     expect(cap.repoPath).toBe(repo)
     expect(cap.reason).toMatch(/Git could not read this clone/)
+  })
+
+  it("reports a failed switch when the build log is longer than the tail", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-upgrade-log-"))
+    const file = path.join(dir, "lux-upgrade.log")
+    const marker = "=== LUX switch to v1.3.2 started 2026-09-28T00:00:00Z ===\n"
+    const error = "Error: tag 'v1.3.2' not found after fetch.\n"
+    const build = "Step 12/40 : RUN npm run build\n".repeat(400)
+    const exit = "LUX_UPGRADE_EXIT:1\n"
+    const early = marker + error + build + exit
+    expect(early.length).toBeGreaterThan(8000)
+    writeFileSync(file, early)
+
+    const earlyTail = readLuxUpgradeLogTail(8000, file)
+    expect(earlyTail.length).toBeLessThan(early.length)
+    expect(luxUpgradeFailureFromLog(earlyTail, "v1.3.2")).toBe(
+      "Error: tag 'v1.3.2' not found after fetch.",
+    )
+    expect(luxUpgradeFailureFromLog(earlyTail, "v1.3.4")).toBeNull()
+
+    const late = `${marker}${build}Error: compose build failed\n${exit}`
+    writeFileSync(file, late)
+    expect(luxUpgradeFailureFromLog(readLuxUpgradeLogTail(8000, file), "v1.3.2")).toBe(
+      "Error: compose build failed",
+    )
+
+    writeFileSync(file, `${marker}${build}LUX_UPGRADE_EXIT:0\n`)
+    expect(luxUpgradeFailureFromLog(readLuxUpgradeLogTail(8000, file), "v1.3.2")).toBeNull()
+
+    const short = marker + error + exit
+    writeFileSync(file, short)
+    expect(readLuxUpgradeLogTail(8000, file)).toBe(short)
+  })
+
+  it("keeps the latest start line and does not reuse an older exit status", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-upgrade-log-"))
+    const file = path.join(dir, "lux-upgrade.log")
+    const older =
+      "=== LUX switch to v1.3.0 started 2026-09-27T00:00:00Z ===\n" +
+      "old\n".repeat(5000) +
+      "LUX_UPGRADE_EXIT:1\n"
+    const newer =
+      "=== LUX switch to v1.3.2 started 2026-09-28T00:00:00Z ===\nError: boom\nLUX_UPGRADE_EXIT:1\n"
+    writeFileSync(file, older + newer)
+    const tail = readLuxUpgradeLogTail(8000, file)
+    expect(luxUpgradeFailureFromLog(tail, "v1.3.2")).toBe("Error: boom")
+    expect(luxUpgradeFailureFromLog(tail, "v1.3.0")).toBeNull()
+
+    const stillRunning =
+      older + "=== LUX switch to v1.3.2 started 2026-09-28T00:00:00Z ===\n" + "build\n".repeat(5000)
+    writeFileSync(file, stillRunning)
+    expect(luxUpgradeFailureFromLog(readLuxUpgradeLogTail(8000, file), "v1.3.2")).toBeNull()
+
+    const marker = "=== LUX switch to v1.3.2 started 2026-09-28T00:00:00Z ===\n"
+    const exit = "LUX_UPGRADE_EXIT:1\n"
+    writeFileSync(file, marker + "build\n".repeat(5000) + exit)
+    expect(marker.length).toBeLessThan(60)
+    expect(marker.length + exit.length).toBeGreaterThan(60)
+    expect(luxUpgradeFailureFromLog(readLuxUpgradeLogTail(60, file), "v1.3.2")).toBe(
+      "Version switch exited 1",
+    )
   })
 
   it("sees a dirty file in a real clone the current user owns", () => {

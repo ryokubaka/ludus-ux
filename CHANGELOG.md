@@ -15,6 +15,10 @@ Each bullet uses a single tag:
 
 ---
 
+## Unreleased
+
+- [Fix] **Host SSH user** — `PROXMOX_SSH_USER` no longer has to be `root`. A non-root account is elevated with `sudo -n /usr/local/sbin/lux-host`. Quickstart asks before installing that helper and a sudoers rule for that path only (not `NOPASSWD: ALL`). The credential test fails when the account is not root and cannot run the helper, or cannot write the Packer directory.
+
 ## [1.3.2] - 2026-09-10
 
 **LUX**

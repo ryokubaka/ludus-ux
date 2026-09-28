@@ -695,6 +695,8 @@ function SettingsContent() {
     rootSsh: {
       ok: boolean; host: string; port: number; user: string
       authAttempted: string; privateKeyPath: string | null; detail?: string
+      uid?: number | null; remoteUser?: string | null; privileged?: boolean
+      sudo?: boolean | null; packerDir?: string; packerWritable?: boolean | null
     }
     adminApi: { ok: boolean; baseUrl: string; detail?: string; hint?: string }
     keyProbe?: {
@@ -1075,9 +1077,10 @@ function SettingsContent() {
               </div>
 
               <div className="border-t border-border pt-4 space-y-3">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Root SSH Credentials</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host SSH Credentials</p>
                 <p className="text-xs text-muted-foreground">
-                  Used for privileged admin operations: pvesh over SSH, user password changes, and API key updates.
+                  Used for privileged admin operations: template copies under /opt/ludus, pvesh over SSH, user password changes, and API key updates.
+                  <code className="text-primary">root</code> works outright. Another account works when it can run <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. Quickstart can install that helper and a sudoers rule for it alone. A normal login with neither is denied those writes.
                   GOAD runs as each user&apos;s own SSH session — root creds here are not used for normal GOAD.
                 </p>
                 <div className="grid grid-cols-3 gap-4">
@@ -1087,6 +1090,11 @@ function SettingsContent() {
                       <span className="ml-2 text-xs text-muted-foreground font-normal">PROXMOX_SSH_USER</span>
                     </Label>
                     <Input id="ssh-user" value={draft?.proxmoxSshUser || ""} onChange={(e) => setDraft((d) => d ? { ...d, proxmoxSshUser: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="root" />
+                    {draft?.proxmoxSshUser?.trim() && draft.proxmoxSshUser.trim() !== "root" && (
+                      <p className="text-xs text-muted-foreground">
+                        {draft.proxmoxSshUser.trim()} is not root. Host writes use <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. That rule does not allow every sudo command. Run the test below; it fails if the helper is missing or the Packer directory is not writable.
+                      </p>
+                    )}
                   </div>
                   <div className="col-span-2 space-y-1.5">
                     <Label htmlFor="ssh-password">
@@ -1116,10 +1124,10 @@ function SettingsContent() {
                   <div className="space-y-3">
                     <Button type="button" size="sm" variant="secondary" onClick={handleTestCredentials} disabled={credentialTesting} className="gap-2">
                       {credentialTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
-                      Test root SSH &amp; admin API
+                      Test host SSH &amp; admin API
                     </Button>
                     <p className="text-xs text-muted-foreground">
-                      Runs from the app container using the values in this form. Confirms root SSH and admin API reachability with your session Ludus API key.
+                      Runs from the app container using the values in this form. Confirms this SSH account can do host writes, and that the admin API answers with your session Ludus API key.
                     </p>
                     {credentialTestResult && (
                       <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
@@ -1128,12 +1136,23 @@ function SettingsContent() {
                             ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500 mt-0.5" />
                             : <XCircle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />}
                           <div>
-                            <p className="font-semibold">Root SSH → {credentialTestResult.rootSsh.host}:{credentialTestResult.rootSsh.port} ({credentialTestResult.rootSsh.user})</p>
+                            <p className="font-semibold">Host SSH → {credentialTestResult.rootSsh.host}:{credentialTestResult.rootSsh.port} ({credentialTestResult.rootSsh.user})</p>
                             <p className="text-muted-foreground">
                               Auth: <code className="text-primary">{credentialTestResult.rootSsh.authAttempted}</code>
                               {credentialTestResult.rootSsh.privateKeyPath && <> · key: <code className="text-primary">{credentialTestResult.rootSsh.privateKeyPath}</code></>}
                             </p>
                             {credentialTestResult.rootSsh.detail && <p className="mt-1 text-foreground/90 whitespace-pre-wrap break-words">{credentialTestResult.rootSsh.detail}</p>}
+                            {credentialTestResult.rootSsh.privileged != null && (
+                              <p className="mt-1 text-muted-foreground">
+                                uid {credentialTestResult.rootSsh.uid ?? "?"} ({credentialTestResult.rootSsh.remoteUser || credentialTestResult.rootSsh.user})
+                                {credentialTestResult.rootSsh.sudo != null && (
+                                  <> · sudo -n: {credentialTestResult.rootSsh.sudo ? "yes" : "no"}</>
+                                )}
+                                {credentialTestResult.rootSsh.packerDir && (
+                                  <> · {credentialTestResult.rootSsh.packerDir} writable: {credentialTestResult.rootSsh.packerWritable ? "yes" : "no"}</>
+                                )}
+                              </p>
+                            )}
                             {credentialTestResult.keyProbe && (
                               <div className="mt-2 rounded border border-border/80 bg-background/50 p-2 space-y-1.5 font-mono text-[11px]">
                                 <p className="font-sans font-semibold text-foreground">SSH key probe</p>

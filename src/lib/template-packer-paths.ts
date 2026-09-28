@@ -65,9 +65,9 @@ export function shellSingleQuote(value: string): string {
 }
 
 /**
- * Run `ludus templates add` over root SSH with the caller's Ludus API key.
- * No sudo/runuser/su — LUX already SSHs as root; user-switching breaks on
- * hosts without sudo and is unnecessary for registration.
+ * Run `ludus templates add` over host SSH with the caller's Ludus API key.
+ * The command itself does not switch users. When PROXMOX_SSH_USER is not root,
+ * the SSH helper runs it with `sudo -n /usr/local/sbin/lux-host`.
  */
 export function buildLudusTemplateAddCmd(destDir: string, ludusApiKey: string): string {
   const safeDir = shellSingleQuote(destDir)

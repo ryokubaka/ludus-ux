@@ -1,0 +1,13 @@
+#!/bin/bash
+# LUX host helper. Passwordless sudo is granted for this path only.
+# It runs one host script as root (template dirs, chown, pvesh, qm, chpasswd).
+# It is not a grant of every sudo command.
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "lux-host: must run as root via sudo" >&2
+  exit 1
+fi
+if [[ $# -ne 1 ]]; then
+  echo "lux-host: expected one command string" >&2
+  exit 2
+fi
+exec bash --noprofile --norc -lc "$1"

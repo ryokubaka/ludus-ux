@@ -7,6 +7,7 @@
  */
 import { Client as SSHClient, type ConnectConfig } from "ssh2"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
+import { asPrivilegedShell } from "./root-ssh-preflight"
 
 function buildSshConnectConfig(
   host: string,
@@ -35,6 +36,7 @@ export function sshExec(
   username: string,
   password: string,
   command: string,
+  options?: { elevate?: boolean },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let cfg: ConnectConfig
@@ -47,7 +49,8 @@ export function sshExec(
     conn.on("ready", () => {
       // Use bash -l (login shell) so /etc/profile is sourced and Proxmox tools
       // like pvesh are on PATH regardless of their exact install location.
-      conn.exec(`bash -l -c ${JSON.stringify(command)}`, (err, stream) => {
+      const remote = options?.elevate === false ? command : asPrivilegedShell(username, command)
+      conn.exec(`bash -l -c ${JSON.stringify(remote)}`, (err, stream) => {
         if (err) { conn.end(); return reject(err) }
         let out = "", errOut = ""
         stream.on("data", (d: Buffer) => { out += d.toString() })

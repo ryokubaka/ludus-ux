@@ -19,6 +19,12 @@ import {
   probeSshKeyMount,
 } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import {
+  buildRootSshProbeCommand,
+  parseRootSshProbe,
+  rootSshProbeProblem,
+} from "@/lib/root-ssh-preflight"
 
 
 type Body = Partial<{
@@ -73,6 +79,7 @@ export async function POST(request: NextRequest) {
       : "none"
 
   // ── Root SSH (admin tunnel uses the same auth at container boot) ─────────
+  const packerDir = `${resolveLudusInstallPath().replace(/\/$/, "")}/packer`
   const rootSsh: {
     ok: boolean
     host: string
@@ -81,6 +88,12 @@ export async function POST(request: NextRequest) {
     authAttempted: typeof authAttempted
     privateKeyPath: string | null
     detail?: string
+    uid?: number | null
+    remoteUser?: string | null
+    privileged?: boolean
+    sudo?: boolean | null
+    packerDir?: string
+    packerWritable?: boolean | null
   } = {
     ok: false,
     host: effective.sshHost || "",
@@ -119,11 +132,26 @@ export async function POST(request: NextRequest) {
         effective.sshPort || 22,
         rootSsh.user,
         effective.proxmoxSshPassword || "",
-        "echo lux_root_ssh_ok",
+        buildRootSshProbeCommand(packerDir),
+        { elevate: false },
       )
-      rootSsh.ok = out.includes("lux_root_ssh_ok")
-      if (!rootSsh.ok) {
+      const probe = parseRootSshProbe(out)
+      rootSsh.uid = probe.uid
+      rootSsh.remoteUser = probe.username
+      rootSsh.sudo = probe.sudo
+      rootSsh.privileged = probe.uid === 0 || probe.sudo === true
+      rootSsh.packerDir = packerDir
+      rootSsh.packerWritable = probe.packerWritable
+      const problem = rootSshProbeProblem(probe, packerDir)
+      rootSsh.ok = probe.loginOk && !problem
+      if (!probe.loginOk) {
         rootSsh.detail = `Unexpected SSH output: ${out.slice(0, 120)}`
+      } else if (problem) {
+        rootSsh.detail = problem
+      } else if (probe.uid === 0) {
+        rootSsh.detail = `uid 0 (${probe.username}). ${packerDir} is writable.`
+      } else {
+        rootSsh.detail = `uid ${probe.uid} (${probe.username}) with passwordless sudo. ${packerDir} is writable.`
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

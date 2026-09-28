@@ -391,8 +391,8 @@ lux_install_pubkey_for_root_ssh() {
   local key_file="$1" host="$2" port="$3" remote_user="${4:-root}"
   local -a BASE=( -o StrictHostKeyChecking=accept-new -p "$port" )
 
-  if [[ "$remote_user" != "root" ]]; then
-    echo "Skipping authorized_keys auto-setup (only implemented for PROXMOX_SSH_USER=root). See docs/ssh-and-auth.md."
+  if [[ ! "$remote_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    echo "Skipping authorized_keys auto-setup (username must be a plain Linux account). See docs/ssh-and-auth.md."
     return 0
   fi
 
@@ -511,6 +511,119 @@ lux_action_print_ssh_env_hints() {
 }
 
 
+# Offer a sudoers drop-in for a non-root PROXMOX_SSH_USER.
+# Grants passwordless sudo for /usr/local/sbin/lux-host only — not ALL.
+lux_offer_scoped_host_sudo() {
+  local target_user="$1"
+  target_user="${target_user:-}"
+  if [[ -z "$target_user" || "$target_user" == "root" ]]; then
+    echo "PROXMOX_SSH_USER is root. Host writes do not use sudo."
+    return 0
+  fi
+  if [[ ! "$target_user" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+    echo "Not installing sudoers: PROXMOX_SSH_USER must be a plain Linux username." >&2
+    return 1
+  fi
+
+  local helper_src="$ROOT/scripts/lux-host/lux-host"
+  local sudoers_src="$ROOT/scripts/lux-host/sudoers.in"
+  if [[ ! -f "$helper_src" || ! -f "$sudoers_src" ]]; then
+    echo "Missing $helper_src or $sudoers_src." >&2
+    return 1
+  fi
+
+  echo ""
+  echo "PROXMOX_SSH_USER is ${target_user}, not root."
+  echo "LUX runs host writes with: sudo -n /usr/local/sbin/lux-host"
+  echo "That helper covers template directories, chown, pvesh, qm, and chpasswd."
+  echo "The sudoers rule allows only that helper. It does not grant every sudo command."
+  read -r -p "Install this sudoers rule for ${target_user}? [Y/n] " install_sudo
+  install_sudo="${install_sudo:-y}"
+  if [[ ! "${install_sudo,,}" =~ ^y ]]; then
+    echo "Skipped. Add the rule yourself — docs/ssh-and-auth.md."
+    return 0
+  fi
+
+  lux_load_ludus_ssh_from_env || return 1
+  local helper_b64 sudoers_b64
+  helper_b64="$(python3 -c 'import base64,sys; print(base64.b64encode(open(sys.argv[1],"rb").read().replace(b"\r\n", b"\n").replace(b"\r", b"\n")).decode())' "$helper_src")"
+  sudoers_b64="$(python3 -c 'import base64,sys; data=open(sys.argv[1],encoding="utf-8").read().replace("\r\n","\n").replace("\r","\n"); data=data.replace("__LUX_SSH_USER__", sys.argv[2]); print(base64.b64encode(data.encode()).decode())' "$sudoers_src" "$target_user")"
+
+  local -a SSH_BASE=( -o StrictHostKeyChecking=accept-new -p "$LUDUS_SSH_PORT" )
+  local remote="${target_user}@${LUDUS_SSH_HOST}"
+  local install_body
+  install_body="$(cat <<'EOS'
+set -euo pipefail
+umask 077
+printf '%s' "$1" | base64 -d > /usr/local/sbin/lux-host
+chown root:root /usr/local/sbin/lux-host
+chmod 755 /usr/local/sbin/lux-host
+tmp="$(mktemp)"
+printf '%s' "$2" | base64 -d > "$tmp"
+visudo -cf "$tmp"
+install -o root -g root -m 440 "$tmp" /etc/sudoers.d/lux-host
+rm -f "$tmp"
+EOS
+)"
+
+  local ssh_mode="none"
+  if [[ -s "$KEY_DIR/id_rsa" ]] && ssh "${SSH_BASE[@]}" -o BatchMode=yes -i "$KEY_DIR/id_rsa" "$remote" true; then
+    ssh_mode="key"
+  else
+    local ssh_pw
+    ssh_pw="$(lux_read_env_kv PROXMOX_SSH_PASSWORD)"
+    if [[ -n "$ssh_pw" ]] && lux_ensure_sshpass_local_available; then
+      if SSHPASS="$ssh_pw" sshpass -e ssh "${SSH_BASE[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no "$remote" true; then
+        ssh_mode="password"
+      fi
+    fi
+    unset ssh_pw
+  fi
+  if [[ "$ssh_mode" == "none" ]]; then
+    echo "Cannot SSH as ${remote}. Install the rule by hand — docs/ssh-and-auth.md." >&2
+    return 1
+  fi
+
+  lux_ssh_as_target() {
+    if [[ "$ssh_mode" == "key" ]]; then
+      ssh "${SSH_BASE[@]}" -o BatchMode=yes -i "$KEY_DIR/id_rsa" "$remote" "$@"
+      return
+    fi
+    local pw
+    pw="$(lux_read_env_kv PROXMOX_SSH_PASSWORD)"
+    SSHPASS="$pw" sshpass -e ssh "${SSH_BASE[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no "$remote" "$@"
+  }
+
+  echo "Installing /usr/local/sbin/lux-host and /etc/sudoers.d/lux-host on ${remote}…"
+  if lux_ssh_as_target "test \"\$(id -u)\" -eq 0"; then
+    lux_ssh_as_target "bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
+  elif lux_ssh_as_target "sudo -n true"; then
+    echo "This account already has passwordless sudo for all commands. Installing the helper anyway."
+    lux_ssh_as_target "sudo -n bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
+  else
+    local sudo_pw=""
+    read -r -s -p "sudo password for ${target_user} on ${LUDUS_SSH_HOST} (used once to write the rule): " sudo_pw
+    echo
+    if [[ -z "$sudo_pw" ]]; then
+      echo "Skipped. No sudo password, so the rule was not installed." >&2
+      return 0
+    fi
+    if ! printf '%s\n' "$sudo_pw" | lux_ssh_as_target "sudo -S -p '' bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"; then
+      unset sudo_pw
+      echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
+      return 1
+    fi
+    unset sudo_pw
+  fi
+
+  if lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host 'id -u'" | grep -qx 0; then
+    echo "Installed. ${target_user} can run sudo -n /usr/local/sbin/lux-host. Other sudo commands still need a password."
+    return 0
+  fi
+  echo "Helper installed but 'sudo -n /usr/local/sbin/lux-host id -u' did not return 0. Check /etc/sudoers.d/lux-host." >&2
+  return 1
+}
+
 lux_run_action_menu() {
   while true; do
     echo ""
@@ -519,8 +632,9 @@ lux_run_action_menu() {
     echo "  2) Append SSH_KEY_PATH/id_rsa pubkey → authorized_keys (sshpass; chown key if unreadable)"
     echo "  3) docker compose up -d --build (needs Docker available here)"
     echo "  4) Print Ludus / SSH / GOAD fields from .env (mask secrets)"
+    echo "  5) Install passwordless sudo for /usr/local/sbin/lux-host only (non-root PROXMOX_SSH_USER)"
     echo "  0) Exit menu"
-    read -r -p "Choose [0-4] [0]: " _ac
+    read -r -p "Choose [0-5] [0]: " _ac
     _ac="${_ac:-0}"
     case "$_ac" in
       1)
@@ -534,6 +648,10 @@ lux_run_action_menu() {
         ;;
       4)
         lux_action_print_ssh_env_hints || true
+        ;;
+      5)
+        lux_load_ludus_ssh_from_env || true
+        lux_offer_scoped_host_sudo "$(lux_read_env_kv PROXMOX_SSH_USER)" || true
         ;;
       0)
         echo "Bye."
@@ -773,6 +891,8 @@ case "$auth_choice" in
     exit 1
     ;;
 esac
+
+lux_offer_scoped_host_sudo "$(lux_read_env_kv PROXMOX_SSH_USER)" || true
 
 if [[ "$root_ssh_key_auth" == "1" ]]; then
   echo ""

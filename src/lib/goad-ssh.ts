@@ -17,6 +17,7 @@ import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-requ
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
+import { asPrivilegedShell } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
@@ -316,9 +317,12 @@ export async function sshExec(
     const conn = new SSHClient();
     let stdout = "";
     let stderr = "";
+    const cfg = buildConnectConfig(creds)
+    // User creds stay as that user. The settings account elevates with sudo when it is not root.
+    const remote = creds ? command : asPrivilegedShell(cfg.username || "root", command)
 
     conn.on("ready", () => {
-      conn.exec(command, (err, stream) => {
+      conn.exec(remote, (err, stream) => {
         if (err) {
           conn.end();
           return reject(err);
@@ -338,7 +342,7 @@ export async function sshExec(
       reject(new Error(`SSH connection error: ${err.message}`));
     });
 
-    conn.connect(buildConnectConfig(creds));
+    conn.connect(cfg);
   });
 }
 
@@ -669,9 +673,9 @@ export async function streamGoadCommand(
   // Non-root SSH users cannot create instance sub-directories in it, which
   // causes goad.py to crash with "Instance dir creation error".
   //
-  // We open a *separate* root SSH connection (reusing the root credentials in
-  // the settings store) and create+chmod the directory before the user's command
-  // starts.  This runs as actual root — no sudo required.
+  // We open a separate SSH connection as PROXMOX_SSH_USER and create+chmod the
+  // directory before the user's command starts. Root runs it directly; any other
+  // account runs it with passwordless sudo.
   //
   // The await adds ~1-2 s of setup latency, which is negligible for a GOAD deployment.
   // GOAD deployment.  Failure is silenced here; the preamble below still checks

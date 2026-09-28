@@ -53,6 +53,8 @@ import {
   packerRootCandidates,
   shellSingleQuote,
 } from "@/lib/template-packer-paths"
+import { packerDirFromTemplatePath } from "@/lib/packer-vm-name"
+import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { writeRemoteFileViaSsh } from "@/lib/template-remote-write"
 
 
@@ -144,7 +146,7 @@ async function addTemplate(
     throw err
   }
 
-  const destDir = `${templatesDir}/${name}`
+  const destDir = `${templatesDir}/${packerDirFromTemplatePath(templatePath, name)}`
 
   const subdirs = new Set<string>()
   subdirs.add(destDir)
@@ -245,6 +247,23 @@ async function tryInstallTemplatesViaSources(
   return out
 }
 
+/** Sources install uses Packer `vm_name`; the git path stays the short folder. */
+async function resolveTemplateSpecName(spec: TemplateSpec): Promise<TemplateSpec> {
+  const dir = packerDirFromTemplatePath(spec.path || "", spec.name)
+  if (spec.name !== dir && /-template$/i.test(spec.name)) return spec
+  const safe = assertSafeTemplateRepoUrl(spec.apiBase)
+  if (!safe.ok) return spec
+  const name = await resolveGitTemplateInstallName(
+    safe.apiBase,
+    spec.ref || "main",
+    dir,
+    undefined,
+    spec.path,
+  )
+  if (!name || name === spec.name) return spec
+  return { ...spec, name }
+}
+
 function resolveTemplateAddContext(
   session: NonNullable<Awaited<ReturnType<typeof resolveSession>>>,
   request: NextRequest,
@@ -302,8 +321,10 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const resolvedTemplates = await Promise.all(templates.map((spec) => resolveTemplateSpecName(spec)))
+
   const byRepo = new Map<string, TemplateSpec[]>()
-  for (const spec of templates) {
+  for (const spec of resolvedTemplates) {
     const key = `${spec.apiBase}|${spec.ref || "main"}`
     const group = byRepo.get(key) ?? []
     group.push(spec)
@@ -317,7 +338,7 @@ export async function POST(request: NextRequest) {
   }
 
   const mapped = await Promise.all(
-    templates.map(async (spec) => {
+    resolvedTemplates.map(async (spec) => {
       const fromSource = sourceResults.get(spec.name)
       if (fromSource?.success) {
         return { name: spec.name, ...fromSource }
@@ -342,7 +363,7 @@ export async function POST(request: NextRequest) {
   const allOk = mapped.every((r) => r.success)
   logLuxRouteAction(request, session, {
     outcome: allOk ? "success" : "failure",
-    detail: `templates=${templates.map((t) => t.name).join(",")}`,
+    detail: `templates=${resolvedTemplates.map((t) => t.name).join(",")}`,
   })
   return NextResponse.json({ results: mapped })
 }

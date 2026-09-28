@@ -17,6 +17,7 @@ import {
   resolveBadslCatalogMeta,
 } from "@/lib/ludus-source-catalog"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
 
@@ -200,7 +201,9 @@ export async function GET(request: NextRequest) {
           apiLabel,
         )
         const files = fileTree.filter((i) => i.type === "blob").map((i) => i.name)
-        return { name: dir.name, path: dir.path, files, ref, apiBase }
+        // Folder stays `debian13`; Ludus install/build id is the Packer vm_name.
+        const name = await resolveGitTemplateInstallName(apiBase, ref, dir.name, files, dir.path)
+        return { name, path: dir.path, files, ref, apiBase }
       }),
       5,
     )

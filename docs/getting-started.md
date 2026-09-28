@@ -92,7 +92,7 @@ cp .env.example .env
      - Put the key in `./ssh` as a **normal file**, e.g. **`./ssh/id_rsa`**.
    - **`PROXMOX_SSH_KEY_PATH`** in `.env` is the path **inside** the container (default **`/app/ssh/id_rsa`**) and should match that filename.
 
-   **If the key “is there” but LUX cannot read it:** use **Settings → Test root SSH** and inspect **SSH key probe**
+   **If the key “is there” but LUX cannot read it:** use **Settings → Test host SSH** and inspect **SSH key probe**
 
    Example: copy **`/root/.ssh/id_rsa`** from the Ludus server to the default mount directory:
 
@@ -129,7 +129,7 @@ docker compose up -d --build
 # https://localhost   (port 443 — expected self-signed cert warning if using generated certs)
 ```
 
-7. Log in with your Ludus user’s (not root!) **SSH username and password**. LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+7. Log in with your Ludus user’s (not root!) **SSH username and password**. LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible. Host writes (templates, `pvesh`, password changes) use `PROXMOX_SSH_USER` separately: `root`, or another account that can run `sudo -n /usr/local/sbin/lux-host`. Quickstart asks before installing that sudoers rule. It does not grant every sudo command. See `docs/ssh-and-auth.md`.
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash

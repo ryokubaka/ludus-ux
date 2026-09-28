@@ -4,7 +4,7 @@
 
 | Mechanism | What it’s for |
 |---|---|
-| **`PROXMOX_SSH_PASSWORD` or root key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side root SSH: admin tunnel to Ludus admin API, `pvesh` (SPICE, admin VM delete/power, shared pool discovery), GOAD impersonation, template install, log tail via SSH, `chpasswd`, rolling API keys in user `~/.bashrc`. **Key auth is the recommended default** on hardened Proxmox hosts. |
+| **`PROXMOX_SSH_USER` + password or key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side SSH for admin tunnel, `pvesh`, template install, `chown` under `/opt/ludus`, `chpasswd`, and API keys in `~/.bashrc`. The account is **root**, or another user allowed to run **`sudo -n /usr/local/sbin/lux-host`**. That helper is the only passwordless command. A normal Ludus login with neither is not enough. **Key auth is the recommended default** on hardened Proxmox hosts. |
 | **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when root password/key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
 
 Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
@@ -18,7 +18,7 @@ The browser console uses two separate Proxmox mechanisms:
 - **SPICE / VNC `.vv` downloads** use `pvesh` over server-side SSH. Root key auth works here.
 - **In-browser noVNC** uses the Proxmox HTTP API on `https://<LUDUS_SSH_HOST>:8006`. LUX logs in as the current LUX user's Ludus `proxmoxUsername@pam` using the password captured during LUX login, then requests the VM's VNC proxy ticket.
 
-Green **Settings → Test root SSH & admin API** results do not prove noVNC will work. That test validates root SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.
+Green **Settings → Test host SSH & admin API** results do not prove noVNC will work. That test validates host SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.
 
 If noVNC fails with `Proxmox login failed (HTTP 401)`:
 
@@ -31,7 +31,7 @@ If noVNC fails with `Proxmox login failed (HTTP 401)`:
 ## Admin API URL (`LUDUS_ADMIN_URL`)
 
 - **Typical:** `https://<same-host-as-LUDUS_URL>:8081` whenever Ludus listens for admin traffic on an address your **container** can reach (LAN IP or DNS name). `docker-compose.yml` defaults to that pattern.
-- **Loopback-only 8081 on the Ludus box:** LUX can start an SSH tunnel and forward `127.0.0.1:18081` → the server’s `127.0.0.1:8081`. That requires working **root SSH** at container startup. If you set `LUDUS_ADMIN_URL` to a **non-localhost** host name, LUX **does not** overwrite it with the tunnel URL.
+- **Loopback-only 8081 on the Ludus box:** LUX can start an SSH tunnel and forward `127.0.0.1:18081` → the server’s `127.0.0.1:8081`. That requires working **host SSH** (`PROXMOX_SSH_USER`) at container startup. The tunnel itself does not need root. If you set `LUDUS_ADMIN_URL` to a **non-localhost** host name, LUX **does not** overwrite it with the tunnel URL.
 - **Settings → Admin API URL** is persisted in SQLite and overrides the value from the environment until you change it again.
 
 ## Root private key copied from the Ludus server
@@ -56,12 +56,32 @@ fi
 chmod 600 /root/.ssh/authorized_keys
 ```
 
-Then restart LUX’s container and run **Settings → Test root SSH & admin API**.
+Then restart LUX’s container and run **Settings → Test host SSH & admin API**.
+
+If `PROXMOX_SSH_USER` is not root, install that same public key in **that user’s** `~/.ssh/authorized_keys`.
+
+## Non-root host SSH
+
+`scripts/quickstart.sh` asks before it installs anything when `PROXMOX_SSH_USER` is not root. Answering yes writes:
+
+- `/usr/local/sbin/lux-host` (root-owned, mode 755)
+- `/etc/sudoers.d/lux-host`
+
+The sudoers rule is only:
+
+```
+Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
+<user> ALL=(root) NOPASSWD: LUX_HOST
+```
+
+It does **not** grant `NOPASSWD: ALL`. `sudo apt`, `sudo bash`, and other commands still ask for a password. LUX calls `sudo -n /usr/local/sbin/lux-host` for template directories, `chown`, `pvesh`, `qm`, `chpasswd`, and `~/.bashrc` updates. The same prompt is menu item **5** (`bash scripts/quickstart.sh --menu`).
+
+The templates live in `scripts/lux-host/`. To install by hand, replace `__LUX_SSH_USER__` in `sudoers.in`, check it with `visudo -cf`, and install both files as root (`lux-host` mode 755, sudoers mode 440).
 
 **Alternative (cleaner):** generate a **new** keypair only for LUX on your workstation (`ssh-keygen`), put the **`.pub`** line in `/root/.ssh/authorized_keys` on the server, and mount only that **private** key in `./ssh/id_rsa`.
 
 ## Other SSH key notes
 
-- The image has **no `ssh` CLI** — use **Settings → Test root SSH & admin API**, not `docker exec … ssh`.
+- The image has **no `ssh` CLI** — use **Settings → Test host SSH & admin API**, not `docker exec … ssh`.
 - Use **OpenSSH PEM** keys (`id_rsa` / `id_ed25519`), not PuTTY **`.ppk`**.
 - **CRLF** in the key file is normalized when LUX loads the key; **`dos2unix ./ssh/id_rsa`** on the host is still safe if you hit parse errors.

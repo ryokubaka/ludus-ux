@@ -435,6 +435,7 @@ function AddFromSource({
                     ? resolveInstalledTemplateName(t.name, ludusTemplates)
                     : null
                   const result = addResults.find((r) => r.name === t.name)
+                  const folder = t.path.replace(/\/+$/, "").split("/").filter(Boolean).pop()
                   return (
                     <button
                       key={t.name}
@@ -482,9 +483,11 @@ function AddFromSource({
                       <p className="text-muted-foreground/70 truncate pl-5">
                         {ludusName && ludusName !== t.name
                           ? `as ${ludusName}`
-                          : t.version
-                            ? `v${t.version}`
-                            : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
+                          : folder && folder !== t.name
+                            ? `folder ${folder}`
+                            : t.version
+                              ? `v${t.version}`
+                              : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
                       </p>
                     </button>
                   )

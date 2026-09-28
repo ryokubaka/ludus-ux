@@ -90,7 +90,7 @@ export function rootSshProbeProblem(probe: RootSshProbe, packerDir: string): str
   if (probe.uid != null && !elevated) {
     return (
       `Login succeeded as ${who} (uid ${probe.uid}), without passwordless sudo for ${LUX_HOST_SUDO_BIN}. ` +
-      `Host writes need root, or a sudoers rule for that helper only (quickstart can install it).`
+      `Host writes need root, or a sudoers rule for that helper only. Settings → SSH & GOAD can install that rule; quickstart can too.`
     )
   }
   if (probe.packerWritable === false) {

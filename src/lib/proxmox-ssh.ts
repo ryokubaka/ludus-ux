@@ -36,7 +36,7 @@ export function sshExec(
   username: string,
   password: string,
   command: string,
-  options?: { elevate?: boolean },
+  options?: { elevate?: boolean; stdin?: string },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let cfg: ConnectConfig
@@ -55,6 +55,7 @@ export function sshExec(
         let out = "", errOut = ""
         stream.on("data", (d: Buffer) => { out += d.toString() })
         stream.stderr.on("data", (d: Buffer) => { errOut += d.toString() })
+        if (options?.stdin != null) stream.end(options.stdin)
         stream.on("close", (code: number) => {
           conn.end()
           if (code !== 0) reject(new Error(errOut.trim() || `Exit code ${code}`))

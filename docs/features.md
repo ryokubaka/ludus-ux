@@ -89,3 +89,4 @@ This is the recommended way to recover from a broken install or update the lab a
 - Runtime settings persisted in SQLite (URLs, SSH, GOAD path, secrets)
 - Custom logo upload
 - Ludus API and SSH connectivity tests
+- LUX release check, upgrade, and downgrade (Settings → About)

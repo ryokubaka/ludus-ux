@@ -50,9 +50,14 @@ services:
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - NODE_ENV=production
       - TZ=${TZ:-America/New_York}
+      # Host path of this git clone. Empty: discover via `docker inspect` on the Ludus host.
+      - LUX_REPO_PATH=${LUX_REPO_PATH:-}
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh
       - ${DATA_DIR:-./data}:/app/data
+      # Lets Settings → About run scripts/upgrade.sh on this Docker host.
+      # The socket is root-equivalent for the daemon: the app can start and stop containers here.
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

@@ -18,6 +18,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 |---|---|---|
 | `SSH_KEY_PATH` | **Host** directory where you put the root private key **copied from the Ludus server**. Mounted at **`/app/ssh`** in the container. | `./ssh` |
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
+| `LUX_REPO_PATH` | Absolute path of the LUX git clone on the Docker host. Settings → About uses it when `docker inspect` cannot see the Compose project directory. | unset |
 
 ## Admin / user management
 

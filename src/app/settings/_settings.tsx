@@ -11,6 +11,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   CheckCircle2,
   XCircle,
   Loader2,
@@ -42,6 +50,7 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { LuxReleasesPanel } from "@/components/settings/lux-releases-panel"
 import { cn } from "@/lib/utils"
 import { statusBadge } from "@/lib/status-colors"
 import { useResolvedSession } from "@/hooks/use-resolved-session"
@@ -542,7 +551,7 @@ function DependenciesList() {
 
 // ── About tab ─────────────────────────────────────────────────────────────
 
-function AboutTab() {
+function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   const [logoKey] = useState(0)
   const [depsCount, setDepsCount] = useState<number | null>(null)
   const [changelogCount, setChangelogCount] = useState<number | null>(null)
@@ -607,6 +616,8 @@ function AboutTab() {
           </a>
         </div>
       </div>
+
+      <LuxReleasesPanel isAdmin={isAdmin} />
 
       {/* Release notes */}
       <div className="rounded-lg border border-border bg-card">
@@ -691,6 +702,9 @@ function SettingsContent() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; version?: string } | null>(null)
   const [credentialTesting, setCredentialTesting] = useState(false)
+  const [luxHostDialogOpen, setLuxHostDialogOpen] = useState(false)
+  const [installingLuxHost, setInstallingLuxHost] = useState(false)
+  const [luxHostRootPassword, setLuxHostRootPassword] = useState("")
   const [credentialTestResult, setCredentialTestResult] = useState<{
     rootSsh: {
       ok: boolean; host: string; port: number; user: string
@@ -826,6 +840,45 @@ function SettingsContent() {
       toast({ variant: "destructive", title: "Credential test failed", description: e instanceof Error ? e.message : "Network error" })
     } finally {
       setCredentialTesting(false)
+    }
+  }
+
+  const handleInstallLuxHost = async () => {
+    if (!draft || !session?.isAdmin) return
+    setInstallingLuxHost(true)
+    try {
+      const res = await fetch("/api/settings/install-lux-host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sshHost: draft.sshHost,
+          sshPort: draft.sshPort,
+          proxmoxSshUser: draft.proxmoxSshUser,
+          proxmoxSshPassword: draft.proxmoxSshPassword,
+          rootPassword: luxHostRootPassword,
+        }),
+      })
+      const data = await res.json().catch(() => null) as { error?: string; message?: string } | null
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title: "lux-host install failed",
+          description: data?.error || res.statusText,
+        })
+        return
+      }
+      setLuxHostDialogOpen(false)
+      setLuxHostRootPassword("")
+      toast({ title: "lux-host installed", description: data?.message || "Passwordless sudo is limited to lux-host." })
+      await handleTestCredentials()
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "lux-host install failed",
+        description: e instanceof Error ? e.message : "Network error",
+      })
+    } finally {
+      setInstallingLuxHost(false)
     }
   }
 
@@ -1080,7 +1133,7 @@ function SettingsContent() {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host SSH Credentials</p>
                 <p className="text-xs text-muted-foreground">
                   Used for privileged admin operations: template copies under /opt/ludus, pvesh over SSH, user password changes, and API key updates.
-                  <code className="text-primary">root</code> works outright. Another account works when it can run <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. Quickstart can install that helper and a sudoers rule for it alone. A normal login with neither is denied those writes.
+                  <code className="text-primary">root</code> works outright. Another account works when it can run <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. The button below installs that helper and a sudoers rule for it alone. A normal login with neither is denied those writes.
                   GOAD runs as each user&apos;s own SSH session — root creds here are not used for normal GOAD.
                 </p>
                 <div className="grid grid-cols-3 gap-4">
@@ -1092,7 +1145,7 @@ function SettingsContent() {
                     <Input id="ssh-user" value={draft?.proxmoxSshUser || ""} onChange={(e) => setDraft((d) => d ? { ...d, proxmoxSshUser: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="root" />
                     {draft?.proxmoxSshUser?.trim() && draft.proxmoxSshUser.trim() !== "root" && (
                       <p className="text-xs text-muted-foreground">
-                        {draft.proxmoxSshUser.trim()} is not root. Host writes use <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. That rule does not allow every sudo command. Run the test below; it fails if the helper is missing or the Packer directory is not writable.
+                        {draft.proxmoxSshUser.trim()} is not root. Host writes use <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. That rule does not allow every sudo command. Install it here, then run the test.
                       </p>
                     )}
                   </div>
@@ -1122,10 +1175,18 @@ function SettingsContent() {
                 </div>
                 {session?.isAdmin && (
                   <div className="space-y-3">
-                    <Button type="button" size="sm" variant="secondary" onClick={handleTestCredentials} disabled={credentialTesting} className="gap-2">
-                      {credentialTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
-                      Test host SSH &amp; admin API
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="secondary" onClick={handleTestCredentials} disabled={credentialTesting} className="gap-2">
+                        {credentialTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+                        Test host SSH &amp; admin API
+                      </Button>
+                      {draft?.proxmoxSshUser?.trim() && draft.proxmoxSshUser.trim() !== "root" && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => setLuxHostDialogOpen(true)} disabled={installingLuxHost} className="gap-2">
+                          {installingLuxHost ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                          Install lux-host sudo rule
+                        </Button>
+                      )}
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Runs from the app container using the values in this form. Confirms this SSH account can do host writes, and that the admin API answers with your session Ludus API key.
                     </p>
@@ -1194,6 +1255,51 @@ function SettingsContent() {
                         </div>
                       </div>
                     )}
+                    <Dialog open={luxHostDialogOpen} onOpenChange={(open) => {
+                      if (installingLuxHost) return
+                      setLuxHostDialogOpen(open)
+                      if (!open) setLuxHostRootPassword("")
+                    }}>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Install lux-host for {draft?.proxmoxSshUser?.trim() || "this account"}?</DialogTitle>
+                          <DialogDescription>
+                            This writes two files on the Ludus host. It does not grant every sudo command.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+                          <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs one host script as root.</li>
+                          <li><span className="font-mono">/etc/sudoers.d/lux-host</span> lets {draft?.proxmoxSshUser?.trim() || "this user"} run that helper with <span className="font-mono">sudo -n</span>.</li>
+                          <li>Other sudo commands still ask for a password.</li>
+                          <li>If this account can already sudo, the SSH password is used once. If sudo says the account is not in the sudoers file, enter the root password instead.</li>
+                        </ul>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="lux-host-root-password">Root password</Label>
+                          <Input
+                            id="lux-host-root-password"
+                            type="password"
+                            value={luxHostRootPassword}
+                            onChange={(e) => setLuxHostRootPassword(e.target.value)}
+                            className="font-mono text-xs"
+                            placeholder="Used once as root. Not saved."
+                            autoComplete="off"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Leave blank only when {draft?.proxmoxSshUser?.trim() || "this account"} can already run sudo. The root password is not written to Settings.
+                          </p>
+                        </div>
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => { setLuxHostDialogOpen(false); setLuxHostRootPassword("") }} disabled={installingLuxHost}>Cancel</Button>
+                          <Button
+                            onClick={() => { void handleInstallLuxHost() }}
+                            disabled={installingLuxHost || (!draft?.proxmoxSshPassword?.trim() && !luxHostRootPassword.trim())}
+                          >
+                            {installingLuxHost && <Loader2 className="h-4 w-4 animate-spin" />}
+                            Install
+                          </Button>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   </div>
                 )}
               </div>
@@ -1258,7 +1364,7 @@ function SettingsContent() {
 
         {/* ── About ────────────────────────────────────────────────────── */}
         <TabsContent value="about" className="mt-0">
-          <AboutTab />
+          <AboutTab isAdmin={!!session?.isAdmin} />
         </TabsContent>
       </Tabs>
     </div>

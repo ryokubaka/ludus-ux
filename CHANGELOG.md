@@ -17,6 +17,10 @@ Each bullet uses a single tag:
 
 ## Unreleased
 
+## [1.3.3] - 2026-09-28
+
+- [Add] **In-app LUX versions** — Settings → About checks GitHub releases. Every upgrade and downgrade opens a confirmation that explains the host checkout, image rebuild, restart, and that `./data`, `./ssh`, and `.env` stay. The switch runs `scripts/upgrade.sh` through the local Docker socket (a one-shot container enters the host namespaces). SSH to the Ludus host is only the fallback when that socket is not mounted. The sidebar marks when a newer stable release exists. A target older than v1.3.3 adds a required acknowledgement: that release has no Releases panel and no in-app upgrade or downgrade, so later changes use `bash scripts/upgrade.sh` on the host. Set `LUX_REPO_PATH` when the clone path cannot be discovered from `docker inspect`.
+- [Add] **Install lux-host from Settings** — SSH & GOAD can write `/usr/local/sbin/lux-host` and a sudoers rule for that helper only. If the SSH account is not in sudoers, the dialog takes the Ludus host root password once and does not save it. Other sudo commands still require a password.
 - [Fix] **Host SSH user** — `PROXMOX_SSH_USER` no longer has to be `root`. A non-root account is elevated with `sudo -n /usr/local/sbin/lux-host`. Quickstart asks before installing that helper and a sudoers rule for that path only (not `NOPASSWD: ALL`). The credential test fails when the account is not root and cannot run the helper, or cannot write the Packer directory.
 
 ## [1.3.2] - 2026-09-10

@@ -9,6 +9,8 @@
 #   bash scripts/upgrade.sh main          # non-interactive
 #   bash scripts/upgrade.sh v0.9.8        # checkout tag (detached HEAD)
 #
+# LUX_UPGRADE_YES=1 skips the dirty-tree confirmation (used by the in-app switch).
+#
 # Run from the repository root:
 #   bash scripts/upgrade.sh
 
@@ -199,10 +201,14 @@ if [[ -n "$DIRTY" ]]; then
   echo "Warning: working tree has uncommitted changes."
   echo "          Checkout may discard tracked changes (especially when switching branch/tag)."
   echo ""
-  read -r -p "Continue? [y/N] " cont
-  if [[ ! "$cont" =~ ^[Yy] ]]; then
-    echo "Aborted."
-    exit 0
+  if [[ "${LUX_UPGRADE_YES:-}" == "1" ]]; then
+    echo "LUX_UPGRADE_YES=1: continuing without prompt."
+  else
+    read -r -p "Continue? [y/N] " cont
+    if [[ ! "$cont" =~ ^[Yy] ]]; then
+      echo "Aborted."
+      exit 0
+    fi
   fi
 fi
 

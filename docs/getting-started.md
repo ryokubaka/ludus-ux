@@ -165,6 +165,16 @@ bash scripts/upgrade.sh v1.0.1
 
 Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](../CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
 
+`LUX_UPGRADE_YES=1` skips the dirty-tree prompt and discards uncommitted changes. The in-app switch sets that variable and runs the script in the background so the UI can restart.
+
+### From Settings → About
+
+An admin can check GitHub releases and upgrade or downgrade without a shell. The page lists published `vX.Y.Z` tags. A newer **stable** release shows an update banner (pre-releases are listed, and they do not drive the banner).
+
+The switch uses the local Docker daemon. Compose mounts `/var/run/docker.sock` into the app container, and the app starts a one-shot container that enters the host namespaces and runs this script. That does not use the Proxmox SSH key. SSH is only a fallback when the socket is not mounted. The repo path is `LUX_REPO_PATH` when set, otherwise the Compose project directory from `docker inspect ludus-ux`.
+
+Choosing a release **older than v1.3.3** asks you to confirm first. Those builds do not include this page, so later version changes have to be done on the host with `bash scripts/upgrade.sh`.
+
 ## Quick SSH sanity check
 
 With the stack up and `./ssh/id_rsa` readable in the container:

@@ -16,5 +16,6 @@ describe("isVolatileQueryKey", () => {
     expect(isVolatileQueryKey(queryKeys.templates("u1"))).toBe(false)
     expect(isVolatileQueryKey(queryKeys.ansible("u1"))).toBe(false)
     expect(isVolatileQueryKey(queryKeys.version("u1"))).toBe(false)
+    expect(isVolatileQueryKey(["lux", "releases", "update"])).toBe(true)
   })
 })

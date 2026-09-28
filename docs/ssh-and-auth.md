@@ -74,7 +74,7 @@ Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
 <user> ALL=(root) NOPASSWD: LUX_HOST
 ```
 
-It does **not** grant `NOPASSWD: ALL`. `sudo apt`, `sudo bash`, and other commands still ask for a password. LUX calls `sudo -n /usr/local/sbin/lux-host` for template directories, `chown`, `pvesh`, `qm`, `chpasswd`, and `~/.bashrc` updates. The same prompt is menu item **5** (`bash scripts/quickstart.sh --menu`).
+It does **not** grant `NOPASSWD: ALL`. `sudo apt`, `sudo bash`, and other commands still ask for a password. LUX calls `sudo -n /usr/local/sbin/lux-host` for template directories, `chown`, `pvesh`, `qm`, `chpasswd`, and `~/.bashrc` updates. The same prompt is menu item **5** (`bash scripts/quickstart.sh --menu`). Settings → SSH & GOAD can install the same two files: **Install lux-host sudo rule** uses the SSH password once as the sudo password.
 
 The templates live in `scripts/lux-host/`. To install by hand, replace `__LUX_SSH_USER__` in `sudoers.in`, check it with `visudo -cf`, and install both files as root (`lux-host` mode 755, sudoers mode 440).
 

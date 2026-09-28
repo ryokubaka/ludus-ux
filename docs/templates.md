@@ -68,7 +68,7 @@ After a successful add, the template appears as **Not Built** until you run **Bu
 The trash icon removes a template via LUX `DELETE /api/templates/delete`:
 
 1. Ludus API `DELETE /template/{name}` (clears built Proxmox VM when possible)
-2. `ludus templates rm -n …` over root SSH (unregisters when API soft-refuses)
+2. `ludus templates rm -n …` over host SSH (unregisters when API soft-refuses)
 3. Disk cleanup of `/opt/ludus/packer/<aliases>`, `/opt/ludus/users/*/packer/<aliases>`, and `/opt/ludus/sources/*/templates/<aliases>`
 
 Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
@@ -196,9 +196,9 @@ Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Li
 
 Ludus sync runs `git fetch` as the **`ludus`** Linux user inside `/opt/ludus/sources/<id>/`. If any files there were created as **root** (manual `git` as root, older LUX writing into `sources/…/templates/`, etc.), fetch dies with `insufficient permission for adding an object to repository database .git/objects`.
 
-**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over root SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
+**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over host SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
 
-**Manual repair** (if root SSH is unavailable to LUX):
+**Manual repair** (if host SSH is unavailable to LUX):
 
 ```bash
 chown -R ludus:ludus /opt/ludus/sources
@@ -234,7 +234,7 @@ sudo chmod 700 /opt/ludus/users/<username>/.ansible/cp /opt/ludus/users/<usernam
 sudo chown -R <username>:ludus /opt/ludus/users/<username>/.ansible/{roles,collections,galaxy_cache} 2>/dev/null || true
 ```
 
-When LUX has root SSH configured, it runs this repair after Ludus API ansible installs (roles, collections, blueprints, subscription roles), on user provisioning, and before GOAD / range deploy.
+When LUX has host SSH configured, it runs this repair after Ludus API ansible installs (roles, collections, blueprints, subscription roles), on user provisioning, and before GOAD / range deploy. Who that account is: [SSH and authentication](ssh-and-auth.md).
 
 ### Add from Source succeeds but template missing from the build list
 

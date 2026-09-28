@@ -30,7 +30,7 @@ cd ludus-ux
 bash scripts/quickstart.sh
 ```
 
-Or follow [manual setup](docs/getting-started.md#manual-setup) (`cp .env.example .env`, place root SSH key under `./ssh`, `docker compose up -d --build`). Then open **https://localhost** (port **443**; expect a self-signed cert warning unless you supply PEMs in `docker/nginx/certificates/`).
+Or follow [manual setup](docs/getting-started.md#manual-setup) (`cp .env.example .env`, place the host SSH key under `./ssh`, `docker compose up -d --build`). Then open **https://localhost** (port **443**; expect a self-signed cert warning unless you supply PEMs in `docker/nginx/certificates/`).
 
 ## Upgrade
 
@@ -45,7 +45,7 @@ bash scripts/upgrade.sh v1.0.1
 
 The script fetches from your configured remote, checks out the chosen ref, then runs `docker compose up -d --build` (or `docker-compose` if that is what you use). Host paths **`./data`**, **`./ssh`**, **`./docker/nginx/certificates`**, and **`.env`** are left as-is so SQLite and keys survive the rebuild.
 
-Full behavior, prerequisites, and downgrade notes: [Upgrade and downgrade](docs/getting-started.md#upgrade-and-downgrade). Release notes: [CHANGELOG.md](CHANGELOG.md).
+Admins can start the same switch from **Settings → About**. Full behavior, prerequisites, and downgrade notes: [Upgrade and downgrade](docs/getting-started.md#upgrade-and-downgrade). Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements (short)
 

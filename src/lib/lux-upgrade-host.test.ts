@@ -94,7 +94,7 @@ describe("lux-upgrade-host", () => {
     const started = Date.now()
     const out = execFileSync("bash", ["-c", cmd], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin` },
+      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
     })
     expect(Date.now() - started).toBeGreaterThanOrEqual(250)
     expect(out.trim()).toBe("started")
@@ -119,7 +119,7 @@ describe("lux-upgrade-host", () => {
     writeFileSync(path.join(bin, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
     const result = spawnSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin` },
+      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
     })
     expect(result.status).not.toBe(0)
     expect(result.stdout ?? "").not.toMatch(/\bstarted\b/)

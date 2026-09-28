@@ -24,7 +24,7 @@ services:
       - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
       # ROOT API key for Ludus v2 admin operations (user management)
       - LUDUS_ROOT_API_KEY=${LUDUS_ROOT_API_KEY:-}
-      # Proxmox root SSH for pvesh / admin tunnel / privileged ops (key preferred on hardened PVE)
+      # Host SSH for pvesh / admin tunnel / privileged ops (root, or sudo -n lux-host; key preferred)
       - PROXMOX_SSH_USER=${PROXMOX_SSH_USER:-root}
       - PROXMOX_SSH_PASSWORD=${PROXMOX_SSH_PASSWORD:-}
       - PROXMOX_SSH_KEY_PATH=${PROXMOX_SSH_KEY_PATH:-/app/ssh/id_rsa}

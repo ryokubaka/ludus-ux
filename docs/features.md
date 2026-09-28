@@ -24,7 +24,7 @@
 
 ### VM access
 
-- **Consoles** — noVNC in browser (uses the logged-in user's PAM password with Proxmox HTTP API on port 8006); SPICE / VNC `.vv` via `pvesh` over SSH (works with key-based root SSH)
+- **Consoles** — noVNC in browser (uses the logged-in user's PAM password with Proxmox HTTP API on port 8006); SPICE / VNC `.vv` via `pvesh` over host SSH (key auth works; see [SSH and authentication](ssh-and-auth.md))
 - **Console range picker** — Choose any accessible range and VM from the Consoles page
 
 ### LudusHound integration

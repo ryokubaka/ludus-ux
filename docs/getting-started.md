@@ -80,13 +80,13 @@ cp .env.example .env
    | `LUDUS_SSH_HOST` | Ludus server hostname or IP (SSH, GOAD, and default Ludus API URLs) |
    | `APP_SECRET` | Long random secret for session encryption (`openssl rand -hex 32`) |
    | `LUDUS_ROOT_API_KEY` | Ludus v2 root API key (admin users/ranges) — from `/opt/ludus/install/root-api-key` on the server |
-   | Root SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** set `PROXMOX_SSH_PASSWORD` for server-side admin operations. In-browser noVNC uses the logged-in user's PAM password separately. |
+   | Host SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** `PROXMOX_SSH_PASSWORD`, for `PROXMOX_SSH_USER`. See [SSH and authentication](ssh-and-auth.md). In-browser noVNC uses the logged-in user's PAM password separately. |
 
 > As of **0.9.5**, the `PROXMOX_SSH_PASSWORD` value saved through Settings is encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
 
-3. **Root SSH private key: from the Ludus server onto the LUX host**
+3. **Host SSH private key: from the Ludus server onto the LUX host**
 
-   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **root SSH** to the **same** machine Ludus runs on (the Proxmox host). The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
+   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **host SSH** (`PROXMOX_SSH_USER`) to the **same** machine Ludus runs on (the Proxmox host). That account is root, or another user who can run `sudo -n /usr/local/sbin/lux-host` ([SSH and authentication](ssh-and-auth.md)). The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
 
    - **`SSH_KEY_PATH`** (in `docker-compose.yml`, overridable via `.env`) is the **host** directory that is bind-mounted to **`/app/ssh`** in the container. Default: **`./ssh`** next to the `docker-compose.yml`.
      - Put the key in `./ssh` as a **normal file**, e.g. **`./ssh/id_rsa`**.
@@ -171,9 +171,9 @@ Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are o
 
 An admin can check GitHub releases and upgrade or downgrade without a shell. The page lists published `vX.Y.Z` tags. A newer **stable** release shows an update banner (pre-releases are listed, and they do not drive the banner).
 
-The switch uses the local Docker daemon. Compose mounts `/var/run/docker.sock` into the app container, and the app starts a one-shot container that enters the host namespaces and runs this script. That does not use the Proxmox SSH key. SSH is only a fallback when the socket is not mounted. The repo path is `LUX_REPO_PATH` when set, otherwise the Compose project directory from `docker inspect ludus-ux`.
+The switch uses the local Docker daemon. Compose mounts `/var/run/docker.sock` into the app container. The app starts a one-shot container that enters the host namespaces and starts this script with `systemd-run`, so the switch keeps running after that container exits. The host needs `systemd-run`. That path does not use the Proxmox SSH key. SSH is only a fallback when the socket is not mounted. That fallback runs the same `systemd-run` command on the host. The repo path is `LUX_REPO_PATH` when set, otherwise the Compose project directory from `docker inspect ludus-ux`.
 
-Choosing a release **older than v1.3.3** asks you to confirm first. Those builds do not include this page, so later version changes have to be done on the host with `bash scripts/upgrade.sh`.
+Every upgrade and downgrade asks you to confirm first. The dialog covers the host checkout, image rebuild, UI restart, and that `./data`, `./ssh`, and `.env` stay on the host. A downgrade also warns that an older release may not understand settings or schema written by a newer version. A target older than v1.3.3 adds a required acknowledgement: that release has no Releases panel and no in-app upgrade or downgrade, so later changes use `bash scripts/upgrade.sh` on the host.
 
 ## Quick SSH sanity check
 

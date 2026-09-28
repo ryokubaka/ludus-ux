@@ -32,8 +32,9 @@ async function sshLuxHost(command: string): Promise<string> {
 /**
  * Prefer the local Docker daemon. The running container is not the host, but
  * the mounted socket can start a one-shot container that enters the host
- * namespaces and runs scripts/upgrade.sh. SSH is only the fallback when this
- * process cannot see the socket (LUX built without that mount).
+ * namespaces and starts scripts/upgrade.sh with systemd-run, so the switch
+ * outlives that container. SSH is only the fallback when this process cannot
+ * see the socket (LUX built without that mount); it runs the same command.
  */
 async function execOnUpgradeHost(command: string): Promise<string> {
   if (dockerSocketAvailable()) return runHostScriptViaDocker(command)

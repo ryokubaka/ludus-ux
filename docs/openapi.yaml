@@ -1235,7 +1235,7 @@ paths:
       summary: Roll a user's Ludus API key
       description: |
         Resets a user's Ludus API key by calling the Ludus API, then writes
-        the new key to the user's `~/.bashrc` via root SSH. Admin required.
+        the new key to the user's `~/.bashrc` via host SSH. Admin required.
       operationId: rollUserApiKey
       security:
         - sessionCookie: []
@@ -1276,7 +1276,7 @@ paths:
       summary: Change a user's Linux/PAM password
       description: |
         Changes a user's Linux/PAM password (shared with the Proxmox PAM
-        realm) by running `chpasswd` via root SSH. Admin required.
+        realm) by running `chpasswd` via host SSH. Admin required.
       operationId: changeUserPassword
       security:
         - sessionCookie: []
@@ -1694,7 +1694,7 @@ paths:
       summary: Install templates on the Ludus server
       description: |
         Fetches template files from GitLab, copies them to the Ludus server via
-        root SSH, and registers them with `ludus templates add`. Uses root SSH
+        host SSH, and registers them with `ludus templates add`. Uses host SSH
         credentials from the application settings.
       operationId: addTemplates
       security:
@@ -2361,7 +2361,7 @@ paths:
       description: |
         Downloads a `.vv` virt-viewer connection file for a Proxmox VM. Tries
         SPICE first and falls back to VNC. Calls `pvesh` on the Proxmox node
-        over root SSH.
+        over host SSH.
       operationId: getSpiceConsole
       security:
         - sessionCookie: []

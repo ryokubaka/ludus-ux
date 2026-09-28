@@ -123,7 +123,7 @@ describe("buildRootSshProbeCommand", () => {
     )
     const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin` },
+      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
     })
     const parsed = parseRootSshProbe(result.stdout ?? "")
     expect(result.status).toBe(0)
@@ -138,7 +138,7 @@ describe("buildRootSshProbeCommand", () => {
     writeFileSync(path.join(bin, "sudo"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
     const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin` },
+      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
     })
     const parsed = parseRootSshProbe(result.stdout ?? "")
     expect(result.status).toBe(0)

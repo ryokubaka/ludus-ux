@@ -116,7 +116,7 @@ export function buildStartUpgradeCmd(repoPath: string, tag: string): string {
     `docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' ludus-ux`
   const service = [
     `bash "$REPO/scripts/upgrade.sh" "$TAG" >> "$LOG" 2>&1`,
-    `printf 'LUX_UPGRADE_EXIT:%s\\n' "$?" >> "$LOG"`,
+    `printf 'LUX_UPGRADE_EXIT:%%s\\n' "$?" >> "$LOG"`,
   ].join("; ")
   return [
     `REPO=${shellSingleQuote(repoPath)}`,

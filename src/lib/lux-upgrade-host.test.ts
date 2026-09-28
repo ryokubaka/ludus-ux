@@ -109,6 +109,51 @@ describe("lux-upgrade-host", () => {
     expect(readFileSync(path.join(data, "lux-upgrade.log"), "utf8")).toContain("v1.3.3")
   })
 
+  it("records a numeric exit after systemd expands percents in the unit command", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-upgrade-spec-"))
+    const data = path.join(dir, "data")
+    const bin = path.join(dir, "bin")
+    const repo = path.join(dir, "repo")
+    const upgradeSh = path.join(repo, "scripts/upgrade.sh")
+    mkdirSync(bin)
+    mkdirSync(path.join(repo, "scripts"), { recursive: true })
+    writeFileSync(path.join(bin, "docker"), `#!/bin/sh\nprintf '%s' ${JSON.stringify(data)}\n`, { mode: 0o755 })
+    writeFileSync(path.join(bin, "systemd-run"), systemdRunStub(repo), { mode: 0o755 })
+    chmodSync(path.join(bin, "docker"), 0o755)
+    chmodSync(path.join(bin, "systemd-run"), 0o755)
+    const env = { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" }
+    const logFile = path.join(data, "lux-upgrade.log")
+
+    writeFileSync(
+      upgradeSh,
+      "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 500 ]; do printf '%s\\n' 'Step 12/40 : RUN npm run build'; i=$((i + 1)); done\nprintf '%s\\n' 'Error: compose build failed'\nexit 1\n",
+      { mode: 0o755 },
+    )
+    chmodSync(upgradeSh, 0o755)
+    const failed = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
+      encoding: "utf8",
+      env,
+    })
+    expect(failed.trim()).toBe("started")
+    const failedLog = readFileSync(logFile, "utf8")
+    expect(failedLog.length).toBeGreaterThan(8000)
+    const failedTail = readLuxUpgradeLogTail(8000, logFile)
+    expect(luxUpgradeFailureFromLog(failedTail, "v1.3.3")).toBe("Error: compose build failed")
+    expect(failedLog).toMatch(/^LUX_UPGRADE_EXIT:1$/m)
+    expect(failedLog).not.toMatch(/LUX_UPGRADE_EXIT:\/bin\/bash/)
+
+    writeFileSync(upgradeSh, "#!/bin/sh\nprintf '%s\\n' 'Done. Running:'\nexit 0\n", { mode: 0o755 })
+    chmodSync(upgradeSh, 0o755)
+    const ok = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.4")], {
+      encoding: "utf8",
+      env,
+    })
+    expect(ok.trim()).toBe("started")
+    const okLog = readFileSync(logFile, "utf8")
+    expect(okLog).toMatch(/^LUX_UPGRADE_EXIT:0$/m)
+    expect(luxUpgradeFailureFromLog(readLuxUpgradeLogTail(8000, logFile), "v1.3.4")).toBeNull()
+  })
+
   it("does not report started when systemd-run fails", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "lux-upgrade-fail-"))
     const bin = path.join(dir, "bin")
@@ -302,6 +347,45 @@ exit 1
     expect(cap.reason).toBeNull()
   })
 })
+
+function systemdRunStub(repo: string): string {
+  return `#!/bin/sh
+script=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --setenv=*)
+      export "\${1#--setenv=}"
+      ;;
+    -c)
+      shift
+      script=$1
+      ;;
+  esac
+  shift
+done
+export REPO=${JSON.stringify(repo)}
+expanded=""
+rest=$script
+while [ -n "$rest" ]; do
+  case "$rest" in
+    %%*)
+      expanded=$expanded%
+      rest=\${rest#%%}
+      ;;
+    %s*)
+      expanded=$expanded/bin/bash
+      rest=\${rest#%s}
+      ;;
+    *)
+      one=\${rest%"\${rest#?}"}
+      expanded=$expanded$one
+      rest=\${rest#?}
+      ;;
+  esac
+done
+exec /bin/bash -c "$expanded"
+`
+}
 
 function gitEnv(bin: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }

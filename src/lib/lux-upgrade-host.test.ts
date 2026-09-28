@@ -109,7 +109,7 @@ describe("lux-upgrade-host", () => {
     expect(readFileSync(path.join(data, "lux-upgrade.log"), "utf8")).toContain("v1.3.3")
   })
 
-  it("records a numeric exit after systemd expands percents in the unit command", () => {
+  it("records a numeric exit code in the upgrade log", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "lux-upgrade-spec-"))
     const data = path.join(dir, "data")
     const bin = path.join(dir, "bin")
@@ -364,26 +364,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 export REPO=${JSON.stringify(repo)}
-expanded=""
-rest=$script
-while [ -n "$rest" ]; do
-  case "$rest" in
-    %%*)
-      expanded=$expanded%
-      rest=\${rest#%%}
-      ;;
-    %s*)
-      expanded=$expanded/bin/bash
-      rest=\${rest#%s}
-      ;;
-    *)
-      one=\${rest%"\${rest#?}"}
-      expanded=$expanded$one
-      rest=\${rest#?}
-      ;;
-  esac
-done
-exec /bin/bash -c "$expanded"
+exec /bin/bash -c "$script"
 `
 }
 

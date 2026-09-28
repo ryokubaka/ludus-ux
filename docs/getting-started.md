@@ -4,7 +4,7 @@
 
 | Requirement | Details |
 |---|---|
-| **Ludus server** | v2.x with API access on port 8080 (tested with [**Ludus v2.1.0**](https://gitlab.com/badsectorlabs/ludus/-/releases)) |
+| **Ludus server** | v2.x with API access on port 8080 (compatible through [**Ludus 2.3.5**](https://gitlab.com/badsectorlabs/ludus/-/releases)). Ludus 2.3.2+ defaults the range router to Debian 13. |
 | **Docker + Docker Compose** | Any recent version (tested on Docker 24+) |
 | **Network access** | Container must reach the Ludus server on ports 8080 (API) and 22 (SSH) |
 

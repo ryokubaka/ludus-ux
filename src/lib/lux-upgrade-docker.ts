@@ -21,11 +21,11 @@ export type HostExecContainer = {
   Tty: true
   Entrypoint: string[]
   Cmd: string[]
-  HostConfig: { Privileged: true; PidMode: "host" }
+  HostConfig: { Privileged: true; PidMode: "host"; CgroupnsMode: "host" }
 }
 
 /**
- * One-shot container that enters the host mount/pid namespaces and runs `script`
+ * One-shot container that enters the host namespaces and runs `script`
  * with the host's own `git` and `docker`. The image only supplies `nsenter`.
  */
 export function buildHostExecContainer(script: string): HostExecContainer {
@@ -34,7 +34,7 @@ export function buildHostExecContainer(script: string): HostExecContainer {
     Tty: true,
     Entrypoint: ["/usr/bin/nsenter", "-t", "1", "-w/", "-m", "-u", "-i", "-n", "-p", "--", "/bin/sh", "-c"],
     Cmd: [script],
-    HostConfig: { Privileged: true, PidMode: "host" },
+    HostConfig: { Privileged: true, PidMode: "host", CgroupnsMode: "host" },
   }
 }
 
@@ -81,11 +81,45 @@ function dockerError(body: string, status: number): Error {
   return new Error(text || `Docker API HTTP ${status}`)
 }
 
+function imageCreateQuery(image: string): string {
+  const at = image.lastIndexOf("@")
+  if (at > image.lastIndexOf("/")) return `fromImage=${encodeURIComponent(image)}`
+  const slash = image.lastIndexOf("/")
+  const colon = image.lastIndexOf(":")
+  if (colon <= slash) return `fromImage=${encodeURIComponent(image)}`
+  return `fromImage=${encodeURIComponent(image.slice(0, colon))}&tag=${encodeURIComponent(image.slice(colon + 1))}`
+}
+
+function pullStreamError(body: string): string | null {
+  for (const line of body.split("\n")) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: string }
+      if (parsed.error) return parsed.error
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+async function ensureHostExecImage(): Promise<void> {
+  const inspect = await dockerApi("GET", `/images/${encodeURIComponent(HOST_EXEC_IMAGE)}/json`)
+  if (inspect.status === 200) return
+  if (inspect.status !== 404) throw dockerError(inspect.body, inspect.status)
+  const pulled = await dockerApi("POST", `/images/create?${imageCreateQuery(HOST_EXEC_IMAGE)}`, undefined, 300_000)
+  if (pulled.status >= 300) throw dockerError(pulled.body, pulled.status)
+  const streamError = pullStreamError(pulled.body)
+  if (streamError) throw new Error(streamError)
+}
+
 /** Run a shell script on the Docker host and return its stdout. */
 export async function runHostScriptViaDocker(script: string): Promise<string> {
   const name = `lux-host-exec-${randomBytes(4).toString("hex")}`
   let id = ""
   try {
+    await ensureHostExecImage()
     const created = await dockerApi("POST", `/containers/create?name=${encodeURIComponent(name)}`, buildHostExecContainer(script))
     if (created.status >= 300) throw dockerError(created.body, created.status)
     const parsed = JSON.parse(created.body) as { Id?: string }
@@ -100,7 +134,7 @@ export async function runHostScriptViaDocker(script: string): Promise<string> {
     const statusCode = (JSON.parse(waited.body) as { StatusCode?: number }).StatusCode
 
     const logs = await dockerApi("GET", `/containers/${id}/logs?stdout=1&stderr=1`)
-    const text = logs.status < 300 ? logs.body.trim() : ""
+    const text = logs.status < 300 ? logs.body.replace(/\r/g, "").trim() : ""
     if (statusCode !== 0) {
       throw new Error(text || `Host command exited ${statusCode ?? "unknown"}`)
     }

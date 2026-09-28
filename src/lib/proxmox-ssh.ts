@@ -6,8 +6,13 @@
  * as GOAD / admin tunnel: PROXMOX_SSH_KEY_PATH, GOAD_SSH_KEY_PATH, /app/ssh/*).
  */
 import { Client as SSHClient, type ConnectConfig } from "ssh2"
+import { shellSingleQuote } from "@/lib/template-packer-paths"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
 import { asPrivilegedShell } from "./root-ssh-preflight"
+
+export function sshLoginCommand(remote: string): string {
+  return `bash -l -c ${shellSingleQuote(remote)}`
+}
 
 function buildSshConnectConfig(
   host: string,
@@ -50,7 +55,7 @@ export function sshExec(
       // Use bash -l (login shell) so /etc/profile is sourced and Proxmox tools
       // like pvesh are on PATH regardless of their exact install location.
       const remote = options?.elevate === false ? command : asPrivilegedShell(username, command)
-      conn.exec(`bash -l -c ${JSON.stringify(remote)}`, (err, stream) => {
+      conn.exec(sshLoginCommand(remote), (err, stream) => {
         if (err) { conn.end(); return reject(err) }
         let out = "", errOut = ""
         stream.on("data", (d: Buffer) => { out += d.toString() })

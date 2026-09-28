@@ -596,10 +596,16 @@ EOS
 
   echo "Installing /usr/local/sbin/lux-host and /etc/sudoers.d/lux-host on ${remote}…"
   if lux_ssh_as_target "test \"\$(id -u)\" -eq 0"; then
-    lux_ssh_as_target "bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
+    if ! lux_ssh_as_target "bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"; then
+      echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
+      return 1
+    fi
   elif lux_ssh_as_target "sudo -n true"; then
     echo "This account already has passwordless sudo for all commands. Installing the helper anyway."
-    lux_ssh_as_target "sudo -n bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
+    if ! lux_ssh_as_target "sudo -n bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"; then
+      echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
+      return 1
+    fi
   else
     local sudo_pw=""
     read -r -s -p "sudo password for ${target_user} on ${LUDUS_SSH_HOST} (used once to write the rule): " sudo_pw
@@ -990,4 +996,6 @@ lux_main() {
   fi
 }
 
-lux_main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  lux_main "$@"
+fi

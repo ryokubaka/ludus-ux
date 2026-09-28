@@ -21,10 +21,7 @@ export function renderLuxHostSudoers(template: string, user: string): string {
 }
 
 /**
- * sshExec runs `bash -l -c ${JSON.stringify(cmd)}`. That outer double-quoted
- * shell expands `$tmp` and `$(mktemp)` before the install script runs, which
- * turns the redirect into `> ""` (`bash: : No such file or directory`).
- * The transmitted command is therefore only a base64 blob: no `$`, no newlines.
+ * The transmitted command is a base64 blob with no `$` and no newlines.
  */
 export function buildLuxHostInstallShell(
   helperB64: string,
@@ -52,7 +49,9 @@ export function buildLuxHostInstallShell(
       : mode === "sudo-n"
         ? "sudo -n bash /tmp/lux-host-install.sh"
         : "sudo -S -p '' bash /tmp/lux-host-install.sh"
-  return `${write}; ${run}; rm -f /tmp/lux-host-install.sh`
+  const wrapper = `${write} && ${run}; status=$?; rm -f /tmp/lux-host-install.sh /tmp/lux-host-install.wrap; exit $status`
+  const wrapperB64 = Buffer.from(wrapper).toString("base64")
+  return `printf '%s' ${shellSingleQuote(wrapperB64)} | base64 -d > /tmp/lux-host-install.wrap && bash /tmp/lux-host-install.wrap`
 }
 
 export function loadLuxHostInstallPayload(user: string): { helperB64: string; sudoersB64: string } {

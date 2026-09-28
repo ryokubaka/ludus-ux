@@ -172,7 +172,6 @@ export function buildTestingStopVmEnrollShell(vmid: number, node: string): strin
 
 /**
  * Before testing-start snapshot: shutdown → `qm enroll-efi-keys` → verify → optional start.
- * Avoid `$vars` / `$(...)` / awk `$N` — `sshExec` wraps with `bash -l -c "..."`.
  */
 export function buildTestingStartEfiEnrollShell(
   vmid: number,

@@ -57,13 +57,14 @@ export function buildHostProbeCmd(explicitRepo: string | null): string {
 }
 
 export function parseHostProbe(output: string): LuxHostCapability {
-  const repoRaw = /^repo=(.*)$/m.exec(output)?.[1]?.trim() ?? ""
+  const text = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const repoRaw = /^repo=(.*)$/m.exec(text)?.[1]?.trim() ?? ""
   const repoPath = isSafeLuxRepoPath(repoRaw) ? repoRaw : null
-  const compose = /^compose=yes$/m.test(output)
-  const script = /^script=yes$/m.test(output)
-  const git = /^git=yes$/m.test(output)
-  const dirty = /^dirty=yes$/m.test(output)
-  const checkout = /^checkout=(.*)$/m.exec(output)?.[1]?.trim() || null
+  const compose = /^compose=yes$/m.test(text)
+  const script = /^script=yes$/m.test(text)
+  const git = /^git=yes$/m.test(text)
+  const dirty = /^dirty=yes$/m.test(text)
+  const checkout = /^checkout=(.*)$/m.exec(text)?.[1]?.trim() || null
 
   if (!repoPath) {
     return {
@@ -97,6 +98,10 @@ export function buildStartUpgradeCmd(repoPath: string, tag: string): string {
   }
   const dataInspect =
     `docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' ludus-ux`
+  const service = [
+    `bash "$REPO/scripts/upgrade.sh" "$TAG" >> "$LOG" 2>&1`,
+    `printf 'LUX_UPGRADE_EXIT:%s\\n' "$?" >> "$LOG"`,
+  ].join("; ")
   return [
     `REPO=${shellSingleQuote(repoPath)}`,
     `TAG=${shellSingleQuote(tag)}`,
@@ -105,11 +110,8 @@ export function buildStartUpgradeCmd(repoPath: string, tag: string): string {
     `mkdir -p "$DATA"`,
     `LOG="$DATA/lux-upgrade.log"`,
     `printf '%s\\n' "=== LUX switch to $TAG started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" > "$LOG"`,
-    `command -v setsid >/dev/null 2>&1 || { echo "Error: setsid not found"; exit 1; }`,
-    `export REPO TAG`,
-    // Exit sentinel is written by the wrapper, including when upgrade.sh calls exit.
-    // `&` already ends the command; a following `;` would be a bash syntax error (`&;`).
-    `setsid nohup bash -c 'env LUX_UPGRADE_YES=1 bash "$REPO/scripts/upgrade.sh" "$TAG"; echo "LUX_UPGRADE_EXIT:$?"' >> "$LOG" 2>&1 < /dev/null & echo started; echo "pid=$!"`,
+    `command -v systemd-run >/dev/null 2>&1 || { echo "Error: systemd-run not found"; exit 1; }`,
+    `systemd-run --collect --setenv=REPO="$REPO" --setenv=TAG="$TAG" --setenv=LOG="$LOG" --setenv=LUX_UPGRADE_YES=1 /bin/bash -c ${shellSingleQuote(service)} && echo started`,
   ].join("; ")
 }
 

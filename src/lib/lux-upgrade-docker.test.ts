@@ -9,6 +9,6 @@ describe("lux-upgrade-docker", () => {
     expect(spec.Entrypoint.slice(0, 4)).toEqual(["/usr/bin/nsenter", "-t", "1", "-w/"])
     expect(spec.Entrypoint).toContain("-p")
     expect(spec.Cmd).toEqual([script])
-    expect(spec.HostConfig).toEqual({ Privileged: true, PidMode: "host" })
+    expect(spec.HostConfig).toEqual({ Privileged: true, PidMode: "host", CgroupnsMode: "host" })
   })
 })

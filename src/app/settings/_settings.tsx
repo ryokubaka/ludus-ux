@@ -58,6 +58,7 @@ import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
+import { canSubmitLuxHostInstall } from "@/lib/root-ssh-preflight"
 import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus-version"
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -710,7 +711,7 @@ function SettingsContent() {
       ok: boolean; host: string; port: number; user: string
       authAttempted: string; privateKeyPath: string | null; detail?: string
       uid?: number | null; remoteUser?: string | null; privileged?: boolean
-      sudo?: boolean | null; packerDir?: string; packerWritable?: boolean | null
+      sudo?: boolean | null; sudoAll?: boolean | null; packerDir?: string; packerWritable?: boolean | null
     }
     adminApi: { ok: boolean; baseUrl: string; detail?: string; hint?: string }
     keyProbe?: {
@@ -1292,7 +1293,26 @@ function SettingsContent() {
                           <Button variant="outline" onClick={() => { setLuxHostDialogOpen(false); setLuxHostRootPassword("") }} disabled={installingLuxHost}>Cancel</Button>
                           <Button
                             onClick={() => { void handleInstallLuxHost() }}
-                            disabled={installingLuxHost || (!draft?.proxmoxSshPassword?.trim() && !luxHostRootPassword.trim())}
+                            disabled={!canSubmitLuxHostInstall({
+                              installing: installingLuxHost,
+                              sshPassword: draft?.proxmoxSshPassword ?? "",
+                              rootPassword: luxHostRootPassword,
+                              account: {
+                                user: draft?.proxmoxSshUser ?? "",
+                                host: draft?.sshHost ?? "",
+                                port: draft?.sshPort || 22,
+                              },
+                              probe: credentialTestResult
+                                ? {
+                                    user: credentialTestResult.rootSsh.user,
+                                    host: credentialTestResult.rootSsh.host,
+                                    port: credentialTestResult.rootSsh.port,
+                                    authAttempted: credentialTestResult.rootSsh.authAttempted,
+                                    uid: credentialTestResult.rootSsh.uid,
+                                    sudoAll: credentialTestResult.rootSsh.sudoAll,
+                                  }
+                                : null,
+                            })}
                           >
                             {installingLuxHost && <Loader2 className="h-4 w-4 animate-spin" />}
                             Install

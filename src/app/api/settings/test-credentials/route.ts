@@ -92,6 +92,7 @@ export async function POST(request: NextRequest) {
     remoteUser?: string | null
     privileged?: boolean
     sudo?: boolean | null
+    sudoAll?: boolean | null
     packerDir?: string
     packerWritable?: boolean | null
   } = {
@@ -139,6 +140,7 @@ export async function POST(request: NextRequest) {
       rootSsh.uid = probe.uid
       rootSsh.remoteUser = probe.username
       rootSsh.sudo = probe.sudo
+      rootSsh.sudoAll = probe.sudoAll
       rootSsh.privileged = probe.uid === 0 || probe.sudo === true
       rootSsh.packerDir = packerDir
       rootSsh.packerWritable = probe.packerWritable

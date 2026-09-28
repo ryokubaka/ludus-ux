@@ -29,10 +29,28 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
-if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-  echo "Error: not a git repository." >&2
+SAFE_ROOT="$(cd "$ROOT" && pwd -P)"
+lux_git_n=${GIT_CONFIG_COUNT:-0}
+case "$lux_git_n" in
+  ''|*[!0-9]*) lux_git_n=0 ;;
+esac
+printf -v "GIT_CONFIG_KEY_${lux_git_n}" '%s' safe.directory
+printf -v "GIT_CONFIG_VALUE_${lux_git_n}" '%s' "$SAFE_ROOT"
+export "GIT_CONFIG_KEY_${lux_git_n}"
+export "GIT_CONFIG_VALUE_${lux_git_n}"
+GIT_CONFIG_COUNT=$((lux_git_n + 1))
+export GIT_CONFIG_COUNT
+
+git_err=""
+if ! git_err="$(git rev-parse --is-inside-work-tree 2>&1)"; then
+  if [[ "$git_err" == *"dubious ownership"* ]]; then
+    echo "Error: git refused this repository because another user owns it. Not switching versions." >&2
+  else
+    echo "Error: not a git repository." >&2
+  fi
   exit 1
 fi
+unset git_err
 
 lux_compose() {
   if docker compose version &>/dev/null 2>&1; then

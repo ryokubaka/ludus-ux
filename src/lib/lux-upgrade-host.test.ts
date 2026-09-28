@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process"
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
@@ -126,5 +127,207 @@ describe("lux-upgrade-host", () => {
     expect(() => buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3;rm")).toThrow("Invalid release tag")
     expect(() => buildStartUpgradeCmd("/opt/ludus-ux", "main")).toThrow("Invalid release tag")
     expect(() => buildStartUpgradeCmd("/opt/../tmp", "v1.3.3")).toThrow("Unsafe repository path")
+  })
+
+  it("trusts only this clone when root git would otherwise refuse it, and reports a dirty tree", () => {
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "lux-probe-owned-")))
+    const bin = path.join(repo, "bin")
+    const log = path.join(repo, "git.args")
+    mkdirSync(path.join(repo, "scripts"))
+    mkdirSync(bin)
+    mkdirSync(path.join(repo, ".git"))
+    writeFileSync(path.join(repo, "docker-compose.yml"), "services: {}\n")
+    writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\nexit 0\n")
+    writeFileSync(path.join(repo, "README"), "dirty\n")
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+found=
+i=0
+count=\${GIT_CONFIG_COUNT:-0}
+while [ "$i" -lt "$count" ]; do
+  eval "key=\\$GIT_CONFIG_KEY_$i"
+  eval "val=\\$GIT_CONFIG_VALUE_$i"
+  if [ "$key" = "safe.directory" ] && [ "$val" = "*" ]; then
+    echo "fatal: wildcard safe.directory" >&2
+    exit 1
+  fi
+  if [ "$key" = "safe.directory" ] && [ "$val" = ${JSON.stringify(repo)} ]; then found=1; fi
+  i=$((i + 1))
+done
+case "$*" in
+  *"--global"*) echo "fatal: global git config" >&2; exit 1 ;;
+esac
+if [ "$found" != 1 ]; then
+  echo "fatal: detected dubious ownership in repository" >&2
+  exit 128
+fi
+case "$1" in
+  rev-parse)
+    if [ "$2" = "--is-inside-work-tree" ]; then exit 0; fi
+    if [ "$2" = "--abbrev-ref" ]; then printf 'main\\n'; exit 0; fi
+    exit 1
+    ;;
+  status)
+    printf ' M README\\n'
+    exit 0
+    ;;
+  describe)
+    exit 1
+    ;;
+esac
+exit 1
+`,
+      { mode: 0o755 },
+    )
+    chmodSync(path.join(bin, "git"), 0o755)
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+      encoding: "utf8",
+      env: gitEnv(bin),
+    })
+    expect(parseHostProbe(out)).toMatchObject({
+      canSwitch: true,
+      repoPath: repo,
+      dirty: true,
+      checkout: "main",
+      reason: null,
+    })
+    expect(readFileSync(log, "utf8")).not.toContain("--global")
+  })
+
+  it("keeps upgrade disabled when git still cannot read the clone", () => {
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "lux-probe-refused-")))
+    const bin = path.join(repo, "bin")
+    mkdirSync(path.join(repo, "scripts"))
+    mkdirSync(bin)
+    mkdirSync(path.join(repo, ".git"))
+    writeFileSync(path.join(repo, "docker-compose.yml"), "services: {}\n")
+    writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\nexit 0\n")
+    writeFileSync(
+      path.join(bin, "git"),
+      "#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n",
+      { mode: 0o755 },
+    )
+    chmodSync(path.join(bin, "git"), 0o755)
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+      encoding: "utf8",
+      env: gitEnv(bin),
+    })
+    const cap = parseHostProbe(out)
+    expect(cap.canSwitch).toBe(false)
+    expect(cap.dirty).toBe(false)
+    expect(cap.repoPath).toBe(repo)
+    expect(cap.reason).toMatch(/Git could not read this clone/)
+  })
+
+  it("sees a dirty file in a real clone the current user owns", () => {
+    const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "lux-probe-real-")))
+    mkdirSync(path.join(repo, "scripts"))
+    writeFileSync(path.join(repo, "docker-compose.yml"), "services: {}\n")
+    writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\nexit 0\n")
+    execFileSync("git", ["init", "-q"], { cwd: repo })
+    writeFileSync(path.join(repo, "README"), "dirty\n")
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+      encoding: "utf8",
+      env: gitEnv(""),
+    })
+    const cap = parseHostProbe(out)
+    expect(cap.canSwitch).toBe(true)
+    expect(cap.dirty).toBe(true)
+    expect(cap.repoPath).toBe(repo)
+    expect(cap.reason).toBeNull()
+  })
+})
+
+function gitEnv(bin: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  if (bin) env.PATH = `${bin}${path.delimiter}${env.PATH ?? ""}`
+  delete env.GIT_CONFIG_COUNT
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_CONFIG_KEY_") || key.startsWith("GIT_CONFIG_VALUE_")) delete env[key]
+  }
+  return env
+}
+
+describe("upgrade.sh dubious ownership", () => {
+  it("marks this clone safe for the switch and stops when git still refuses it", () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "lux-upgrade-sh-")))
+    const bin = path.join(root, "bin")
+    const log = path.join(root, "git.args")
+    mkdirSync(path.join(root, "scripts"))
+    mkdirSync(bin)
+    writeFileSync(path.join(root, "docker-compose.yml"), "services: {}\n")
+    copyFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/upgrade.sh"),
+      path.join(root, "scripts/upgrade.sh"),
+    )
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(log)}
+case "$*" in
+  *"--global"*|config*) echo "fatal: global git config" >&2; exit 1 ;;
+esac
+found=
+i=0
+count=\${GIT_CONFIG_COUNT:-0}
+while [ "$i" -lt "$count" ]; do
+  eval "key=\\$GIT_CONFIG_KEY_$i"
+  eval "val=\\$GIT_CONFIG_VALUE_$i"
+  if [ "$key" = "safe.directory" ] && [ "$val" = "*" ]; then
+    echo "fatal: wildcard safe.directory" >&2
+    exit 1
+  fi
+  if [ "$key" = "safe.directory" ] && [ "$val" = ${JSON.stringify(root)} ]; then found=1; fi
+  i=$((i + 1))
+done
+if [ "$found" != 1 ]; then
+  echo "fatal: detected dubious ownership in repository" >&2
+  exit 128
+fi
+case "$1" in
+  rev-parse) exit 0 ;;
+esac
+exit 0
+`,
+      { mode: 0o755 },
+    )
+    writeFileSync(
+      path.join(bin, "docker"),
+      `#!/bin/sh\nprintf '%s\\n' "docker $*" >> ${JSON.stringify(log)}\nexit 1\n`,
+      { mode: 0o755 },
+    )
+    writeFileSync(path.join(bin, "docker-compose"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    chmodSync(path.join(bin, "git"), 0o755)
+    chmodSync(path.join(bin, "docker"), 0o755)
+    chmodSync(path.join(bin, "docker-compose"), 0o755)
+    const trusted = spawnSync("bash", [path.join(root, "scripts/upgrade.sh")], {
+      encoding: "utf8",
+      env: gitEnv(bin),
+    })
+    const trustedText = `${trusted.stdout ?? ""}${trusted.stderr ?? ""}`
+    const trustedLog = readFileSync(log, "utf8")
+    expect(trusted.status).not.toBe(0)
+    expect(trustedText).not.toMatch(/not a git repository/)
+    expect(trustedText).not.toMatch(/another user owns it/)
+    expect(trustedLog).toContain("rev-parse --is-inside-work-tree")
+    expect(trustedLog).toContain("docker compose version")
+    expect(trustedLog).not.toContain("--global")
+
+    writeFileSync(log, "")
+    writeFileSync(path.join(bin, "git"), "#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n", {
+      mode: 0o755,
+    })
+    chmodSync(path.join(bin, "git"), 0o755)
+    const refused = spawnSync("bash", [path.join(root, "scripts/upgrade.sh")], {
+      encoding: "utf8",
+      env: gitEnv(bin),
+    })
+    const refusedText = `${refused.stdout ?? ""}${refused.stderr ?? ""}`
+    expect(refused.status).not.toBe(0)
+    expect(refusedText).toMatch(/another user owns it/)
+    expect(refusedText).not.toMatch(/Checking out/)
+    expect(readFileSync(log, "utf8")).toBe("")
   })
 })

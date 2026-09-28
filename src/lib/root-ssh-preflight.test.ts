@@ -1,8 +1,13 @@
+import { spawnSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   asPrivilegedShell,
   assessConfiguredSshUser,
   buildRootSshProbeCommand,
+  canSubmitLuxHostInstall,
   parseRootSshProbe,
   rootSshProbeProblem,
 } from "./root-ssh-preflight"
@@ -48,6 +53,7 @@ describe("parseRootSshProbe", () => {
       uid: 0,
       username: "root",
       sudo: null,
+      sudoAll: null,
       packerWritable: true,
     })
     expect(rootSshProbeProblem(out, "/opt/ludus/packer")).toBeNull()
@@ -101,9 +107,151 @@ describe("buildRootSshProbeCommand", () => {
     expect(cmd).toContain("lux_root_ssh_ok")
     expect(cmd).toContain("'/opt/ludus/packer'")
     expect(cmd).toContain("sudo -n /usr/local/sbin/lux-host true")
-    expect(cmd).not.toContain("sudo -n true")
     expect(cmd).not.toContain("NOPASSWD")
     expect(cmd).toContain("packer_writable=yes")
     expect(cmd).toContain("packer_writable=no")
+  })
+
+  it("reports passwordless sudo separately from the lux-host helper", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-ssh-probe-"))
+    const bin = path.join(dir, "bin")
+    mkdirSync(bin)
+    writeFileSync(
+      path.join(bin, "sudo"),
+      "#!/bin/sh\nif [ \"$1\" = \"-n\" ] && [ \"$2\" = \"true\" ]; then exit 0; fi\nexit 1\n",
+      { mode: 0o755 },
+    )
+    const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
+      encoding: "utf8",
+      env: { PATH: `${bin}:/usr/bin:/bin` },
+    })
+    const parsed = parseRootSshProbe(result.stdout ?? "")
+    expect(result.status).toBe(0)
+    expect(parsed.sudoAll).toBe(true)
+    expect(parsed.sudo).toBe(false)
+  })
+
+  it("reports that passwordless sudo is unavailable when sudo -n true fails", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-ssh-probe-deny-"))
+    const bin = path.join(dir, "bin")
+    mkdirSync(bin)
+    writeFileSync(path.join(bin, "sudo"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
+    const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
+      encoding: "utf8",
+      env: { PATH: `${bin}:/usr/bin:/bin` },
+    })
+    const parsed = parseRootSshProbe(result.stdout ?? "")
+    expect(result.status).toBe(0)
+    expect(parsed.sudoAll).toBe(false)
+    expect(parsed.sudo).toBe(false)
+  })
+})
+
+const account = { user: "lux", host: "ludus.local", port: 22 }
+
+describe("canSubmitLuxHostInstall", () => {
+  it("allows a blank root password when key auth already has passwordless sudo", () => {
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "",
+      account,
+      probe: {
+        user: "lux",
+        host: "ludus.local",
+        port: 22,
+        authAttempted: "private_key",
+        uid: 1000,
+        sudoAll: true,
+      },
+    })).toBe(true)
+  })
+
+  it("requires a password when that account cannot sudo and no root password was entered", () => {
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "",
+      account,
+      probe: {
+        user: "lux",
+        host: "ludus.local",
+        port: 22,
+        authAttempted: "private_key",
+        uid: 1000,
+        sudoAll: false,
+      },
+    })).toBe(false)
+  })
+
+  it("accepts the SSH password or the root password when sudo is not passwordless", () => {
+    const denied = {
+      user: "lux",
+      host: "ludus.local",
+      port: 22,
+      authAttempted: "private_key",
+      uid: 1000,
+      sudoAll: false,
+    }
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "secret",
+      rootPassword: "",
+      account,
+      probe: denied,
+    })).toBe(true)
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "root-secret",
+      account,
+      probe: denied,
+    })).toBe(true)
+  })
+
+  it("lets an unprobed key login try, and blocks a login that has no key", () => {
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "",
+      account,
+      probe: null,
+    })).toBe(true)
+    expect(canSubmitLuxHostInstall({
+      installing: true,
+      sshPassword: "secret",
+      rootPassword: "",
+      account,
+      probe: null,
+    })).toBe(false)
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: " ",
+      rootPassword: " ",
+      account,
+      probe: {
+        user: "lux",
+        host: "ludus.local",
+        port: 22,
+        authAttempted: "none",
+        sudoAll: null,
+      },
+    })).toBe(false)
+  })
+
+  it("does not apply a sudo denial from a different account", () => {
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "",
+      account,
+      probe: {
+        user: "other",
+        host: "ludus.local",
+        port: 22,
+        authAttempted: "private_key",
+        sudoAll: false,
+      },
+    })).toBe(true)
   })
 })

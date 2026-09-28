@@ -12,8 +12,10 @@ export interface RootSshProbe {
   loginOk: boolean
   uid: number | null
   username: string | null
-  /** Passwordless `sudo -n true`. Null when the probe did not report it. */
+  /** Passwordless `sudo -n /usr/local/sbin/lux-host`. Null when the probe did not report it. */
   sudo: boolean | null
+  /** Passwordless `sudo -n true`. Null when the probe did not report it. */
+  sudoAll: boolean | null
   packerWritable: boolean | null
 }
 
@@ -62,6 +64,7 @@ export function buildRootSshProbeCommand(packerDir: string): string {
     "echo lux_root_ssh_ok",
     "printf 'uid=%s\\n' \"$(id -u)\"",
     "printf 'user=%s\\n' \"$(id -un)\"",
+    `if sudo -n true >/dev/null 2>&1; then printf 'sudo_all=yes\\n'; else printf 'sudo_all=no\\n'; fi`,
     `if sudo -n ${LUX_HOST_SUDO_BIN} true >/dev/null 2>&1; then printf 'sudo=yes\\n'; else printf 'sudo=no\\n'; fi`,
     `if [ -d ${dir} ] && [ -w ${dir} ]; then printf 'packer_writable=yes\\n'; elif sudo -n ${LUX_HOST_SUDO_BIN} "[ -d ${dir} ] && [ -w ${dir} ]"; then printf 'packer_writable=yes\\n'; else printf 'packer_writable=no\\n'; fi`,
   ].join("; ")
@@ -72,14 +75,49 @@ export function parseRootSshProbe(output: string): RootSshProbe {
   const uidMatch = /^uid=(\d+)$/m.exec(output)
   const userMatch = /^user=(.+)$/m.exec(output)
   const sudoMatch = /^sudo=(yes|no)$/m.exec(output)
+  const sudoAllMatch = /^sudo_all=(yes|no)$/m.exec(output)
   const writableMatch = /^packer_writable=(yes|no)$/m.exec(output)
   return {
     loginOk,
     uid: uidMatch ? Number(uidMatch[1]) : null,
     username: userMatch?.[1]?.trim() || null,
     sudo: sudoMatch ? sudoMatch[1] === "yes" : null,
+    sudoAll: sudoAllMatch ? sudoAllMatch[1] === "yes" : null,
     packerWritable: writableMatch ? writableMatch[1] === "yes" : null,
   }
+}
+
+export type LuxHostInstallProbe = {
+  user: string
+  host: string
+  port: number
+  authAttempted: string
+  uid?: number | null
+  sudoAll?: boolean | null
+}
+
+/** Whether the Settings dialog may submit the lux-host installer. */
+export function canSubmitLuxHostInstall(input: {
+  installing: boolean
+  sshPassword: string
+  rootPassword: string
+  account: { user: string; host: string; port: number }
+  probe: LuxHostInstallProbe | null
+}): boolean {
+  if (input.installing) return false
+  if (input.sshPassword.trim() || input.rootPassword.trim()) return true
+  const probe = input.probe
+  if (!probe) return true
+  const same =
+    probe.user === input.account.user.trim() &&
+    probe.host === input.account.host.trim() &&
+    probe.port === (input.account.port || 22)
+  if (!same) return true
+  if (probe.authAttempted === "none") return false
+  if (probe.uid === 0) return true
+  if (probe.authAttempted === "private_key" && probe.sudoAll === true) return true
+  if (probe.sudoAll === false) return false
+  return probe.authAttempted === "private_key"
 }
 
 /** Why a successful login is still not usable for host writes. Null when it is. */

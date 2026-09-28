@@ -49,7 +49,13 @@ export function buildHostProbeCmd(explicitRepo: string | null): string {
     `if [ ! -f "$REPO/scripts/upgrade.sh" ]; then printf 'script=no\\n'; else printf 'script=yes\\n'; fi`,
     `if [ ! -d "$REPO/.git" ]; then printf 'git=no\\n'; else printf 'git=yes\\n'; fi`,
     `if ! cd "$REPO"; then printf 'ok=no\\nreason=not_found\\n'; exit 0; fi`,
-    `DIRTY=$(git status --porcelain 2>/dev/null || true)`,
+    `GIT_ROOT=$(pwd -P)`,
+    `GIT_CONFIG_COUNT=1`,
+    `GIT_CONFIG_KEY_0=safe.directory`,
+    `GIT_CONFIG_VALUE_0="$GIT_ROOT"`,
+    `export GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0`,
+    `if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then printf 'git_ok=no\\n'; printf 'ok=no\\nreason=git_failed\\n'; exit 0; fi`,
+    `DIRTY=$(git status --porcelain 2>/dev/null) || { printf 'git_ok=no\\n'; printf 'ok=no\\nreason=git_failed\\n'; exit 0; }`,
     `if [ -n "$DIRTY" ]; then printf 'dirty=yes\\n'; else printf 'dirty=no\\n'; fi`,
     `printf 'checkout=%s\\n' "$(git describe --tags --exact-match 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"`,
     `printf 'ok=yes\\n'`,
@@ -74,6 +80,16 @@ export function parseHostProbe(output: string): LuxHostCapability {
       checkout: null,
       reason:
         "Could not find the LUX git clone on the Ludus host. Set LUX_REPO_PATH or run bash scripts/upgrade.sh on the machine that runs Docker Compose.",
+    }
+  }
+  if (/^git_ok=no$/m.test(text) || /^reason=git_failed$/m.test(text)) {
+    return {
+      canSwitch: false,
+      repoPath,
+      dirty: false,
+      checkout,
+      reason:
+        "Git could not read this clone, so upgrade and downgrade stay off until git can inspect the working tree.",
     }
   }
   if (!compose || !script || !git) {

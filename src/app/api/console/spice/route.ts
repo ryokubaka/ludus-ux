@@ -122,7 +122,7 @@ export async function GET(request: NextRequest) {
   const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
   if (!hasSshExecAuth(settings, session.sshPassword)) {
     return NextResponse.json(
-      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a root key (./ssh), or log in with your SSH password." },
+      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a private key for PROXMOX_SSH_USER (./ssh), or log in with your SSH password." },
       { status: 503 }
     )
   }

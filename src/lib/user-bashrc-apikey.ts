@@ -94,7 +94,7 @@ export async function readUserApiKeyFromBashrc(
   if (!isRootProxmoxSshConfigured(settings)) {
     return {
       apiKey: null,
-      message: "Root SSH not configured (set PROXMOX_SSH_PASSWORD or mount a root private key)",
+      message: "Host SSH is not configured (set PROXMOX_SSH_PASSWORD, or mount a private key for PROXMOX_SSH_USER)",
     }
   }
 

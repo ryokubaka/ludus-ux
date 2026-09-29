@@ -80,7 +80,7 @@ async function withSsh(
       return r.creds
     })()
   if (!c) {
-    return { ok: false, error: "Proxmox root SSH not configured" }
+    return { ok: false, error: "Proxmox host SSH is not configured" }
   }
   try {
     const out = await sshExec(

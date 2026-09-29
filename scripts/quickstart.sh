@@ -730,7 +730,7 @@ set_kv "APP_SECRET" "$APP_SECRET"
 read -r -p "LUDUS_ROOT_API_KEY (from /opt/ludus/install/root-api-key; Enter to skip — admin features need it): " LUDUS_ROOT_API_KEY
 set_kv "LUDUS_ROOT_API_KEY" "${LUDUS_ROOT_API_KEY:-}"
 
-read -r -p "Host directory for root SSH private key (SSH_KEY_PATH) [./ssh]: " skp_in
+read -r -p "Host directory for the PROXMOX_SSH_USER private key (SSH_KEY_PATH) [./ssh]: " skp_in
 skp_in="${skp_in:-./ssh}"
 if [[ "$skp_in" == "ssh" ]]; then
   skp_in="./ssh"
@@ -747,7 +747,7 @@ mkdir -p "$KEY_DIR"
 chmod 755 "$KEY_DIR" 2>/dev/null || true
 
 echo ""
-echo "Root SSH to the Ludus/Proxmox host (for pvesh, admin tunnel, etc.):"
+echo "Host SSH to the Ludus/Proxmox host (for pvesh, admin tunnel, etc.). The account can be root, or a user that can run sudo -n /usr/local/sbin/lux-host:"
 echo "  1) Fetch private key from the server (scp as root; non-root + /root/ uses sshpass + sudo -S when needed — install sshpass if prompted)"
 echo "  2) Copy from a file already on this machine"
 echo "  3) Use password only (PROXMOX_SSH_PASSWORD)"
@@ -902,9 +902,9 @@ lux_offer_scoped_host_sudo "$(lux_read_env_kv PROXMOX_SSH_USER)" || true
 
 if [[ "$root_ssh_key_auth" == "1" ]]; then
   echo ""
-  echo "Optional: root PROXMOX_SSH_PASSWORD for server-side root SSH only."
-  echo "In-browser noVNC now uses the LUX user's login password with their Proxmox PAM user; the root SSH key is not used for that HTTP ticket."
-  read -r -s -p "Root PROXMOX_SSH_PASSWORD [Enter to keep key-only root SSH]: " optional_root_pw
+  echo "Optional: PROXMOX_SSH_PASSWORD for host SSH only."
+  echo "In-browser noVNC uses the LUX user's login password with their Proxmox PAM user; the host SSH key is not used for that HTTP ticket."
+  read -r -s -p "PROXMOX_SSH_PASSWORD [Enter to keep key-only host SSH]: " optional_root_pw
   echo
   if [[ -n "$optional_root_pw" ]]; then
     set_kv "PROXMOX_SSH_PASSWORD" "$optional_root_pw"
@@ -947,7 +947,7 @@ echo "  • HTTPS UI: https://localhost (port 443 via bundled nginx) — self-si
 echo "  • Optional: docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d exposes http://127.0.0.1:3000 to the app directly (bypass nginx)"
 echo "  • Log in with a Ludus (non-root) SSH/PAM user. In-browser noVNC uses that session password for the user's Proxmox ticket."
 echo "  • On the Ludus server: put LUDUS_API_KEY in ~/.bashrc for that user (and root) if needed — see docs/getting-started.md."
-echo "  • In LUX: Settings → Test root SSH & admin API"
+echo "  • In LUX: Settings → Test host SSH & admin API"
 echo ""
 echo "Done."
 }

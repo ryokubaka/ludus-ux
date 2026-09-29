@@ -76,7 +76,7 @@ export async function repairLudusSourcesOwnershipAsRoot(options?: {
     return true
   } catch (err) {
     console.warn(
-      "[LUX] ludus sources ownership repair skipped (root SSH?):",
+      "[LUX] ludus sources ownership repair skipped (host SSH?):",
       err instanceof Error ? err.message : err,
     )
     return false

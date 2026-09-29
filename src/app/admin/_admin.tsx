@@ -512,8 +512,8 @@ export function AdminPageClient() {
               <Alert>
                 <KeyRound className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  Could not auto-read the API key from <code>~/.bashrc</code>. Enter it manually below.
-                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.fields.sshLogin}</code>.
+                  Could not auto-read the API key from <code>~/.bashrc</code> over host SSH. Enter it manually below.
+                  Commands will run via that host SSH account (root, or <code>sudo -n /usr/local/sbin/lux-host</code>) and <code>sudo -u {impersonateTarget.fields.sshLogin}</code>.
                 </AlertDescription>
               </Alert>
               <div className="space-y-1.5">

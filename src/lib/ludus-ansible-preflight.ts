@@ -45,7 +45,7 @@ export function buildVerifyAnsibleHomeShell(linuxUser: string): string {
     `_HD=$(getent passwd "$_LU" 2>/dev/null | cut -d: -f6 || true)`,
     'if [ -z "$_HD" ]; then exit 0; fi',
     'if ! sudo -u ludus test -w "$_HD/.ansible/cp" 2>/dev/null; then',
-    '  echo "[-] Ludus cannot write ControlPath $_HD/.ansible/cp — configure root SSH for ansible home repair" >&2',
+    '  echo "[-] Ludus cannot write ControlPath $_HD/.ansible/cp — configure host SSH (PROXMOX_SSH_USER) for ansible home repair" >&2',
     "  exit 1",
     "fi",
   ].join("; ")
@@ -65,7 +65,7 @@ export function buildAnsibleCpPreamble(): string {
   return [
     'mkdir -p "$HOME/.goad/ansible-cp"',
     'export ANSIBLE_SSH_CONTROL_PATH_DIR="$HOME/.goad/ansible-cp"',
-    'if [ ! -w "$HOME/.goad/ansible-cp" ]; then echo "[-] Ansible control path $HOME/.goad/ansible-cp is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for ansible home setup."; exit 1; fi',
+    'if [ ! -w "$HOME/.goad/ansible-cp" ]; then echo "[-] Ansible control path $HOME/.goad/ansible-cp is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a private key for PROXMOX_SSH_USER (./ssh) for ansible home setup."; exit 1; fi',
   ].join("; ")
 }
 

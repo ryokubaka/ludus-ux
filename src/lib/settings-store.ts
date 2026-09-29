@@ -48,12 +48,12 @@ export interface RuntimeSettings {
   blueprintOperatorApiKey: string
   /** Ludus userID of the admin who installed global source blueprints. */
   blueprintOperatorUserId: string
-  /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
+  /** Host SSH user (PROXMOX_SSH_USER) for pvesh (SPICE) and other host writes. Defaults to "root". */
   proxmoxSshUser: string
-  /** Proxmox/root SSH password — used for VM console (SPICE) access. */
+  /** Password for PROXMOX_SSH_USER. Used for pvesh (SPICE) and other host writes. */
   proxmoxSshPassword: string
   /**
-   * Optional path to root SSH private key inside the container (e.g. /app/ssh/id_rsa).
+   * Optional path to the PROXMOX_SSH_USER private key inside the container (e.g. /app/ssh/id_rsa).
    * When set, tried before PROXMOX_SSH_KEY_PATH env — survives Next/env oddities and is saved in SQLite.
    */
   proxmoxSshKeyPath: string

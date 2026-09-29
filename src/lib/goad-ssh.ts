@@ -381,7 +381,7 @@ export function workspaceSshExecPlan(
         ok: false,
         status: 503,
         error:
-          "Admin impersonation requires root SSH to the GOAD host: set PROXMOX_SSH_PASSWORD, GOAD_SSH_PASSWORD, or mount a readable root private key (same as Settings → Root SSH test).",
+          "Admin impersonation needs host SSH to the GOAD host: set PROXMOX_SSH_PASSWORD or GOAD_SSH_PASSWORD, or mount a private key for PROXMOX_SSH_USER (Settings → Test host SSH & admin API). The account must be root or able to run sudo -n /usr/local/sbin/lux-host.",
       }
     }
     const safeUser = impersonateAs.username.replace(/'/g, "")
@@ -401,7 +401,7 @@ export function workspaceSshExecPlan(
     return {
       ok: false,
       status: 503,
-      error: "No SSH credentials available (set root SSH password or log in with SSH password).",
+      error: "No SSH credentials available (set PROXMOX_SSH_PASSWORD or log in with your SSH password).",
     }
   }
   return { ok: true, command: innerCommand, creds }
@@ -754,7 +754,7 @@ export async function streamGoadCommand(
 
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
-    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
+    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a private key for PROXMOX_SSH_USER (./ssh) for workspace setup."; exit 1; fi`,
     ensureGoadVenv,
     buildAnsibleCpPreamble(),
     pythonEnvSetup,

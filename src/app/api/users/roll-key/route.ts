@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
     }
   } else {
     bashrcError =
-      "SSH not configured (LUDUS_SSH_HOST and root SSH password or private key required) — bashrc not updated"
+      "SSH not configured (LUDUS_SSH_HOST and a host SSH password or private key for PROXMOX_SSH_USER required) — bashrc not updated"
   }
 
   logLuxRouteAction(request, adminSession, { detail: `userId=${userId} bashrcUpdated=${bashrcUpdated}` })

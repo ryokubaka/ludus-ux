@@ -138,9 +138,9 @@ async function addTemplate(
     const msg = logAndSafeError("templates/add", err, "Template add failed")
     if (/all configured authentication methods failed/i.test(msg) || /authentication/i.test(msg)) {
       throw new Error(
-        "Root SSH authentication failed. To add templates, configure root SSH access: " +
-        "set PROXMOX_SSH_PASSWORD (or mount a root private key: ./ssh → /app/ssh, PROXMOX_SSH_KEY_PATH) " +
-        "in your .env or Settings → SSH."
+        "Host SSH authentication failed. To add templates, configure host SSH: " +
+        "set PROXMOX_SSH_PASSWORD (or mount a private key for PROXMOX_SSH_USER: ./ssh → /app/ssh, PROXMOX_SSH_KEY_PATH) " +
+        "in your .env or Settings → SSH. The account can be root, or another user that can run sudo -n /usr/local/sbin/lux-host."
       )
     }
     throw err

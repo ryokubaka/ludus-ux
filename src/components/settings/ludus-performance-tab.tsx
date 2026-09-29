@@ -121,7 +121,7 @@ export function LudusPerformanceTab() {
       <Alert>
         <Activity className="h-4 w-4" />
         <AlertDescription className="text-xs">
-          Samples Proxmox every {POLL_MS / 1000}s via <code className="text-primary">pvesh</code> over root SSH. Same credentials as
+          Samples Proxmox every {POLL_MS / 1000}s via <code className="text-primary">pvesh</code> over host SSH. Same credentials as
           SSH &amp; GOAD. CPU and memory come from <code className="text-primary">/cluster/resources</code> (pvestatd); load averages from{" "}
           <code className="text-primary">/nodes/&lt;node&gt;/status</code>.
         </AlertDescription>

@@ -223,10 +223,10 @@ export async function POST(request: NextRequest) {
       if (isConn) {
         if (adminBase.includes("127.0.0.1") || adminBase.includes("localhost")) {
           adminApi.hint =
-            "This URL points at the container itself. It only works when the admin SSH tunnel is up: root SSH must succeed at container start (see Root SSH test above). Restart the container after fixing SSH, or set LUDUS_ADMIN_URL to a URL the container can reach (e.g. https://<ludus-ip>:8081 if bound on all interfaces)."
+            "This URL points at the container itself. It only works when the admin SSH tunnel is up: host SSH must succeed at container start (see Test host SSH & admin API above). Restart the container after fixing SSH, or set LUDUS_ADMIN_URL to a URL the container can reach (e.g. https://<ludus-ip>:8081 if bound on all interfaces)."
         } else {
           adminApi.hint =
-            "Check firewall, TLS, and that Ludus admin API listens on this host:port. If 8081 is loopback-only on the server, use the tunnel (127.0.0.1:18081) with working root SSH."
+            "Check firewall, TLS, and that Ludus admin API listens on this host:port. If 8081 is loopback-only on the server, use the tunnel (127.0.0.1:18081) with working host SSH."
         }
       }
     }

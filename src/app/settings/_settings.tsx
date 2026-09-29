@@ -1135,7 +1135,7 @@ function SettingsContent() {
                 <p className="text-xs text-muted-foreground">
                   Used for privileged admin operations: template copies under /opt/ludus, pvesh over SSH, user password changes, and API key updates.
                   <code className="text-primary">root</code> works outright. Another account works when it can run <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. The button below installs that helper and a sudoers rule for it alone. A normal login with neither is denied those writes.
-                  GOAD runs as each user&apos;s own SSH session — root creds here are not used for normal GOAD.
+                  GOAD runs as each user&apos;s own SSH session — these host credentials are not used for normal GOAD.
                 </p>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="space-y-1.5">

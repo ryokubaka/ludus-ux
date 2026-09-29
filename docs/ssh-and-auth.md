@@ -26,7 +26,7 @@ If noVNC fails with `Proxmox login failed (HTTP 401)`:
 - Confirm Ludus has the expected `proxmoxUsername` for that user.
 - Confirm `LUDUS_SSH_HOST` points at the Proxmox node or cluster endpoint serving port 8006.
 - If an admin is using LUX impersonation, the console still uses the admin's own PAM credentials, not the impersonated user's password. That admin must have Proxmox permission to access the target VM.
-- Root SSH key auth can be fully working while noVNC fails, because Proxmox's HTTP ticket endpoint does not accept SSH keys.
+- Host SSH key auth can be fully working while noVNC fails, because Proxmox's HTTP ticket endpoint does not accept SSH keys.
 
 ## Admin API URL (`LUDUS_ADMIN_URL`)
 

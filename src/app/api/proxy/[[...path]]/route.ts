@@ -174,7 +174,7 @@ async function handler(
       const isConnectionError = result.status === 0
       const errorMessage =
         useAdmin && isConnectionError
-          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
+          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix host SSH so the optional tunnel to 127.0.0.1:18081 can work.`
           : result.error
       if (MUTATING_METHODS.has(request.method)) {
         const username = effectiveUsernameFromRequest(request, session)

@@ -37,6 +37,8 @@ tags:
     description: Application liveness check
   - name: Settings
     description: Runtime configuration management
+  - name: Releases
+    description: In-app LUX release list and version switch
   - name: Logo
     description: Custom logo upload and retrieval
   - name: Logs
@@ -921,6 +923,232 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /api/settings/install-lux-host:
+    post:
+      tags: [Settings]
+      summary: Install the scoped lux-host sudo rule
+      description: |
+        Writes `/usr/local/sbin/lux-host` and a sudoers rule for that helper only.
+        `PROXMOX_SSH_USER` does not have to be root. A non-root account is valid when
+        it can run `sudo -n /usr/local/sbin/lux-host`. If that account is not in
+        sudoers, `rootPassword` is used once to SSH as root and is not saved.
+        Admin required.
+      operationId: installLuxHost
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sshHost:
+                  type: string
+                sshPort:
+                  type: integer
+                proxmoxSshUser:
+                  type: string
+                proxmoxSshPassword:
+                  type: string
+                  format: password
+                rootPassword:
+                  type: string
+                  format: password
+                  description: Used once to SSH as root. Not stored.
+      responses:
+        '200':
+          description: The SSH account can run the helper without a password.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+                required: [ok, message]
+        '400':
+          description: The SSH user is invalid, a password contains a newline, or the account cannot install the helper.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: The helper was written but verification did not return uid 0, or the install command failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # --------------------------------------------------------------------------
+  # Releases
+  # --------------------------------------------------------------------------
+  /api/lux/releases:
+    get:
+      tags: [Releases]
+      summary: List LUX GitHub releases
+      description: |
+        Compares the running version with GitHub releases. Any signed-in session
+        may call this. `logTail` is the upgrade log for admins and an empty string
+        otherwise.
+      operationId: listLuxReleases
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Release snapshot for Settings → About.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:
+                    type: string
+                    example: "1.3.3"
+                  latestStable:
+                    type: string
+                    nullable: true
+                  updateAvailable:
+                    type: boolean
+                  releases:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tag:
+                          type: string
+                          example: v1.3.3
+                        name:
+                          type: string
+                        publishedAt:
+                          type: string
+                        htmlUrl:
+                          type: string
+                        notesExcerpt:
+                          type: string
+                        prerelease:
+                          type: boolean
+                        relation:
+                          type: string
+                          enum: [upgrade, current, downgrade]
+                        losesVersionManagement:
+                          type: boolean
+                      required: [tag, name, publishedAt, htmlUrl, notesExcerpt, prerelease, relation, losesVersionManagement]
+                  error:
+                    type: string
+                  logTail:
+                    type: string
+                required: [current, latestStable, updateAvailable, releases, logTail]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/lux/releases/host:
+    get:
+      tags: [Releases]
+      summary: Probe whether this install can switch versions
+      description: |
+        Admin only. Reports whether the Docker socket or SSH fallback can run
+        `scripts/upgrade.sh` in the LUX clone. The SSH account does not have to be root.
+      operationId: probeLuxReleaseHost
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Host capability for an in-app upgrade or downgrade.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  canSwitch:
+                    type: boolean
+                  repoPath:
+                    type: string
+                    nullable: true
+                  dirty:
+                    type: boolean
+                  checkout:
+                    type: string
+                    nullable: true
+                  reason:
+                    type: string
+                    nullable: true
+                  logTail:
+                    type: string
+                required: [canSwitch, repoPath, dirty, checkout, reason, logTail]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/lux/releases/switch:
+    post:
+      tags: [Releases]
+      summary: Start an in-app upgrade or downgrade
+      description: |
+        Admin only. Checks out the release tag and rebuilds the stack. A target
+        older than v1.3.3 requires `acknowledgeVersionManagementLoss`. Returns
+        as soon as the host script has started.
+      operationId: switchLuxRelease
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tag:
+                  type: string
+                  description: GitHub release tag (`vX.Y.Z`).
+                  example: v1.3.3
+                acknowledgeVersionManagementLoss:
+                  type: boolean
+                  description: Required when `tag` is older than v1.3.3.
+              required: [tag]
+      responses:
+        '202':
+          description: The host switch has started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                  tag:
+                    type: string
+                required: [started, tag]
+        '400':
+          description: Missing tag, unknown tag, or a downgrade below v1.3.3 without acknowledgement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: This host cannot switch versions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: The host command failed to start.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # --------------------------------------------------------------------------
   # Logo

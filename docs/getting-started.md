@@ -94,12 +94,29 @@ cp .env.example .env
 
    **If the key “is there” but LUX cannot read it:** use **Settings → Test host SSH** and inspect **SSH key probe**
 
-   Example: copy **`/root/.ssh/id_rsa`** from the Ludus server to the default mount directory:
+   Copy **`PROXMOX_SSH_USER`’s** private key into that directory. sshd must trust the matching public key in **that account’s** `authorized_keys` ([SSH and authentication](ssh-and-auth.md)).
+
+   - **`PROXMOX_SSH_USER` is root:** private key **`/root/.ssh/id_rsa`**, `authorized_keys` **`/root/.ssh/authorized_keys`**.
+   - **Account is not root:** both files are in that user’s home. For user `ludus`, that is **`/home/ludus/.ssh/id_rsa`** and **`/home/ludus/.ssh/authorized_keys`**. Privileged host commands then need `sudo -n /usr/local/sbin/lux-host` (that scoped rule, not `NOPASSWD: ALL`).
+
+   Create the mount directory, copy **one** of those keys, and restrict the file:
 
 ```bash
 mkdir -p ssh
 chmod 755 ssh
+```
+
+   Root:
+
+```bash
 scp -P 22 root@<ludus-host>:/root/.ssh/id_rsa ssh/id_rsa
+chmod 600 ssh/id_rsa
+```
+
+   Not root (example user `ludus`):
+
+```bash
+scp -P 22 ludus@<ludus-host>:/home/ludus/.ssh/id_rsa ssh/id_rsa
 chmod 600 ssh/id_rsa
 ```
 

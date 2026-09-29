@@ -34,31 +34,36 @@ If noVNC fails with `Proxmox login failed (HTTP 401)`:
 - **Loopback-only 8081 on the Ludus box:** LUX can start an SSH tunnel and forward `127.0.0.1:18081` → the server’s `127.0.0.1:8081`. That requires working **host SSH** (`PROXMOX_SSH_USER`) at container startup. The tunnel itself does not need root. If you set `LUDUS_ADMIN_URL` to a **non-localhost** host name, LUX **does not** overwrite it with the tunnel URL.
 - **Settings → Admin API URL** is persisted in SQLite and overrides the value from the environment until you change it again.
 
-## Root private key copied from the Ludus server
+## Host private key for `PROXMOX_SSH_USER`
 
-Copying **`id_rsa` off the box** is only half of SSH key authentication:
+Copying that account’s private key off the Ludus server is only half of SSH key authentication:
 
-- **LUX (client)** needs the **private** key file (`id_rsa`).
-- **sshd on the Ludus server** needs the matching **public** key in **`/root/.ssh/authorized_keys`**.
+- **LUX (client)** needs the **private** key file (`id_rsa`), placed at `./ssh/id_rsa`.
+- **sshd on the Ludus server** needs the matching **public** key in **that account’s** `authorized_keys`.
 
-`/root/.ssh/id_rsa` on the server is often used for **outgoing** SSH (e.g. git) and its public half is **not** automatically trusted for **incoming** root logins. If that line is missing, you will see “All configured authentication methods failed” even though the key file is correct.
+| `PROXMOX_SSH_USER` | Private key on the server | `authorized_keys` |
+|---|---|---|
+| `root` | `/root/.ssh/id_rsa` | `/root/.ssh/authorized_keys` |
+| not root (example `ludus`) | `/home/ludus/.ssh/id_rsa` | `/home/ludus/.ssh/authorized_keys` |
 
-**One-time fix on the Ludus server (as root)** — append this keypair’s **public** line to `authorized_keys`:
+That private key is often used for **outgoing** SSH (for example git). Its public half is **not** automatically trusted for **incoming** logins as the same account. If that line is missing, you will see “All configured authentication methods failed” even though the key file is correct.
+
+**One-time fix on the Ludus server** — run as `PROXMOX_SSH_USER` and append this keypair’s **public** line. When the account is root, `$HOME` is `/root` and the file is `/root/.ssh/authorized_keys`. When it is not, `$HOME` is that user’s home (`/home/ludus/.ssh/authorized_keys` for user `ludus`):
 
 ```bash
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-if [ -f /root/.ssh/id_rsa.pub ]; then
-  cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+if [ -f "$HOME/.ssh/id_rsa.pub" ]; then
+  cat "$HOME/.ssh/id_rsa.pub" >> "$HOME/.ssh/authorized_keys"
 else
-  ssh-keygen -y -f /root/.ssh/id_rsa >> /root/.ssh/authorized_keys
+  ssh-keygen -y -f "$HOME/.ssh/id_rsa" >> "$HOME/.ssh/authorized_keys"
 fi
-chmod 600 /root/.ssh/authorized_keys
+chmod 600 "$HOME/.ssh/authorized_keys"
 ```
 
 Then restart LUX’s container and run **Settings → Test host SSH & admin API**.
 
-If `PROXMOX_SSH_USER` is not root, install that same public key in **that user’s** `~/.ssh/authorized_keys`.
+When the account is not root, privileged host commands need `sudo -n /usr/local/sbin/lux-host` (the scoped rule in the next section, not `NOPASSWD: ALL`).
 
 ## Non-root host SSH
 
@@ -78,7 +83,7 @@ It does **not** grant `NOPASSWD: ALL`. `sudo apt`, `sudo bash`, and other comman
 
 The templates live in `scripts/lux-host/`. To install by hand, replace `__LUX_SSH_USER__` in `sudoers.in`, check it with `visudo -cf`, and install both files as root (`lux-host` mode 755, sudoers mode 440).
 
-**Alternative (cleaner):** generate a **new** keypair only for LUX on your workstation (`ssh-keygen`), put the **`.pub`** line in `/root/.ssh/authorized_keys` on the server, and mount only that **private** key in `./ssh/id_rsa`.
+**Alternative (cleaner):** generate a **new** keypair only for LUX on your workstation (`ssh-keygen`), append the **`.pub`** line to that account’s `authorized_keys` (`/root/.ssh/authorized_keys` when `PROXMOX_SSH_USER` is root, or `/home/<user>/.ssh/authorized_keys` when it is not), and mount only that **private** key in `./ssh/id_rsa`.
 
 ## Other SSH key notes
 

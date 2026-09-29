@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
       rootSsh.detail = msg
       if (/All configured authentication methods failed/i.test(msg)) {
         rootSsh.detail +=
-          " Common causes: wrong key file, wrong PROXMOX_SSH_USER, host/port unreachable from the container, or — if this private key was copied from the server's /root/.ssh/id_rsa — the matching public key is not in /root/.ssh/authorized_keys on the Ludus host (see docs/ssh-and-auth.md). CRLF in the key is normalized by LUX; container shows 777 on Windows mounts — entrypoint chmod 600s the key at startup."
+          " Common causes: wrong key file, wrong PROXMOX_SSH_USER, host/port unreachable from the container, or the matching public key is missing from that account's authorized_keys (/root/.ssh/authorized_keys when PROXMOX_SSH_USER is root, otherwise that user's home, for example /home/<user>/.ssh/authorized_keys; see docs/ssh-and-auth.md). CRLF in the key is normalized by LUX; container shows 777 on Windows mounts — entrypoint chmod 600s the key at startup."
       }
     }
   }

@@ -6,7 +6,20 @@ import { LUX_HOST_SUDO_BIN } from "@/lib/root-ssh-preflight"
 /** Same shape quickstart accepts for PROXMOX_SSH_USER. */
 const LINUX_USER = /^[a-z_][a-z0-9_-]{0,31}$/
 
-export type LuxHostInstallMode = "root" | "sudo-n" | "sudo-s"
+export type LuxHostInstallMode = "root" | "helper" | "sudo-n" | "sudo-s"
+
+export function selectLuxHostInstallMode(input: {
+  uid: number | null
+  sudoAll: boolean
+  sudoHelper: boolean
+  hasUserPassword: boolean
+}): LuxHostInstallMode | null {
+  if (input.uid === 0) return "root"
+  if (input.sudoHelper) return "helper"
+  if (input.sudoAll) return "sudo-n"
+  if (input.hasUserPassword) return "sudo-s"
+  return null
+}
 
 export function luxHostSudoUsernameError(user: string): string | null {
   const name = user.trim()
@@ -43,13 +56,13 @@ export function buildLuxHostInstallShell(
   ].join("; ")
   const scriptB64 = Buffer.from(script).toString("base64")
   const write = `printf '%s' ${shellSingleQuote(scriptB64)} | base64 -d > /tmp/lux-host-install.sh`
-  const run =
-    mode === "root"
-      ? "bash /tmp/lux-host-install.sh"
-      : mode === "sudo-n"
-        ? "sudo -n bash /tmp/lux-host-install.sh"
-        : "sudo -S -p '' bash /tmp/lux-host-install.sh"
-  const wrapper = `${write} && ${run}; status=$?; rm -f /tmp/lux-host-install.sh /tmp/lux-host-install.wrap; exit $status`
+  const run: Record<LuxHostInstallMode, string> = {
+    root: "bash /tmp/lux-host-install.sh",
+    helper: `sudo -n ${LUX_HOST_SUDO_BIN} ${shellSingleQuote("bash /tmp/lux-host-install.sh")}`,
+    "sudo-n": "sudo -n bash /tmp/lux-host-install.sh",
+    "sudo-s": "sudo -S -p '' bash /tmp/lux-host-install.sh",
+  }
+  const wrapper = `${write} && ${run[mode]}; status=$?; rm -f /tmp/lux-host-install.sh /tmp/lux-host-install.wrap; exit $status`
   const wrapperB64 = Buffer.from(wrapper).toString("base64")
   return `printf '%s' ${shellSingleQuote(wrapperB64)} | base64 -d > /tmp/lux-host-install.wrap && bash /tmp/lux-host-install.wrap`
 }

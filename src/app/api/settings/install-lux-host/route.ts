@@ -10,7 +10,9 @@ import {
   loadLuxHostInstallPayload,
   luxHostSudoUsernameError,
   redactSecret,
+  selectLuxHostInstallMode,
 } from "@/lib/lux-host-install"
+import { buildLuxHostAuthProbeCommand, parseRootSshProbe } from "@/lib/root-ssh-preflight"
 
 type Body = Partial<{
   sshHost: string
@@ -79,14 +81,15 @@ export async function POST(request: NextRequest) {
     if (rootPassword) {
       await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"))
     } else {
-      const who = await runAsUser("id -u; if sudo -n true >/dev/null 2>&1; then echo sudo_all=yes; else echo sudo_all=no; fi")
-      const uid = Number(/^(\d+)/.exec(who)?.[1])
-      const sudoAll = /sudo_all=yes/.test(who)
-      let mode: "root" | "sudo-n" | "sudo-s"
-      if (uid === 0) mode = "root"
-      else if (sudoAll) mode = "sudo-n"
-      else if (password) mode = "sudo-s"
-      else {
+      const who = await runAsUser(buildLuxHostAuthProbeCommand())
+      const auth = parseRootSshProbe(who)
+      const mode = selectLuxHostInstallMode({
+        uid: auth.uid,
+        sudoAll: auth.sudoAll === true,
+        sudoHelper: auth.sudo === true,
+        hasUserPassword: password.length > 0,
+      })
+      if (!mode) {
         return finishAdminResponse(
           NextResponse.json({
             error: "Enter this account's password, or the Ludus host root password. The root password is used once and is not saved.",

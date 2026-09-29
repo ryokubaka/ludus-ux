@@ -600,6 +600,13 @@ EOS
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
     fi
+  elif lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host true"; then
+    local helper_cmd
+    helper_cmd="bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
+    if ! lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host $(printf '%q' "$helper_cmd")"; then
+      echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
+      return 1
+    fi
   elif lux_ssh_as_target "sudo -n true"; then
     echo "This account already has passwordless sudo for all commands. Installing the helper anyway."
     if ! lux_ssh_as_target "sudo -n bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"; then

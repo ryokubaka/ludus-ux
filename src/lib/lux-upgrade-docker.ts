@@ -4,8 +4,11 @@ import http from "node:http"
 
 /** Host docker daemon socket. Compose mounts this into the app container. */
 export const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || "/var/run/docker.sock"
-const DOCKER_API = process.env.LUX_DOCKER_API_VERSION || "v1.44"
-const HOST_EXEC_IMAGE = process.env.LUX_HOST_EXEC_IMAGE || "node:24-alpine"
+
+export function dockerApiVersion(): string {
+  const raw = (process.env.LUX_DOCKER_API_VERSION || "v1.43").trim() || "v1.43"
+  return raw.startsWith("v") ? raw : `v${raw}`
+}
 
 export function dockerSocketAvailable(): boolean {
   try {
@@ -26,11 +29,11 @@ export type HostExecContainer = {
 
 /**
  * One-shot container that enters the host namespaces and runs `script`
- * with the host's own `git` and `docker`. The image only supplies `nsenter`.
+ * with the host's own `git` and `docker`. `image` must contain `/usr/bin/nsenter`.
  */
-export function buildHostExecContainer(script: string): HostExecContainer {
+export function buildHostExecContainer(script: string, image: string): HostExecContainer {
   return {
-    Image: HOST_EXEC_IMAGE,
+    Image: image,
     Tty: true,
     Entrypoint: ["/usr/bin/nsenter", "-t", "1", "-w/", "-m", "-u", "-i", "-n", "-p", "--", "/bin/sh", "-c"],
     Cmd: [script],
@@ -46,7 +49,7 @@ function dockerApi(method: string, apiPath: string, body?: unknown, timeoutMs = 
     const req = http.request(
       {
         socketPath: DOCKER_SOCKET_PATH,
-        path: `/${DOCKER_API}${apiPath}`,
+        path: `/${dockerApiVersion()}${apiPath}`,
         method,
         headers: payload
           ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }
@@ -104,11 +107,40 @@ function pullStreamError(body: string): string | null {
   return null
 }
 
-async function ensureHostExecImage(): Promise<void> {
-  const inspect = await dockerApi("GET", `/images/${encodeURIComponent(HOST_EXEC_IMAGE)}/json`)
+function containerNameCandidates(): string[] {
+  const names: string[] = []
+  try {
+    const host = fs.readFileSync("/etc/hostname", "utf8").trim()
+    if (host) names.push(host)
+  } catch {
+    // The process is not running in a container with a hostname file.
+  }
+  if (!names.includes("ludus-ux")) names.push("ludus-ux")
+  return names
+}
+
+async function resolveHostExecImage(): Promise<{ image: string; allowPull: boolean }> {
+  const configured = process.env.LUX_HOST_EXEC_IMAGE?.trim()
+  if (configured) return { image: configured, allowPull: true }
+  for (const name of containerNameCandidates()) {
+    const inspected = await dockerApi("GET", `/containers/${encodeURIComponent(name)}/json`)
+    if (inspected.status !== 200) continue
+    try {
+      const image = (JSON.parse(inspected.body) as { Image?: string }).Image?.trim()
+      if (image) return { image, allowPull: false }
+    } catch {
+      continue
+    }
+  }
+  throw new Error("Could not find this container's image, which must include /usr/bin/nsenter")
+}
+
+async function ensureHostExecImage(image: string, allowPull: boolean): Promise<void> {
+  const inspect = await dockerApi("GET", `/images/${encodeURIComponent(image)}/json`)
   if (inspect.status === 200) return
+  if (!allowPull) throw new Error("The host helper image is not on the local Docker daemon")
   if (inspect.status !== 404) throw dockerError(inspect.body, inspect.status)
-  const pulled = await dockerApi("POST", `/images/create?${imageCreateQuery(HOST_EXEC_IMAGE)}`, undefined, 300_000)
+  const pulled = await dockerApi("POST", `/images/create?${imageCreateQuery(image)}`, undefined, 300_000)
   if (pulled.status >= 300) throw dockerError(pulled.body, pulled.status)
   const streamError = pullStreamError(pulled.body)
   if (streamError) throw new Error(streamError)
@@ -119,8 +151,13 @@ export async function runHostScriptViaDocker(script: string): Promise<string> {
   const name = `lux-host-exec-${randomBytes(4).toString("hex")}`
   let id = ""
   try {
-    await ensureHostExecImage()
-    const created = await dockerApi("POST", `/containers/create?name=${encodeURIComponent(name)}`, buildHostExecContainer(script))
+    const hostExec = await resolveHostExecImage()
+    await ensureHostExecImage(hostExec.image, hostExec.allowPull)
+    const created = await dockerApi(
+      "POST",
+      `/containers/create?name=${encodeURIComponent(name)}`,
+      buildHostExecContainer(script, hostExec.image),
+    )
     if (created.status >= 300) throw dockerError(created.body, created.status)
     const parsed = JSON.parse(created.body) as { Id?: string }
     if (!parsed.Id) throw new Error("Docker did not return a container id")

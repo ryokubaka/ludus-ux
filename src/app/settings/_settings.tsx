@@ -1309,6 +1309,7 @@ function SettingsContent() {
                                     port: credentialTestResult.rootSsh.port,
                                     authAttempted: credentialTestResult.rootSsh.authAttempted,
                                     uid: credentialTestResult.rootSsh.uid,
+                                    sudo: credentialTestResult.rootSsh.sudo,
                                     sudoAll: credentialTestResult.rootSsh.sudoAll,
                                   }
                                 : null,

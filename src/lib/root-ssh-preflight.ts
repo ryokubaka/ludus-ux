@@ -57,6 +57,18 @@ export function asPrivilegedShell(username: string, command: string): string {
   return `sudo -n ${LUX_HOST_SUDO_BIN} ${shellSingleQuote(command)}`
 }
 
+function sudoProbeClauses(): string[] {
+  return [
+    `if sudo -n true >/dev/null 2>&1; then printf 'sudo_all=yes\\n'; else printf 'sudo_all=no\\n'; fi`,
+    `if sudo -n ${LUX_HOST_SUDO_BIN} true >/dev/null 2>&1; then printf 'sudo=yes\\n'; else printf 'sudo=no\\n'; fi`,
+  ]
+}
+
+/** uid plus passwordless sudo for every command and for the lux-host helper. */
+export function buildLuxHostAuthProbeCommand(): string {
+  return ["printf 'uid=%s\\n' \"$(id -u)\"", ...sudoProbeClauses()].join("; ")
+}
+
 /** One remote script. Exit 0 even when the packer dir is missing or not writable. */
 export function buildRootSshProbeCommand(packerDir: string): string {
   const dir = shellSingleQuote(packerDir)
@@ -64,8 +76,7 @@ export function buildRootSshProbeCommand(packerDir: string): string {
     "echo lux_root_ssh_ok",
     "printf 'uid=%s\\n' \"$(id -u)\"",
     "printf 'user=%s\\n' \"$(id -un)\"",
-    `if sudo -n true >/dev/null 2>&1; then printf 'sudo_all=yes\\n'; else printf 'sudo_all=no\\n'; fi`,
-    `if sudo -n ${LUX_HOST_SUDO_BIN} true >/dev/null 2>&1; then printf 'sudo=yes\\n'; else printf 'sudo=no\\n'; fi`,
+    ...sudoProbeClauses(),
     `if [ -d ${dir} ] && [ -w ${dir} ]; then printf 'packer_writable=yes\\n'; elif sudo -n ${LUX_HOST_SUDO_BIN} "[ -d ${dir} ] && [ -w ${dir} ]"; then printf 'packer_writable=yes\\n'; else printf 'packer_writable=no\\n'; fi`,
   ].join("; ")
 }
@@ -93,6 +104,7 @@ export type LuxHostInstallProbe = {
   port: number
   authAttempted: string
   uid?: number | null
+  sudo?: boolean | null
   sudoAll?: boolean | null
 }
 
@@ -115,6 +127,7 @@ export function canSubmitLuxHostInstall(input: {
   if (!same) return true
   if (probe.authAttempted === "none") return false
   if (probe.uid === 0) return true
+  if (probe.sudo === true) return true
   if (probe.authAttempted === "private_key" && probe.sudoAll === true) return true
   if (probe.sudoAll === false) return false
   return probe.authAttempted === "private_key"

@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest"
 
 const quickstart = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/quickstart.sh")
 
-function offerInstall(fakeRoot: boolean): { status: number; output: string; calls: string } {
+function offerInstall(fakeRoot: boolean, fakeHelper = false): { status: number; output: string; calls: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "lux-qs-"))
   const keys = path.join(dir, "keys")
   const bin = path.join(dir, "bin")
@@ -33,6 +33,18 @@ printf '%s\\n' "$cmd" >> ${JSON.stringify(callLog)}
 if [[ "$cmd" == "true" || "$cmd" == "sudo -n true" ]]; then
   exit 0
 fi
+case "$cmd" in
+  "sudo -n /usr/local/sbin/lux-host true")
+    if [[ "\${FAKE_HELPER}" == "1" ]]; then exit 0; fi
+    exit 1
+    ;;
+  "sudo -n /usr/local/sbin/lux-host "*)
+    if [[ "\${FAKE_HELPER}" == "1" ]]; then
+      if [[ "$cmd" == *"'id -u'"* ]]; then echo 0; fi
+      exit 0
+    fi
+    ;;
+esac
 if [[ "$cmd" == *"visudo"* || "$cmd" == *"bash -c"* ]]; then
   exit 1
 fi
@@ -70,6 +82,7 @@ printf '%s' "$status"
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         FAKE_ROOT: fakeRoot ? "1" : "0",
+        FAKE_HELPER: fakeHelper ? "1" : "0",
       },
     },
   )
@@ -94,5 +107,14 @@ describe("lux_offer_scoped_host_sudo", () => {
     expect(result.output).not.toContain("Installed.")
     expect(result.output).toContain("sudoers install failed")
     expect(result.calls).not.toContain("lux-host 'id -u'")
+  })
+
+  it("refreshes the helper through lux-host when sudo -n true is denied", () => {
+    const result = offerInstall(false, true)
+    expect(result.status).toBe(0)
+    expect(result.output).toContain("Installed.")
+    expect(result.calls).toContain("sudo -n /usr/local/sbin/lux-host ")
+    expect(result.calls).not.toContain("sudo -n bash")
+    expect(result.calls).not.toContain("sudo -n true")
   })
 })

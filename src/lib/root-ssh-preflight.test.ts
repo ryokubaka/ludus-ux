@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import {
   asPrivilegedShell,
   assessConfiguredSshUser,
+  buildLuxHostAuthProbeCommand,
   buildRootSshProbeCommand,
   canSubmitLuxHostInstall,
   parseRootSshProbe,
@@ -131,6 +132,26 @@ describe("buildRootSshProbeCommand", () => {
     expect(parsed.sudo).toBe(false)
   })
 
+  it("reports passwordless lux-host when sudo -n true is denied", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-ssh-probe-helper-"))
+    const bin = path.join(dir, "bin")
+    mkdirSync(bin)
+    writeFileSync(
+      path.join(bin, "sudo"),
+      "#!/bin/sh\nif [ \"$1\" = \"-n\" ] && [ \"$2\" = \"/usr/local/sbin/lux-host\" ]; then exit 0; fi\nexit 1\n",
+      { mode: 0o755 },
+    )
+    const result = spawnSync("bash", ["-c", buildLuxHostAuthProbeCommand()], {
+      encoding: "utf8",
+      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+    })
+    const parsed = parseRootSshProbe(result.stdout ?? "")
+    expect(result.status).toBe(0)
+    expect(parsed.sudo).toBe(true)
+    expect(parsed.sudoAll).toBe(false)
+    expect(parsed.uid).not.toBeNull()
+  })
+
   it("reports that passwordless sudo is unavailable when sudo -n true fails", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "lux-ssh-probe-deny-"))
     const bin = path.join(dir, "bin")
@@ -163,6 +184,24 @@ describe("canSubmitLuxHostInstall", () => {
         authAttempted: "private_key",
         uid: 1000,
         sudoAll: true,
+      },
+    })).toBe(true)
+  })
+
+  it("allows a blank password when key auth can already run the lux-host helper", () => {
+    expect(canSubmitLuxHostInstall({
+      installing: false,
+      sshPassword: "",
+      rootPassword: "",
+      account,
+      probe: {
+        user: "lux",
+        host: "ludus.local",
+        port: 22,
+        authAttempted: "private_key",
+        uid: 1000,
+        sudo: true,
+        sudoAll: false,
       },
     })).toBe(true)
   })

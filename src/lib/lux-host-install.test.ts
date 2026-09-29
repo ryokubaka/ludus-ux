@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
@@ -8,6 +8,7 @@ import {
   explainLuxHostInstallFailure,
   luxHostSudoUsernameError,
   renderLuxHostSudoers,
+  selectLuxHostInstallMode,
 } from "./lux-host-install"
 
 const TEMPLATE = "# comment\n__LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST\n"
@@ -38,6 +39,56 @@ describe("lux-host-install", () => {
     expect(script).toContain("mkdir -p /usr/local/sbin")
     expect(script).toContain("aGVscGVy")
     expect(script).toContain("pipefail; umask 077")
+  })
+
+  it("refreshes through the lux-host helper when that sudo is already passwordless", () => {
+    expect(selectLuxHostInstallMode({
+      uid: 1000,
+      sudoAll: false,
+      sudoHelper: true,
+      hasUserPassword: false,
+    })).toBe("helper")
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-host-install-helper-"))
+    const argsFile = path.join(dir, "args")
+    writeFileSync(
+      path.join(dir, "sudo"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argsFile)}\nif [ "$1" = "-n" ] && [ "$2" = "/usr/local/sbin/lux-host" ]; then exit 0; fi\nexit 19\n`,
+      { mode: 0o755 },
+    )
+    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "helper")
+    const result = spawnSync("bash", ["-c", cmd], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    })
+    expect(result.status).toBe(0)
+    expect(readFileSync(argsFile, "utf8").split("\n").filter(Boolean)).toEqual([
+      "-n",
+      "/usr/local/sbin/lux-host",
+      "bash /tmp/lux-host-install.sh",
+    ])
+    expect(existsSync("/tmp/lux-host-install.sh")).toBe(false)
+    expect(existsSync("/tmp/lux-host-install.wrap")).toBe(false)
+  })
+
+  it("still needs a password when neither root nor passwordless sudo is available", () => {
+    expect(selectLuxHostInstallMode({
+      uid: 1000,
+      sudoAll: false,
+      sudoHelper: false,
+      hasUserPassword: false,
+    })).toBeNull()
+    expect(selectLuxHostInstallMode({
+      uid: 1000,
+      sudoAll: false,
+      sudoHelper: false,
+      hasUserPassword: true,
+    })).toBe("sudo-s")
+    expect(selectLuxHostInstallMode({
+      uid: 0,
+      sudoAll: false,
+      sudoHelper: false,
+      hasUserPassword: false,
+    })).toBe("root")
   })
 
   it("returns the installer status when sudo fails and deletes the temp script", () => {

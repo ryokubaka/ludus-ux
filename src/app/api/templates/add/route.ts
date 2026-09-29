@@ -109,6 +109,13 @@ async function addTemplate(
 ): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
 
+  const dirName = packerDirFromTemplatePath(templatePath, name)
+  if (!dirName) {
+    throw new Error(
+      `Invalid template directory in "${templatePath}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.`,
+    )
+  }
+
   const safe = assertSafeTemplateRepoUrl(apiBase)
   if (!safe.ok) {
     throw new Error(safe.error)
@@ -146,7 +153,7 @@ async function addTemplate(
     throw err
   }
 
-  const destDir = `${templatesDir}/${packerDirFromTemplatePath(templatePath, name)}`
+  const destDir = `${templatesDir}/${dirName}`
 
   const subdirs = new Set<string>()
   subdirs.add(destDir)
@@ -156,7 +163,7 @@ async function addTemplate(
       subdirs.add(`${destDir}/${parts.join("/")}`)
     }
   }
-  const mkdirCmd = Array.from(subdirs).map((d) => `'${d}'`).join(" ")
+  const mkdirCmd = Array.from(subdirs).map((d) => shellSingleQuote(d)).join(" ")
   const mkdirResult = await sshExec(`mkdir -p ${mkdirCmd}`)
   if (mkdirResult.code !== 0) {
     throw new Error(`Failed to create template dirs under ${destDir}: ${mkdirResult.stderr}`)
@@ -167,12 +174,12 @@ async function addTemplate(
     try {
       await writeRemoteFileViaSsh(destPath, file.content)
     } catch (err) {
-      await sshExec(`rm -rf '${destDir}'`).catch(() => {})
+      await sshExec(`rm -rf ${shellSingleQuote(destDir)}`).catch(() => {})
       throw new Error(`Failed to write ${file.relativePath}: ${(err as Error).message}`)
     }
   }
 
-  await sshExec(`chown -R ludus:ludus '${destDir}' && chmod -R 755 '${destDir}'`).catch(() => {
+  await sshExec(`chown -R ludus:ludus ${shellSingleQuote(destDir)} && chmod -R 755 ${shellSingleQuote(destDir)}`).catch(() => {
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
@@ -250,6 +257,11 @@ async function tryInstallTemplatesViaSources(
 /** Sources install uses Packer `vm_name`; the git path stays the short folder. */
 async function resolveTemplateSpecName(spec: TemplateSpec): Promise<TemplateSpec> {
   const dir = packerDirFromTemplatePath(spec.path || "", spec.name)
+  if (!dir) {
+    throw new Error(
+      `Invalid template directory in "${spec.path}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.`,
+    )
+  }
   if (spec.name !== dir && /-template$/i.test(spec.name)) return spec
   const safe = assertSafeTemplateRepoUrl(spec.apiBase)
   if (!safe.ok) return spec
@@ -316,6 +328,12 @@ export async function POST(request: NextRequest) {
     if (!NAME_RE.test(spec.name ?? "")) {
       return NextResponse.json(
         { error: `Invalid template name "${spec.name}". Use only letters, numbers, hyphens, underscores, and dots.` },
+        { status: 400 },
+      )
+    }
+    if (!packerDirFromTemplatePath(spec.path ?? "", spec.name)) {
+      return NextResponse.json(
+        { error: `Invalid template path "${spec.path ?? ""}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.` },
         { status: 400 },
       )
     }

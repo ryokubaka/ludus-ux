@@ -23,6 +23,11 @@ export function isLudusTemplateName(name: string): boolean {
   return TEMPLATE_NAME_RE.test(name) && !name.includes("${")
 }
 
+/** One on-disk packer folder: template-name charset, and not `.` or `..`. */
+function isSafePackerDirName(name: string): boolean {
+  return name !== "." && name !== ".." && isLudusTemplateName(name)
+}
+
 /** Install/build id. Falls back to the git directory when the Packer file has no literal vm_name. */
 export function ludusTemplateInstallName(dirName: string, packerSource: string | null | undefined): string {
   const parsed = packerSource ? parsePackerVmName(packerSource) : null
@@ -32,9 +37,11 @@ export function ludusTemplateInstallName(dirName: string, packerSource: string |
 /**
  * On-disk folder under `packer/`. `templates/debian13` stays `debian13` even when
  * the install name is `debian-13-x64-server-template`.
+ * Null when that folder is not one safe directory name.
  */
-export function packerDirFromTemplatePath(templatePath: string, fallbackName: string): string {
+export function packerDirFromTemplatePath(templatePath: string, fallbackName: string): string | null {
   const base = templatePath.replace(/\/+$/, "").split("/").filter(Boolean).pop() ?? ""
-  if (!base || base === "templates") return fallbackName
-  return base
+  const candidate = !base || base === "templates" ? fallbackName : base
+  if (!isSafePackerDirName(candidate)) return null
+  return candidate
 }

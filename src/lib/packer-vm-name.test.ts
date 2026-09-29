@@ -53,4 +53,12 @@ describe("packerDirFromTemplatePath", () => {
   it("falls back when the path is only the templates root", () => {
     expect(packerDirFromTemplatePath("templates", "debian13")).toBe("debian13")
   })
+
+  it("rejects a segment that is not one safe directory name", () => {
+    expect(packerDirFromTemplatePath("templates/foo';id;'", "debian13")).toBeNull()
+    expect(packerDirFromTemplatePath("templates/..", "debian13")).toBeNull()
+    expect(packerDirFromTemplatePath("templates/.", "debian13")).toBeNull()
+    expect(packerDirFromTemplatePath("templates", "..")).toBeNull()
+    expect(packerDirFromTemplatePath("templates", ".")).toBeNull()
+  })
 })

@@ -45,3 +45,28 @@ export function packerDirFromTemplatePath(templatePath: string, fallbackName: st
   if (!isSafePackerDirName(candidate)) return null
   return candidate
 }
+
+/**
+ * File path relative to the packer directory. Uses the suffix after
+ * `templatePrefix` when `blobPath` starts with it; otherwise `blobName`.
+ * Null when that path is absolute or any segment is empty, `.`, or `..`.
+ */
+export function templateBlobRelativePath(
+  blobPath: string,
+  blobName: string,
+  templatePrefix: string,
+): string | null {
+  const relative = blobPath.startsWith(templatePrefix)
+    ? blobPath.slice(templatePrefix.length)
+    : blobName
+  if (!isSafeTemplateRelativePath(relative)) return null
+  return relative
+}
+
+function isSafeTemplateRelativePath(relativePath: string): boolean {
+  if (typeof relativePath !== "string" || relativePath.length === 0 || relativePath.startsWith("/")) {
+    return false
+  }
+  const segments = relativePath.split("/")
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+}

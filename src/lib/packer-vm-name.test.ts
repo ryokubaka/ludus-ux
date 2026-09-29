@@ -3,6 +3,7 @@ import {
   ludusTemplateInstallName,
   packerDirFromTemplatePath,
   parsePackerVmName,
+  templateBlobRelativePath,
 } from "./packer-vm-name"
 
 const DEBIAN13_HCL = `
@@ -60,5 +61,36 @@ describe("packerDirFromTemplatePath", () => {
     expect(packerDirFromTemplatePath("templates/.", "debian13")).toBeNull()
     expect(packerDirFromTemplatePath("templates", "..")).toBeNull()
     expect(packerDirFromTemplatePath("templates", ".")).toBeNull()
+  })
+})
+
+describe("templateBlobRelativePath", () => {
+  const prefix = "templates/debian13/"
+
+  it("keeps nested files under the template directory", () => {
+    expect(
+      templateBlobRelativePath("templates/debian13/http/preseed.cfg", "preseed.cfg", prefix),
+    ).toBe("http/preseed.cfg")
+  })
+
+  it("rejects a prefix slice that leaves the template directory", () => {
+    expect(
+      templateBlobRelativePath(
+        "templates/debian13/../../etc/cron.d/pwn",
+        "pwn",
+        prefix,
+      ),
+    ).toBeNull()
+    expect(templateBlobRelativePath("templates/debian13/./secret", "secret", prefix)).toBeNull()
+    expect(templateBlobRelativePath("templates/debian13/foo//bar", "bar", prefix)).toBeNull()
+    expect(templateBlobRelativePath("templates/debian13/", "debian13", prefix)).toBeNull()
+  })
+
+  it("rejects a blob name that leaves the template directory", () => {
+    expect(templateBlobRelativePath("elsewhere", "../../etc/cron.d/pwn", prefix)).toBeNull()
+    expect(templateBlobRelativePath("elsewhere", "/etc/cron.d/pwn", prefix)).toBeNull()
+    expect(templateBlobRelativePath("elsewhere", "..", prefix)).toBeNull()
+    expect(templateBlobRelativePath("elsewhere", ".", prefix)).toBeNull()
+    expect(templateBlobRelativePath("elsewhere", "", prefix)).toBeNull()
   })
 })

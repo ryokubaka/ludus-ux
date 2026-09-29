@@ -53,7 +53,7 @@ import {
   packerRootCandidates,
   shellSingleQuote,
 } from "@/lib/template-packer-paths"
-import { packerDirFromTemplatePath } from "@/lib/packer-vm-name"
+import { packerDirFromTemplatePath, templateBlobRelativePath } from "@/lib/packer-vm-name"
 import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { writeRemoteFileViaSsh } from "@/lib/template-remote-write"
 
@@ -131,9 +131,12 @@ async function addTemplate(
   const prefix = templatePath.endsWith("/") ? templatePath : templatePath + "/"
   const files: { relativePath: string; content: Buffer }[] = []
   for (const blob of blobs) {
-    const relativePath = blob.path.startsWith(prefix)
-      ? blob.path.slice(prefix.length)
-      : blob.name
+    const relativePath = templateBlobRelativePath(blob.path, blob.name, prefix)
+    if (!relativePath) {
+      throw new Error(
+        `Invalid template file path "${blob.path}". Each file must stay inside the template directory.`,
+      )
+    }
     const content = await fetchRepoRawFile(safeApiBase, blob.path, ref)
     files.push({ relativePath, content: Buffer.from(content) })
   }

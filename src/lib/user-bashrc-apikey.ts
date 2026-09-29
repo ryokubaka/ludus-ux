@@ -75,7 +75,7 @@ async function readKeyFromHome(
 }
 
 /**
- * Read LUDUS_API_KEY from a Ludus user's shell init files via root SSH.
+ * Read LUDUS_API_KEY from a Ludus user's shell init files via host SSH.
  * Mirrors roll-key SSH path: settings host + proxmox-ssh + getent home dir.
  */
 export async function readUserApiKeyFromBashrc(

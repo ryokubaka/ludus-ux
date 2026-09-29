@@ -12,13 +12,14 @@
  *  5. Write each file preserving its relative path within the template.
  *  6. Fix ownership/permissions to ludus:ludus 755.
  *  7. Register the template with `ludus templates add -d <destDir>` as the
- *     logged-in Ludus user (ROOT key / root SSH alone is not sufficient).
+ *     logged-in Ludus user (the Ludus ROOT API key or host SSH alone is not
+ *     sufficient).
  *
  * Request body:
  *   {
  *     templates: {
- *       name: string;          // directory name, used as the template sub-dir
- *       path: string;          // relative path in the repo, e.g. "templates/debian10"
+ *       name: string;          // Packer vm_name registered with Ludus
+ *       path: string;          // repo path; last segment is the on-disk directory (e.g. templates/debian13)
  *       apiBase: string;       // GitLab or GitHub repository API base URL
  *       ref:     string;       // git ref (branch/tag/sha)
  *     }[]

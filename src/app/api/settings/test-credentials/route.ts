@@ -1,7 +1,7 @@
 /**
  * POST /api/settings/test-credentials
  *
- * Admin-only diagnostic: verifies root SSH (same path as admin tunnel / pvesh)
+ * Admin-only diagnostic: verifies host SSH (same path as admin tunnel / pvesh)
  * and Ludus admin API reachability with the **session** API key (GET /user/all).
  *
  * Optional JSON body fields override persisted settings for this request only

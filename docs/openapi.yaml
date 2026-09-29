@@ -1194,7 +1194,7 @@ paths:
       tags: [Admin]
       summary: Fetch a user's Ludus API key
       description: |
-        Retrieves a user's `LUDUS_API_KEY` from their `~/.bashrc` over root
+        Retrieves a user's `LUDUS_API_KEY` from their `~/.bashrc` over host
         SSH. Used for admin impersonation flows. Admin required.
       operationId: adminFetchUserApikey
       security:
@@ -1713,10 +1713,10 @@ paths:
                     properties:
                       name:
                         type: string
-                        description: Template directory name.
+                        description: Packer `vm_name` registered with Ludus. The on-disk directory is the last segment of `path`.
                       path:
                         type: string
-                        description: Relative path in the repository (e.g. `templates/debian10`).
+                        description: Relative path in the repository (e.g. `templates/debian13`). The last segment is the on-disk directory.
                       apiBase:
                         type: string
                         format: uri

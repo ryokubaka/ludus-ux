@@ -411,7 +411,7 @@ export function AdminPageClient() {
   }
 
   /**
-   * Attempt to auto-read the user's LUDUS_API_KEY from their ~/.bashrc via root SSH.
+   * Attempt to auto-read the user's LUDUS_API_KEY from their ~/.bashrc via host SSH.
    * If found, immediately commit the impersonation and navigate to /goad.
    * If not found, fall back to the manual-entry dialog.
    */

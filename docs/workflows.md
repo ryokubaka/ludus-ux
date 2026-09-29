@@ -178,7 +178,7 @@ Labs from [ludus-source-meow](https://github.com/ryokubaka/ludus-source-meow) (`
 
 **On deploy** (`POST /range/deploy` via the Ludus proxy):
 
-1. LUX starts a background watcher if root Proxmox SSH is configured
+1. LUX starts a background watcher if host SSH is configured
 2. While the range is `DEPLOYING` / `WAITING`, LUX only sets `bridge-ageing 0` on `vmbr10XX` (hub mode — see [Ludus Packet Capture](https://docs.ludus.cloud/docs/networking)). It does **not** add `net1` yet — a second NIC on the same VLAN tag breaks Ludus MAC→interface lookup during configure-ip.
 3. `ludus_securityonion` attaches sniff `net1` during the roles phase (after IP/hostname). After deploy leaves `DEPLOYING`, LUX idempotently ensures `net1` + hub-mode if still missing.
 4. Optional audit marker: `/opt/ludus/lux/so-sniff/<rangeId>.json` on the Proxmox host

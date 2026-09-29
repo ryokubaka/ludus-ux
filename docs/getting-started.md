@@ -92,7 +92,7 @@ cp .env.example .env
      - Put the key in `./ssh` as a **normal file**, e.g. **`./ssh/id_rsa`**.
    - **`PROXMOX_SSH_KEY_PATH`** in `.env` is the path **inside** the container (default **`/app/ssh/id_rsa`**) and should match that filename.
 
-   **If the key “is there” but LUX cannot read it:** use **Settings → Test host SSH** and inspect **SSH key probe**
+   **If the key “is there” but LUX cannot read it:** use **Settings → Test host SSH & admin API** and inspect **SSH key probe**
 
    Copy **`PROXMOX_SSH_USER`’s** private key into that directory. sshd must trust the matching public key in **that account’s** `authorized_keys` ([SSH and authentication](ssh-and-auth.md)).
 

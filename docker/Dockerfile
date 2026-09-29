@@ -78,7 +78,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/docs ./docs
 
-# Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS
+# Patch OS packages (e.g. zlib CVEs), install openssl for runtime TLS, and
+# util-linux-misc so this image contains /usr/bin/nsenter for the in-app host helper.
 RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl util-linux-misc
 
 # Standalone Next runs with `node` only. The official Node image ships npm under

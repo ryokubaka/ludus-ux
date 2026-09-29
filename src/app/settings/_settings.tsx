@@ -1272,7 +1272,8 @@ function SettingsContent() {
                           <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs one host script as root.</li>
                           <li><span className="font-mono">/etc/sudoers.d/lux-host</span> lets {draft?.proxmoxSshUser?.trim() || "this user"} run that helper with <span className="font-mono">sudo -n</span>.</li>
                           <li>Other sudo commands still ask for a password.</li>
-                          <li>If this account can already sudo, the SSH password is used once. If sudo says the account is not in the sudoers file, enter the root password instead.</li>
+                          <li>Key auth that can already run <span className="font-mono">sudo -n /usr/local/sbin/lux-host</span> installs or refreshes the helper with no password.</li>
+                          <li>The root password is optional and is not saved. Enter it only when this account is not in sudoers.</li>
                         </ul>
                         <div className="space-y-1.5">
                           <Label htmlFor="lux-host-root-password">Root password</Label>
@@ -1282,11 +1283,11 @@ function SettingsContent() {
                             value={luxHostRootPassword}
                             onChange={(e) => setLuxHostRootPassword(e.target.value)}
                             className="font-mono text-xs"
-                            placeholder="Used once as root. Not saved."
+                            placeholder="Optional. Used once as root. Not saved."
                             autoComplete="off"
                           />
                           <p className="text-xs text-muted-foreground">
-                            Leave blank only when {draft?.proxmoxSshUser?.trim() || "this account"} can already run sudo. The root password is not written to Settings.
+                            Leave blank when {draft?.proxmoxSshUser?.trim() || "this account"} can already run sudo -n /usr/local/sbin/lux-host. The root password is not saved. Enter it only when this account is not in sudoers.
                           </p>
                         </div>
                         <DialogFooter>

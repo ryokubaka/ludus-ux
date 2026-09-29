@@ -1,11 +1,11 @@
 # SSH and authentication
 
-## Root vs session
+## Host SSH vs session
 
 | Mechanism | What it’s for |
 |---|---|
 | **`PROXMOX_SSH_USER` + password or key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side SSH for admin tunnel, `pvesh`, template install, `chown` under `/opt/ludus`, `chpasswd`, and API keys in `~/.bashrc`. The account is **root**, or another user allowed to run **`sudo -n /usr/local/sbin/lux-host`**. That helper is the only passwordless command. A normal Ludus login with neither is not enough. **Key auth is the recommended default** on hardened Proxmox hosts. |
-| **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when root password/key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
+| **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when that host password or key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
 
 Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
 
@@ -15,7 +15,7 @@ noVNC uses the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
 
 The browser console uses two separate Proxmox mechanisms:
 
-- **SPICE / VNC `.vv` downloads** use `pvesh` over server-side SSH. Root key auth works here.
+- **SPICE / VNC `.vv` downloads** use `pvesh` over server-side SSH. Host SSH key auth works here.
 - **In-browser noVNC** uses the Proxmox HTTP API on `https://<LUDUS_SSH_HOST>:8006`. LUX logs in as the current LUX user's Ludus `proxmoxUsername@pam` using the password captured during LUX login, then requests the VM's VNC proxy ticket.
 
 Green **Settings → Test host SSH & admin API** results do not prove noVNC will work. That test validates host SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.

@@ -50,7 +50,7 @@ services:
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - NODE_ENV=production
       - TZ=${TZ:-America/New_York}
-      # Host path of this git clone. Empty: discover via `docker inspect` on the Ludus host.
+      # Host path of this git clone on the Docker host. Empty: discover via `docker inspect`.
       - LUX_REPO_PATH=${LUX_REPO_PATH:-}
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh

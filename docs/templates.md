@@ -58,8 +58,8 @@ Logs are written under `/opt/ludus/users/<username>/packer/` on the Ludus host.
 
 The collapsible **Add Templates from Source** panel installs template directories that are not bundled with Ludus:
 
-1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom git repo you configure).
-2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files under the server templates directory, runs `ludus templates add -d …`, and registers the template in Ludus.
+1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom git repo you configure). The name in the list is the Packer `vm_name` when that file sets one. The git folder can differ: `templates/debian13` is registered as `debian-13-x64-server-template`, and the panel shows `folder debian13`.
+2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files in that git folder under the server templates directory (not under the `vm_name`), runs `ludus templates add -d …`, and registers the Packer `vm_name` in Ludus.
 
 After a successful add, the template appears as **Not Built** until you run **Build**.
 
@@ -243,7 +243,7 @@ When LUX has host SSH configured, it runs this repair after Ludus API ansible in
 **Common causes:**
 
 1. **List filter** — New templates are **Not Built**. Use the **all** or **added** filter on the Templates page (not **built** only).
-2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX installs under `/opt/ludus/packer/<name>/` and registers as the logged-in Ludus user (via `sudo` / `runuser` / `su` — hosts without `sudo` are supported).
+2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX copies the git folder to `/opt/ludus/packer/<folder>/` (`debian13` stays `debian13`) and registers the Packer `vm_name` with the logged-in Ludus user's API key. The add command does not switch Linux users. When `PROXMOX_SSH_USER` is not root, host SSH runs it through `sudo -n /usr/local/sbin/lux-host` ([SSH and authentication](ssh-and-auth.md)).
 
 3. **Stale UI** — Click the refresh icon on Templates after add; LUX invalidates cache on success but a long `staleTime` can lag briefly.
 

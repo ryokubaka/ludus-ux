@@ -67,7 +67,7 @@ LUX is a small Docker stack (Next.js app + nginx + SQLite). Heavy work (VMs, Pac
 | **Disk** | ~10 GiB free (image + `./data` + logs) | ~20 GiB free |
 | **Network** | Reach Ludus API (`:8080`, and `:8081` or tunnel) + SSH (`:22`) on the Ludus/Proxmox host | Same |
 
-**Root SSH (strongly recommended):** mount a root private key under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). LUX treats this as the privileged channel to the **same** Ludus/Proxmox box. Without it, API-only browsing still works; most automation does not.
+**Host SSH (strongly recommended):** mount a private key for `PROXMOX_SSH_USER` under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). That account is root, or another user who can run `sudo -n /usr/local/sbin/lux-host`. Without host SSH, API-only browsing still works; most automation does not.
 
 Details: [SSH and auth](docs/ssh-and-auth.md), [Getting started](docs/getting-started.md).
 

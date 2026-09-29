@@ -121,7 +121,7 @@ describe("lux-upgrade-host", () => {
     writeFileSync(path.join(bin, "systemd-run"), systemdRunStub(repo), { mode: 0o755 })
     chmodSync(path.join(bin, "docker"), 0o755)
     chmodSync(path.join(bin, "systemd-run"), 0o755)
-    const env = { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" }
+    const env = { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" as const }
     const logFile = path.join(data, "lux-upgrade.log")
 
     writeFileSync(

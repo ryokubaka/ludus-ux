@@ -78,7 +78,35 @@ export function gitUrlToRepoApiBase(gitUrl: string): string | null {
 export function githubRawFileUrl(apiBase: string, path: string, ref: string): string {
   const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)
   if (!match) throw new Error("Invalid GitHub apiBase")
-  return `https://raw.githubusercontent.com/${match[1]}/${ref}/${path}`
+  // Keep slashes in branch names (feat/securityonion-3.3.0). Callers that need a
+  // fresh tip should pass a commit SHA; branch URLs are cached by GitHub.
+  const encodedRef = ref.split("/").map(encodeURIComponent).join("/")
+  return `https://raw.githubusercontent.com/${match[1]}/${encodedRef}/${path}`
+}
+
+const refShaCache = new Map<string, { sha: string; at: number }>()
+const REF_SHA_TTL_MS = 15_000
+
+/**
+ * Resolve a branch/tag to a commit SHA before reading file contents.
+ * raw.githubusercontent.com caches branch-tip URLs (max-age=300), so a push
+ * can keep showing the previous meta/version.yml and blueprint.yml.
+ */
+export async function resolveGitHubCommitSha(apiBase: string, ref: string): Promise<string> {
+  if (/^[0-9a-f]{40}$/i.test(ref)) return ref
+  const key = `${apiBase}\n${ref}`
+  const hit = refShaCache.get(key)
+  if (hit && Date.now() - hit.at < REF_SHA_TTL_MS) return hit.sha
+  const res = await fetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
+    headers: FETCH_HEADERS,
+    ...NO_STORE,
+  })
+  if (!res.ok) throw new Error(`Could not resolve GitHub ref "${ref}" (HTTP ${res.status})`)
+  const body = (await res.json()) as { sha?: string }
+  const sha = body.sha?.trim()
+  if (!sha) throw new Error(`GitHub ref "${ref}" did not return a commit sha`)
+  refShaCache.set(key, { sha, at: Date.now() })
+  return sha
 }
 
 export async function listRepoDirectory(
@@ -160,9 +188,19 @@ export async function fetchAllRepoBlobs(
 }
 
 export async function fetchRepoRawFile(apiBase: string, path: string, ref: string): Promise<string> {
-  const url = isGitHubApiBase(apiBase)
-    ? githubRawFileUrl(apiBase, path, ref)
-    : `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
+  if (isGitHubApiBase(apiBase)) {
+    let sha = ref
+    try {
+      sha = await resolveGitHubCommitSha(apiBase, ref)
+    } catch {
+      sha = ref
+    }
+    const url = githubRawFileUrl(apiBase, path, sha)
+    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
+    return res.text()
+  }
+  const url = `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
   const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
   return res.text()

@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
     // Best-effort SSH write to the .goad_range_id file on the remote server.
     // This keeps the on-server record in sync for any tooling that reads it directly.
     try {
-      await writeGoadRangeId(instanceId, rangeId, undefined, runAsOwner)
+      await writeGoadRangeId(instanceId, rangeId, runAsOwner)
       results.push({ instanceId, ok: true })
     } catch (err) {
       // SSH write failed — local DB is already updated so the UI will still show

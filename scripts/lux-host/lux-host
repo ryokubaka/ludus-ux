@@ -46,8 +46,8 @@
 #   wizard-reap
 #   wizard-yaml <uuid>                (YAML on stdin)
 #   proxmox-token
-#   upgrade-probe [repo]
-#   upgrade-start <repo> <tag>
+#   upgrade-probe [repo]             (optional upgrade.sh body on stdin)
+#   upgrade-start <repo> <tag>       (optional upgrade.sh body on stdin)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
   exit 1
@@ -218,6 +218,41 @@ writable_by_sudo_user() {
   local path="$1"
   [[ -n "${SUDO_USER:-}" ]] || return 1
   sudo -u "$SUDO_USER" test -w "$path"
+}
+
+read_upgrade_script_body() {
+  UPGRADE_SCRIPT_BODY=""
+  local tmp
+  tmp="$(mktemp)"
+  chmod 700 "$tmp" || { rm -f "$tmp"; die "chmod"; }
+  chown root:root "$tmp" || { rm -f "$tmp"; die "chown"; }
+  head -c 524288 > "$tmp" || { rm -f "$tmp"; die "read"; }
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if IFS= read -r -n 1 _; then
+    rm -f "$tmp"
+    die "too large"
+  fi
+  head -n 1 "$tmp" | grep -Eq '^#!/(usr/bin/env bash|bin/bash)\r?$' || { rm -f "$tmp"; die "shebang"; }
+  bash -n "$tmp" || { rm -f "$tmp"; die "syntax"; }
+  UPGRADE_SCRIPT_BODY="$tmp"
+}
+
+select_upgrade_script() {
+  local repo="$1"
+  read_upgrade_script_body
+  if [[ -n "$UPGRADE_SCRIPT_BODY" ]]; then
+    UPGRADE_SCRIPT="$UPGRADE_SCRIPT_BODY"
+    UPGRADE_SCRIPT_IS_TEMP=1
+    return 0
+  fi
+  if writable_by_sudo_user "$repo/scripts/upgrade.sh"; then
+    die "upgrade script is writable by the caller"
+  fi
+  UPGRADE_SCRIPT="$repo/scripts/upgrade.sh"
+  UPGRADE_SCRIPT_IS_TEMP=0
 }
 
 op="${1:-}"
@@ -712,6 +747,10 @@ PY
     fi
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then printf 'dirty=yes\n'; else printf 'dirty=no\n'; fi
     printf 'checkout=%s\n' "$(git describe --tags --exact-match 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    select_upgrade_script "$repo"
+    if [[ "$UPGRADE_SCRIPT_IS_TEMP" -eq 1 ]]; then
+      rm -f "$UPGRADE_SCRIPT"
+    fi
     printf 'ok=yes\n'
     ;;
   upgrade-start)
@@ -719,9 +758,7 @@ PY
     is_abs_path "$1" || die "repo"
     [[ "$2" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "tag"
     [[ -f "$1/scripts/upgrade.sh" && -f "$1/docker-compose.yml" ]] || die "not a lux checkout"
-    if [[ -n "${SUDO_USER:-}" ]] && sudo -u "$SUDO_USER" test -w "$1/scripts/upgrade.sh"; then
-      die "upgrade script is writable by the caller"
-    fi
+    select_upgrade_script "$1"
     repo="$1"
     tag="$2"
     data=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' ludus-ux 2>/dev/null || true)
@@ -730,8 +767,13 @@ PY
     log="$data/lux-upgrade.log"
     printf '%s\n' "=== LUX switch to $tag started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >"$log"
     command -v systemd-run >/dev/null 2>&1 || die "systemd-run not found"
-    systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 \
-      /bin/bash -c "bash \"\$REPO/scripts/upgrade.sh\" \"\$TAG\" >> \"\$LOG\" 2>&1; echo \"LUX_UPGRADE_EXIT:\$?\" >> \"\$LOG\""
+    if [[ "$UPGRADE_SCRIPT_IS_TEMP" -eq 1 ]]; then
+      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 --setenv=LUX_UPGRADE_SCRIPT="$UPGRADE_SCRIPT" \
+        /bin/bash -c "bash \"\$LUX_UPGRADE_SCRIPT\" \"\$TAG\" >> \"\$LOG\" 2>&1; ec=\$?; rm -f \"\$LUX_UPGRADE_SCRIPT\"; echo \"LUX_UPGRADE_EXIT:\$ec\" >> \"\$LOG\""
+    else
+      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 \
+        /bin/bash -c "bash \"\$REPO/scripts/upgrade.sh\" \"\$TAG\" >> \"\$LOG\" 2>&1; echo \"LUX_UPGRADE_EXIT:\$?\" >> \"\$LOG\""
+    fi
     echo started
     ;;
   "")

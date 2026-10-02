@@ -1071,8 +1071,10 @@ paths:
       tags: [Releases]
       summary: Probe whether this install can switch versions
       description: |
-        Admin only. Reports whether the Docker socket or SSH fallback can run
-        `scripts/upgrade.sh` in the LUX clone. The SSH account does not have to be root.
+        Admin only. Reports whether the Docker socket or SSH fallback can switch
+        this install. The SSH fallback sends this build's `scripts/upgrade.sh` and
+        does not run a checkout copy the SSH user can write. The SSH account does
+        not have to be root.
       operationId: probeLuxReleaseHost
       security:
         - sessionCookie: []

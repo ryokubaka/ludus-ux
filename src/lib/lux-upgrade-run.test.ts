@@ -68,6 +68,7 @@ describe("lux upgrade host transport", () => {
       "ludus",
       "",
       ["upgrade-probe", "/opt/ludus-ux"],
+      { stdin: expect.stringContaining("#!/usr/bin/env bash") },
     )
     expect(runHostScriptViaDocker).not.toHaveBeenCalled()
 
@@ -79,6 +80,7 @@ describe("lux upgrade host transport", () => {
       "ludus",
       "",
       ["upgrade-start", "/opt/ludus-ux", "v1.4.1"],
+      { stdin: expect.stringContaining("#!/usr/bin/env bash") },
     )
   })
 

@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Write .goad_range_id tracking file on the server (best-effort)
     try {
-      await writeGoadRangeId(instanceId, rangeId, undefined, (command) =>
+      await writeGoadRangeId(instanceId, rangeId, (command) =>
         sshExecAsWorkspaceUser(
           request,
           { ...session, username: targetUserId, isAdmin: false },

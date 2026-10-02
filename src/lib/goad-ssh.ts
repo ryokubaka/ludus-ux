@@ -1236,20 +1236,23 @@ export async function streamGoadCommand(
 // as a plain string. GOAD is invoked with LUDUS_RANGE_ID=<rangeId> so it
 // targets the correct range for all Ludus API calls.
 
-/** Write the dedicated Ludus rangeID for a GOAD instance workspace. */
+/** Write the dedicated Ludus rangeID for a GOAD instance workspace as its owner. */
 export async function writeGoadRangeId(
   instanceId: string,
   rangeId: string,
-  creds?: SSHCreds,
-  exec?: (command: string) => Promise<{ stdout: string; stderr: string; code: number }>,
+  exec: (command: string) => Promise<{ stdout: string; stderr: string; code: number }>,
 ): Promise<void> {
   const goadPath = resolveGoadPath()
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
   const dir = `${goadPath}/workspace/${safeId}`
   const filePath = `${dir}/.goad_range_id`
   const safeRangeId = rangeId.replace(/'/g, "")
-  const run = exec ?? ((command: string) => sshExecAccountOrUser(command, creds))
-  await run(`mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`)
+  const { code, stderr } = await exec(
+    `mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`,
+  )
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `Failed to write .goad_range_id (exit ${code})`)
+  }
 }
 
 /** Read the dedicated Ludus rangeID for a GOAD instance. Returns null if not set. */

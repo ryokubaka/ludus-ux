@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { buildWorkspaceSshExecPlan, wrapImpersonatedGoadCommand } from "./goad-ssh"
+import { buildWorkspaceSshExecPlan, wrapImpersonatedGoadCommand, writeGoadRangeId } from "./goad-ssh"
 
 describe("buildWorkspaceSshExecPlan", () => {
   it("runs as the owner when they logged in with an SSH password", () => {
@@ -122,5 +122,27 @@ describe("wrapImpersonatedGoadCommand", () => {
     expect(wrapImpersonatedGoadCommand("echo ok", "root", "ludus")).toContain("exit 1")
     expect(wrapImpersonatedGoadCommand("echo ok", "root", "ludus")).not.toContain("run-as-user")
     expect(wrapImpersonatedGoadCommand("echo ok", "Bad User", "ludus")).not.toContain("sudo -H -u")
+  })
+})
+
+describe("writeGoadRangeId", () => {
+  it("fails when the owner command exits non-zero", async () => {
+    await expect(
+      writeGoadRangeId("inst-1", "alice-range", async () => ({
+        stdout: "",
+        stderr: "Permission denied",
+        code: 1,
+      })),
+    ).rejects.toThrow(/Permission denied/)
+  })
+
+  it("asks the owner command to create .goad_range_id", async () => {
+    let seen = ""
+    await writeGoadRangeId("inst-1", "alice-range", async (command) => {
+      seen = command
+      return { stdout: "", stderr: "", code: 0 }
+    })
+    expect(seen).toContain("/.goad_range_id")
+    expect(seen).toContain("alice-range")
   })
 })

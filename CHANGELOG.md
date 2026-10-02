@@ -20,10 +20,12 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Fix] **lux-host** — The Settings install writes an update key that `self-update` checks. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.
+- [Fix] **In-app releases** — The SSH fallback sends this build's `scripts/upgrade.sh` and runs that root-owned copy, so a checkout the SSH user owns can still switch. About stays off when that start would fail.
 
 **GOAD**
 
 - [Fix] **Firewall rules** — After Provide, the safety-net merge keeps existing range rules in their current order and evaluates new extension rules after them.
+- [Fix] **Range file** — Provide writes `.goad_range_id` as the workspace owner and leaves the instance unlinked when that write fails.
 
 ## [1.4.0] - 2026-10-02
 

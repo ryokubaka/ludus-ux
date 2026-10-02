@@ -121,15 +121,16 @@ export async function POST(request: NextRequest) {
   //       The previous guard (!impersonateAs) meant impersonated destroy/start/stop
   //       commands never received range scoping, causing them to target the wrong
   //       (default) range.
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
+
   let effectiveRangeId: string | undefined = bodyRangeId || undefined
   if (!effectiveRangeId && instanceId) {
     try {
-      const userCreds =
-        session.sshPassword && session.username
-          ? { username: session.username, password: session.sshPassword }
-          : undefined
-      const runAsOwner = (command: string) =>
-        sshExecAsWorkspaceUser(request, session, command, userCreds)
       effectiveRangeId = (await readGoadRangeId(instanceId, undefined, runAsOwner)) ?? undefined
     } catch {
       // SSH unavailable — proceed without range targeting
@@ -188,6 +189,7 @@ export async function POST(request: NextRequest) {
       apiKey,
       instanceId: typeof instanceId === "string" ? instanceId : undefined,
       beforeInstanceIds,
+      runAsOwner,
     })
   }
 

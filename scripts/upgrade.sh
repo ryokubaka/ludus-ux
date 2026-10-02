@@ -16,7 +16,11 @@
 
 set -e
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${LUX_UPGRADE_YES:-}" == "1" && -n "${REPO:-}" && -d "${REPO}" ]]; then
+  ROOT="$(cd "$REPO" && pwd)"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$ROOT"
 
 if [[ ! -f docker-compose.yml ]]; then

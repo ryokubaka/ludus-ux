@@ -139,7 +139,7 @@ export async function POST(
   }
 
   try {
-    await writeGoadRangeId(instanceId, rangeId, undefined, runAsOwner)
+    await writeGoadRangeId(instanceId, rangeId, runAsOwner)
   } catch (err) {
     return NextResponse.json(
       {

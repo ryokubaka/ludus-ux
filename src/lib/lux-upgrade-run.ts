@@ -1,3 +1,5 @@
+import fs from "node:fs"
+import path from "node:path"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { listKnownLuxReleaseTags } from "@/lib/lux-releases"
@@ -14,7 +16,18 @@ import {
 
 export type LuxHostStatus = LuxHostCapability & { logTail: string }
 
-async function sshLuxHost(args: readonly string[]): Promise<string> {
+const UPGRADE_SCRIPT_MAX = 524288
+
+function bundledUpgradeScript(): string {
+  const file = path.join(process.cwd(), "scripts", "upgrade.sh")
+  const text = fs.readFileSync(file, "utf8")
+  if (!text || Buffer.byteLength(text) > UPGRADE_SCRIPT_MAX) {
+    throw new Error("This LUX build has no scripts/upgrade.sh to send to the host.")
+  }
+  return text
+}
+
+async function sshLuxHost(args: readonly string[], stdin: string): Promise<string> {
   const settings = getSettings()
   const host = settings.sshHost.trim()
   if (!host) {
@@ -26,6 +39,7 @@ async function sshLuxHost(args: readonly string[]): Promise<string> {
     settings.proxmoxSshUser || "root",
     settings.proxmoxSshPassword || "",
     args,
+    { stdin },
   )
 }
 
@@ -35,11 +49,12 @@ async function sshLuxHost(args: readonly string[]): Promise<string> {
  * namespaces and starts scripts/upgrade.sh with systemd-run, so the switch
  * outlives that container. SSH is only the fallback when this process cannot
  * see the socket (LUX built without that mount). That fallback calls lux-host
- * upgrade-probe and upgrade-start. The socket path keeps the host shell.
+ * upgrade-probe and upgrade-start with this build's scripts/upgrade.sh on stdin.
+ * The socket path keeps the host shell.
  */
 async function execOnUpgradeHost(dockerScript: string, luxHostArgs: readonly string[]): Promise<string> {
   if (dockerSocketAvailable()) return runHostScriptViaDocker(dockerScript)
-  return sshLuxHost(luxHostArgs)
+  return sshLuxHost(luxHostArgs, bundledUpgradeScript())
 }
 
 export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {

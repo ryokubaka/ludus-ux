@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
@@ -20,7 +20,11 @@ function fakeRootBin(): string {
   return dir
 }
 
-function run(args: string[], stdin = ""): { status: number; stdout: string; stderr: string; log: string } {
+function run(
+  args: string[],
+  stdin = "",
+  extraEnv: Record<string, string> = {},
+): { status: number; stdout: string; stderr: string; log: string } {
   const bin = fakeRootBin()
   const log = path.join(bin, "stub.log")
   writeFileSync(log, "")
@@ -31,6 +35,7 @@ function run(args: string[], stdin = ""): { status: number; stdout: string; stde
       ...process.env,
       PATH: `${bin}:/usr/bin:/bin`,
       LUX_HOST_STUB_LOG: log,
+      ...extraEnv,
     },
   })
   let stubLog = ""
@@ -71,7 +76,7 @@ describe("lux-host allowlist", () => {
   })
 
   it("settings and credential probe", () => {
-    expect(run(["version"]).stdout.trim()).toBe("3")
+    expect(run(["version"]).stdout.trim()).toBe("4")
     expect(run(["true"]).status).toBe(0)
     expect(run(["id"]).stdout.trim()).toBe("0")
     denied(["writable-dir", "/etc"])
@@ -180,5 +185,40 @@ describe("lux-host allowlist", () => {
     denied(["upgrade-start", "/opt/ludus-ux", "v1.3.3;id"])
     denied(["upgrade-start", "relative", "v1.3.3"])
     denied(["upgrade-probe", "/tmp/not-lux;id"])
+  })
+
+  it("runs a stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "lux-upgrade-owned-"))
+    mkdirSync(path.join(repo, "scripts"), { recursive: true })
+    mkdirSync(path.join(repo, "data"), { recursive: true })
+    writeFileSync(path.join(repo, "docker-compose.yml"), "services: {}\n")
+    writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\necho checkout\n", { mode: 0o755 })
+    const body = "#!/usr/bin/env bash\necho from-stdin\n"
+    const env = { SUDO_USER: "ludus" }
+
+    const refusedProbe = run(["upgrade-probe", repo], "", env)
+    expect(refusedProbe.status).toBe(2)
+    expect(refusedProbe.stderr).toMatch(/writable by the caller/)
+    expect(refusedProbe.stdout).not.toMatch(/^ok=yes$/m)
+
+    const refusedStart = run(["upgrade-start", repo, "v1.4.0"], "", env)
+    expect(refusedStart.status).toBe(2)
+    expect(refusedStart.stderr).toMatch(/writable by the caller/)
+    expect(refusedStart.log).not.toContain("systemd-run")
+
+    const probed = run(["upgrade-probe", repo], body, env)
+    expect(probed.status, probed.stderr).toBe(0)
+    expect(probed.stdout).toMatch(/^ok=yes$/m)
+    expect(probed.log).not.toContain("systemd-run")
+
+    const started = run(["upgrade-start", repo, "v1.4.0"], body, env)
+    expect(started.status, started.stderr).toBe(0)
+    expect(started.stdout.trim()).toBe("started")
+    const script = /LUX_UPGRADE_SCRIPT=(\S+)/.exec(started.log)?.[1]
+    expect(script).toBeTruthy()
+    expect(script).not.toBe(path.join(repo, "scripts/upgrade.sh"))
+    expect(readFileSync(script!, "utf8")).toBe(body)
+    expect(started.log).not.toContain(path.join(repo, "scripts/upgrade.sh"))
+    expect(started.log).toContain('bash "$LUX_UPGRADE_SCRIPT"')
   })
 })

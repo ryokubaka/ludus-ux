@@ -62,8 +62,9 @@ export async function POST(request: NextRequest) {
       hostProcessActive: setRangeHostProcessActive(instanceId),
     })
   ) {
+    const stillWriting = "GOAD is still writing this workspace"
     return NextResponse.json(
-      { ok: false, errors: ["GOAD is still writing this workspace"] },
+      { ok: false, error: stillWriting, errors: [stillWriting] },
       { status: 409 },
     )
   }

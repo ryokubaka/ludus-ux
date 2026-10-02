@@ -104,10 +104,29 @@ afterEach(() => {
 })
 
 describe("POST /api/goad/instances/[instanceId]/init-range", () => {
-  it("does not chown a host-owned workspace while a fresh install has no instance id", async () => {
+  it("refuses an admin who has an SSH password while a fresh install has no instance id", async () => {
     gate.tasks = [{ status: "running", instanceId: "" }]
     const res = await call()
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toBe("GOAD is still writing this workspace")
+    expect(body.created).not.toBe(true)
+    expect(chownGoadInstance).not.toHaveBeenCalled()
+    expect(writeGoadRangeId).not.toHaveBeenCalled()
+  })
+
+  it("returns the range id for a key-only caller while that install is still running", async () => {
+    gate.tasks = [{ status: "running", instanceId: "" }]
+    vi.mocked(resolveSession).mockResolvedValue({
+      isAdmin: true,
+      username: "alice",
+      apiKey: "k",
+    } as never)
+    const res = await call()
     expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.rangeId).toBe("alice-inst-1")
+    expect(body.created).toBe(true)
     expect(chownGoadInstance).not.toHaveBeenCalled()
     expect(writeGoadRangeId).not.toHaveBeenCalled()
   })

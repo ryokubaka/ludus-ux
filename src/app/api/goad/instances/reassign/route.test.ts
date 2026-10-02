@@ -118,6 +118,7 @@ describe("POST /api/goad/instances/reassign", () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.ok).toBe(false)
+    expect(body.error).toBe("GOAD is still writing this workspace")
     expect(chownGoadInstance).not.toHaveBeenCalled()
     expect(setInstanceRangeLocal).not.toHaveBeenCalled()
   })
@@ -126,6 +127,7 @@ describe("POST /api/goad/instances/reassign", () => {
     gate.tasks = [{ status: "running", instanceId: "inst-1" }]
     const res = await POST(post({ instanceId: "inst-1", targetUserId: "alice", rangeId: "alice-range" }))
     expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe("GOAD is still writing this workspace")
     expect(chownGoadInstance).not.toHaveBeenCalled()
   })
 
@@ -134,6 +136,7 @@ describe("POST /api/goad/instances/reassign", () => {
     vi.mocked(listGoadInstances).mockRejectedValueOnce(new Error("ssh down"))
     const res = await POST(post({ instanceId: "inst-1", targetUserId: "alice", rangeId: "alice-range" }))
     expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe("GOAD is still writing this workspace")
     expect(chownGoadInstance).not.toHaveBeenCalled()
     expect(setInstanceRangeLocal).not.toHaveBeenCalled()
   })

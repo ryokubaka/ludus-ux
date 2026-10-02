@@ -163,6 +163,12 @@ export async function POST(
       hostProcessActive: runsAsHost || taskActive,
     })
   ) {
+    if (!runsAsHost) {
+      return NextResponse.json(
+        { error: "GOAD is still writing this workspace" },
+        { status: 409 },
+      )
+    }
     logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })
     return NextResponse.json({ rangeId, created: true })
   }

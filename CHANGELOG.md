@@ -17,6 +17,10 @@ Each bullet uses a single tag:
 
 ## Unreleased
 
+**Security**
+
+- [Security] **Next.js** 16.3.8 — [GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j) (next/og ImageResponse RCE). `brace-expansion` 5.0.12 — [GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr), [GHSA-qhr7-859c-m2p7](https://github.com/advisories/GHSA-qhr7-859c-m2p7), [GHSA-6j4f-fj2g-mc7p](https://github.com/advisories/GHSA-6j4f-fj2g-mc7p).
+
 **LUX**
 
 - [Fix] **lux-host** — The Settings install writes an update key that `self-update` and the SSH version switch check. Quickstart writes and stores the same key. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.

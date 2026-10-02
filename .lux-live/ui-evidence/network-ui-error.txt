@@ -1,3 +1,0 @@
-TimeoutError: locator.waitFor: Timeout 15000ms exceeded.
-Call log:
-  - waiting for locator('button:has(svg.lucide-trash-2)').first() to be visible

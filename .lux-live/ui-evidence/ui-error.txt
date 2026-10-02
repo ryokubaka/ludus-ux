@@ -1,3 +1,0 @@
-TimeoutError: locator.waitFor: Timeout 30000ms exceeded.
-Call log:
-  - waiting for getByText('v1.4.0').first() to be visible

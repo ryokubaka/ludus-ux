@@ -1,9 +1,0 @@
-----
---collect
---setenv=REPO=/tmp/lux-live-repo-01M3YXJB
---setenv=TAG=v1.3.2
---setenv=LOG=/tmp/lux-live-repo-01M3YXJB/data/lux-upgrade.log
---setenv=LUX_UPGRADE_YES=1
-/bin/bash
--c
-bash "$REPO/scripts/upgrade.sh" "$TAG" >> "$LOG" 2>&1; echo "LUX_UPGRADE_EXIT:$?" >> "$LOG"

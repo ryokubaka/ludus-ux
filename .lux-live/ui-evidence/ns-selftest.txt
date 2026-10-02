@@ -1,5 +1,0 @@
-{
-  "code": 0,
-  "stdout": "0\nroot\n2000\nalice\nwritable:0\n",
-  "stderr": ""
-}

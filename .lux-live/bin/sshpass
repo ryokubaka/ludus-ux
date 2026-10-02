@@ -1,0 +1,13 @@
+#!/bin/bash
+# Disposable sshpass -e for the sandbox. Reads SSHPASS and answers OpenSSH via SSH_ASKPASS.
+if [[ "${1:-}" == "-e" ]]; then
+  shift
+fi
+ask="$HOME/.lux-askpass"
+mkdir -p "$HOME"
+printf '%s\n' '#!/bin/sh' 'printf %s "$SSHPASS"' > "$ask"
+chmod 700 "$ask"
+export SSH_ASKPASS="$ask"
+export SSH_ASKPASS_REQUIRE=force
+export DISPLAY="${DISPLAY:-:0}"
+exec "$@"

@@ -1,0 +1,330 @@
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+printf 'uid=%s\n' "$(id -u)"; if sudo -n true >/dev/null 2>&1; then echo sudo_all=yes; else echo sudo_all=no; fi; if sudo -n /usr/local/sbin/lux-host true >/dev/null 2>&1; then echo sudo_helper=yes; else echo sudo_helper=no; fi
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+printf 'uid=%s\n' "$(id -u)"; if sudo -n true >/dev/null 2>&1; then echo sudo_all=yes; else echo sudo_all=no; fi; if sudo -n /usr/local/sbin/lux-host true >/dev/null 2>&1; then echo sudo_helper=yes; else echo sudo_helper=no; fi
+
+client error: Bad packet length
+
+client error: Trying to add data in unsupported state
+
+client error: Trying to add data in unsupported state
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/repo'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/repo'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-start'\'' '\''/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/repo'\'' '\''v1.3.2'\'''
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'inst1'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'run-as-user' 'alice'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'does-not-exist'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'debian-13-x64-server-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'debian-13-x64-server-template' 'debian-13-x64-server'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'sticky-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'sticky-template' 'sticky'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-start'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'' '\''v1.3.2'\'''
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'inst1'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'run-as-user' 'alice'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'does-not-exist'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'debian-13-x64-server-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'debian-13-x64-server-template' 'debian-13-x64-server'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'sticky-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'sticky-template' 'sticky'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-start'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'' '\''v1.3.2'\'''
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'inst1'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'run-as-user' 'alice'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'chown-goad' 'alice' '/opt/goad' 'does-not-exist'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'debian-13-x64-server-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'debian-13-x64-server-template' 'debian-13-x64-server'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'ludus-template-rm' 'sticky-template' 'adminkey1234567890'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'template-purge' 'sticky-template' 'sticky'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+echo 'CmltcG9ydCBvcywganNvbiwgcHdkLCBzeXMsIHN0YXQgYXMgc3RhdG1vZAoKaWYgbGVuKHN5cy5hcmd2KSA8IDI6CiAgICBzeXMuZXhpdCgxKQpnb2FkX3BhdGggPSBzeXMuYXJndlsxXQp3b3Jrc3BhY2UgID0gb3MucGF0aC5qb2luKGdvYWRfcGF0aCwgJ3dvcmtzcGFjZScpCgpyZXN1bHRzID0gW10KdHJ5OgogICAgZW50cmllcyA9IHNvcnRlZChvcy5saXN0ZGlyKHdvcmtzcGFjZSkpIGlmIG9zLnBhdGguaXNkaXIod29ya3NwYWNlKSBlbHNlIFtdCmV4Y2VwdCBFeGNlcHRpb246CiAgICBlbnRyaWVzID0gW10KCmZvci
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+echo 'CmltcG9ydCBvcywganNvbiwgcHdkLCBzeXMsIHN0YXQgYXMgc3RhdG1vZAoKaWYgbGVuKHN5cy5hcmd2KSA8IDI6CiAgICBzeXMuZXhpdCgxKQpnb2FkX3BhdGggPSBzeXMuYXJndlsxXQp3b3Jrc3BhY2UgID0gb3MucGF0aC5qb2luKGdvYWRfcGF0aCwgJ3dvcmtzcGFjZScpCgpyZXN1bHRzID0gW10KdHJ5OgogICAgZW50cmllcyA9IHNvcnRlZChvcy5saXN0ZGlyKHdvcmtzcGFjZSkpIGlmIG9zLnBhdGguaXNkaXIod29ya3NwYWNlKSBlbHNlIFtdCmV4Y2VwdCBFeGNlcHRpb246CiAgICBlbnRyaWVzID0gW10KCmZvci
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+echo 'CmltcG9ydCBvcywganNvbiwgcHdkLCBzeXMsIHN0YXQgYXMgc3RhdG1vZAoKaWYgbGVuKHN5cy5hcmd2KSA8IDI6CiAgICBzeXMuZXhpdCgxKQpnb2FkX3BhdGggPSBzeXMuYXJndlsxXQp3b3Jrc3BhY2UgID0gb3MucGF0aC5qb2luKGdvYWRfcGF0aCwgJ3dvcmtzcGFjZScpCgpyZXN1bHRzID0gW10KdHJ5OgogICAgZW50cmllcyA9IHNvcnRlZChvcy5saXN0ZGlyKHdvcmtzcGFjZSkpIGlmIG9zLnBhdGguaXNkaXIod29ya3NwYWNlKSBlbHNlIFtdCmV4Y2VwdCBFeGNlcHRpb246CiAgICBlbnRyaWVzID0gW10KCmZvci
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxadmin
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'revision'
+
+## testuser
+cat ~/.bashrc 2>/dev/null || true
+
+## luxuser
+sudo -n /usr/local/sbin/lux-host 'version'
+
+## luxuser
+bash -l -c 'sudo -n /usr/local/sbin/lux-host '\''upgrade-probe'\'' '\''/tmp/lux-live-repo-01M3YXJB'\'''
+
+## luxadmin
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCByZQoKZGVmIGNsZWFuX2Rlc2NyaXB0aW9uKHRleHQpOgogICAgIiIiUmV0dXJuIGZpcnN0IHN1YnN0YW50aXZlIHBsYWluLXRleHQgbGluZSBmcm9tIFJFQURNRSBjb250ZW50LiIiIgogICAgc2tpcCA9IHJlLmNvbXBpbGUocideKDx8IVxbfFxbfCN8XHwpJywgcmUuSSkKICAgIGZvciBsaW5lIGluIHRleHQuc3BsaXRsaW5lcygpOgogICAgICAgIGxpbmUgPSBsaW5lLnN0cmlwKCkubHN0cmlwKCctICcpLnN0cmlwKCkKICAgICAgICBpZiBsZW4obGluZSkgPCAxMDoKICAgICAgIC
+
+## luxadmin
+echo 'CmltcG9ydCBvcywganNvbiwgcHdkLCBzeXMsIHN0YXQgYXMgc3RhdG1vZAoKaWYgbGVuKHN5cy5hcmd2KSA8IDI6CiAgICBzeXMuZXhpdCgxKQpnb2FkX3BhdGggPSBzeXMuYXJndlsxXQp3b3Jrc3BhY2UgID0gb3MucGF0aC5qb2luKGdvYWRfcGF0aCwgJ3dvcmtzcGFjZScpCgpyZXN1bHRzID0gW10KdHJ5OgogICAgZW50cmllcyA9IHNvcnRlZChvcy5saXN0ZGlyKHdvcmtzcGFjZSkpIGlmIG9zLnBhdGguaXNkaXIod29ya3NwYWNlKSBlbHNlIFtdCmV4Y2VwdCBFeGNlcHRpb246CiAgICBlbnRyaWVzID0gW10KCmZvci
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW
+
+## luxuser
+echo 'CmltcG9ydCBqc29uLCBvcywgc3lzLCBiYXNlNjQKCmRlZiBfYihpKToKICAgIHJldHVybiBiYXNlNjQuYjY0ZGVjb2RlKHN5cy5hcmd2W2ldKS5kZWNvZGUoInV0Zi04IikKCmdvYWRfcGF0aCA9IF9iKDEpCmxhYl9uYW1lID0gX2IoMikKZXh0ZW5zaW9uc19qc29uID0gX2IoMykKcHJvdmlkZXJfbmFtZSA9IF9iKDQpIGlmIGxlbihzeXMuYXJndikgPiA0IGVsc2UgImx1ZHVzIgoKb3V0ID0geyJvayI6IEZhbHNlLCAieWFtbCI6ICIiLCAiZXJyb3IiOiAiIn0KCiMgaXBfcmFuZ2UgLyByYW5nZV9pZCBhcmUgc3VwcGxpZW

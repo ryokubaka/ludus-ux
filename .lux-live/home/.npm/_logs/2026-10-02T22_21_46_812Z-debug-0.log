@@ -1,0 +1,13 @@
+0 verbose cli /home/melchior/.local/share/node-v24.8.0-linux-x64/bin/node /home/melchior/.local/share/node-v24.8.0-linux-x64/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@11.6.0
+2 info using node@v24.8.0
+3 silly config load:file:/home/melchior/.local/share/node-v24.8.0-linux-x64/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.npmrc
+5 silly config load:file:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npmrc
+6 silly config load:file:/home/melchior/.local/share/node-v24.8.0-linux-x64/etc/npmrc
+7 verbose title npm exec next start -p 3456 -H 127.0.0.1
+8 verbose argv "exec" "--" "next" "start" "-p" "3456" "-H" "127.0.0.1"
+9 verbose logfile logs-max:10 dir:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npm/_logs/2026-10-02T22_21_46_812Z-
+10 verbose logfile /home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npm/_logs/2026-10-02T22_21_46_812Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly logfile done cleaning log files

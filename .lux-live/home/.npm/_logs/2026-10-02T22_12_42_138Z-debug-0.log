@@ -1,0 +1,18 @@
+0 verbose cli /home/melchior/.local/share/node-v24.8.0-linux-x64/bin/node /home/melchior/.local/bin/npm
+1 info using npm@11.6.0
+2 info using node@v24.8.0
+3 silly config load:file:/home/melchior/.local/share/node-v24.8.0-linux-x64/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.npmrc
+5 silly config load:file:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npmrc
+6 silly config load:file:/home/melchior/.local/share/node-v24.8.0-linux-x64/etc/npmrc
+7 verbose title npm run copy:monaco
+8 verbose argv "run" "copy:monaco"
+9 verbose logfile logs-max:10 dir:/home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npm/_logs/2026-10-02T22_12_42_138Z-
+10 verbose logfile /home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN/.lux-live/home/.npm/_logs/2026-10-02T22_12_42_138Z-debug-0.log
+11 silly logfile done cleaning log files
+12 verbose cwd /home/melchior/.no-mistakes/worktrees/a9d6eeb594f3/01M3YXJB2E15S8CHBWPKZY73YN
+13 verbose os Linux 7.0.0-34-generic
+14 verbose node v24.8.0
+15 verbose npm  v11.6.0
+16 verbose exit 0
+17 info ok

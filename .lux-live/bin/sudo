@@ -1,0 +1,29 @@
+#!/bin/bash
+# Disposable sudo for the live sandbox. Not the host sudo.
+set +e
+user=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|-H|-E|-S|-p)
+      if [[ "$1" == "-p" ]]; then shift 2; else shift; fi
+      ;;
+    -u)
+      user="$2"
+      shift 2
+      exec setpriv --reuid="$(id -u "$user")" --regid="$(id -g "$user")" --clear-groups -- "$@"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [[ "$1" == "/usr/local/sbin/lux-host" || "$1" == "lux-host" ]]; then
+  shift
+  export SUDO_USER="${SUDO_USER:-luxuser}"
+  exec bash "$LUX_HOST_SCRIPT" "$@"
+fi
+if [[ "$1" == "bash" || "$1" == "/bin/bash" ]]; then
+  exec "$@"
+fi
+echo "sandbox sudo: refused: $*" >&2
+exit 1

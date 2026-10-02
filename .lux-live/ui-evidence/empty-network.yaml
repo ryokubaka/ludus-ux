@@ -1,0 +1,7 @@
+ludus:
+  - vm_name: "{{ range_id }}-DC"
+    hostname: dc
+    vlan: 10
+network:
+  rules: []
+  inter_vlan_default: DROP

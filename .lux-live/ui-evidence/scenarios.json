@@ -1,0 +1,58 @@
+[
+  {
+    "name": "An admin signs in and the app reports that account as an admin",
+    "result": "pass",
+    "live": true,
+    "evidence": "login-admin.json",
+    "reason": ""
+  },
+  {
+    "name": "A normal user signs in and the app reports that account as not an admin",
+    "result": "pass",
+    "live": true,
+    "evidence": "login-user.json",
+    "reason": ""
+  },
+  {
+    "name": "Settings About shows v1.4.0 on the running page",
+    "result": "pass",
+    "live": true,
+    "evidence": "about-version.png",
+    "reason": ""
+  },
+  {
+    "name": "The About release notes show separate LUX and GOAD sections for 1.4.0",
+    "result": "pass",
+    "live": true,
+    "evidence": "about-changelog.png",
+    "reason": ""
+  },
+  {
+    "name": "The downgrade dialog stays blocked until the operator acknowledges losing in-app version management",
+    "result": "pass",
+    "live": true,
+    "evidence": "downgrade-ack-required.png",
+    "reason": ""
+  },
+  {
+    "name": "The Network Rules step lists the existing range rule before new rules and does not duplicate a shared name",
+    "result": "pass",
+    "live": true,
+    "evidence": "network-rules-editor.png",
+    "reason": "dc=972 fleet=1030 extra=1095 once=true"
+  },
+  {
+    "name": "The generated config keeps inter_vlan_default and orders rules so existing rules evaluate before new ones",
+    "result": "pass",
+    "live": true,
+    "evidence": "generated-network.yaml",
+    "reason": "allow-443 | Allow targets to SO Fleet | Allow clients to DC"
+  },
+  {
+    "name": "Clearing the Network Rules editor writes rules: [] and keeps the existing range inter_vlan_default",
+    "result": "pass",
+    "live": true,
+    "evidence": "empty-network.yaml",
+    "reason": "ludus:\n  - vm_name: \"{{ range_id }}-DC\"\n    hostname: dc\n    vlan: 10\nnetwork:\n  rules: []\n  inter_vlan_default: DROP\n"
+  }
+]

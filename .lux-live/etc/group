@@ -1,0 +1,5 @@
+root:x:0:
+luxuser:x:1000:
+alice:x:2000:
+testuser:x:2001:
+luxadmin:x:2002:

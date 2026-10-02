@@ -1,0 +1,4 @@
+{
+  "status": 200,
+  "body": "{\"success\":true,\"isAdmin\":false,\"username\":\"testuser\"}"
+}

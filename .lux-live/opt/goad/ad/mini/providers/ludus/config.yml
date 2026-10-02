@@ -1,0 +1,4 @@
+ludus:
+  - vm_name: "{{ range_id }}-DC"
+    hostname: dc
+    vlan: 10

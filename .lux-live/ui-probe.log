@@ -1,0 +1,13 @@
+▲ Next.js 16.3.4 (webpack)
+- Local:         http://127.0.0.1:3456
+- Network:       http://127.0.0.1:3456
+✓ Ready in 256ms
+✓ Running next.config.js took 16ms
+[source-auto-sync] enabled interval=300s
+- Cache Components enabled
+
+ GET /api/health 200 in 937ms (next.js: 728ms, proxy.ts: 130ms, application-code: 79ms)
+[lux-host] SSH connection error: connect ECONNREFUSED 127.0.0.1:9
+○ Compiling /login ...
+ GET /login 200 in 4.5s (next.js: 4.2s, proxy.ts: 3ms, application-code: 249ms)
+[?25h

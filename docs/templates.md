@@ -73,6 +73,8 @@ The trash icon removes a template via LUX `DELETE /api/templates/delete`:
 
 Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). On the install trees, cleanup also removes a directory whose Packer `vm_name` equals that list name, such as `debian13` for `debian-13-x64-server-template`. It does not remove a source git checkout by `vm_name`. Delete fails when an install-tree directory is still present. A template that remains only in the source checkout does not fail the delete. Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
 
+Turning a shared source off (Sources) runs that same CLI remove and disk cleanup for each template installed from the source. A leftover install directory is a warning on the toast. The source checkout staying on disk does not fail unpublish.
+
 ---
 
 ## Proxmox permissions template builds need

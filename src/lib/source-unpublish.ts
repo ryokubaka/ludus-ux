@@ -9,7 +9,11 @@ import {
   listSourceTemplates,
 } from "@/lib/ludus-source-client"
 import { sshExec } from "@/lib/goad-ssh"
-import { buildLudusTemplateRmCliCmd } from "@/lib/template-packer-paths"
+import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import {
+  buildLudusTemplateDeleteCmd,
+  buildLudusTemplateRmCliCmd,
+} from "@/lib/template-packer-paths"
 
 /**
  * Remove blueprints, templates, roles, and collections installed from a source.
@@ -43,7 +47,7 @@ export async function removeSourceInstalledItems(
 
   try {
     const templates = await listSourceTemplates(apiKey, id)
-    let hostCleanupWarned = false
+    const ludusRoot = resolveLudusInstallPath()
     for (const template of templates) {
       const name = template.name?.trim()
       if (!name) continue
@@ -55,13 +59,10 @@ export async function removeSourceInstalledItems(
       if (removed.error && removed.status !== 404) {
         warnings.push(`Template ${name}: ${removed.error}`)
       }
-      try {
-        await sshExec(buildLudusTemplateRmCliCmd(name, apiKey))
-      } catch {
-        if (!hostCleanupWarned) {
-          warnings.push("Could not remove templates on the Ludus host")
-          hostCleanupWarned = true
-        }
+      await sshExec(buildLudusTemplateRmCliCmd(name, apiKey)).catch(() => undefined)
+      const purged = await sshExec(buildLudusTemplateDeleteCmd(ludusRoot, name)).catch(() => null)
+      if (!purged || purged.code !== 0) {
+        warnings.push(`Template ${name}: install directory is still on the Ludus host`)
       }
     }
   } catch (err) {

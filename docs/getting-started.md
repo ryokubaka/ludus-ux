@@ -86,7 +86,7 @@ cp .env.example .env
 
 3. **Host SSH private key: from the Ludus server onto the LUX host**
 
-   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **host SSH** (`PROXMOX_SSH_USER`) to the **same** machine Ludus runs on (the Proxmox host). The account can be root, or any other user. A non-root account runs those commands through [lux-host](ssh-and-auth.md#lux-host): a root-owned helper at `/usr/local/sbin/lux-host`, with passwordless sudo for that path only. Quickstart asks before installing it. Settings → SSH & GOAD can install it later. The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
+   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **host SSH** (`PROXMOX_SSH_USER`) to the **same** machine Ludus runs on (the Proxmox host). Quickstart, and individual action **2**, ask whether that account is root or a non-root user. Root setup copies and authorizes root's key. A non-root user gets that same key setup, then [lux-host](ssh-and-auth.md#lux-host): a root-owned helper at `/usr/local/sbin/lux-host`, with passwordless sudo for that path only. Settings → SSH & GOAD can install the helper later. The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
 
    - **`SSH_KEY_PATH`** (in `docker-compose.yml`, overridable via `.env`) is the **host** directory that is bind-mounted to **`/app/ssh`** in the container. Default: **`./ssh`** next to the `docker-compose.yml`.
      - Put the key in `./ssh` as a **normal file**, e.g. **`./ssh/id_rsa`**.

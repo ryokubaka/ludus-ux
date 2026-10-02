@@ -45,6 +45,7 @@ import {
   ShieldAlert,
   OctagonAlert,
   Zap,
+  Copy,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
@@ -58,6 +59,7 @@ import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
+import { luxHostManualInstallCommand } from "@/lib/lux-host-manual-command"
 import { canSubmitLuxHostInstall } from "@/lib/root-ssh-preflight"
 import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus-version"
 
@@ -676,7 +678,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
 
 // ── Main settings page ─────────────────────────────────────────────────────
 
-function SettingsContent() {
+function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -707,6 +709,15 @@ function SettingsContent() {
   const [luxHostDialogOpen, setLuxHostDialogOpen] = useState(false)
   const [installingLuxHost, setInstallingLuxHost] = useState(false)
   const [luxHostRootPassword, setLuxHostRootPassword] = useState("")
+  const [luxHostMode, setLuxHostMode] = useState<"shell" | "ssh">("shell")
+  const luxHostManual = useMemo(() => {
+    const user = draft?.proxmoxSshUser?.trim() ?? ""
+    try {
+      return { command: luxHostManualInstallCommand(user, luxHostScript), error: "" }
+    } catch (e) {
+      return { command: "", error: e instanceof Error ? e.message : "Enter a plain Linux username." }
+    }
+  }, [draft?.proxmoxSshUser, luxHostScript])
   const [credentialTestResult, setCredentialTestResult] = useState<{
     rootSsh: {
       ok: boolean; host: string; port: number; user: string
@@ -913,6 +924,16 @@ function SettingsContent() {
       toast({ variant: "destructive", title: "Delete failed" })
     }
     setLogoDeleting(false)
+  }
+
+  const handleCopyLuxHostManual = async () => {
+    if (!luxHostManual.command) return
+    try {
+      await navigator.clipboard.writeText(luxHostManual.command)
+      toast({ title: "Copied", description: "Paste it into a root shell on the Ludus host and run it." })
+    } catch {
+      toast({ variant: "destructive", title: "Copy failed" })
+    }
   }
 
   if (loading) {
@@ -1247,66 +1268,122 @@ function SettingsContent() {
                     <Dialog open={luxHostDialogOpen} onOpenChange={(open) => {
                       if (installingLuxHost) return
                       setLuxHostDialogOpen(open)
-                      if (!open) setLuxHostRootPassword("")
+                      if (!open) {
+                        setLuxHostRootPassword("")
+                        setLuxHostMode("shell")
+                      }
                     }}>
-                      <DialogContent>
+                      <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] max-w-lg overflow-x-hidden overflow-y-auto">
                         <DialogHeader>
                           <DialogTitle>Install lux-host for {draft?.proxmoxSshUser?.trim() || "this account"}?</DialogTitle>
-                          <DialogDescription>
-                            This writes two files on the Ludus host. It does not grant every sudo command.
+                          <DialogDescription className="break-words">
+                            This writes the helper and a sudoers rule for that helper only. It does not grant every sudo command.
                           </DialogDescription>
                         </DialogHeader>
-                        <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
+                        <ul className="list-disc space-y-1.5 break-words pl-5 text-sm text-muted-foreground">
                           <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs a fixed list of host operations as root. It does not run a shell.</li>
                           <li><span className="font-mono">/etc/sudoers.d/lux-host</span> lets {draft?.proxmoxSshUser?.trim() || "this user"} run that helper with <span className="font-mono">sudo -n</span>.</li>
                           <li>Other sudo commands still ask for a password. The helper cannot replace itself.</li>
-                          <li>The Ludus host root password is required. LUX uses it to write the files and does not save it.</li>
                         </ul>
-                        <div className="space-y-1.5">
-                          <Label htmlFor="lux-host-root-password">Root password</Label>
-                          <Input
-                            id="lux-host-root-password"
-                            type="password"
-                            value={luxHostRootPassword}
-                            onChange={(e) => setLuxHostRootPassword(e.target.value)}
-                            className="font-mono text-xs"
-                            placeholder="Ludus host root password"
-                            autoComplete="off"
-                            required
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Required. LUX logs in as root on the Ludus host to write the helper and the sudoers rule, then drops the password.
-                          </p>
-                        </div>
-                        <DialogFooter>
-                          <Button variant="outline" onClick={() => { setLuxHostDialogOpen(false); setLuxHostRootPassword("") }} disabled={installingLuxHost}>Cancel</Button>
+                        <div role="radiogroup" aria-label="How to install lux-host" className="grid grid-cols-2 gap-2">
                           <Button
-                            onClick={() => { void handleInstallLuxHost() }}
-                            disabled={!canSubmitLuxHostInstall({
-                              installing: installingLuxHost,
-                              sshPassword: draft?.proxmoxSshPassword ?? "",
-                              rootPassword: luxHostRootPassword,
-                              account: {
-                                user: draft?.proxmoxSshUser ?? "",
-                                host: draft?.sshHost ?? "",
-                                port: draft?.sshPort || 22,
-                              },
-                              probe: credentialTestResult
-                                ? {
-                                    user: credentialTestResult.rootSsh.user,
-                                    host: credentialTestResult.rootSsh.host,
-                                    port: credentialTestResult.rootSsh.port,
-                                    authAttempted: credentialTestResult.rootSsh.authAttempted,
-                                    uid: credentialTestResult.rootSsh.uid,
-                                    sudo: credentialTestResult.rootSsh.sudo,
-                                    sudoAll: credentialTestResult.rootSsh.sudoAll,
-                                  }
-                                : null,
-                            })}
+                            type="button"
+                            role="radio"
+                            aria-checked={luxHostMode === "shell"}
+                            variant={luxHostMode === "shell" ? "secondary" : "outline"}
+                            className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+                            onClick={() => setLuxHostMode("shell")}
                           >
-                            {installingLuxHost && <Loader2 className="h-4 w-4 animate-spin" />}
-                            Install
+                            <span className="text-sm font-medium">Run as root</span>
+                            <span className="text-xs font-normal text-muted-foreground">Paste one command in a root shell.</span>
                           </Button>
+                          <Button
+                            type="button"
+                            role="radio"
+                            aria-checked={luxHostMode === "ssh"}
+                            variant={luxHostMode === "ssh" ? "secondary" : "outline"}
+                            className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+                            onClick={() => setLuxHostMode("ssh")}
+                          >
+                            <span className="text-sm font-medium">Root SSH password</span>
+                            <span className="text-xs font-normal text-muted-foreground">sshd allows root login.</span>
+                          </Button>
+                        </div>
+                        {luxHostMode === "shell" ? (
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-medium">Root shell command</p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="shrink-0 gap-1.5"
+                                onClick={() => { void handleCopyLuxHostManual() }}
+                                disabled={!luxHostManual.command}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground break-words">
+                              Paste this into a root shell on the Ludus host and run it. The block is the whole install.
+                            </p>
+                            {luxHostManual.error ? (
+                              <p className="text-xs text-destructive">{luxHostManual.error}</p>
+                            ) : (
+                              <pre className="max-h-40 min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+                                {luxHostManual.command}
+                              </pre>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            <Label htmlFor="lux-host-root-password">Root password</Label>
+                            <Input
+                              id="lux-host-root-password"
+                              type="password"
+                              value={luxHostRootPassword}
+                              onChange={(e) => setLuxHostRootPassword(e.target.value)}
+                              className="font-mono text-xs"
+                              placeholder="Ludus host root password"
+                              autoComplete="off"
+                            />
+                            <p className="text-xs text-muted-foreground break-words">
+                              LUX logs in as root over SSH, writes the helper and the sudoers rule, and drops the password.
+                            </p>
+                          </div>
+                        )}
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => { setLuxHostDialogOpen(false); setLuxHostRootPassword(""); setLuxHostMode("shell") }} disabled={installingLuxHost}>Cancel</Button>
+                          {luxHostMode === "ssh" && (
+                            <Button
+                              onClick={() => { void handleInstallLuxHost() }}
+                              disabled={!canSubmitLuxHostInstall({
+                                installing: installingLuxHost,
+                                sshPassword: draft?.proxmoxSshPassword ?? "",
+                                rootPassword: luxHostRootPassword,
+                                account: {
+                                  user: draft?.proxmoxSshUser ?? "",
+                                  host: draft?.sshHost ?? "",
+                                  port: draft?.sshPort || 22,
+                                },
+                                probe: credentialTestResult
+                                  ? {
+                                      user: credentialTestResult.rootSsh.user,
+                                      host: credentialTestResult.rootSsh.host,
+                                      port: credentialTestResult.rootSsh.port,
+                                      authAttempted: credentialTestResult.rootSsh.authAttempted,
+                                      uid: credentialTestResult.rootSsh.uid,
+                                      sudo: credentialTestResult.rootSsh.sudo,
+                                      sudoAll: credentialTestResult.rootSsh.sudoAll,
+                                    }
+                                  : null,
+                              })}
+                            >
+                              {installingLuxHost && <Loader2 className="h-4 w-4 animate-spin" />}
+                              Install
+                            </Button>
+                          )}
                         </DialogFooter>
                       </DialogContent>
                     </Dialog>
@@ -1381,14 +1458,14 @@ function SettingsContent() {
   )
 }
 
-export function SettingsPageClient() {
+export function SettingsPageClient({ luxHostScript }: { luxHostScript: string }) {
   return (
     <Suspense fallback={
       <div className="flex justify-center py-20">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     }>
-      <SettingsContent />
+      <SettingsContent luxHostScript={luxHostScript} />
     </Suspense>
   )
 }

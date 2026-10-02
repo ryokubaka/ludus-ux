@@ -42,20 +42,22 @@ Each bullet uses a single tag:
 
 **LUX**
 
-- [Add] **In-app releases** — Settings → About lists GitHub releases and confirms before an upgrade or downgrade. The switch runs `scripts/upgrade.sh` through the Docker socket (`systemd-run` on the host). SSH is only the fallback when that socket is not mounted. `./data`, `./ssh`, and `.env` stay. A target older than v1.4.0 must be acknowledged: that release has no in-app switch. Set `LUX_REPO_PATH` when `docker inspect` cannot see the clone.
-- [Add] **lux-host** — `PROXMOX_SSH_USER` can be any account, not only root. Privileged host commands run through `/usr/local/sbin/lux-host`, and sudoers allows that path only. The helper accepts a fixed list of operations. It does not run a shell. `pvesh --type node` is passed through as `node`. Settings → SSH & GOAD installs it and requires the Ludus host root password. That password is not saved. Quickstart can install it too. [What it is](docs/ssh-and-auth.md#lux-host).
-- [Add] **Dashboard** — A Ludus host box shows cluster CPU and memory from Proxmox. Several nodes are one total. Settings → Performance keeps one line per node. It refreshes every 10 seconds.
-- [Improve] **Host SSH test** — Test host SSH & admin API still checks that the Packer directory is writable. The path is shown only when that check fails.
-- [Improve] **Sources** — Templates and Blueprints install from a source registered on the Sources page. Cards show the owner and the tracked branch. An admin can share a source so other users install its blueprints without registering it again. Two branches of one repo stay separate. **Re-sync outdated** runs only when that branch’s own install is older than its catalog.
-- [Improve] **Lists** — Long pages preview the first rows, then a bar that says how many are hidden with a UI element indicating more items are below.
-- [Fix] **Template names** — Add from Source keeps the git folder (`templates/debian13`) and registers the Packer `vm_name` (`debian-13-x64-server-template`). The catalog lists every template in the tree. [Templates](docs/templates.md#add-from-source).
-- [Fix] **Sources** — A role or collection name has one installed copy. A second branch no longer shows Installed at its own version. It shows the branch that owns the copy, and Re-sync replaces that copy.
-- [Remove] **Deploy preflight** — Range deploy is forwarded to Ludus. LUX no longer installs platform Ansible requirements or rewrites the Ansible home before that call.
+- [Add] **In-app releases** — Settings → About lists GitHub releases and confirms before an upgrade or downgrade. The switch uses the Docker socket, or this build's script over SSH when that socket is missing. `./data`, `./ssh`, and `.env` stay. A release older than v1.4.0 must be acknowledged. Set `LUX_REPO_PATH` when Docker cannot see the clone.
+- [Add] **lux-host** — Host SSH can be any account. Privileged commands run through `/usr/local/sbin/lux-host`, and sudoers allows that path only. Settings installs it with one root-shell paste, or with the root SSH password when root login is allowed. That password is used once and is not saved. A password install keeps later helper updates from asking again. [What it is](docs/ssh-and-auth.md#lux-host).
+- [Add] **Dashboard** — A Ludus host box shows cluster CPU and memory. It refreshes every 10 seconds.
+- [Improve] **Quickstart** — Host SSH setup, in the full wizard and in individual actions, asks for root or a non-root user. A non-root user gets lux-host after the key is authorized.
+- [Improve] **Host SSH test** — The Packer directory path is shown only when that directory is not writable.
+- [Improve] **Sources** — Install from a source on the Sources page. Cards show the owner and branch. A shared source can be installed by other users. **Re-sync outdated** follows that branch's own install.
+- [Improve] **Lists** — Long pages preview the first rows, then a bar for the rest.
+- [Fix] **Template names** — Add from Source keeps the git folder and registers the Packer `vm_name`. [Templates](docs/templates.md#add-from-source).
+- [Fix] **Sources** — A role or collection has one installed copy. Another branch shows who owns it, and Re-sync replaces that copy.
+- [Remove] **Deploy preflight** — Range deploy is forwarded to Ludus.
 
 **GOAD**
 
-- [Add] **Firewall rules** — The Network Rules step lists rules from the selected extensions and from an existing range. The generated configuration shows that same list, and Provide sends it to Ludus before the deploy that installs the rules.
-- [Fix] **Ansible check** — Dependency install and the on-disk collection check use `/opt/ludus/users/<ludus-username>/.ansible`, the tree for the signed-in Ludus user. The host SSH account is not that path.
+- [Add] **Firewall rules** — Network Rules lists extension and existing range rules, and Provide sends that list to Ludus. Existing rules stay in order. New rules are added after them.
+- [Fix] **Range file** — Provide writes `.goad_range_id` as the workspace owner. A failed write leaves the instance unlinked.
+- [Fix] **Ansible check** — Dependency checks use `/opt/ludus/users/<ludus-username>/.ansible` for the signed-in user.
 
 ## [1.3.2] - 2026-09-10
 

@@ -157,3 +157,124 @@ describe("lux_offer_scoped_host_sudo", () => {
     expect(result.calls).not.toContain("sudo -n true")
   })
 })
+
+function runSourced(script: string, input: string, cwd?: string): { status: number; output: string } {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `
+set +e
+source ${JSON.stringify(quickstart)}
+set +e
+${cwd ? `cd ${JSON.stringify(cwd)}` : ""}
+set +e
+${script}
+`,
+    ],
+    { encoding: "utf8", input },
+  )
+  return { status: result.status ?? 1, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}` }
+}
+
+describe("host SSH account choice", () => {
+  it("selects root or a non-root user", () => {
+    const root = runSourced("lux_choose_host_ssh_account; printf '%s' \"$LUX_HOST_SSH_USER\"", "1\n")
+    expect(root.status).toBe(0)
+    expect(root.output.trim().endsWith("root")).toBe(true)
+
+    const user = runSourced("lux_choose_host_ssh_account; printf '%s' \"$LUX_HOST_SSH_USER\"", "2\nludus\n")
+    expect(user.status).toBe(0)
+    expect(user.output.trim().endsWith("ludus")).toBe(true)
+    expect(user.output).toContain("install lux-host")
+
+    const rejected = runSourced("lux_choose_host_ssh_account", "2\nroot\n")
+    expect(rejected.status).not.toBe(0)
+    expect(rejected.output).toContain("other than root")
+  })
+
+  it("stores a root password without offering lux-host", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-qs-root-"))
+    const keys = path.join(dir, "keys")
+    mkdirSync(keys)
+    writeFileSync(path.join(dir, ".env"), "PROXMOX_SSH_USER=\nPROXMOX_SSH_PASSWORD=\nPROXMOX_SSH_KEY_PATH=\n")
+    const result = runSourced(
+      `
+LUDUS_SSH_HOST=127.0.0.1
+LUDUS_SSH_PORT=22
+KEY_DIR=${JSON.stringify(keys)}
+LUX_HOST_SSH_USER=root
+lux_configure_host_ssh
+printf 'USER=%s\\n' "$(lux_read_env_kv PROXMOX_SSH_USER)"
+printf 'PW=%s\\n' "$(lux_read_env_kv PROXMOX_SSH_PASSWORD)"
+`,
+      "3\nsecret\n",
+      dir,
+    )
+    expect(result.status).toBe(0)
+    expect(result.output).toContain("USER=root")
+    expect(result.output).toContain("PW=secret")
+    expect(result.output).not.toContain("Install this sudoers rule")
+    expect(result.output).toContain("Root SSH key")
+  })
+
+  it("offers lux-host after a non-root password setup", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-qs-user-"))
+    const keys = path.join(dir, "keys")
+    mkdirSync(keys)
+    writeFileSync(
+      path.join(dir, ".env"),
+      [
+        "LUDUS_SSH_HOST=127.0.0.1",
+        "LUDUS_SSH_PORT=22",
+        "PROXMOX_SSH_USER=",
+        "PROXMOX_SSH_PASSWORD=",
+        `SSH_KEY_PATH=${keys}`,
+        "",
+      ].join("\n"),
+    )
+    const result = runSourced(
+      `
+LUDUS_SSH_HOST=127.0.0.1
+LUDUS_SSH_PORT=22
+KEY_DIR=${JSON.stringify(keys)}
+LUX_HOST_SSH_USER=ludus
+lux_configure_host_ssh
+printf 'USER=%s\\n' "$(lux_read_env_kv PROXMOX_SSH_USER)"
+`,
+      "3\nsecret\nn\n",
+      dir,
+    )
+    expect(result.status).toBe(0)
+    expect(result.output).toContain("USER=ludus")
+    expect(result.output).toContain("sudo -n /usr/local/sbin/lux-host")
+    expect(result.output).toContain("Skipped.")
+  })
+})
+
+describe("lux_offer_scoped_host_sudo", () => {
+  it("does not report success when the root install fails", () => {
+    const result = offerInstall(true)
+    expect(result.status).toBe(1)
+    expect(result.output).not.toContain("Installed.")
+    expect(result.output).toContain("sudoers install failed")
+    expect(result.calls).not.toContain("lux-host 'id -u'")
+  })
+
+  it("does not report success when the passwordless sudo install fails", () => {
+    const result = offerInstall(false)
+    expect(result.status).toBe(1)
+    expect(result.output).not.toContain("Installed.")
+    expect(result.output).toContain("sudoers install failed")
+    expect(result.calls).not.toContain("lux-host 'id -u'")
+  })
+
+  it("refreshes the helper through lux-host when sudo -n true is denied", () => {
+    const result = offerInstall(false, true)
+    expect(result.status).toBe(0)
+    expect(result.output).toContain("Installed.")
+    expect(result.calls).toContain("sudo -n /usr/local/sbin/lux-host ")
+    expect(result.calls).not.toContain("sudo -n bash")
+    expect(result.calls).not.toContain("sudo -n true")
+  })
+})

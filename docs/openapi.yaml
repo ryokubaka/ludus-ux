@@ -949,7 +949,9 @@ paths:
         Writes `/usr/local/sbin/lux-host` and a sudoers rule for that helper only.
         `PROXMOX_SSH_USER` does not have to be root. A non-root account is valid when
         it can run `sudo -n /usr/local/sbin/lux-host`. If that account is not in
-        sudoers. `rootPassword` is required. LUX SSHes as root to write the files and does not save it.
+        sudoers, `rootPassword` is required. LUX SSHes as root to write the files and does not save it.
+        When root SSH login is disabled, paste the dialog's root-shell command on the Ludus host.
+        That paste is the whole install.
         Admin required.
       operationId: installLuxHost
       security:

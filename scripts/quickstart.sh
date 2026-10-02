@@ -366,7 +366,7 @@ lux_openssh_pubkey_b64_from_private() {
   printf '%s\n' "$b64"
 }
 
-# Ensure sshd will accept this private key: append derived pubkey to REMOTE_USER's authorized_keys (root only).
+# Ensure sshd will accept this private key: append the derived pubkey to that account's authorized_keys.
 # Tries BatchMode + -i key first; if that fails, optional one-shot SSH password + sshpass.
 lux_ssh_remote_authorized_keys_body() {
   local b64="$1"
@@ -436,30 +436,6 @@ lux_install_pubkey_for_root_ssh() {
   unset LUX_AK_PW
   echo "Password SSH failed; authorized_keys unchanged. See docs/ssh-and-auth.md." >&2
   return 0
-}
-
-lux_action_pubkey_from_env() {
-  lux_load_ludus_ssh_from_env || return 1
-  local px_user kf uh b64
-  px_user="$(lux_read_env_kv PROXMOX_SSH_USER)"
-  px_user="${px_user:-root}"
-  uh="${px_user}@${LUDUS_SSH_HOST}"
-  kf="$KEY_DIR/id_rsa"
-  if [[ ! -f "$kf" ]]; then
-    echo "Error: no private key at $kf — run full setup (option 1/2) or place id_rsa there." >&2
-    return 1
-  fi
-  mkdir -p "$KEY_DIR" 2>/dev/null || true
-  if ! b64="$(lux_openssh_pubkey_b64_from_private "$kf")"; then
-    return 1
-  fi
-  echo "Appending pubkey from $kf to ~/.ssh/authorized_keys on ${uh} (PROXMOX SSH password only; reuses earlier prompt / .env)…"
-  if lux_ssh_remote_authorized_keys_body "$b64" | lux_ludus_ssh_remote_bash_sshpass "$uh"; then
-    echo "authorized_keys updated for ${uh}."
-    return 0
-  fi
-  echo "[quickstart] authorized_keys append failed — check password, sshd AllowUsers, PROXMOX_SSH_USER match." >&2
-  return 1
 }
 
 lux_action_docker_up_build() {
@@ -682,34 +658,244 @@ EOS
   return 1
 }
 
+lux_valid_host_ssh_user() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+# Root key setup, or a non-root account plus lux-host. Sets LUX_HOST_SSH_USER.
+lux_choose_host_ssh_account() {
+  echo ""
+  echo "Ludus host SSH for LUX (pvesh, templates, admin tunnel):"
+  echo "  1) Root — copy root's private key and authorize it"
+  echo "  2) Non-root user — copy that user's key, authorize it, and install lux-host"
+  local choice name
+  read -r -p "Choose [1/2] [1]: " choice
+  choice="${choice:-1}"
+  case "$choice" in
+    1)
+      LUX_HOST_SSH_USER="root"
+      ;;
+    2)
+      read -r -p "Linux username on the Ludus host: " name
+      name="${name//[[:space:]]/}"
+      if [[ "$name" == "root" || ! "$name" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        echo "Need a plain Linux username other than root." >&2
+        return 1
+      fi
+      LUX_HOST_SSH_USER="$name"
+      ;;
+    *)
+      echo "Invalid choice." >&2
+      return 1
+      ;;
+  esac
+}
+
+# Needs LUDUS_SSH_HOST, LUDUS_SSH_PORT, KEY_DIR, and LUX_HOST_SSH_USER.
+# Writes PROXMOX_SSH_USER, the key or password, and authorized_keys.
+# A non-root account is then offered lux-host.
+lux_configure_host_ssh() {
+  local target="${LUX_HOST_SSH_USER:-}"
+  if ! lux_valid_host_ssh_user "$target"; then
+    echo "Host SSH user must be a plain Linux username." >&2
+    return 1
+  fi
+  local default_remote_key="/root/.ssh/id_rsa"
+  if [[ "$target" != "root" ]]; then
+    default_remote_key="/home/${target}/.ssh/id_rsa"
+  fi
+  local root_ssh_key_auth=0
+  local auth_choice _existing_key=0
+
+  echo ""
+  if [[ "$target" == "root" ]]; then
+    echo "Root SSH key for ${LUDUS_SSH_HOST}:"
+    echo "  1) Fetch the private key from the Ludus host (scp as root; another user can read /root/ with sudo)"
+  else
+    echo "SSH key for ${target}@${LUDUS_SSH_HOST}. lux-host is installed after the key is in place."
+    echo "  1) Fetch ${target}'s private key from the Ludus host"
+  fi
+  echo "  2) Copy from a file already on this machine"
+  echo "  3) Use password only (PROXMOX_SSH_PASSWORD)"
+  if [[ -s "$KEY_DIR/id_rsa" ]] && grep -qE 'BEGIN.*PRIVATE KEY' "$KEY_DIR/id_rsa" 2>/dev/null; then
+    _existing_key=1
+    echo "  4) Keep existing private key at $KEY_DIR/id_rsa"
+    read -r -p "Choose [1/2/3/4] [4]: " auth_choice
+    auth_choice="${auth_choice:-4}"
+  else
+    read -r -p "Choose [1/2/3] [1]: " auth_choice
+    auth_choice="${auth_choice:-1}"
+  fi
+
+  case "$auth_choice" in
+    4)
+      if [[ "$_existing_key" != "1" ]]; then
+        echo "Error: no usable private key at $KEY_DIR/id_rsa — pick 1, 2, or 3." >&2
+        return 1
+      fi
+      echo "Keeping existing key: $KEY_DIR/id_rsa"
+      chmod 600 "$KEY_DIR/id_rsa" 2>/dev/null || true
+      lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$target"
+      set_kv "PROXMOX_SSH_USER" "$target"
+      set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+      root_ssh_key_auth=1
+      ;;
+    1)
+      local scp_user remote_key remote_q
+      read -r -p "SSH user on the Ludus host to connect as [${target}]: " scp_user
+      scp_user="${scp_user:-$target}"
+      read -r -p "Remote private key path [${default_remote_key}]: " remote_key
+      remote_key="${remote_key:-$default_remote_key}"
+      local -a SSH_BASE=( -o StrictHostKeyChecking=accept-new -p "$LUDUS_SSH_PORT" )
+      remote_q=$(printf '%q' "$remote_key")
+      if [[ "$scp_user" == "root" ]]; then
+        echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
+        if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
+            "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
+          echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
+          return 1
+        fi
+      elif [[ "$remote_key" == /root/* ]]; then
+        local -a SSH_BATCH=( "${SSH_BASE[@]}" -o BatchMode=yes )
+        local -a SSH_PASS_ONLY=( "${SSH_BASE[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no )
+        key_ok() { [[ -s "$KEY_DIR/id_rsa" ]] && grep -qE 'BEGIN.*PRIVATE KEY' "$KEY_DIR/id_rsa"; }
+
+        rm -f "$KEY_DIR/id_rsa"
+        echo "Non-root cannot scp under /root/. Trying automated fetch…"
+        local fetched=""
+
+        if ssh "${SSH_BATCH[@]}" "${scp_user}@${LUDUS_SSH_HOST}" "sudo -n cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>/dev/null && key_ok; then
+          echo "OK — SSH key auth + passwordless sudo (NOPASSWD)."
+          fetched=1
+        else
+          rm -f "$KEY_DIR/id_rsa"
+          LUX_QS_SSHPASS_STRICT=1 lux_ensure_sshpass_local_available
+
+          local LUX_SSH_PW LUX_SUDO_PW errf
+          read -r -s -p "SSH password for ${scp_user}@${LUDUS_SSH_HOST}: " LUX_SSH_PW
+          echo
+          if [[ -z "$LUX_SSH_PW" ]]; then
+            echo "Error: empty SSH password." >&2
+            return 1
+          fi
+
+          errf=$(mktemp)
+          if printf '\n' | SSHPASS="$LUX_SSH_PW" sshpass -e ssh "${SSH_PASS_ONLY[@]}" "${scp_user}@${LUDUS_SSH_HOST}" \
+              "sudo -n cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>"$errf" && key_ok; then
+            echo "OK — password SSH + passwordless sudo (NOPASSWD)."
+            fetched=1
+          else
+            rm -f "$KEY_DIR/id_rsa"
+            read -r -s -p "sudo password on server [Enter if same as SSH]: " LUX_SUDO_PW
+            echo
+            LUX_SUDO_PW="${LUX_SUDO_PW:-$LUX_SSH_PW}"
+            if printf '%s\n' "$LUX_SUDO_PW" | SSHPASS="$LUX_SSH_PW" sshpass -e ssh "${SSH_PASS_ONLY[@]}" "${scp_user}@${LUDUS_SSH_HOST}" \
+                "sudo -S cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>"$errf" && key_ok; then
+              echo "OK — password SSH + sudo -S (non-interactive)."
+              fetched=1
+            else
+              echo "Automated fetch failed. Remote said:" >&2
+              cat "$errf" >&2
+              rm -f "$errf"
+              unset LUX_SSH_PW LUX_SUDO_PW
+              echo "Check SSH/sudo passwords and that $remote_key exists. Or use option 1 as root / option 2." >&2
+              return 1
+            fi
+          fi
+          rm -f "$errf"
+          unset LUX_SSH_PW LUX_SUDO_PW
+        fi
+
+        if [[ -z "$fetched" ]]; then
+          echo "Internal error: fetch flag not set." >&2
+          return 1
+        fi
+      else
+        echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
+        if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
+            "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
+          echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
+          return 1
+        fi
+      fi
+      chmod 600 "$KEY_DIR/id_rsa"
+      lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$target"
+      set_kv "PROXMOX_SSH_USER" "$target"
+      set_kv "PROXMOX_SSH_PASSWORD" ""
+      set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+      root_ssh_key_auth=1
+      ;;
+    2)
+      local key_path
+      read -r -p "Path to existing private key file: " key_path
+      key_path="${key_path/#\~/$HOME}"
+      if [[ ! -f "$key_path" ]]; then
+        echo "Error: file not found: $key_path" >&2
+        return 1
+      fi
+      cp "$key_path" "$KEY_DIR/id_rsa"
+      chmod 600 "$KEY_DIR/id_rsa"
+      lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$target"
+      set_kv "PROXMOX_SSH_USER" "$target"
+      set_kv "PROXMOX_SSH_PASSWORD" ""
+      set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
+      root_ssh_key_auth=1
+      ;;
+    3)
+      local px_pw
+      read -r -s -p "PROXMOX_SSH_PASSWORD for ${target}: " px_pw
+      echo
+      set_kv "PROXMOX_SSH_USER" "$target"
+      set_kv "PROXMOX_SSH_PASSWORD" "$px_pw"
+      ;;
+    *)
+      echo "Invalid choice." >&2
+      return 1
+      ;;
+  esac
+
+  if [[ "$target" != "root" ]]; then
+    lux_offer_scoped_host_sudo "$target" || true
+  fi
+
+  if [[ "$root_ssh_key_auth" == "1" ]]; then
+    echo ""
+    echo "Optional: PROXMOX_SSH_PASSWORD for host SSH only."
+    echo "In-browser noVNC uses the LUX user's login password with their Proxmox PAM user; the host SSH key is not used for that HTTP ticket."
+    local optional_pw
+    read -r -s -p "PROXMOX_SSH_PASSWORD [Enter to keep key-only host SSH]: " optional_pw
+    echo
+    if [[ -n "$optional_pw" ]]; then
+      set_kv "PROXMOX_SSH_PASSWORD" "$optional_pw"
+    fi
+  fi
+}
+
 lux_run_action_menu() {
   while true; do
     echo ""
     echo "Individual actions (reuse ./.env in this repo):"
     echo "  1) Ensure 'sudo' on Ludus SSH host (required for GOAD automation)"
-    echo "  2) Append SSH_KEY_PATH/id_rsa pubkey → authorized_keys (sshpass; chown key if unreadable)"
+    echo "  2) Set up Ludus host SSH (root key, or a non-root user plus lux-host)"
     echo "  3) docker compose up -d --build (needs Docker available here)"
     echo "  4) Print Ludus / SSH / GOAD fields from .env (mask secrets)"
-    echo "  5) Install passwordless sudo for /usr/local/sbin/lux-host only (non-root PROXMOX_SSH_USER)"
     echo "  0) Exit menu"
-    read -r -p "Choose [0-5] [0]: " _ac
+    read -r -p "Choose [0-4] [0]: " _ac
     _ac="${_ac:-0}"
     case "$_ac" in
       1)
         lux_ensure_remote_sudo_for_goad || true
         ;;
       2)
-        lux_action_pubkey_from_env || true
+        if lux_load_ludus_ssh_from_env && lux_choose_host_ssh_account; then
+          lux_configure_host_ssh || true
+        fi
         ;;
       3)
         lux_action_docker_up_build || true
         ;;
       4)
         lux_action_print_ssh_env_hints || true
-        ;;
-      5)
-        lux_load_ludus_ssh_from_env || true
-        lux_offer_scoped_host_sudo "$(lux_read_env_kv PROXMOX_SSH_USER)" || true
         ;;
       0)
         echo "Bye."
@@ -798,170 +984,11 @@ fi
 mkdir -p "$KEY_DIR"
 chmod 755 "$KEY_DIR" 2>/dev/null || true
 
-echo ""
-echo "Host SSH to the Ludus/Proxmox host (for pvesh, admin tunnel, etc.). The account can be root, or a user that can run sudo -n /usr/local/sbin/lux-host:"
-echo "  1) Fetch private key from the server (scp as root; non-root + /root/ uses sshpass + sudo -S when needed — install sshpass if prompted)"
-echo "  2) Copy from a file already on this machine"
-echo "  3) Use password only (PROXMOX_SSH_PASSWORD)"
-_existing_key=0
-if [[ -s "$KEY_DIR/id_rsa" ]] && grep -qE 'BEGIN.*PRIVATE KEY' "$KEY_DIR/id_rsa" 2>/dev/null; then
-  _existing_key=1
-  echo "  4) Keep existing private key at $KEY_DIR/id_rsa"
-  read -r -p "Choose [1/2/3/4] [4]: " auth_choice
-  auth_choice="${auth_choice:-4}"
-else
-  read -r -p "Choose [1/2/3]: " auth_choice
-  auth_choice="${auth_choice:-1}"
+if ! lux_choose_host_ssh_account; then
+  exit 1
 fi
-root_ssh_key_auth=0
-
-case "$auth_choice" in
-  4)
-    if [[ "$_existing_key" != "1" ]]; then
-      echo "Error: no usable private key at $KEY_DIR/id_rsa — pick 1, 2, or 3." >&2
-      exit 1
-    fi
-    echo "Keeping existing key: $KEY_DIR/id_rsa"
-    chmod 600 "$KEY_DIR/id_rsa" 2>/dev/null || true
-    read -r -p "PROXMOX_SSH_USER [root]: " px_user
-    px_user="${px_user:-root}"
-    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$px_user"
-    set_kv "PROXMOX_SSH_USER" "$px_user"
-    set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
-    # Do not clear PROXMOX_SSH_PASSWORD — may still be set later via optional prompt.
-    root_ssh_key_auth=1
-    ;;
-  1)
-    read -r -p "SSH user on Ludus host to connect as [root]: " scp_user
-    scp_user="${scp_user:-root}"
-    read -r -p "Remote private key path [/root/.ssh/id_rsa]: " remote_key
-    remote_key="${remote_key:-/root/.ssh/id_rsa}"
-    SSH_BASE=( -o StrictHostKeyChecking=accept-new -p "$LUDUS_SSH_PORT" )
-    remote_q=$(printf '%q' "$remote_key")
-    if [[ "$scp_user" == "root" ]]; then
-      echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
-      if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
-          "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
-        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
-        exit 1
-      fi
-    elif [[ "$remote_key" == /root/* ]]; then
-      # Non-root cannot read /root over scp. Automate without PTY+redirect (which breaks sudo prompts):
-      #   1) SSH key + sudo -n
-      #   2) sshpass + sudo -n (password SSH only; sudo NOPASSWD)
-      #   3) sshpass + sudo -S (password SSH + sudo via stdin — no ssh -t > file)
-      SSH_BATCH=( "${SSH_BASE[@]}" -o BatchMode=yes )
-      # Force password auth when using sshpass (avoid trying SSH keys first and burning retries).
-      SSH_PASS_ONLY=( "${SSH_BASE[@]}" -o PreferredAuthentications=password -o PubkeyAuthentication=no )
-      key_ok() { [[ -s "$KEY_DIR/id_rsa" ]] && grep -qE 'BEGIN.*PRIVATE KEY' "$KEY_DIR/id_rsa"; }
-
-      rm -f "$KEY_DIR/id_rsa"
-      echo "Non-root cannot scp under /root/. Trying automated fetch…"
-      fetched=""
-
-      if ssh "${SSH_BATCH[@]}" "${scp_user}@${LUDUS_SSH_HOST}" "sudo -n cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>/dev/null && key_ok; then
-        echo "OK — SSH key auth + passwordless sudo (NOPASSWD)."
-        fetched=1
-      else
-        rm -f "$KEY_DIR/id_rsa"
-        LUX_QS_SSHPASS_STRICT=1 lux_ensure_sshpass_local_available
-
-        read -r -s -p "SSH password for ${scp_user}@${LUDUS_SSH_HOST}: " LUX_SSH_PW
-        echo
-        if [[ -z "$LUX_SSH_PW" ]]; then
-          echo "Error: empty SSH password." >&2
-          exit 1
-        fi
-
-        errf=$(mktemp)
-        if printf '\n' | SSHPASS="$LUX_SSH_PW" sshpass -e ssh "${SSH_PASS_ONLY[@]}" "${scp_user}@${LUDUS_SSH_HOST}" \
-            "sudo -n cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>"$errf" && key_ok; then
-          echo "OK — password SSH + passwordless sudo (NOPASSWD)."
-          fetched=1
-        else
-          rm -f "$KEY_DIR/id_rsa"
-          read -r -s -p "sudo password on server [Enter if same as SSH]: " LUX_SUDO_PW
-          echo
-          LUX_SUDO_PW="${LUX_SUDO_PW:-$LUX_SSH_PW}"
-          if printf '%s\n' "$LUX_SUDO_PW" | SSHPASS="$LUX_SSH_PW" sshpass -e ssh "${SSH_PASS_ONLY[@]}" "${scp_user}@${LUDUS_SSH_HOST}" \
-              "sudo -S cat -- $remote_q" >"$KEY_DIR/id_rsa" 2>"$errf" && key_ok; then
-            echo "OK — password SSH + sudo -S (non-interactive)."
-            fetched=1
-          else
-            echo "Automated fetch failed. Remote said:" >&2
-            cat "$errf" >&2
-            rm -f "$errf"
-            unset LUX_SSH_PW LUX_SUDO_PW
-            echo "Check SSH/sudo passwords and that $remote_key exists. Or use option 1 as root / option 2." >&2
-            exit 1
-          fi
-        fi
-        rm -f "$errf"
-        unset LUX_SSH_PW LUX_SUDO_PW
-      fi
-
-      if [[ -z "$fetched" ]]; then
-        echo "Internal error: fetch flag not set." >&2
-        exit 1
-      fi
-    else
-      echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
-      if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
-          "${scp_user}@${LUDUS_SSH_HOST}:${remote_key}" "$KEY_DIR/id_rsa"; then
-        echo "scp failed. Place id_rsa manually under $KEY_DIR and run: docker compose up -d --build (or docker-compose)" >&2
-        exit 1
-      fi
-    fi
-    chmod 600 "$KEY_DIR/id_rsa"
-    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" root
-    # LUX uses this key to SSH as root on the Ludus/Proxmox host (fetch user above is only for copying the file).
-    set_kv "PROXMOX_SSH_USER" "root"
-    set_kv "PROXMOX_SSH_PASSWORD" ""
-    set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
-    root_ssh_key_auth=1
-    ;;
-  2)
-    read -r -p "Path to existing private key file: " key_path
-    key_path="${key_path/#\~/$HOME}"
-    if [[ ! -f "$key_path" ]]; then
-      echo "Error: file not found: $key_path" >&2
-      exit 1
-    fi
-    cp "$key_path" "$KEY_DIR/id_rsa"
-    chmod 600 "$KEY_DIR/id_rsa"
-    read -r -p "PROXMOX_SSH_USER [root]: " px_user
-    px_user="${px_user:-root}"
-    lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$px_user"
-    set_kv "PROXMOX_SSH_USER" "$px_user"
-    set_kv "PROXMOX_SSH_PASSWORD" ""
-    set_kv "PROXMOX_SSH_KEY_PATH" "/app/ssh/id_rsa"
-    root_ssh_key_auth=1
-    ;;
-  3)
-    read -r -s -p "PROXMOX_SSH_PASSWORD: " px_pw
-    echo
-    read -r -p "PROXMOX_SSH_USER [root]: " px_user
-    set_kv "PROXMOX_SSH_USER" "${px_user:-root}"
-    set_kv "PROXMOX_SSH_PASSWORD" "$px_pw"
-    ;;
-  *)
-    echo "Invalid choice." >&2
-    exit 1
-    ;;
-esac
-
-lux_offer_scoped_host_sudo "$(lux_read_env_kv PROXMOX_SSH_USER)" || true
-
-if [[ "$root_ssh_key_auth" == "1" ]]; then
-  echo ""
-  echo "Optional: PROXMOX_SSH_PASSWORD for host SSH only."
-  echo "In-browser noVNC uses the LUX user's login password with their Proxmox PAM user; the host SSH key is not used for that HTTP ticket."
-  read -r -s -p "PROXMOX_SSH_PASSWORD [Enter to keep key-only host SSH]: " optional_root_pw
-  echo
-  if [[ -n "$optional_root_pw" ]]; then
-    set_kv "PROXMOX_SSH_PASSWORD" "$optional_root_pw"
-  fi
-  unset optional_root_pw
+if ! lux_configure_host_ssh; then
+  exit 1
 fi
 
 read -r -p "GOAD path on Ludus server [/opt/GOAD]: " goad_path

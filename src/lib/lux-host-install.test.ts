@@ -13,6 +13,7 @@ import {
   renderLuxHostSudoers,
   selectLuxHostInstallMode,
 } from "./lux-host-install"
+import { luxHostManualInstallCommand } from "./lux-host-manual-command"
 
 const TEMPLATE = "# comment\n__LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST\n"
 
@@ -197,5 +198,50 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
     const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "root")
     expect(cmd.startsWith("printf ")).toBe(true)
     expect(cmd).not.toContain("sudo")
+  })
+})
+
+function scratchManualCommand(command: string, dir: string): string {
+  return command
+    .replace("mkdir -p /usr/local/sbin /etc/sudoers.d", `mkdir -p ${dir}/sbin ${dir}/sudoers.d`)
+    .replace("cat > /usr/local/sbin/lux-host << 'LUX_HOST_FILE'", `cat > ${dir}/sbin/lux-host << 'LUX_HOST_FILE'`)
+    .replace("\nchown root:root /usr/local/sbin/lux-host\n", `\ntrue ${dir}/sbin/lux-host\n`)
+    .replace("\nchmod 755 /usr/local/sbin/lux-host\n", `\nchmod 755 ${dir}/sbin/lux-host\n`)
+    .replace(
+      "install -o root -g root -m 440 \"$tmp\" /etc/sudoers.d/lux-host",
+      `install -m 440 "$tmp" ${dir}/sudoers.d/lux-host`,
+    )
+}
+
+describe("luxHostManualInstallCommand", () => {
+  it("rejects root and unsafe names", () => {
+    expect(() => luxHostManualInstallCommand("root", "#!/bin/bash\n")).toThrow(/root/)
+    expect(() => luxHostManualInstallCommand("user;rm", "#!/bin/bash\n")).toThrow(/plain Linux/)
+  })
+
+  it("installs the helper and sudoers rule from one pasted root shell", () => {
+    const helper = "#!/bin/bash\necho manual-helper\n"
+    const command = luxHostManualInstallCommand("testuser", helper)
+    expect(command).toContain("#!/bin/bash")
+    expect(command).toContain("echo manual-helper")
+    expect(command).toContain("testuser ALL=(root) NOPASSWD: LUX_HOST")
+    expect(command).not.toMatch(/scripts\/lux-host/)
+
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-host-manual-"))
+    const result = spawnSync("bash", ["-s"], { input: scratchManualCommand(command, dir), encoding: "utf8" })
+    expect(result.status).toBe(0)
+    expect(readFileSync(`${dir}/sbin/lux-host`, "utf8")).toBe("#!/bin/bash\necho manual-helper\n")
+    const rule = readFileSync(`${dir}/sudoers.d/lux-host`, "utf8")
+    expect(rule).toContain("testuser ALL=(root) NOPASSWD: LUX_HOST")
+    expect(rule).not.toContain("__LUX_SSH_USER__")
+  })
+
+  it("embeds the bundled helper so the paste does not need another file", () => {
+    const helper = readFileSync(path.join(process.cwd(), "scripts/lux-host/lux-host"), "utf8")
+    const command = luxHostManualInstallCommand("testuser", helper)
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-host-manual-bundled-"))
+    const result = spawnSync("bash", ["-s"], { input: scratchManualCommand(command, dir), encoding: "utf8" })
+    expect(result.status).toBe(0)
+    expect(readFileSync(`${dir}/sbin/lux-host`, "utf8")).toBe(helper.replace(/\r\n/g, "\n"))
   })
 })

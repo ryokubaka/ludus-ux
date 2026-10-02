@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings, setLuxHostUpdateKey, type RuntimeSettings } from "@/lib/settings-store"
+import { getLuxHostUpdateKey, getSettings, setLuxHostUpdateKey, type RuntimeSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import {
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
   }
 
   const port = settings.sshPort || 22
-  const updateKey = randomBytes(32).toString("hex")
+  const updateKey = getLuxHostUpdateKey() || randomBytes(32).toString("hex")
   const runAsUser = (command: string, stdin?: string) =>
     sshExec(host, port, user, password, command, { elevate: false, stdin })
   const runAsRoot = (command: string, stdin?: string) =>
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
     const raw = err instanceof Error ? err.message : "Install failed"
     const explained = explainLuxHostInstallFailure(raw, user)
       ?? (rootPassword && /authentication methods failed|all configured authentication/i.test(raw)
-        ? "Could not SSH as root with that password. If root login is key-only, install the rule from a root shell on the Ludus host."
+        ? "Could not SSH as root with that password. Paste the root shell command from this dialog into a root shell on the Ludus host."
         : null)
     const message = explained ?? redactSecret(redactSecret(redactSecret(raw, password), rootPassword), updateKey)
     logLuxRouteAction(request, admin.session, { outcome: "failure", detail: message.slice(0, 300) })

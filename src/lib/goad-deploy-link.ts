@@ -11,6 +11,7 @@ import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { updateTaskInstance } from "@/lib/goad-task-store"
 import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad-ssh"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { getSettings } from "@/lib/settings-store"
 import { setOwnership } from "@/lib/range-ownership-store"
 import { ludusRequest } from "@/lib/ludus-client"
@@ -25,8 +26,17 @@ function sameLinuxUser(a: string, b: string): boolean {
   return left.length > 0 && left === right
 }
 
-function mayChownDeployWorkspace(directoryOwner: string, targetUser: string, hostUser: string): boolean {
-  return sameLinuxUser(directoryOwner, hostUser) || sameLinuxUser(directoryOwner, targetUser)
+function isResolvedOwnerName(owner: string): boolean {
+  const name = owner.trim()
+  return name.length > 0 && !/^\d+$/.test(name)
+}
+
+type WorkspaceOwnerGate = "allow" | "foreign" | "unresolved"
+
+function workspaceOwnerGate(directoryOwner: string, targetUser: string, hostUser: string): WorkspaceOwnerGate {
+  if (!isResolvedOwnerName(directoryOwner)) return "unresolved"
+  if (sameLinuxUser(directoryOwner, hostUser) || sameLinuxUser(directoryOwner, targetUser)) return "allow"
+  return "foreign"
 }
 
 export type GoadOwnerExec = (
@@ -49,7 +59,7 @@ export type GoadDeployLinkageOpts = {
 
 export type GoadDeployLinkageResult =
   | { ok: true }
-  | { ok: false; error: string; skip?: boolean }
+  | { ok: false; error: string; skip?: boolean; pending?: boolean }
 
 /** Pure helper — pick the new instance from a list (exported for tests). */
 export function pickNewGoadInstanceId(
@@ -78,11 +88,14 @@ export async function finalizeGoadDeployLinkage(opts: {
   const settings = getSettings()
   const rootCreds = rootPasswordCredsIfSet(settings)
   const ownerLinux = username.trim()
-  const hostUser = (settings.proxmoxSshUser || "root").trim()
+  const hostUser = effectivePrivilegedSshUser(settings.proxmoxSshUser)
+  const gate = workspaceOwnerGate(directoryOwner, ownerLinux, hostUser)
 
-  if (!mayChownDeployWorkspace(directoryOwner, ownerLinux, hostUser)) {
-    const who = directoryOwner.trim() || "unknown"
-    return { ok: false, error: `Workspace is owned by ${who}`, skip: true }
+  if (gate === "unresolved") {
+    return { ok: false, error: "Workspace owner is unresolved", pending: true }
+  }
+  if (gate === "foreign") {
+    return { ok: false, error: `Workspace is owned by ${directoryOwner.trim()}`, skip: true }
   }
 
   if (ownerLinux && ownerLinux.toLowerCase() !== "root") {
@@ -138,20 +151,37 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
   if (opts.instanceId?.trim()) {
     const instanceId = opts.instanceId.trim()
     void (async () => {
-      const listed = await listGoadInstances(rootPasswordCredsIfSet(getSettings()))
-      const directoryOwner =
-        listed.find((i) => i.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
-      const linked = await finalizeGoadDeployLinkage({
-        taskId: opts.taskId,
-        rangeId,
-        instanceId,
-        username,
-        apiKey: opts.apiKey,
-        runAsOwner: opts.runAsOwner,
-        directoryOwner,
-      })
-      if (!linked.ok) console.warn("[goad-deploy-link] finalize known instance:", linked.error)
-    })().catch((err) => console.error("[goad-deploy-link] finalize known instance:", err))
+      const rootCreds = rootPasswordCredsIfSet(getSettings())
+      const deadline = Date.now() + POLL_MAX_MS
+      try {
+        while (true) {
+          const listed = await listGoadInstances(rootCreds)
+          const directoryOwner =
+            listed.find((i) => i.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
+          const linked = await finalizeGoadDeployLinkage({
+            taskId: opts.taskId,
+            rangeId,
+            instanceId,
+            username,
+            apiKey: opts.apiKey,
+            runAsOwner: opts.runAsOwner,
+            directoryOwner,
+          })
+          if (linked.ok) return
+          if (!linked.pending) {
+            console.warn("[goad-deploy-link] finalize known instance:", linked.error)
+            return
+          }
+          if (Date.now() >= deadline) break
+          await new Promise((r) => setTimeout(r, POLL_MS))
+        }
+        console.warn(
+          `[goad-deploy-link] timed out waiting for workspace owner (task=${opts.taskId} range=${rangeId} instance=${instanceId})`,
+        )
+      } catch (err) {
+        console.error("[goad-deploy-link] finalize known instance:", err)
+      }
+    })()
     return { handoffId: handoff.id }
   }
 
@@ -181,6 +211,7 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
           directoryOwner,
         })
         if (!linked.ok) {
+          if (linked.pending) continue
           if (linked.skip) {
             beforeIds.add(newId)
             continue

@@ -228,3 +228,36 @@ export function updateSettings(patch: Partial<RuntimeSettings>): RuntimeSettings
   saveOverridesToDb(patch)
   return getSettings()
 }
+
+const LUX_HOST_UPDATE_KEY_SETTING = "luxHostUpdateKey"
+
+/** HMAC key for lux-host self-update. Empty when Settings has not installed the helper. */
+export function getLuxHostUpdateKey(): string {
+  try {
+    const db = getDb()
+    const row = db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(LUX_HOST_UPDATE_KEY_SETTING) as { value: string } | undefined
+    const stored = row?.value ?? ""
+    if (!stored || !isSettingsValueAtRestEncrypted(stored)) return ""
+    const key = decryptSettingsValueAtRest(stored, appSecretForSettingsAtRest()).trim()
+    return /^[0-9a-f]{64}$/.test(key) ? key : ""
+  } catch {
+    return ""
+  }
+}
+
+export function setLuxHostUpdateKey(key: string): void {
+  const trimmed = key.trim()
+  if (!/^[0-9a-f]{64}$/.test(trimmed)) {
+    throw new Error("lux-host update key is invalid")
+  }
+  const db = getDb()
+  db.prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  ).run(
+    LUX_HOST_UPDATE_KEY_SETTING,
+    encryptSettingsValueAtRest(trimmed, appSecretForSettingsAtRest()),
+    Date.now(),
+  )
+}

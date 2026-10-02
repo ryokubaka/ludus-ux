@@ -7,7 +7,8 @@
 # Operations:
 #   version
 #   revision
-#   self-update                       (new script on stdin; LUX ships updates this way)
+#   self-update                       (HMAC line, then the new script, on stdin)
+#   run-as-user <user>                (script on stdin; runs as that user)
 #   true
 #   id
 #   writable-dir <path>
@@ -224,7 +225,7 @@ shift || true
 
 case "$op" in
   version)
-    echo 3
+    echo 4
     ;;
   revision)
     [[ $# -eq 0 ]] || die "revision"
@@ -233,18 +234,54 @@ case "$op" in
   self-update)
     # The SSH account that may run lux-host is the host admin LUX uses.
     # Later LUX releases push a new helper here so operators are not asked
-    # to reinstall it by hand. The body must be this program, not a shell.
+    # to reinstall it by hand. Marker strings are not enough: the body must
+    # carry an HMAC-SHA256 made with /etc/lux-host.update-key.
     [[ $# -eq 0 ]] || die "self-update"
+    [[ -f /etc/lux-host.update-key ]] || die "update key"
+    assert_not_symlink /etc/lux-host.update-key
+    tmp="$(mktemp)"
+    body="$(mktemp)"
+    trap 'rm -f "$tmp" "$body"' EXIT
+    head -c 524354 > "$tmp"
+    [[ -s "$tmp" ]] || die "empty"
+    [[ "$(wc -c < "$tmp")" -le 524353 ]] || die "too large"
+    python3 - "$tmp" "$body" <<'PY' || die "hmac"
+import hmac, hashlib, sys
+raw = open(sys.argv[1], "rb").read()
+nl = raw.find(b"\n")
+if nl != 64:
+    sys.exit(2)
+mac = raw[:nl].decode("ascii")
+body = raw[nl + 1:]
+if len(body) == 0 or len(body) > 524288:
+    sys.exit(2)
+if any(c not in "0123456789abcdef" for c in mac):
+    sys.exit(2)
+key = open("/etc/lux-host.update-key", "rb").read().strip()
+if not key:
+    sys.exit(2)
+got = hmac.new(key, body, hashlib.sha256).hexdigest()
+if not hmac.compare_digest(got, mac):
+    sys.exit(3)
+open(sys.argv[2], "wb").write(body)
+PY
+    head -n 1 "$body" | grep -qx '#!/bin/bash' || die "shebang"
+    grep -q 'lux-host: must run as root via sudo' "$body" || die "marker"
+    grep -q 'self-update)' "$body" || die "marker"
+    bash -n "$body" || die "syntax"
+    install -o root -g root -m 755 "$body" /usr/local/sbin/lux-host
+    ;;
+  run-as-user)
+    [[ $# -eq 1 ]] || die "run-as-user"
+    is_login "$1" || die "bad user"
+    [[ "$1" != "root" ]] || die "refusing root"
+    id -u "$1" >/dev/null 2>&1 || die "no such user"
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' EXIT
     head -c 524289 > "$tmp"
     [[ -s "$tmp" ]] || die "empty"
     [[ "$(wc -c < "$tmp")" -le 524288 ]] || die "too large"
-    head -n 1 "$tmp" | grep -qx '#!/bin/bash' || die "shebang"
-    grep -q 'lux-host: must run as root via sudo' "$tmp" || die "marker"
-    grep -q 'self-update)' "$tmp" || die "marker"
-    bash -n "$tmp" || die "syntax"
-    install -o root -g root -m 755 "$tmp" /usr/local/sbin/lux-host
+    sudo -H -u "$1" bash -s < "$tmp"
     ;;
   true)
     exit 0

@@ -326,9 +326,11 @@ function ruleName(rule: unknown): string {
 }
 
 /**
- * Keep the snapshot's defaults and rules, then append rules from `yamlText`
- * whose names are not already present. A second `network:` block must not
- * replace rules the range already has.
+ * Ludus inserts each YAML rule with iptables `-I`, so the last stored rule is
+ * evaluated first. Names already in the snapshot stay in that storage order
+ * (and keep the snapshot body). Rules that exist only in `yamlText` are stored
+ * first, in the order they appear there, so they evaluate after the snapshot.
+ * Snapshot defaults such as `inter_vlan_default` win over the current file.
  */
 export function mergeNetworkSection(yamlText: string, snapshot: NetworkSnapshot): string {
   let doc: Record<string, unknown>
@@ -344,14 +346,16 @@ export function mergeNetworkSection(yamlText: string, snapshot: NetworkSnapshot)
       ? (current as Record<string, unknown>)
       : {}
   const currentRules = Array.isArray(currentNet.rules) ? currentNet.rules : []
-  const kept = Array.isArray(snapshot.rules) ? [...snapshot.rules] : []
-  const seen = new Set(kept.map(ruleName).filter(Boolean))
+  const snapshotRules = Array.isArray(snapshot.rules) ? [...snapshot.rules] : []
+  const seen = new Set(snapshotRules.map(ruleName).filter(Boolean))
+  const added: unknown[] = []
   for (const rule of currentRules) {
     const name = ruleName(rule)
     if (name && seen.has(name)) continue
-    kept.push(rule)
+    added.push(rule)
     if (name) seen.add(name)
   }
+  const kept = [...added, ...snapshotRules]
   const { rules: _snapshotRules, ...snapshotRest } = snapshot
   doc.network = { ...currentNet, ...snapshotRest, rules: kept }
   return yaml.dump(doc, YAML_DUMP_OPTS)

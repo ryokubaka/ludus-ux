@@ -17,7 +17,7 @@ import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-requ
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
-import { asPrivilegedShell, formatLuxHost } from "./root-ssh-preflight"
+import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
@@ -39,9 +39,11 @@ import { goadLogShowsFailure, goadLogShowsInterrupt } from "./goad-task-outcome"
 //  2. For `range config set -f <file>`: combine network rules before Ludus
 //     stores the config that `range deploy` applies. A wizard review file
 //     already contains that combination and is copied over as-is. Otherwise
-//     the sidecar keeps the range's existing rules and appends rules the
-//     rendered config added. ludus_extensions still come from their sidecar.
-const LUDUS_WRAPPER_SH = [
+//     the sidecar keeps the range's existing rules in their storage order and
+//     places rules that exist only on the rendered file so iptables -I
+//     evaluates them after those rules. ludus_extensions still come from
+//     their sidecar.
+export const LUDUS_WRAPPER_SH = [
   '#!/bin/sh',
   '_R="REAL_LUDUS_PATH"',
   '',
@@ -102,15 +104,23 @@ const LUDUS_WRAPPER_SH = [
   '   cur=d.get("network") if isinstance(d.get("network"), dict) else {}',
   '   cur_rules=cur.get("rules") if isinstance(cur.get("rules"), list) else []',
   '   snap_rules=snap.get("rules") if isinstance(snap.get("rules"), list) else []',
-  '   kept=[]; seen=set()',
-  '   for r in list(snap_rules)+list(cur_rules):',
+  '   seen=set(); snap_kept=[]',
+  '   for r in snap_rules:',
+  '    if not isinstance(r, dict):',
+  '     continue',
+  '    snap_kept.append(r)',
+  '    name=r.get("name")',
+  '    if name: seen.add(name)',
+  '   added=[]',
+  '   for r in cur_rules:',
   '    if not isinstance(r, dict):',
   '     continue',
   '    name=r.get("name")',
   '    if name and name in seen:',
   '     continue',
-  '    kept.append(r)',
+  '    added.append(r)',
   '    if name: seen.add(name)',
+  '   kept=added+snap_kept',
   '   merged=dict(cur)',
   '   for k,v in snap.items():',
   '    if k!="rules": merged[k]=v',
@@ -421,8 +431,30 @@ export async function sshExecAccount(
 }
 
 export type WorkspaceSshPlan =
-  | { ok: true; command: string; creds: SSHCreds | undefined }
+  | { ok: true; command: string | readonly string[]; creds: SSHCreds | undefined; stdin?: string }
   | { ok: false; status: number; error: string }
+
+const RUN_AS_USER_NAME = /^[a-z_][a-z0-9_-]{0,31}$/
+
+/**
+ * Impersonated GOAD command for the host SSH account.
+ * Root keeps `sudo -H -u`. Any other account uses lux-host `run-as-user`
+ * with the script on stdin. The script is not a command argument.
+ */
+export function wrapImpersonatedGoadCommand(inner: string, username: string, hostUser: string): string {
+  const host = hostUser.trim() || "root"
+  if (host === "root") {
+    const safe = username.replace(/'/g, "")
+    return `sudo -H -u '${safe}' bash -c '${inner.replace(/'/g, "'\\''")}'`
+  }
+  const user = username.trim()
+  if (!RUN_AS_USER_NAME.test(user) || user === "root") {
+    return `echo "Linux user cannot be switched to through lux-host." >&2; exit 1`
+  }
+  const delim = `LUX_RUN_AS_${randomUUID().replace(/-/g, "")}`
+  const remote = formatLuxHost(host, ["run-as-user", user])
+  return `${remote} <<'${delim}'\n${inner}\n${delim}`
+}
 
 /**
  * Linux account that owns `workspace/<instance>/`. Impersonation wins.
@@ -446,15 +478,17 @@ export function workspaceOwnerLinuxUser(
 
 /**
  * Run a workspace mutation as `owner`.
- * Their own SSH login runs the command directly. Otherwise the privileged host
- * account (root, or lux-host) switches to that user. Passing the host account's
- * password as the command user skips lux-host and hits EACCES on their files.
+ * Their own SSH login runs the command directly. A LUX admin may switch to
+ * that user: root uses `sudo -H -u`, and any other host account uses lux-host
+ * `run-as-user` with the script on stdin. A non-admin never switches.
  */
 export function buildWorkspaceSshExecPlan(opts: {
   owner: string
   innerCommand: string
   ownerSshCreds?: SSHCreds
   privilegedSshConfigured: boolean
+  callerIsAdmin: boolean
+  hostSshUser: string
   /** When set, refuse before the mutation if this user cannot write instance.json. */
   workspaceDir?: string
 }): WorkspaceSshPlan {
@@ -487,6 +521,14 @@ export function buildWorkspaceSshExecPlan(opts: {
     return { ok: true, command: inner, creds: opts.ownerSshCreds }
   }
 
+  if (!opts.callerIsAdmin) {
+    return {
+      ok: false,
+      status: 403,
+      error: `GOAD workspace commands run as Linux user ${owner}. Log in with that user's SSH credentials.`,
+    }
+  }
+
   if (!opts.privilegedSshConfigured) {
     return {
       ok: false,
@@ -496,13 +538,31 @@ export function buildWorkspaceSshExecPlan(opts: {
     }
   }
 
+  const host = opts.hostSshUser.trim() || "root"
+  if (host !== "root") {
+    if (!RUN_AS_USER_NAME.test(owner) || owner === "root") {
+      return {
+        ok: false,
+        status: 400,
+        error: `Linux user ${owner} cannot be switched to through lux-host.`,
+      }
+    }
+    const script = [
+      `if ! id -u '${owner}' >/dev/null 2>&1; then`,
+      `echo "Linux user '${owner}' does not exist on the GOAD host." >&2`,
+      `exit 1`,
+      `fi`,
+      inner,
+    ].join("\n")
+    return { ok: true, command: ["run-as-user", owner], creds: undefined, stdin: script }
+  }
+
   const safeInner = inner.replace(/'/g, "'\\''")
   const command = [
     `if ! id -u '${safeUser}' >/dev/null 2>&1; then`,
     `echo "Linux user '${safeUser}' does not exist on the GOAD host." >&2; exit 1; fi;`,
     `sudo -H -u '${safeUser}' bash -c '${safeInner}'`,
   ].join(" ")
-  // Omit creds: sshExec elevates a non-root PROXMOX_SSH_USER through lux-host, then we drop to the owner.
   return { ok: true, command, creds: undefined }
 }
 
@@ -544,8 +604,16 @@ export function workspaceSshExecPlan(
     innerCommand,
     ownerSshCreds,
     privilegedSshConfigured: isRootProxmoxSshConfigured(settings),
+    callerIsAdmin: session.isAdmin === true,
+    hostSshUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
     workspaceDir,
   })
+}
+
+export async function runWorkspaceSshPlan(
+  plan: Extract<WorkspaceSshPlan, { ok: true }>,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return sshExec(plan.command, plan.creds, plan.stdin !== undefined ? { stdin: plan.stdin } : undefined)
 }
 
 /** Run one remote command as the workspace owner. */
@@ -560,7 +628,7 @@ export async function sshExecAsWorkspaceUser(
   if (!plan.ok) {
     throw new Error(plan.error)
   }
-  return sshExec(plan.command, plan.creds)
+  return runWorkspaceSshPlan(plan)
 }
 
 /** GOAD prints this after create_empty / load_instance. */
@@ -668,9 +736,9 @@ export async function streamGoadCommand(
   onClose: (code: number) => void,
   onError: (err: Error) => void,
   creds?: SSHCreds,
-  /** When set, the command is wrapped with `sudo -H -u {username}` and the
-   *  impersonated user's API key replaces the caller's key.  The SSH connection
-   *  itself uses root credentials (creds is ignored and falls back to root/key). */
+  /** When set, a LUX admin runs as this user. Root uses `sudo -H -u`. Any other
+   *  host account uses lux-host `run-as-user`. The SSH connection uses the host
+   *  account (creds is ignored). */
   impersonateAs?: { username: string; apiKey: string },
   /** Ludus session username for ~/.ansible ownership repair when SSH is root-only. */
   ludusLinuxUser?: string,
@@ -686,10 +754,16 @@ export async function streamGoadCommand(
   /** When non-empty, Ludus wrapper appends `--only-roles` to every `ludus range deploy`
    *  in this session (comma-joined list). */
   ludusOnlyRoles?: string[],
+  /** Required when `impersonateAs` is set. A non-admin never switches users. */
+  callerIsAdmin = false,
 ): Promise<() => void> {
   // Keep full args (incl. --lux-install-extension=…) on the task row for history
   // titles; never pass LUX meta flags into goad.sh.
   goadArgs = stripLuxGoadArgsMeta(goadArgs)
+  if (impersonateAs && !callerIsAdmin) {
+    onError(new Error("Admin session required to run GOAD as another Linux user."))
+    return () => {}
+  }
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
@@ -871,8 +945,9 @@ export async function streamGoadCommand(
   //      existing range rules plus extension rules, so the network sidecar is
   //      not applied on top of it.
   //    - Otherwise `.lux-network-snapshot.json` (written by sync-network before
-  //      the session) keeps the range's rules and appends rules the rendered
-  //      file added. `.lux-extensions-snapshot.json` is still written through.
+  //      the session) keeps the range's rules in their storage order and places
+  //      rules that exist only on the rendered file so they evaluate after
+  //      those rules. `.lux-extensions-snapshot.json` is still written through.
   //
   // The wrapper is base64-encoded and decoded on the remote to avoid shell
   // quoting nightmares (nested single/double quotes, Python inside sh, etc.).
@@ -961,7 +1036,11 @@ export async function streamGoadCommand(
 
   const wrapInnerForSudo = (inner: string) =>
     impersonateAs
-      ? `sudo -H -u '${impersonateAs.username}' bash -c '${inner.replace(/'/g, "'\\''")}'`
+      ? wrapImpersonatedGoadCommand(
+          inner,
+          impersonateAs.username,
+          effectivePrivilegedSshUser(getSettings().proxmoxSshUser),
+        )
       : inner
 
   // Build the inner goad command.

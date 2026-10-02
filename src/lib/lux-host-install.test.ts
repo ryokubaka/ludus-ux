@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildLuxHostInstallShell,
   explainLuxHostInstallFailure,
+  luxHostSelfUpdateStdin,
   luxHostSudoUsernameError,
   renderLuxHostSudoers,
   selectLuxHostInstallMode,
@@ -138,6 +139,38 @@ describe("lux-host-install", () => {
   it("explains a user that is absent from sudoers", () => {
     expect(explainLuxHostInstallFailure("user is not in the sudoers file. This incident will be reported to the administrator.", "user"))
       .toMatch(/cannot install this rule/)
+  })
+
+  it("binds a self-update body to the update key", () => {
+    const key = "ab".repeat(32)
+    const script = "#!/bin/bash\necho hi\n"
+    const stdin = luxHostSelfUpdateStdin(script, key)
+    const verify = `
+import hmac, hashlib, sys
+raw = sys.stdin.buffer.read()
+nl = raw.find(b"\\n")
+mac = raw[:nl].decode()
+body = raw[nl + 1:]
+key = sys.argv[1].encode()
+want = sys.argv[2].encode()
+got = hmac.new(key, body, hashlib.sha256).hexdigest()
+sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
+`
+    const ok = spawnSync("python3", ["-c", verify, key, script], { input: stdin, encoding: "utf8" })
+    expect(ok.status).toBe(0)
+    const tampered = stdin.replace("echo hi", "echo no")
+    const bad = spawnSync("python3", ["-c", verify, key, script], { input: tampered, encoding: "utf8" })
+    expect(bad.status).toBe(1)
+    expect(() => luxHostSelfUpdateStdin(script, "short")).toThrow(/invalid/)
+  })
+
+  it("reads the update key from stdin and does not print it", () => {
+    const key = "cd".repeat(32)
+    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "root")
+    expect(cmd).not.toContain(key)
+    const result = spawnSync("bash", ["-c", cmd], { encoding: "utf8", input: key })
+    expect(result.status).not.toBe(0)
+    expect(`${result.stdout ?? ""}${result.stderr ?? ""}`).not.toContain(key)
   })
 
   it("omits sudo when the SSH account is already root", () => {

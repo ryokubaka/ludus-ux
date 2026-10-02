@@ -246,6 +246,7 @@ export async function POST(request: NextRequest) {
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
           typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
           ludusOnlyRoles.length > 0 ? ludusOnlyRoles : undefined,
+          session.isAdmin === true,
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
-import { sshExec, isGoadConfigured, workspaceSshExecPlan } from "@/lib/goad-ssh"
+import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -100,7 +100,7 @@ export async function POST(
   }
 
   try {
-    const { stdout, stderr, code } = await sshExec(plan.command, plan.creds)
+    const { stdout, stderr, code } = await runWorkspaceSshPlan(plan)
     if (code !== 0) {
       logLuxRouteAction(request, session, { outcome: "failure", detail: `SSH exit ${code}` })
       return NextResponse.json(

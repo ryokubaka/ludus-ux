@@ -17,6 +17,14 @@ Each bullet uses a single tag:
 
 ## Unreleased
 
+**LUX**
+
+- [Fix] **lux-host** — The Settings install writes an update key that `self-update` checks. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.
+
+**GOAD**
+
+- [Fix] **Firewall rules** — After Provide, the safety-net merge keeps existing range rules in their current order and evaluates new extension rules after them.
+
 ## [1.4.0] - 2026-10-02
 
 **LUX**

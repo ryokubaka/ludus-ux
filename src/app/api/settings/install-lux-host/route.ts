@@ -1,6 +1,7 @@
+import { randomBytes } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
+import { getSettings, setLuxHostUpdateKey, type RuntimeSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import {
@@ -78,14 +79,15 @@ export async function POST(request: NextRequest) {
   }
 
   const port = settings.sshPort || 22
+  const updateKey = randomBytes(32).toString("hex")
   const runAsUser = (command: string, stdin?: string) =>
     sshExec(host, port, user, password, command, { elevate: false, stdin })
-  const runAsRoot = (command: string) =>
-    sshExec(host, port, "root", rootPassword, command, { elevate: false })
+  const runAsRoot = (command: string, stdin?: string) =>
+    sshExec(host, port, "root", rootPassword, command, { elevate: false, stdin })
 
   try {
     const payload = loadLuxHostInstallPayload(user)
-    await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"))
+    await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"), updateKey)
 
     const verify = (await runAsUser(LUX_HOST_VERIFY_CMD)).trim()
     if (verify !== "0") {
@@ -98,6 +100,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    setLuxHostUpdateKey(updateKey)
     logLuxRouteAction(request, admin.session, { detail: user })
     return finishAdminResponse(
       NextResponse.json({
@@ -112,7 +115,7 @@ export async function POST(request: NextRequest) {
       ?? (rootPassword && /authentication methods failed|all configured authentication/i.test(raw)
         ? "Could not SSH as root with that password. If root login is key-only, install the rule from a root shell on the Ludus host."
         : null)
-    const message = explained ?? redactSecret(redactSecret(raw, password), rootPassword)
+    const message = explained ?? redactSecret(redactSecret(redactSecret(raw, password), rootPassword), updateKey)
     logLuxRouteAction(request, admin.session, { outcome: "failure", detail: message.slice(0, 300) })
     const status = explained || /sorry|incorrect password|authentication/i.test(message) ? 400 : 500
     return finishAdminResponse(NextResponse.json({ error: message }, { status }), admin)

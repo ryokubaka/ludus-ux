@@ -3,8 +3,10 @@ import {
   buildLuxHostBinaryInstallShell,
   bundledLuxHostSha256,
   loadLuxHostScriptText,
+  luxHostSelfUpdateStdin,
   selectLuxHostInstallMode,
 } from "@/lib/lux-host-install"
+import { getLuxHostUpdateKey } from "@/lib/settings-store"
 
 export type LuxHostSyncResult = {
   ok: boolean
@@ -48,8 +50,8 @@ async function readInstalledRevision(): Promise<{ revision: string | null; versi
 /**
  * Install the bundled lux-host when the copy on the Ludus host is older.
  * Root and passwordless full sudo can write the file directly. A helper that
- * already accepts `self-update` (version 3+) replaces itself, so later LUX
- * releases do not need another manual install.
+ * already checks an HMAC on `self-update` (version 4+) replaces itself, so
+ * later LUX releases do not need another manual install.
  */
 export async function ensureLuxHostCurrent(): Promise<LuxHostSyncResult> {
   const want = bundledLuxHostSha256()
@@ -87,7 +89,7 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
     uid,
     sudoAll,
     sudoHelper,
-    helperSupportsSelfUpdate: (installed.version ?? 0) >= 3,
+    helperSupportsSelfUpdate: (installed.version ?? 0) >= 4,
     helperIsLegacy: false,
     hasUserPassword: false,
   })
@@ -101,9 +103,26 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
       return { ok: false, updated: false, detail: written.stderr.trim() || "lux-host install failed" }
     }
   } else if (mode === "self-update") {
-    const updated = await sshExec(["self-update"], undefined, { stdin: script })
+    const updateKey = getLuxHostUpdateKey()
+    if (!updateKey) {
+      return {
+        ok: false,
+        updated: false,
+        detail:
+          "Install lux-host once from Settings → SSH & GOAD using the Ludus host root password. Later updates use self-update and do not ask for that password again.",
+      }
+    }
+    const updated = await sshExec(["self-update"], undefined, { stdin: luxHostSelfUpdateStdin(script, updateKey) })
     if (updated.code !== 0) {
-      return { ok: false, updated: false, detail: updated.stderr.trim() || "lux-host self-update failed" }
+      const stderr = updated.stderr.trim()
+      const needsInstall = /update key|hmac/i.test(stderr) || !stderr
+      return {
+        ok: false,
+        updated: false,
+        detail: needsInstall
+          ? "Install lux-host once from Settings → SSH & GOAD using the Ludus host root password. Later updates use self-update and do not ask for that password again."
+          : stderr || "lux-host self-update failed",
+      }
     }
   } else {
     return {

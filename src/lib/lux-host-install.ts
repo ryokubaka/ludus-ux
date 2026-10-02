@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, createHmac } from "node:crypto"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { shellSingleQuote } from "@/lib/template-packer-paths"
@@ -13,7 +13,7 @@ export function selectLuxHostInstallMode(input: {
   uid: number | null
   sudoAll: boolean
   sudoHelper: boolean
-  /** True when the installed helper accepts `self-update` (version 3+). */
+  /** True when the installed helper checks an HMAC on `self-update` (version 4+). */
   helperSupportsSelfUpdate?: boolean
   /** True only for the old helper that runs a shell string. */
   helperIsLegacy?: boolean
@@ -42,6 +42,14 @@ export function renderLuxHostSudoers(template: string, user: string): string {
 /**
  * The transmitted command is a base64 blob with no `$` and no newlines.
  */
+export function luxHostSelfUpdateStdin(script: string, key: string): string {
+  if (!/^[0-9a-f]{64}$/.test(key)) {
+    throw new Error("lux-host update key is invalid")
+  }
+  const mac = createHmac("sha256", key).update(script).digest("hex")
+  return `${mac}\n${script}`
+}
+
 export function buildLuxHostInstallShell(
   helperB64: string,
   sudoersB64: string,
@@ -50,6 +58,8 @@ export function buildLuxHostInstallShell(
   const script = [
     "set -euo pipefail",
     "umask 077",
+    "key=$(cat)",
+    "[[ \"$key\" =~ ^[0-9a-f]{64}$ ]]",
     "mkdir -p /usr/local/sbin /etc/sudoers.d",
     `printf '%s' ${shellSingleQuote(helperB64)} | base64 -d > /usr/local/sbin/lux-host`,
     "chown root:root /usr/local/sbin/lux-host",
@@ -59,6 +69,9 @@ export function buildLuxHostInstallShell(
     `visudo -cf "$tmp"`,
     `install -o root -g root -m 440 "$tmp" /etc/sudoers.d/lux-host`,
     `rm -f "$tmp"`,
+    "printf '%s' \"$key\" > /etc/lux-host.update-key",
+    "chown root:root /etc/lux-host.update-key",
+    "chmod 600 /etc/lux-host.update-key",
   ].join("; ")
   const scriptB64 = Buffer.from(script).toString("base64")
   const write = `printf '%s' ${shellSingleQuote(scriptB64)} | base64 -d > /tmp/lux-host-install.sh`

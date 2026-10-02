@@ -21,7 +21,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { buildWorkspaceSshExecPlan, chownGoadInstance, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad-ssh"
+import { shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
+import { buildWorkspaceSshExecPlan, chownGoadInstance, listGoadInstances, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad-ssh"
+import { getRunningTasksForInstance } from "@/lib/goad-task-store"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { setPbRangeOwner } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -45,6 +47,27 @@ export async function POST(request: NextRequest) {
   }
 
   const errors: string[] = []
+  const settings = getSettings()
+  let directoryOwner = ""
+  try {
+    const listed = await listGoadInstances()
+    directoryOwner = listed.find((item) => item.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
+  } catch {
+    directoryOwner = ""
+  }
+  if (
+    shouldDeferHostWorkspaceChown({
+      directoryOwner,
+      targetUser: targetUserId,
+      hostUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
+      hostProcessActive: getRunningTasksForInstance(instanceId).length > 0,
+    })
+  ) {
+    return NextResponse.json(
+      { ok: false, errors: ["GOAD is still writing this workspace"] },
+      { status: 409 },
+    )
+  }
 
   // Step 1: Change OS-level file ownership of the GOAD workspace directory.
   // Elevated through lux-host / root — the host SSH account is not root.
@@ -60,7 +83,6 @@ export async function POST(request: NextRequest) {
   if (rangeId) {
     if (chownOk) {
       try {
-        const settings = getSettings()
         await writeGoadRangeId(instanceId, rangeId, async (command) => {
           const plan = buildWorkspaceSshExecPlan({
             owner: targetUserId,

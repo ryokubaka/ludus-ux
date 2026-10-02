@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+const taskGate = vi.hoisted(() => ({ status: "absent" as "absent" | "running" | "completed" }))
+
 const order: string[] = []
 
 vi.mock("@/lib/goad-ssh", () => ({
@@ -20,6 +22,9 @@ vi.mock("@/lib/goad-instance-range-store", () => ({
 
 vi.mock("@/lib/goad-task-store", () => ({
   updateTaskInstance: vi.fn(),
+  getTask: vi.fn(() => (taskGate.status === "absent" ? null : { status: taskGate.status })),
+  getRunningTasksForInstance: vi.fn(() => []),
+  listTasks: vi.fn(() => []),
 }))
 
 vi.mock("@/lib/goad-deploy-handoff-store", () => ({
@@ -52,7 +57,13 @@ import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/go
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { getSettings } from "@/lib/settings-store"
 import type { GoadInstance } from "@/lib/types"
-import { finalizeGoadDeployLinkage, pickNewGoadInstanceId, scheduleGoadDeployLinkage } from "./goad-deploy-link"
+import {
+  finalizeGoadDeployLinkage,
+  goadCommandRunsAsHostAccount,
+  pickNewGoadInstanceId,
+  scheduleGoadDeployLinkage,
+  shouldDeferHostWorkspaceChown,
+} from "./goad-deploy-link"
 
 describe("goad-deploy-link", () => {
   it("picks brand-new instance id not in before set", () => {
@@ -113,6 +124,7 @@ function restoreGoadSshUser() {
 describe("finalizeGoadDeployLinkage", () => {
   beforeEach(() => {
     order.length = 0
+    taskGate.status = "absent"
     vi.clearAllMocks()
     delete process.env.GOAD_SSH_USER
     vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "root" } as ReturnType<typeof getSettings>)
@@ -262,6 +274,57 @@ describe("finalizeGoadDeployLinkage", () => {
     expect(setInstanceRangeLocal).not.toHaveBeenCalled()
   })
 
+  it("does not chown a host-owned workspace while that host process is still running", async () => {
+    vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "ludus" } as ReturnType<typeof getSettings>)
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "alice-range",
+      instanceId: "inst-1",
+      username: "alice",
+      directoryOwner: "ludus",
+      hostProcessActive: true,
+      runAsOwner,
+    })
+    expect(linked).toEqual({
+      ok: false,
+      error: "Host GOAD process is still writing the workspace",
+      pending: true,
+      awaitingProcess: true,
+    })
+    expect(chownGoadInstance).not.toHaveBeenCalled()
+    expect(writeGoadRangeId).not.toHaveBeenCalled()
+    expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+  })
+
+  it("does not chown early when the host account is root", async () => {
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "alice-range",
+      instanceId: "inst-1",
+      username: "alice",
+      directoryOwner: "root",
+      hostProcessActive: true,
+      runAsOwner,
+    })
+    expect(linked).toMatchObject({ ok: false, awaitingProcess: true, pending: true })
+    expect(chownGoadInstance).not.toHaveBeenCalled()
+    expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+  })
+
+  it("still chowns when the workspace is already owned by the target user", async () => {
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "alice-range",
+      instanceId: "inst-1",
+      username: "alice",
+      directoryOwner: "alice",
+      hostProcessActive: true,
+      runAsOwner,
+    })
+    expect(linked).toEqual({ ok: true })
+    expect(order).toEqual(["chown", "write", "sqlite"])
+  })
+
   it("does not write the range file or SQLite when chown fails", async () => {
     vi.mocked(chownGoadInstance).mockRejectedValueOnce(new Error("chown failed"))
     const linked = await finalizeGoadDeployLinkage({
@@ -282,6 +345,7 @@ describe("finalizeGoadDeployLinkage", () => {
 describe("scheduleGoadDeployLinkage", () => {
   beforeEach(() => {
     order.length = 0
+    taskGate.status = "absent"
     vi.clearAllMocks()
     delete process.env.GOAD_SSH_USER
     vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "ludus" } as ReturnType<typeof getSettings>)
@@ -396,5 +460,112 @@ describe("scheduleGoadDeployLinkage", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("does not chown a known host-owned workspace until the host process exits", async () => {
+    vi.useFakeTimers()
+    try {
+      taskGate.status = "running"
+      vi.mocked(listGoadInstances).mockResolvedValue([workspace("inst-1", "ludus")])
+      scheduleGoadDeployLinkage({
+        taskId: "task-1",
+        rangeId: "alice-range",
+        username: "alice",
+        instanceId: "inst-1",
+        runAsOwner,
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      expect(writeGoadRangeId).not.toHaveBeenCalled()
+      expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+      taskGate.status = "completed"
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(order).toEqual(["chown", "write", "sqlite"])
+      expect(chownGoadInstance).toHaveBeenCalledWith("inst-1", "alice", undefined)
+    } finally {
+      taskGate.status = "absent"
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not chown a newly discovered host-owned workspace until the host process exits", async () => {
+    vi.useFakeTimers()
+    try {
+      taskGate.status = "running"
+      let listed: ReturnType<typeof workspace>[] = []
+      vi.mocked(listGoadInstances).mockImplementation(async () => listed)
+      scheduleGoadDeployLinkage({
+        taskId: "task-1",
+        rangeId: "alice-range",
+        username: "alice",
+        beforeInstanceIds: [],
+        runAsOwner,
+      })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      listed = [workspace("new-ws", "ludus")]
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+      taskGate.status = "completed"
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(order).toEqual(["chown", "write", "sqlite"])
+      expect(chownGoadInstance).toHaveBeenCalledWith("new-ws", "alice", undefined)
+      expect(writeGoadRangeId).toHaveBeenCalledWith("new-ws", "alice-range", runAsOwner)
+    } finally {
+      taskGate.status = "absent"
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("host workspace chown deferral", () => {
+  it("defers a different user, including root, and not a same-user chown", () => {
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "ludus",
+      targetUser: "alice",
+      hostUser: "ludus",
+      hostProcessActive: true,
+    })).toBe(true)
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "root",
+      targetUser: "alice",
+      hostUser: "root",
+      hostProcessActive: true,
+    })).toBe(true)
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "",
+      targetUser: "alice",
+      hostUser: "ludus",
+      hostProcessActive: true,
+    })).toBe(true)
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "ludus",
+      targetUser: "alice",
+      hostUser: "ludus",
+      hostProcessActive: false,
+    })).toBe(false)
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "alice",
+      targetUser: "alice",
+      hostUser: "ludus",
+      hostProcessActive: true,
+    })).toBe(false)
+    expect(shouldDeferHostWorkspaceChown({
+      directoryOwner: "ludus",
+      targetUser: "ludus",
+      hostUser: "ludus",
+      hostProcessActive: true,
+    })).toBe(false)
+  })
+
+  it("treats a password or impersonation as the target user's process", () => {
+    expect(goadCommandRunsAsHostAccount({ sshPassword: "", impersonating: false })).toBe(true)
+    expect(goadCommandRunsAsHostAccount({ sshPassword: "secret", impersonating: false })).toBe(false)
+    expect(goadCommandRunsAsHostAccount({ sshPassword: "", impersonating: true })).toBe(false)
   })
 })

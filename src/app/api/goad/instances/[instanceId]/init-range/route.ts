@@ -17,7 +17,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
-import { chownGoadInstance, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
+import { goadCommandRunsAsHostAccount, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
+import { chownGoadInstance, listGoadInstances, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
+import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -139,6 +141,30 @@ export async function POST(
   }
 
   const ownerLinux = sshForSlug.trim()
+  const runsAsHost = goadCommandRunsAsHostAccount({
+    sshPassword: session.sshPassword,
+    impersonating: session.isAdmin === true && !!impersonateApiKey,
+  })
+  let directoryOwner = ""
+  if (runsAsHost) {
+    try {
+      const listed = await listGoadInstances()
+      directoryOwner = listed.find((item) => item.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
+    } catch {
+      directoryOwner = ""
+    }
+  }
+  if (
+    shouldDeferHostWorkspaceChown({
+      directoryOwner,
+      targetUser: ownerLinux,
+      hostUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
+      hostProcessActive: runsAsHost,
+    })
+  ) {
+    logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })
+    return NextResponse.json({ rangeId, created: true })
+  }
   if (session.isAdmin && ownerLinux && ownerLinux.toLowerCase() !== "root") {
     try {
       await chownGoadInstance(instanceId, ownerLinux)

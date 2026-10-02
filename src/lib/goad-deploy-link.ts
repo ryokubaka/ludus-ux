@@ -8,8 +8,8 @@
 
 import { createDeployHandoff, linkHandoffToTask } from "@/lib/goad-deploy-handoff-store"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { updateTaskInstance } from "@/lib/goad-task-store"
 import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad-ssh"
+import { getRunningTasksForInstance, getTask, listTasks, updateTaskInstance } from "@/lib/goad-task-store"
 import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { getSettings } from "@/lib/settings-store"
@@ -39,6 +39,46 @@ function workspaceOwnerGate(directoryOwner: string, targetUser: string, hostUser
   return "foreign"
 }
 
+export function goadCommandRunsAsHostAccount(opts: {
+  sshPassword?: string | null
+  impersonating: boolean
+}): boolean {
+  if (opts.impersonating) return false
+  return !opts.sshPassword?.trim()
+}
+
+export function shouldDeferHostWorkspaceChown(opts: {
+  directoryOwner: string
+  targetUser: string
+  hostUser: string
+  hostProcessActive: boolean
+}): boolean {
+  if (!opts.hostProcessActive) return false
+  if (sameLinuxUser(opts.targetUser, opts.hostUser)) return false
+  if (!isResolvedOwnerName(opts.directoryOwner)) return true
+  return sameLinuxUser(opts.directoryOwner, opts.hostUser)
+}
+
+export function setRangeHostProcessActive(instanceId: string): boolean {
+  if (getRunningTasksForInstance(instanceId).length > 0) return true
+  return listTasks().some((task) => task.status === "running" && !task.instanceId?.trim())
+}
+
+function hostGoadProcessActive(taskId: string, instanceId: string): boolean {
+  if (getTask(taskId)?.status === "running") return true
+  return getRunningTasksForInstance(instanceId).length > 0
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitWhileHostGoadWrites(taskId: string, instanceId: string): Promise<void> {
+  while (hostGoadProcessActive(taskId, instanceId)) {
+    await sleep(POLL_MS)
+  }
+}
+
 export type GoadOwnerExec = (
   command: string,
 ) => Promise<{ stdout: string; stderr: string; code: number }>
@@ -59,7 +99,7 @@ export type GoadDeployLinkageOpts = {
 
 export type GoadDeployLinkageResult =
   | { ok: true }
-  | { ok: false; error: string; skip?: boolean; pending?: boolean }
+  | { ok: false; error: string; skip?: boolean; pending?: boolean; awaitingProcess?: boolean }
 
 /** Pure helper — pick the new instance from a list (exported for tests). */
 export function pickNewGoadInstanceId(
@@ -83,6 +123,7 @@ export async function finalizeGoadDeployLinkage(opts: {
   runAsOwner: GoadOwnerExec
   /** Linux owner of the workspace directory (from the host account's instance list). */
   directoryOwner: string
+  hostProcessActive?: boolean
 }): Promise<GoadDeployLinkageResult> {
   const { taskId, rangeId, instanceId, username, apiKey, runAsOwner, directoryOwner } = opts
   const settings = getSettings()
@@ -96,6 +137,21 @@ export async function finalizeGoadDeployLinkage(opts: {
   }
   if (gate === "foreign") {
     return { ok: false, error: `Workspace is owned by ${directoryOwner.trim()}`, skip: true }
+  }
+  if (
+    shouldDeferHostWorkspaceChown({
+      directoryOwner,
+      targetUser: ownerLinux,
+      hostUser,
+      hostProcessActive: opts.hostProcessActive === true,
+    })
+  ) {
+    return {
+      ok: false,
+      error: "Host GOAD process is still writing the workspace",
+      pending: true,
+      awaitingProcess: true,
+    }
   }
 
   if (ownerLinux && ownerLinux.toLowerCase() !== "root") {
@@ -152,7 +208,7 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
     const instanceId = opts.instanceId.trim()
     void (async () => {
       const rootCreds = rootPasswordCredsIfSet(getSettings())
-      const deadline = Date.now() + POLL_MAX_MS
+      let deadline = Date.now() + POLL_MAX_MS
       try {
         while (true) {
           const listed = await listGoadInstances(rootCreds)
@@ -166,14 +222,20 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
             apiKey: opts.apiKey,
             runAsOwner: opts.runAsOwner,
             directoryOwner,
+            hostProcessActive: hostGoadProcessActive(opts.taskId, instanceId),
           })
           if (linked.ok) return
+          if (linked.awaitingProcess) {
+            await waitWhileHostGoadWrites(opts.taskId, instanceId)
+            deadline = Date.now() + POLL_MAX_MS
+            continue
+          }
           if (!linked.pending) {
             console.warn("[goad-deploy-link] finalize known instance:", linked.error)
             return
           }
           if (Date.now() >= deadline) break
-          await new Promise((r) => setTimeout(r, POLL_MS))
+          await sleep(POLL_MS)
         }
         console.warn(
           `[goad-deploy-link] timed out waiting for workspace owner (task=${opts.taskId} range=${rangeId} instance=${instanceId})`,
@@ -192,12 +254,14 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
   void (async () => {
     const settings = getSettings()
     const rootCreds = rootPasswordCredsIfSet(settings)
-    const deadline = Date.now() + POLL_MAX_MS
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, POLL_MS))
+    let deadline = Date.now() + POLL_MAX_MS
+    let heldId: string | null = null
+    while (true) {
+      if (!heldId && Date.now() >= deadline) break
+      if (!heldId) await sleep(POLL_MS)
       try {
         const instances = await listGoadInstances(rootCreds)
-        const newId = pickNewGoadInstanceId(instances, { rangeId, beforeIds })
+        const newId = heldId ?? pickNewGoadInstanceId(instances, { rangeId, beforeIds })
         if (!newId) continue
         const directoryOwner =
           instances.find((i) => i.instanceId === newId)?.ownerUserId?.trim() ?? ""
@@ -209,19 +273,26 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
           apiKey: opts.apiKey,
           runAsOwner: opts.runAsOwner,
           directoryOwner,
+          hostProcessActive: hostGoadProcessActive(opts.taskId, newId),
         })
-        if (!linked.ok) {
-          if (linked.pending) continue
-          if (linked.skip) {
-            beforeIds.add(newId)
-            continue
-          }
-          console.warn("[goad-deploy-link] finalize:", linked.error)
-          return
+        if (linked.ok) return
+        if (linked.awaitingProcess) {
+          heldId = newId
+          await waitWhileHostGoadWrites(opts.taskId, newId)
+          deadline = Date.now() + POLL_MAX_MS
+          continue
         }
+        heldId = null
+        if (linked.pending) continue
+        if (linked.skip) {
+          beforeIds.add(newId)
+          continue
+        }
+        console.warn("[goad-deploy-link] finalize:", linked.error)
         return
       } catch (err) {
         console.warn("[goad-deploy-link] poll:", (err as Error).message)
+        if (heldId) await sleep(POLL_MS)
       }
     }
     console.warn(

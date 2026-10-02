@@ -157,7 +157,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     confirm("Provide (create Ludus infrastructure)?", async () => {
       const rangeId = await ensureRangeIsolation()
       if (!rangeId) return
-      await runAction("provide", `--repl "use ${instanceId};update_instance_files;provide"`)
+      await runAction("provide", `--repl "use ${instanceId};update_instance_files;provide"`, { rangeId })
     })
   const handleProvisionLab = () =>
     confirm("Run full Ansible provisioning?", () =>
@@ -199,6 +199,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
         await runAction(
           "install",
           `--repl "use ${instanceId};update_instance_files;provide;provision_lab"`,
+          { rangeId },
         )
       },
     )

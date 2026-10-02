@@ -14,7 +14,7 @@ import {
 
 export type LuxHostStatus = LuxHostCapability & { logTail: string }
 
-async function sshLuxHost(command: string): Promise<string> {
+async function sshLuxHost(args: readonly string[]): Promise<string> {
   const settings = getSettings()
   const host = settings.sshHost.trim()
   if (!host) {
@@ -25,7 +25,7 @@ async function sshLuxHost(command: string): Promise<string> {
     settings.sshPort || 22,
     settings.proxmoxSshUser || "root",
     settings.proxmoxSshPassword || "",
-    command,
+    args,
   )
 }
 
@@ -34,11 +34,12 @@ async function sshLuxHost(command: string): Promise<string> {
  * the mounted socket can start a one-shot container that enters the host
  * namespaces and starts scripts/upgrade.sh with systemd-run, so the switch
  * outlives that container. SSH is only the fallback when this process cannot
- * see the socket (LUX built without that mount); it runs the same command.
+ * see the socket (LUX built without that mount). That fallback calls lux-host
+ * upgrade-probe and upgrade-start. The socket path keeps the host shell.
  */
-async function execOnUpgradeHost(command: string): Promise<string> {
-  if (dockerSocketAvailable()) return runHostScriptViaDocker(command)
-  return sshLuxHost(command)
+async function execOnUpgradeHost(dockerScript: string, luxHostArgs: readonly string[]): Promise<string> {
+  if (dockerSocketAvailable()) return runHostScriptViaDocker(dockerScript)
+  return sshLuxHost(luxHostArgs)
 }
 
 export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
@@ -56,7 +57,11 @@ export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
   }
   const viaDocker = dockerSocketAvailable()
   try {
-    const out = await execOnUpgradeHost(buildHostProbeCmd(resolveConfiguredLuxRepoPath()))
+    const repo = resolveConfiguredLuxRepoPath()
+    const out = await execOnUpgradeHost(
+      buildHostProbeCmd(repo),
+      repo ? ["upgrade-probe", repo] : ["upgrade-probe"],
+    )
     return { ...parseHostProbe(out), logTail }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Host command failed"
@@ -99,7 +104,10 @@ export async function startLuxUpgrade(
   }
 
   try {
-    const out = await execOnUpgradeHost(buildStartUpgradeCmd(host.repoPath, tag))
+    const out = await execOnUpgradeHost(
+      buildStartUpgradeCmd(host.repoPath, tag),
+      ["upgrade-start", host.repoPath, tag],
+    )
     if (!/\bstarted\b/.test(out)) {
       return { ok: false, status: 500, error: out.trim() || "Failed to start the upgrade on the host" }
     }

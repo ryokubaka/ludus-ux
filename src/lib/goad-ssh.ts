@@ -430,6 +430,14 @@ export async function sshExecAccount(
   })
 }
 
+function sshExecAccountOrUser(
+  command: string,
+  creds?: SSHCreds,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (creds) return sshExec(command, creds)
+  return sshExecAccount(command)
+}
+
 export type WorkspaceSshPlan =
   | { ok: true; command: string | readonly string[]; creds: SSHCreds | undefined; stdin?: string }
   | { ok: false; status: number; error: string }
@@ -1240,7 +1248,7 @@ export async function writeGoadRangeId(
   const dir = `${goadPath}/workspace/${safeId}`
   const filePath = `${dir}/.goad_range_id`
   const safeRangeId = rangeId.replace(/'/g, "")
-  const run = exec ?? ((command: string) => sshExec(command, creds))
+  const run = exec ?? ((command: string) => sshExecAccountOrUser(command, creds))
   await run(`mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`)
 }
 
@@ -1254,7 +1262,7 @@ export async function readGoadRangeId(
     const goadPath = resolveGoadPath()
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
-    const run = exec ?? ((command: string) => sshExec(command, creds))
+    const run = exec ?? ((command: string) => sshExecAccountOrUser(command, creds))
     const { stdout, code } = await run(`cat '${filePath}' 2>/dev/null`)
     if (code !== 0 || !stdout.trim()) return null
     return stdout.trim()
@@ -1339,7 +1347,7 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
-    const { stdout, code } = await sshExec(cmd, creds);
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
 
     if (code !== 0 || !stdout.trim()) {
       return [];
@@ -1742,7 +1750,7 @@ export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog
   const encoded = Buffer.from(DISCOVER_PY).toString("base64");
   const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
-  const { stdout, code } = await sshExec(cmd, creds);
+  const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
   if (code !== 0 || !stdout.trim()) {
     return { configured: true, goadPath, labs: [], extensions: [] };
   }
@@ -1780,7 +1788,7 @@ export async function getGoadLabConfig(
   try {
     const goadPath = resolveGoadPath();
     const configPath = `${goadPath}/ad/${labName}/data/config.json`;
-    const { stdout, code } = await sshExec(`cat "${configPath}" 2>/dev/null`, creds);
+    const { stdout, code } = await sshExecAccountOrUser(`cat "${configPath}" 2>/dev/null`, creds);
     if (code !== 0 || !stdout.trim()) return null;
     return JSON.parse(stdout);
   } catch {
@@ -1836,7 +1844,7 @@ export async function getInstanceInventories(
     const goadPath = resolveGoadPath();
     const encoded = Buffer.from(LIST_INVENTORIES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}' '${instanceId.replace(/'/g, "'\\''")}'`;
-    const { stdout, code } = await sshExec(cmd, creds);
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
     if (code !== 0 || !stdout.trim()) return [];
     const parsed = JSON.parse(stdout.trim());
     return Array.isArray(parsed) ? parsed : [];

@@ -9,7 +9,7 @@ import {
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
 import { GOAD_COLLECTION_CANARY_FILES } from "@/lib/goad-ansible-env"
-import { sshExec, type SSHCreds } from "@/lib/goad-ssh"
+import { sshExec, sshExecAccount, type SSHCreds } from "@/lib/goad-ssh"
 import { resolveGoadPath, resolveLudusInstallPath } from "@/lib/runtime-paths"
 
 /** Read GOAD ansible/requirements*.yml from the Ludus host (matches GOAD venv Python version when present). */
@@ -26,8 +26,7 @@ export async function readGoadAnsibleRequirementsYaml(
     `cat "$G/$F" 2>/dev/null || true`,
   ].join("; ")
 
-  // GOAD install tree is often root-only (/opt/GOAD*); always read via root SSH.
-  const { stdout } = await sshExec(inner, creds)
+  const { stdout } = creds ? await sshExec(inner, creds) : await sshExecAccount(inner)
   const text = stdout.trim()
   return text || null
 }

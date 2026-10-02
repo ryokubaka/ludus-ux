@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+const UPDATE_KEY = "ab".repeat(32)
 
 vi.mock("@/lib/settings-store", () => ({
   getSettings: vi.fn(() => ({
@@ -7,6 +11,7 @@ vi.mock("@/lib/settings-store", () => ({
     proxmoxSshUser: "ludus",
     proxmoxSshPassword: "",
   })),
+  getLuxHostUpdateKey: vi.fn(() => UPDATE_KEY),
 }))
 
 vi.mock("@/lib/proxmox-ssh", () => ({
@@ -24,8 +29,15 @@ vi.mock("@/lib/lux-releases", () => ({
 
 import { sshExec } from "@/lib/proxmox-ssh"
 import { dockerSocketAvailable, runHostScriptViaDocker } from "@/lib/lux-upgrade-docker"
+import { getLuxHostUpdateKey } from "@/lib/settings-store"
+import { luxHostSelfUpdateStdin } from "./lux-host-install"
 import { buildHostProbeCmd } from "./lux-upgrade-host"
-import { probeLuxUpgradeHost, startLuxUpgrade } from "./lux-upgrade-run"
+import { SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL, probeLuxUpgradeHost, startLuxUpgrade } from "./lux-upgrade-run"
+
+const signedUpgrade = luxHostSelfUpdateStdin(
+  readFileSync(path.join(process.cwd(), "scripts", "upgrade.sh"), "utf8"),
+  UPDATE_KEY,
+)
 
 const PROBE = [
   "repo=/opt/ludus-ux",
@@ -42,6 +54,7 @@ describe("lux upgrade host transport", () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(getLuxHostUpdateKey).mockReturnValue(UPDATE_KEY)
     process.env.LUX_REPO_PATH = "/opt/ludus-ux"
   })
 
@@ -68,7 +81,7 @@ describe("lux upgrade host transport", () => {
       "ludus",
       "",
       ["upgrade-probe", "/opt/ludus-ux"],
-      { stdin: expect.stringContaining("#!/usr/bin/env bash") },
+      { stdin: signedUpgrade },
     )
     expect(runHostScriptViaDocker).not.toHaveBeenCalled()
 
@@ -80,8 +93,29 @@ describe("lux upgrade host transport", () => {
       "ludus",
       "",
       ["upgrade-start", "/opt/ludus-ux", "v1.4.1"],
-      { stdin: expect.stringContaining("#!/usr/bin/env bash") },
+      { stdin: signedUpgrade },
     )
+  })
+
+  it("does not offer the SSH fallback without the stored update key", async () => {
+    vi.mocked(dockerSocketAvailable).mockReturnValue(false)
+    vi.mocked(getLuxHostUpdateKey).mockReturnValue("")
+
+    const probed = await probeLuxUpgradeHost()
+    expect(probed.canSwitch).toBe(false)
+    expect(probed.reason).toBe(SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL)
+    expect(sshExec).not.toHaveBeenCalled()
+    expect(runHostScriptViaDocker).not.toHaveBeenCalled()
+  })
+
+  it("does not offer the SSH fallback when the host rejects the HMAC", async () => {
+    vi.mocked(dockerSocketAvailable).mockReturnValue(false)
+    vi.mocked(getLuxHostUpdateKey).mockReturnValue(UPDATE_KEY)
+    vi.mocked(sshExec).mockRejectedValue(new Error("lux-host: update key"))
+
+    const probed = await probeLuxUpgradeHost()
+    expect(probed.canSwitch).toBe(false)
+    expect(probed.reason).toBe(SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL)
   })
 
   it("keeps the host shell on the Docker socket path", async () => {

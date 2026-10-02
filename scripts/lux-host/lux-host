@@ -46,8 +46,8 @@
 #   wizard-reap
 #   wizard-yaml <uuid>                (YAML on stdin)
 #   proxmox-token
-#   upgrade-probe [repo]             (optional upgrade.sh body on stdin)
-#   upgrade-start <repo> <tag>       (optional upgrade.sh body on stdin)
+#   upgrade-probe [repo]             (HMAC line, then upgrade.sh, on stdin)
+#   upgrade-start <repo> <tag>       (HMAC line, then upgrade.sh, on stdin)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
   exit 1
@@ -220,24 +220,57 @@ writable_by_sudo_user() {
   sudo -u "$SUDO_USER" test -w "$path"
 }
 
+# HMAC-SHA256 of the body, hex on the first line, using /etc/lux-host.update-key.
+# Same check self-update uses. Marker strings are not authorization.
+verify_update_hmac() {
+  local raw="$1" dest="$2"
+  [[ -f /etc/lux-host.update-key ]] || die "update key"
+  assert_not_symlink /etc/lux-host.update-key
+  python3 - "$raw" "$dest" <<'PY' || die "hmac"
+import hmac, hashlib, sys
+raw = open(sys.argv[1], "rb").read()
+nl = raw.find(b"\n")
+if nl != 64:
+    sys.exit(2)
+mac = raw[:nl].decode("ascii")
+body = raw[nl + 1:]
+if len(body) == 0 or len(body) > 524288:
+    sys.exit(2)
+if any(c not in "0123456789abcdef" for c in mac):
+    sys.exit(2)
+key = open("/etc/lux-host.update-key", "rb").read().strip()
+if not key:
+    sys.exit(2)
+got = hmac.new(key, body, hashlib.sha256).hexdigest()
+if not hmac.compare_digest(got, mac):
+    sys.exit(3)
+open(sys.argv[2], "wb").write(body)
+PY
+}
+
 read_upgrade_script_body() {
   UPGRADE_SCRIPT_BODY=""
-  local tmp
-  tmp="$(mktemp)"
-  chmod 700 "$tmp" || { rm -f "$tmp"; die "chmod"; }
-  chown root:root "$tmp" || { rm -f "$tmp"; die "chown"; }
-  head -c 524288 > "$tmp" || { rm -f "$tmp"; die "read"; }
-  if [[ ! -s "$tmp" ]]; then
-    rm -f "$tmp"
+  local raw body
+  raw="$(mktemp)"
+  body="$(mktemp)"
+  trap "rm -f $(printf '%q' "$raw") $(printf '%q' "$body")" EXIT
+  chmod 700 "$raw" "$body" || die "chmod"
+  chown root:root "$raw" "$body" || die "chown"
+  head -c 524354 > "$raw" || die "read"
+  if [[ ! -s "$raw" ]]; then
+    rm -f "$raw" "$body"
+    trap - EXIT
     return 0
   fi
-  if IFS= read -r -n 1 _; then
-    rm -f "$tmp"
+  if [[ "$(wc -c < "$raw")" -gt 524353 ]]; then
     die "too large"
   fi
-  head -n 1 "$tmp" | grep -Eq '^#!/(usr/bin/env bash|bin/bash)\r?$' || { rm -f "$tmp"; die "shebang"; }
-  bash -n "$tmp" || { rm -f "$tmp"; die "syntax"; }
-  UPGRADE_SCRIPT_BODY="$tmp"
+  verify_update_hmac "$raw" "$body"
+  rm -f "$raw"
+  head -n 1 "$body" | grep -Eq '^#!/(usr/bin/env bash|bin/bash)\r?$' || die "shebang"
+  bash -n "$body" || die "syntax"
+  trap - EXIT
+  UPGRADE_SCRIPT_BODY="$body"
 }
 
 select_upgrade_script() {
@@ -280,26 +313,7 @@ case "$op" in
     head -c 524354 > "$tmp"
     [[ -s "$tmp" ]] || die "empty"
     [[ "$(wc -c < "$tmp")" -le 524353 ]] || die "too large"
-    python3 - "$tmp" "$body" <<'PY' || die "hmac"
-import hmac, hashlib, sys
-raw = open(sys.argv[1], "rb").read()
-nl = raw.find(b"\n")
-if nl != 64:
-    sys.exit(2)
-mac = raw[:nl].decode("ascii")
-body = raw[nl + 1:]
-if len(body) == 0 or len(body) > 524288:
-    sys.exit(2)
-if any(c not in "0123456789abcdef" for c in mac):
-    sys.exit(2)
-key = open("/etc/lux-host.update-key", "rb").read().strip()
-if not key:
-    sys.exit(2)
-got = hmac.new(key, body, hashlib.sha256).hexdigest()
-if not hmac.compare_digest(got, mac):
-    sys.exit(3)
-open(sys.argv[2], "wb").write(body)
-PY
+    verify_update_hmac "$tmp" "$body"
     head -n 1 "$body" | grep -qx '#!/bin/bash' || die "shebang"
     grep -q 'lux-host: must run as root via sudo' "$body" || die "marker"
     grep -q 'self-update)' "$body" || die "marker"

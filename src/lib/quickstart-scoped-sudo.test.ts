@@ -1,17 +1,24 @@
 import { spawnSync } from "node:child_process"
+import { DatabaseSync } from "node:sqlite"
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { decryptSettingsValueAtRest } from "./settings-value-at-rest"
 
 const quickstart = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/quickstart.sh")
 
-function offerInstall(fakeRoot: boolean, fakeHelper = false): { status: number; output: string; calls: string } {
+function offerInstall(
+  fakeRoot: boolean,
+  fakeHelper = false,
+  apply = false,
+): { status: number; output: string; calls: string; dir: string; keyFile: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "lux-qs-"))
   const keys = path.join(dir, "keys")
   const bin = path.join(dir, "bin")
   const callLog = path.join(dir, "ssh-calls")
+  const keyFile = path.join(dir, "update-key")
   mkdirSync(keys)
   mkdirSync(bin)
   writeFileSync(path.join(keys, "id_rsa"), "not-a-real-key\n")
@@ -22,6 +29,7 @@ function offerInstall(fakeRoot: boolean, fakeHelper = false): { status: number; 
       "LUDUS_SSH_PORT=22",
       "PROXMOX_SSH_USER=testuser",
       `SSH_KEY_PATH=${keys}`,
+      "APP_SECRET=unit-test-app-secret-32-characters",
       "",
     ].join("\n"),
   )
@@ -45,6 +53,21 @@ case "$cmd" in
     fi
     ;;
 esac
+if [[ "\${FAKE_APPLY}" == "1" && "$cmd" == "bash -c "* ]]; then
+  unshare --user --map-root-user --mount bash -c '
+    set -euo pipefail
+    mount -t tmpfs tmpfs /etc
+    mkdir -p /etc/sudoers.d
+    echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd
+    echo 'root:x:0:' > /etc/group
+    mount -t tmpfs tmpfs /usr/local
+    mkdir -p /usr/local/sbin
+    export PATH="/usr/sbin:/usr/bin:/bin"
+    eval "$1"
+    cat /etc/lux-host.update-key
+  ' bash "$cmd" > ${JSON.stringify(keyFile)}
+  exit $?
+fi
 if [[ "$cmd" == *"visudo"* || "$cmd" == *"bash -c"* ]]; then
   exit 1
 fi
@@ -83,13 +106,15 @@ printf '%s' "$status"
         PATH: `${bin}:${process.env.PATH}`,
         FAKE_ROOT: fakeRoot ? "1" : "0",
         FAKE_HELPER: fakeHelper ? "1" : "0",
+        FAKE_APPLY: apply ? "1" : "0",
+        DATA_DIR: dir,
       },
     },
   )
   const calls = readFileSync(callLog, "utf8")
   const text = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
   const statusText = (result.stdout ?? "").trim().split("\n").pop() ?? ""
-  return { status: Number(statusText), output: text, calls }
+  return { status: Number(statusText), output: text, calls, dir, keyFile }
 }
 
 describe("lux_offer_scoped_host_sudo", () => {
@@ -107,6 +132,20 @@ describe("lux_offer_scoped_host_sudo", () => {
     expect(result.output).not.toContain("Installed.")
     expect(result.output).toContain("sudoers install failed")
     expect(result.calls).not.toContain("lux-host 'id -u'")
+  })
+
+  it("writes the update key and stores it for Settings when the root install runs", () => {
+    const result = offerInstall(true, false, true)
+    expect(result.status, result.output).toBe(0)
+    expect(result.output).toContain("Installed.")
+    const secret = "unit-test-app-secret-32-characters"
+    const key = readFileSync(result.keyFile, "utf8").trim().split("\n").pop() ?? ""
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(result.output).not.toContain(key)
+    const db = new DatabaseSync(path.join(result.dir, "ludus-ux.db"))
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get("luxHostUpdateKey") as { value: string }
+    db.close()
+    expect(decryptSettingsValueAtRest(row.value, secret)).toBe(key)
   })
 
   it("refreshes the helper through lux-host when sudo -n true is denied", () => {

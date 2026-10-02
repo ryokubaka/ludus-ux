@@ -1,9 +1,9 @@
 /**
  * Server-side GOAD deploy linkage — range ↔ instance mapping + ownership.
  *
- * The /goad/new UI does this client-side (handoff → poll → set-range → chown).
+ * The /goad/new UI does this client-side (handoff → poll → set-range).
  * Assistant /api/goad/execute skips that UI, so without this the dashboard
- * "GOAD Instance" button never appears and workspaces stay root-owned.
+ * "GOAD Instance" button never appears and workspaces stay host-owned.
  */
 
 import { createDeployHandoff, linkHandoffToTask } from "@/lib/goad-deploy-handoff-store"
@@ -61,6 +61,17 @@ export async function finalizeGoadDeployLinkage(opts: {
   const { taskId, rangeId, instanceId, username, apiKey, runAsOwner } = opts
   const settings = getSettings()
   const rootCreds = rootPasswordCredsIfSet(settings)
+  const ownerLinux = username.trim()
+
+  if (ownerLinux && ownerLinux.toLowerCase() !== "root") {
+    try {
+      await chownGoadInstance(instanceId, ownerLinux, rootCreds)
+    } catch (err) {
+      const error = (err as Error).message
+      console.warn("[goad-deploy-link] chownGoadInstance:", error)
+      return { ok: false, error }
+    }
+  }
 
   try {
     await writeGoadRangeId(instanceId, rangeId, runAsOwner)
@@ -72,15 +83,6 @@ export async function finalizeGoadDeployLinkage(opts: {
 
   setInstanceRangeLocal(instanceId, rangeId)
   updateTaskInstance(taskId, instanceId)
-
-  const ownerLinux = username.trim()
-  if (ownerLinux && ownerLinux.toLowerCase() !== "root") {
-    try {
-      await chownGoadInstance(instanceId, ownerLinux, rootCreds)
-    } catch (err) {
-      console.warn("[goad-deploy-link] chownGoadInstance:", (err as Error).message)
-    }
-  }
 
   if (apiKey?.trim()) {
     try {

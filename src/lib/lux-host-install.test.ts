@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process"
+import { DatabaseSync } from "node:sqlite"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { decryptSettingsValueAtRest } from "./settings-value-at-rest"
 import {
   buildLuxHostInstallShell,
   explainLuxHostInstallFailure,
@@ -171,6 +173,24 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
     const result = spawnSync("bash", ["-c", cmd], { encoding: "utf8", input: key })
     expect(result.status).not.toBe(0)
     expect(`${result.stdout ?? ""}${result.stderr ?? ""}`).not.toContain(key)
+  })
+
+  it("stores an update key that Settings can decrypt", () => {
+    const secret = "unit-test-app-secret-32-characters"
+    const key = "cd".repeat(32)
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-update-key-"))
+    const result = spawnSync(process.execPath, [path.join(process.cwd(), "scripts/lux-host/record-update-key.mjs")], {
+      input: key,
+      encoding: "utf8",
+      env: { ...process.env, APP_SECRET: secret, DATA_DIR: dir },
+    })
+    expect(result.status, result.stderr).toBe(0)
+    expect(`${result.stdout}${result.stderr}`).not.toContain(key)
+    const db = new DatabaseSync(path.join(dir, "ludus-ux.db"))
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get("luxHostUpdateKey") as { value: string }
+    db.close()
+    expect(row.value.startsWith("enc:v2:")).toBe(true)
+    expect(decryptSettingsValueAtRest(row.value, secret)).toBe(key)
   })
 
   it("omits sudo when the SSH account is already root", () => {

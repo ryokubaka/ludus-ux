@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
-import { getSettings } from "@/lib/settings-store"
+import { luxHostSelfUpdateStdin } from "@/lib/lux-host-install"
+import { getLuxHostUpdateKey, getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { listKnownLuxReleaseTags } from "@/lib/lux-releases"
 import { LUX_VERSION_MANAGEMENT_SINCE, losesVersionManagement, validateLuxSwitchTag } from "@/lib/lux-version"
@@ -17,6 +18,26 @@ import {
 export type LuxHostStatus = LuxHostCapability & { logTail: string }
 
 const UPGRADE_SCRIPT_MAX = 524288
+
+export const SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL =
+  "The one-time Settings lux-host install is required for the SSH fallback."
+
+function signedBundledUpgradeStdin(): string {
+  const key = getLuxHostUpdateKey()
+  if (!/^[0-9a-f]{64}$/.test(key)) {
+    throw new Error(SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL)
+  }
+  return luxHostSelfUpdateStdin(bundledUpgradeScript(), key)
+}
+
+function upgradeHostFailure(message: string, viaDocker: boolean): string {
+  if (/update key|hmac|Settings lux-host install is required/i.test(message)) {
+    return SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL
+  }
+  return viaDocker
+    ? `Could not inspect the local Docker host: ${message}`
+    : `Could not inspect the LUX host: ${message}`
+}
 
 function bundledUpgradeScript(): string {
   const file = path.join(process.cwd(), "scripts", "upgrade.sh")
@@ -49,12 +70,13 @@ async function sshLuxHost(args: readonly string[], stdin: string): Promise<strin
  * namespaces and starts scripts/upgrade.sh with systemd-run, so the switch
  * outlives that container. SSH is only the fallback when this process cannot
  * see the socket (LUX built without that mount). That fallback calls lux-host
- * upgrade-probe and upgrade-start with this build's scripts/upgrade.sh on stdin.
- * The socket path keeps the host shell.
+ * upgrade-probe and upgrade-start with this build's scripts/upgrade.sh and an
+ * HMAC from the stored update key. The socket path keeps the host shell and
+ * does not need that key.
  */
 async function execOnUpgradeHost(dockerScript: string, luxHostArgs: readonly string[]): Promise<string> {
   if (dockerSocketAvailable()) return runHostScriptViaDocker(dockerScript)
-  return sshLuxHost(luxHostArgs, bundledUpgradeScript())
+  return sshLuxHost(luxHostArgs, signedBundledUpgradeStdin())
 }
 
 export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
@@ -85,9 +107,7 @@ export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
       repoPath: null,
       dirty: false,
       checkout: null,
-      reason: viaDocker
-        ? `Could not inspect the local Docker host: ${message}`
-        : `Could not inspect the LUX host: ${message}`,
+      reason: upgradeHostFailure(message, viaDocker),
       logTail,
     }
   }
@@ -128,10 +148,10 @@ export async function startLuxUpgrade(
     }
     return { ok: true, tag }
   } catch (err) {
-    return {
-      ok: false,
-      status: 500,
-      error: err instanceof Error ? err.message : "Failed to start the upgrade on the host",
+    const message = err instanceof Error ? err.message : "Failed to start the upgrade on the host"
+    if (/update key|hmac|Settings lux-host install is required/i.test(message)) {
+      return { ok: false, status: 409, error: SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL }
     }
+    return { ok: false, status: 500, error: message }
   }
 }

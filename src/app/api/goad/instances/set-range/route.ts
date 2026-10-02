@@ -2,8 +2,10 @@
  * POST /api/goad/instances/set-range
  *
  * Writes a rangeId to the .goad_range_id tracking file for one or more GOAD
- * instance workspaces.  Called after a new-instance deploy completes to link
+ * instance workspaces. Called after a new-instance deploy completes to link
  * the newly created instance(s) with the pre-created dedicated Ludus range.
+ * An admin chowns the workspace to its owner first. SQLite is updated only
+ * after that file write succeeds.
  *
  * Body: { rangeId: string; instanceIds: string[] }
  */
@@ -11,7 +13,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
+import { chownGoadInstance, sshExecAsWorkspaceUser, workspaceOwnerLinuxUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -35,24 +37,20 @@ export async function POST(request: NextRequest) {
       : undefined
   const runAsOwner = (command: string) =>
     sshExecAsWorkspaceUser(request, session, command, userCreds)
+  const owner = workspaceOwnerLinuxUser(session, request)
 
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
   for (const instanceId of instanceIds) {
-    // Write to local DB first — reliable, no SSH dependency.
-    // This ensures the instances API returns the correct ludusRangeId even when
-    // root SSH credentials are not configured (SSH write is best-effort only).
-    setInstanceRangeLocal(instanceId, rangeId)
-
-    // Best-effort SSH write to the .goad_range_id file on the remote server.
-    // This keeps the on-server record in sync for any tooling that reads it directly.
     try {
+      if (session.isAdmin && owner && owner.toLowerCase() !== "root") {
+        await chownGoadInstance(instanceId, owner)
+      }
       await writeGoadRangeId(instanceId, rangeId, runAsOwner)
+      setInstanceRangeLocal(instanceId, rangeId)
       results.push({ instanceId, ok: true })
     } catch (err) {
-      // SSH write failed — local DB is already updated so the UI will still show
-      // the correct association.
-      results.push({ instanceId, ok: true, error: (err as Error).message })
+      results.push({ instanceId, ok: false, error: (err as Error).message })
     }
   }
 

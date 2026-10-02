@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import { createHmac } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -6,7 +7,7 @@ import { describe, expect, it } from "vitest"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
 
-function fakeRootBin(): string {
+function fakeRootBin(opts?: { python?: boolean }): string {
   const dir = mkdtempSync(path.join(tmpdir(), "lux-host-fake-"))
   const stub = (name: string, body: string) => {
     const file = path.join(dir, name)
@@ -14,7 +15,9 @@ function fakeRootBin(): string {
   }
   stub("id", "#!/bin/sh\nif [ \"$1\" = \"-u\" ]; then echo 0; exit 0; fi\nif [ \"$1\" = \"-un\" ]; then echo root; exit 0; fi\necho 0\n")
   stub("getent", "#!/bin/sh\nif [ \"$1\" = passwd ] && [ \"$2\" = luxuser ]; then echo 'luxuser:x:1000:1000::/home/luxuser:/bin/bash'; exit 0; fi\nexit 2\n")
-  for (const name of ["pvesh", "qm", "chown", "chmod", "chpasswd", "mkdir", "rm", "find", "cat", "date", "python3", "go", "curl", "wget", "brctl", "ip", "docker", "git", "systemd-run", "base64", "install", "sudo"]) {
+  const names = ["pvesh", "qm", "chown", "chmod", "chpasswd", "mkdir", "rm", "find", "cat", "date", "python3", "go", "curl", "wget", "brctl", "ip", "docker", "git", "systemd-run", "base64", "install", "sudo"]
+  for (const name of names) {
+    if (name === "python3" && opts?.python === false) continue
     stub(name, "#!/bin/sh\necho \"$0 $*\" >> \"${LUX_HOST_STUB_LOG}\"\nexit 0\n")
   }
   return dir
@@ -187,14 +190,18 @@ describe("lux-host allowlist", () => {
     denied(["upgrade-probe", "/tmp/not-lux;id"])
   })
 
-  it("runs a stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {
+  it("runs a signed stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "lux-upgrade-owned-"))
     mkdirSync(path.join(repo, "scripts"), { recursive: true })
     mkdirSync(path.join(repo, "data"), { recursive: true })
     writeFileSync(path.join(repo, "docker-compose.yml"), "services: {}\n")
     writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\necho checkout\n", { mode: 0o755 })
-    const body = "#!/usr/bin/env bash\necho from-stdin\n"
     const env = { SUDO_USER: "ludus" }
+    const key = "ab".repeat(32)
+    const body = "#!/usr/bin/env bash\nexit 0\n"
+    const unsigned = "#!/bin/bash\necho from-stdin\n"
+    const sign = (text: string, macKey: string) =>
+      `${createHmac("sha256", macKey).update(text).digest("hex")}\n${text}`
 
     const refusedProbe = run(["upgrade-probe", repo], "", env)
     expect(refusedProbe.status).toBe(2)
@@ -206,19 +213,82 @@ describe("lux-host allowlist", () => {
     expect(refusedStart.stderr).toMatch(/writable by the caller/)
     expect(refusedStart.log).not.toContain("systemd-run")
 
-    const probed = run(["upgrade-probe", repo], body, env)
+    const unsignedProbe = runUpgrade(["upgrade-probe", repo], unsigned, key)
+    expect(unsignedProbe.status).toBe(2)
+    expect(unsignedProbe.stderr).toMatch(/hmac/)
+    expect(unsignedProbe.stdout).not.toMatch(/^ok=yes$/m)
+    expect(unsignedProbe.log).not.toContain("systemd-run")
+    expect(unsignedProbe.log).not.toContain("from-stdin")
+
+    const badMac = runUpgrade(["upgrade-start", repo, "v1.4.0"], sign(body, "cd".repeat(32)), key)
+    expect(badMac.status).toBe(2)
+    expect(badMac.stderr).toMatch(/hmac/)
+    expect(badMac.log).not.toContain("systemd-run")
+
+    const missingKey = runUpgrade(["upgrade-probe", repo], sign(body, key), null)
+    expect(missingKey.status).toBe(2)
+    expect(missingKey.stderr).toMatch(/update key/)
+    expect(missingKey.stdout).not.toMatch(/^ok=yes$/m)
+
+    const probed = runUpgrade(["upgrade-probe", repo], sign(body, key), key)
     expect(probed.status, probed.stderr).toBe(0)
     expect(probed.stdout).toMatch(/^ok=yes$/m)
     expect(probed.log).not.toContain("systemd-run")
 
-    const started = run(["upgrade-start", repo, "v1.4.0"], body, env)
+    const started = runUpgrade(["upgrade-start", repo, "v1.4.0"], sign(body, key), key)
     expect(started.status, started.stderr).toBe(0)
     expect(started.stdout.trim()).toBe("started")
     const script = /LUX_UPGRADE_SCRIPT=(\S+)/.exec(started.log)?.[1]
     expect(script).toBeTruthy()
     expect(script).not.toBe(path.join(repo, "scripts/upgrade.sh"))
     expect(readFileSync(script!, "utf8")).toBe(body)
+    expect(started.log).not.toContain("from-stdin")
     expect(started.log).not.toContain(path.join(repo, "scripts/upgrade.sh"))
     expect(started.log).toContain('bash "$LUX_UPGRADE_SCRIPT"')
   })
 })
+
+function runUpgrade(
+  args: string[],
+  stdin: string,
+  updateKey: string | null,
+): { status: number; stdout: string; stderr: string; log: string } {
+  const bin = fakeRootBin({ python: false })
+  const log = path.join(bin, "stub.log")
+  writeFileSync(log, "")
+  const script = `
+set -e
+mount -t tmpfs tmpfs /etc
+if [ -n "$LUX_TEST_UPDATE_KEY" ]; then
+  printf '%s' "$LUX_TEST_UPDATE_KEY" > /etc/lux-host.update-key
+fi
+exec bash ${JSON.stringify(helper)} "$@"
+`
+  const result = spawnSync(
+    "unshare",
+    ["--user", "--map-root-user", "--mount", "bash", "-c", script, "bash", ...args],
+    {
+      input: stdin,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:/usr/bin:/bin`,
+        LUX_HOST_STUB_LOG: log,
+        LUX_TEST_UPDATE_KEY: updateKey ?? "",
+        SUDO_USER: "ludus",
+      },
+    },
+  )
+  let stubLog = ""
+  try {
+    stubLog = readFileSync(log, "utf8")
+  } catch {
+    stubLog = ""
+  }
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    log: stubLog,
+  }
+}

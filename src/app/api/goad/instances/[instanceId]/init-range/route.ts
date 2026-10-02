@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
-import { readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
+import { chownGoadInstance, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -136,6 +136,18 @@ export async function POST(
   if (!assignRes.error || alreadyOwned) {
     setOwnership(rangeId, ludusUserId, session.username)
     bustAdminCache()
+  }
+
+  const ownerLinux = sshForSlug.trim()
+  if (session.isAdmin && ownerLinux && ownerLinux.toLowerCase() !== "root") {
+    try {
+      await chownGoadInstance(instanceId, ownerLinux)
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to give ${ownerLinux} the GOAD workspace: ${(err as Error).message}` },
+        { status: 500 },
+      )
+    }
   }
 
   try {

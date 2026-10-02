@@ -1072,9 +1072,11 @@ paths:
       summary: Probe whether this install can switch versions
       description: |
         Admin only. Reports whether the Docker socket or SSH fallback can switch
-        this install. The SSH fallback sends this build's `scripts/upgrade.sh` and
-        does not run a checkout copy the SSH user can write. The SSH account does
-        not have to be root.
+        this install. The SSH fallback sends this build's `scripts/upgrade.sh`
+        signed with the lux-host update key. It does not run an unsigned script
+        or a checkout copy the SSH user can write. Without that key the SSH
+        fallback is off. The Docker socket path does not need the key. The SSH
+        account does not have to be root.
       operationId: probeLuxReleaseHost
       security:
         - sessionCookie: []

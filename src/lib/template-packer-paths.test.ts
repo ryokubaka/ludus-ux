@@ -127,6 +127,13 @@ describe("buildLudusTemplateDeleteCmd", () => {
     expect(buildLudusTemplateDeleteCmd("/opt/ludus", "ubuntu-24.04-x64-desktop-template")).toEqual([
       "template-purge",
       "ubuntu-24.04-x64-desktop-template",
+      "ubuntu-24.04-x64-desktop",
+    ])
+    expect(buildLudusTemplateDeleteCmd("/opt/ludus", "securityonion-2.4-x64-template")).toEqual([
+      "template-purge",
+      "securityonion-2.4-x64-template",
+      "securityonion-2.4-x64",
+      "securityonion-2.4",
     ])
   })
 })

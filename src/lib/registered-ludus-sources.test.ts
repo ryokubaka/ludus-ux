@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   blueprintShortName,
   installedBlueprintMatchesSource,
+  installedSourceRemoteMatches,
   registeredSourceLabel,
   sourceBlueprintInstallId,
   sourceIdsAreSameRegistration,
@@ -44,6 +45,59 @@ describe("registered-ludus-sources", () => {
         "ryokubaka-ludus-source-meow",
       ),
     ).toBe(true)
+    const sameRepo = {
+      installedUrl: "https://github.com/badsectorlabs/ludus-source-bsl.git",
+      requestedUrl: "https://github.com/badsectorlabs/ludus-source-bsl",
+      requestedSourceId: "ludus-source-bsl",
+    }
+    expect(
+      installedBlueprintMatchesSource(
+        "badsectorlabs-ludus-source-bsl/goad",
+        "goad",
+        "ludus-source-bsl",
+        sameRepo,
+      ),
+    ).toBe(true)
+    expect(
+      installedBlueprintMatchesSource(
+        "other-ludus-source-bsl/goad",
+        "goad",
+        "ludus-source-bsl",
+        {
+          installedUrl: "https://github.com/other/ludus-source-bsl",
+          requestedUrl: "https://github.com/badsectorlabs/ludus-source-bsl",
+          requestedSourceId: "ludus-source-bsl",
+        },
+      ),
+    ).toBe(false)
+    expect(
+      installedBlueprintMatchesSource(
+        "other-ludus-source-bsl/goad",
+        "goad",
+        "ludus-source-bsl",
+        {
+          installedUrl: "https://github.com/badsectorlabs/ludus-source-bsl",
+          requestedUrl: "https://github.com/badsectorlabs/ludus-source-bsl",
+          requestedSourceId: "ludus-source-bsl",
+        },
+      ),
+    ).toBe(true)
+    expect(
+      installedSourceRemoteMatches(
+        "ludus-source-bsl",
+        "badsectorlabs-ludus-source-bsl",
+        null,
+        "https://github.com/badsectorlabs/ludus-source-bsl",
+      ),
+    ).toBe(true)
+    expect(
+      installedSourceRemoteMatches(
+        "other-ludus-source-bsl",
+        "ludus-source-bsl",
+        null,
+        "https://github.com/badsectorlabs/ludus-source-bsl",
+      ),
+    ).toBe(false)
   })
 
   it("includes the git ref so two registrations of one repo stay distinct", () => {

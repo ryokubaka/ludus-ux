@@ -136,6 +136,16 @@ describe("lux-host allowlist", () => {
     denied(["b64-finish", "00000000-0000-0000-0000-000000000000", "/opt/ludus/config.yml"])
     denied(["template-purge", "../packer"])
     denied(["template-purge", "name;rm"])
+    const purged = run([
+      "template-purge",
+      "securityonion-2.4-x64-template",
+      "securityonion-2.4-x64",
+      "securityonion-2.4",
+    ])
+    expect(purged.log).toContain("/opt/ludus/packer/securityonion-2.4-x64-template")
+    expect(purged.log).toContain("/opt/ludus/packer/securityonion-2.4")
+    expect(purged.log).toContain("/opt/ludus/packer/templates/securityonion-2.4")
+    expect(purged.status).toBe(0)
     denied(["ludus-template-add", "/tmp/t", "abcdefgh"])
     denied(["ludus-template-rm", "ok-name", "short"])
     denied(["sources-repair", "../x"])

@@ -114,5 +114,6 @@ export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: st
  * `templateName` must already match a safe charset (letters, digits, ._-).
  */
 export function buildLudusTemplateDeleteCmd(_ludusRoot: string, templateName: string): readonly string[] {
-  return ["template-purge", templateName]
+  const aliases = templateDirNameAliases(templateName)
+  return ["template-purge", ...(aliases.length > 0 ? aliases : [templateName])]
 }

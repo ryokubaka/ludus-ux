@@ -149,11 +149,13 @@ export async function POST(
   // prefix with the correct one.  Using `find -exec sed` avoids the for-loop
   // syntax pitfalls that arise from joining multi-line shell with "; ".
   //
-  // Two passes:
+  // Three passes:
   //   a) If oldIpRange is known: targeted replacement of the exact old value
   //   b) Fallback: always replace the GOAD default 192.168.56 prefix in case
   //      instance.json was updated but inventories were skipped, or the old
   //      prefix was something else entirely.
+  //   c) Security Onion stays on VLAN 20. The prefix rewrite turns
+  //      192.168.56.20 into 10.<rangeNumber>.10.20; correct that host.
   //
   // Dots in the sed pattern must be escaped (\.) so they match only literal
   // dots, not any character.
@@ -170,6 +172,11 @@ export async function POST(
   // Always also replace the GOAD default fallback so the button works even
   // when instance.json already had the correct prefix but inventories didn't.
   sedCmds.push(`${findInventories} -exec sed -i "s|192\\.168\\.56|${newIpRange}|g" {} +`)
+  // Security Onion Ludus VMs sit on vlan 20 (10.R.20.20), not vlan 10.
+  // Prefix rewrite above turns {{ip_range}}.20 into 10.R.10.20 — fix third octet.
+  sedCmds.push(
+    `find '${workspacePath}' -maxdepth 1 -type f -name 'securityonion*_inventory' -exec sed -i "s|ansible_host=10\\.${rangeNumber}\\.10\\.20|ansible_host=10.${rangeNumber}.20.20|g" {} +`,
+  )
   sedCmds.push(`echo "[+] Inventory sync complete"`)
 
   const inventoryUpdateCmd = sedCmds.join(" && ")

@@ -1,4 +1,4 @@
-import { ludusSourceGitRef } from "@/lib/ludus-source-ref"
+import { ludusSourceGitRef, normalizeGitSourceUrl } from "@/lib/ludus-source-ref"
 
 export interface RegisteredLudusSource {
   id: string
@@ -112,11 +112,49 @@ export function blueprintSourcePrefix(id: string): string {
   return slash >= 0 ? id.slice(0, slash) : ""
 }
 
+function gitRemoteSlug(url: string): string {
+  const cleaned = normalizeGitSourceUrl(url)
+  try {
+    const parts = new URL(cleaned).pathname.split("/").filter(Boolean)
+    return (parts[parts.length - 1] || "").toLowerCase()
+  } catch {
+    const parts = cleaned.split("/").filter(Boolean)
+    return (parts[parts.length - 1] || "").toLowerCase()
+  }
+}
+
+/**
+ * Same git remote. A missing installed URL still matches the requested source id
+ * or that URL's repo slug (Ludus `userID-` prefix of the same repo). Any other
+ * id, including another fork of the same slug, does not match.
+ */
+export function installedSourceRemoteMatches(
+  installedPrefix: string,
+  requestedSourceId: string,
+  installedGitUrl: string | null | undefined,
+  requestedGitUrl: string | null | undefined,
+): boolean {
+  const requested = requestedGitUrl?.trim() ?? ""
+  const installed = installedGitUrl?.trim() ?? ""
+  if (!requested) return false
+  if (installed) return normalizeGitSourceUrl(installed) === normalizeGitSourceUrl(requested)
+  const prefix = installedPrefix.trim().toLowerCase()
+  const requestedId = requestedSourceId.trim().toLowerCase()
+  if (prefix && prefix === requestedId) return true
+  const slug = gitRemoteSlug(requested)
+  return Boolean(slug && prefix === slug)
+}
+
 /** Installed blueprint belongs to this source (not another ref that shares the slug). */
 export function installedBlueprintMatchesSource(
   installedId: string,
   shortName: string,
   sourceID: string,
+  remote?: {
+    installedUrl?: string | null
+    requestedUrl?: string | null
+    requestedSourceId?: string | null
+  },
 ): boolean {
   const id = installedId.trim()
   const short = shortName.trim()
@@ -127,7 +165,14 @@ export function installedBlueprintMatchesSource(
   if (slug !== short) return false
   const prefix = slash >= 0 ? id.slice(0, slash) : ""
   if (!prefix) return false
-  return sourceIdsAreSameRegistration(prefix, source)
+  if (!sourceIdsAreSameRegistration(prefix, source)) return false
+  if (!remote) return true
+  return installedSourceRemoteMatches(
+    prefix,
+    remote.requestedSourceId?.trim() || source,
+    remote.installedUrl,
+    remote.requestedUrl,
+  )
 }
 
 export function sourceBlueprintInstallId(

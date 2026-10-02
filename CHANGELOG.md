@@ -20,6 +20,9 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Fix] **lux-host** — The Settings install writes an update key that `self-update` and the SSH version switch check. Quickstart writes and stores the same key. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.
+- [Fix] **Template delete** — Delete removes catalog-dir aliases and the packer folder whose `vm_name` matches, and fails if that folder is still on disk.
+- [Fix] **Shared source import** — A blueprint is not shared from a source whose git URL differs, including another fork whose id ends with the same repo slug.
+- [Security] **Releases** — The changelog title is passed to the release job in the environment, not interpolated into the shell.
 - [Fix] **In-app releases** — The SSH fallback sends this build's `scripts/upgrade.sh` with an HMAC from the lux-host update key and runs that root-owned copy, so a checkout the SSH user owns can still switch. About stays off when the key is missing or the start would fail. The Docker socket path does not need the key.
 
 **GOAD**
@@ -27,6 +30,8 @@ Each bullet uses a single tag:
 - [Fix] **Firewall rules** — After Provide, the safety-net merge keeps existing range rules in their current order and evaluates new extension rules after them.
 - [Fix] **Range file** — Provide chowns a new workspace only when its Linux owner is the account that created it (`GOAD_SSH_USER` when set, otherwise the Settings SSH user) or already the target owner, then writes `.goad_range_id` as that owner. That chown waits until the host-account GOAD process has exited, including when the install runs longer than instance discovery. Set-range, init-range, and reassign do not take the directory while that process still needs it, including a fresh install whose task has no instance id yet. Init-range tells a caller who is not that host account that GOAD is still writing the workspace, so Provide stops. A key-only caller still receives the range id. Reassign shows that same sentence. A directory owned by someone else is left unchanged and unlinked. A missing list entry, a blank owner, or a numeric uid is not chowned and is retried until the deadline. A failed write leaves the instance unlinked.
 - [Remove] **Sniff watcher** — LUX no longer runs a deploy-time Security Onion sniff watcher. The ludus_securityonion role attaches net1 while the role runs.
+- [Fix] **Network rules** — Clearing every rule in the wizard writes `rules: []` and keeps the existing range's other network settings, including `inter_vlan_default`.
+- [Fix] **SO inventory sync** — Sync Range IPs puts Security Onion back on VLAN 20 (`10.R.20.20`) after the `192.168.56` prefix rewrite.
 
 ## [1.4.0] - 2026-10-02
 

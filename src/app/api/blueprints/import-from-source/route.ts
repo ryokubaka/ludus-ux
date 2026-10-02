@@ -35,6 +35,7 @@ import { shareBlueprintWithUsersAs } from "@/lib/blueprint-share"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { ludusRequest } from "@/lib/ludus-client"
 import { resolveSession } from "@/lib/session"
+import { blueprintSourcePrefix, installedBlueprintMatchesSource } from "@/lib/registered-ludus-sources"
 import {
   buildLudusApiUrl,
   ensureGitSource,
@@ -42,6 +43,7 @@ import {
   gitUrlForBadsectorlabs,
   installSourceBlueprints,
   listSources,
+  sourceGitUrlById,
 } from "@/lib/ludus-source-client"
 import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 
@@ -202,6 +204,21 @@ async function installPublishedSourceBlueprintForViewer(
     return {
       success: false,
       message: `Install finished but "${name}" is not on the shared source.`,
+    }
+  }
+
+  const registered = await listSources(serviceKey)
+  const prefix = blueprintSourcePrefix(blueprintID)
+  if (
+    !installedBlueprintMatchesSource(blueprintID, name, sourceId, {
+      installedUrl: sourceGitUrlById(registered, prefix),
+      requestedUrl: sourceGitUrlById(registered, sourceId),
+      requestedSourceId: sourceId,
+    })
+  ) {
+    return {
+      success: false,
+      message: `Blueprint "${name}" on this host is from a different git remote than the shared source.`,
     }
   }
 

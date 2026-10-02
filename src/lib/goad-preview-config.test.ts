@@ -112,6 +112,19 @@ describe("mergeGoadPreviewWithNetworkRules", () => {
     const doc = yaml.load(merged) as { network: { rules: { name: string }[] } }
     expect(doc.network.rules.map((rule) => rule.name)).toEqual(["Allow clients to DC"])
   })
+
+  it("writes rules: [] and keeps other network fields when the editor list is empty", () => {
+    const merged = mergeGoadPreviewWithNetworkRules(PREVIEW_WITH_EXTENSION, [], EXISTING_RANGE, {
+      rulesAreComplete: true,
+    })
+    const doc = yaml.load(merged) as {
+      network: { inter_vlan_default?: string; rules: { name?: string }[] }
+    }
+    expect(doc.network.inter_vlan_default).toBe("DROP")
+    expect(doc.network.rules).toEqual([])
+    expect(merged).not.toContain("Allow targets to SO Fleet")
+    expect(merged).not.toContain("Allow clients to DC")
+  })
 })
 
 describe("validateGoadConfigYaml", () => {

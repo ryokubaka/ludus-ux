@@ -231,6 +231,15 @@ describe("injectNetworkRules", () => {
     expect(result).toContain("ludus:")
   })
 
+  it("keeps other network fields when an empty rule list is explicit", () => {
+    const result = injectNetworkRules(SAMPLE_YAML, [], { emptyRules: "keep" })
+    const snap = extractNetworkSection(result)
+    expect(snap?.rules).toEqual([])
+    expect(snap?.external_default).toBe("REJECT")
+    expect(result).toContain("ludus:")
+    expect(result).not.toContain("allow-ssh")
+  })
+
   it("preserves existing ludus key", () => {
     const result = injectNetworkRules(SAMPLE_YAML, [
       { name: "new", vlan_src: 10, vlan_dst: 20, protocol: "all", ports: "all", action: "ACCEPT" },

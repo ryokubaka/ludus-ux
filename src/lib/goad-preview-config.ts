@@ -61,7 +61,10 @@ export function mergeGoadPreviewWithNetworkRules(
       yamlText = mergeNetworkSection(yamlText, { ...rest, rules: [] })
     }
   }
-  if (rules.length === 0) return yamlText
+  if (rules.length === 0) {
+    if (!options?.rulesAreComplete) return yamlText
+    return injectNetworkRules(yamlText, [], { emptyRules: "keep" })
+  }
   return injectNetworkRules(yamlText, rules)
 }
 

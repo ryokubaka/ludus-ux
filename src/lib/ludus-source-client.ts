@@ -21,7 +21,10 @@ import {
   isLudusSourceGitPermissionError,
   repairLudusSourcesOwnershipAsRoot,
 } from "@/lib/ludus-source-ownership"
-import { installedBlueprintMatchesSource } from "@/lib/registered-ludus-sources"
+import {
+  blueprintSourcePrefix,
+  installedBlueprintMatchesSource,
+} from "@/lib/registered-ludus-sources"
 import { extractLudusList } from "@/lib/utils"
 
 const BADSL_GIT_URL = "https://github.com/badsectorlabs/ludus-source-bsl"
@@ -660,10 +663,22 @@ export async function resolveSourcePublicKey(apiKey: string, sourceID: string): 
   return sourceID
 }
 
+export function sourceGitUrlById(sources: LudusSourceRow[], sourceId: string): string | null {
+  const want = sourceId.trim().toLowerCase()
+  if (!want) return null
+  const hit = sources.find((row) => (row.sourceID || row.id || "").trim().toLowerCase() === want)
+  return hit?.url?.trim() || null
+}
+
 export function selectInstalledBlueprintId(
   rows: Array<{ id?: string; blueprintID?: string }>,
   shortName: string,
   sourceIDs: string[] = [],
+  remote?: {
+    requestedSourceId: string
+    requestedUrl: string | null
+    urlBySourceId: ReadonlyMap<string, string>
+  },
 ): string | null {
   const sources = sourceIDs.map((s) => s.trim()).filter(Boolean)
   for (const row of rows) {
@@ -673,11 +688,38 @@ export function selectInstalledBlueprintId(
       if (id === shortName || id.endsWith(`/${shortName}`)) return id
       continue
     }
-    if (sources.some((sourceID) => installedBlueprintMatchesSource(id, shortName, sourceID))) {
-      return id
-    }
+    const matches = sources.some((sourceID) =>
+      installedBlueprintMatchesSource(
+        id,
+        shortName,
+        sourceID,
+        remote
+          ? {
+              installedUrl: remote.urlBySourceId.get(blueprintSourcePrefix(id).toLowerCase()) ?? null,
+              requestedUrl: remote.requestedUrl,
+              requestedSourceId: remote.requestedSourceId,
+            }
+          : undefined,
+      ),
+    )
+    if (matches) return id
   }
   return null
+}
+
+function publicKeyFromListedSources(sources: LudusSourceRow[], sourceID: string): string {
+  const want = sourceID.trim().toLowerCase()
+  const hit = sources.find((row) => (row.sourceID || row.id || "").trim().toLowerCase() === want)
+  if (hit?.name?.trim()) return hit.name.trim()
+  if (hit?.url?.trim()) {
+    try {
+      const parts = new URL(hit.url.replace(/\.git$/, "")).pathname.split("/").filter(Boolean)
+      if (parts.length > 0) return parts[parts.length - 1]!
+    } catch {
+      /* ignore */
+    }
+  }
+  return sourceID
 }
 
 export async function findInstalledBlueprintId(
@@ -689,12 +731,32 @@ export async function findInstalledBlueprintId(
   if (!res.ok) return null
   const rows = ludusRows<{ id?: string; blueprintID?: string }>(res.data)
   const sourceIDs: string[] = []
+  let remote:
+    | {
+        requestedSourceId: string
+        requestedUrl: string | null
+        urlBySourceId: ReadonlyMap<string, string>
+      }
+    | undefined
   if (sourceID?.trim()) {
-    sourceIDs.push(sourceID.trim())
-    const publicKey = await resolveSourcePublicKey(apiKey, sourceID)
-    if (publicKey && publicKey !== sourceID) sourceIDs.push(publicKey)
+    const requestedId = sourceID.trim()
+    sourceIDs.push(requestedId)
+    const listed = await listSources(apiKey)
+    const publicKey = publicKeyFromListedSources(listed, requestedId)
+    if (publicKey && publicKey !== requestedId) sourceIDs.push(publicKey)
+    const urlBySourceId = new Map<string, string>()
+    for (const row of listed) {
+      const id = (row.sourceID || row.id || "").trim().toLowerCase()
+      const url = row.url?.trim()
+      if (id && url) urlBySourceId.set(id, url)
+    }
+    remote = {
+      requestedSourceId: requestedId,
+      requestedUrl: sourceGitUrlById(listed, requestedId),
+      urlBySourceId,
+    }
   }
-  return selectInstalledBlueprintId(rows, shortName, sourceIDs)
+  return selectInstalledBlueprintId(rows, shortName, sourceIDs, remote)
 }
 
 export function gitUrlForBadsectorlabs(): string {

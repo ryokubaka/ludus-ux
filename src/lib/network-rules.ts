@@ -193,7 +193,8 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
  * Inject (or remove) network rules into a range-config YAML string.
  *
  * - If `rules` is non-empty: parse the YAML, set `network.rules`, re-dump.
- * - If `rules` is empty: remove the `network:` key entirely.
+ * - If `rules` is empty: remove the `network:` key entirely, unless
+ *   `emptyRules` is `keep` (write `rules: []` and leave other network fields).
  *
  * Rules are written in REVERSED order because Ludus applies each rule via
  * `iptables -I` (insert at position 1), which reverses YAML order in the
@@ -263,7 +264,11 @@ export function sanitizeNetworkRulesYaml(yamlText: string): string {
   return sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText))
 }
 
-export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): string {
+export function injectNetworkRules(
+  yamlText: string,
+  rules: NetworkRule[],
+  options?: { emptyRules?: "remove-network" | "keep" },
+): string {
   let doc: Record<string, unknown>
   try {
     const parsed = yaml.load(yamlText)
@@ -272,7 +277,7 @@ export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): stri
     doc = {}
   }
 
-  if (rules.length === 0) {
+  if (rules.length === 0 && options?.emptyRules !== "keep") {
     delete doc.network
   } else {
     const existing = (doc.network ?? {}) as Record<string, unknown>

@@ -146,6 +146,56 @@ export async function DELETE(request: NextRequest) {
     )
   }
 
+  if (!sshOk) {
+    const payload = classifyTemplateDeleteFailure({
+      templateName: name,
+      apiMessage,
+      sshOut,
+      apiRefused,
+    })
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: `template=${name} disk cleanup failed | ${sshOut || ""}`,
+    })
+    return NextResponse.json(
+      {
+        ...payload,
+        error: sshOut.includes("still present")
+          ? `Template "${name}" is still on disk after delete.`
+          : payload.error,
+      },
+      { status: httpStatusForTemplateDeleteError(payload.code) },
+    )
+  }
+
+  const root = ludusRoot.replace(/\/$/, "")
+  for (const alias of templateDirNameAliases(name)) {
+    for (const dir of [`${root}/packer/${alias}`, `${root}/packer/templates/${alias}`]) {
+      let present = false
+      try {
+        const check = await sshExec(["dir-exists", dir])
+        present = check.code === 0 && (check.stdout || "").trim() === "ok"
+      } catch {
+        present = true
+      }
+      if (!present) continue
+      const payload = classifyTemplateDeleteFailure({
+        templateName: name,
+        apiMessage,
+        sshOut,
+        apiRefused,
+      })
+      logLuxRouteAction(request, session, {
+        outcome: "failure",
+        detail: `template=${name} still on disk at ${dir}`,
+      })
+      return NextResponse.json(
+        { ...payload, error: `Template "${name}" is still on disk after delete.` },
+        { status: httpStatusForTemplateDeleteError(payload.code) },
+      )
+    }
+  }
+
   // Ludus soft-refuse returns HTTP 200 with files still on disk — confirm list is clear.
   const listed = await ludusRequest<TemplateObject[]>("/templates", {
     apiKey,

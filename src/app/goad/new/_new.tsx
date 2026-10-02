@@ -1417,9 +1417,7 @@ export function NewGoadInstancePageClient() {
                 <span className="text-xs text-muted-foreground font-normal">(optional)</span>
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                {selectedExtensions.size > 0
-                  ? "Rules from the selected extensions are listed here and included in the generated configuration. Edit them or add more."
-                  : "Define custom iptables rules for the GOAD range router. Leave empty to use Ludus defaults (all inter-VLAN and external traffic accepted)."}
+                Rules from the selected extensions and from the existing range are listed here, and the generated configuration shows that same list. Clearing every row writes an empty list and keeps the existing range&apos;s other network settings, including inter_vlan_default. An empty list does not accept all inter-VLAN traffic.
               </p>
             </CardHeader>
             <CardContent>
@@ -1433,6 +1431,7 @@ export function NewGoadInstancePageClient() {
                   rules={networkRules}
                   onChange={setNetworkRules}
                   availableVlans={wizardVlans}
+                  emptyMessage="No firewall rules in this list. An empty list keeps the existing range's other network settings, including inter_vlan_default, and does not accept all inter-VLAN traffic."
                 />
               )}
               {configPreviewError && (
@@ -1518,7 +1517,7 @@ export function NewGoadInstancePageClient() {
                   <span className="text-sm">
                     {reviewRuleCount > 0
                       ? `${reviewRuleCount} rule${reviewRuleCount !== 1 ? "s" : ""}`
-                      : "Ludus defaults"}
+                      : "None"}
                   </span>
                 </div>
               </div>

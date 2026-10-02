@@ -25,7 +25,8 @@ Each bullet uses a single tag:
 **GOAD**
 
 - [Fix] **Firewall rules** — After Provide, the safety-net merge keeps existing range rules in their current order and evaluates new extension rules after them.
-- [Fix] **Range file** — Provide chowns the new workspace to its owner, then writes `.goad_range_id` as that owner. A failed write leaves the instance unlinked.
+- [Fix] **Range file** — Provide chowns a new workspace only when that directory is owned by the host SSH account or already by its owner, then writes `.goad_range_id` as that owner. A directory owned by someone else is left unchanged and unlinked. A failed write leaves the instance unlinked.
+- [Remove] **Sniff watcher** — LUX no longer runs a deploy-time Security Onion sniff watcher. The ludus_securityonion role attaches net1 while the role runs.
 
 ## [1.4.0] - 2026-10-02
 

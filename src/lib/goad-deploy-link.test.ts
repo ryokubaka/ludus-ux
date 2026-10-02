@@ -32,7 +32,7 @@ vi.mock("@/lib/root-ssh-auth", () => ({
 }))
 
 vi.mock("@/lib/settings-store", () => ({
-  getSettings: vi.fn(() => ({})),
+  getSettings: vi.fn(() => ({ proxmoxSshUser: "root" })),
 }))
 
 vi.mock("@/lib/range-ownership-store", () => ({
@@ -47,9 +47,12 @@ vi.mock("@/lib/ludus-user-from-profile", () => ({
   ludusCallerFromGetUser: vi.fn(),
 }))
 
-import { chownGoadInstance, writeGoadRangeId } from "@/lib/goad-ssh"
+import { createDeployHandoff } from "@/lib/goad-deploy-handoff-store"
+import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { finalizeGoadDeployLinkage, pickNewGoadInstanceId } from "./goad-deploy-link"
+import { getSettings } from "@/lib/settings-store"
+import type { GoadInstance } from "@/lib/types"
+import { finalizeGoadDeployLinkage, pickNewGoadInstanceId, scheduleGoadDeployLinkage } from "./goad-deploy-link"
 
 describe("goad-deploy-link", () => {
   it("picks brand-new instance id not in before set", () => {
@@ -86,24 +89,85 @@ describe("goad-deploy-link", () => {
 
 const runAsOwner = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }))
 
+function workspace(instanceId: string, ownerUserId: string): GoadInstance {
+  return {
+    instanceId,
+    lab: "GOAD",
+    provider: "ludus",
+    provisioner: "ansible",
+    ipRange: "10.3.10.0/24",
+    status: "CREATED",
+    isDefault: false,
+    extensions: [],
+    ownerUserId,
+  }
+}
+
 describe("finalizeGoadDeployLinkage", () => {
   beforeEach(() => {
     order.length = 0
     vi.clearAllMocks()
+    vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "root" } as ReturnType<typeof getSettings>)
   })
 
-  it("chowns the workspace before writing .goad_range_id and then records it", async () => {
+  it("chowns a host-owned workspace before writing .goad_range_id and then records it", async () => {
     const linked = await finalizeGoadDeployLinkage({
       taskId: "task-1",
       rangeId: "alice-range",
       instanceId: "inst-1",
       username: "alice",
+      directoryOwner: "root",
       runAsOwner,
     })
     expect(linked).toEqual({ ok: true })
     expect(order).toEqual(["chown", "write", "sqlite"])
     expect(chownGoadInstance).toHaveBeenCalledWith("inst-1", "alice", undefined)
     expect(writeGoadRangeId).toHaveBeenCalledWith("inst-1", "alice-range", runAsOwner)
+  })
+
+  it("chowns a workspace created by the non-root host account", async () => {
+    vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "ludus" } as ReturnType<typeof getSettings>)
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "alice-range",
+      instanceId: "inst-1",
+      username: "alice",
+      directoryOwner: "ludus",
+      runAsOwner,
+    })
+    expect(linked).toEqual({ ok: true })
+    expect(order).toEqual(["chown", "write", "sqlite"])
+    expect(chownGoadInstance).toHaveBeenCalledWith("inst-1", "alice", undefined)
+  })
+
+  it("writes the range file when the workspace is already owned by the target user", async () => {
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "alice-range",
+      instanceId: "inst-1",
+      username: "alice",
+      directoryOwner: "alice",
+      runAsOwner,
+    })
+    expect(linked).toEqual({ ok: true })
+    expect(chownGoadInstance).toHaveBeenCalledWith("inst-1", "alice", undefined)
+    expect(writeGoadRangeId).toHaveBeenCalledWith("inst-1", "alice-range", runAsOwner)
+    expect(setInstanceRangeLocal).toHaveBeenCalledWith("inst-1", "alice-range")
+  })
+
+  it("does not chown, write, or record a workspace owned by someone else", async () => {
+    const linked = await finalizeGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "bob-range",
+      instanceId: "alice-ws",
+      username: "bob",
+      directoryOwner: "alice",
+      runAsOwner,
+    })
+    expect(linked).toEqual({ ok: false, error: "Workspace is owned by alice", skip: true })
+    expect(chownGoadInstance).not.toHaveBeenCalled()
+    expect(writeGoadRangeId).not.toHaveBeenCalled()
+    expect(setInstanceRangeLocal).not.toHaveBeenCalled()
   })
 
   it("does not update SQLite when the owner write fails", async () => {
@@ -113,6 +177,7 @@ describe("finalizeGoadDeployLinkage", () => {
       rangeId: "alice-range",
       instanceId: "inst-1",
       username: "alice",
+      directoryOwner: "root",
       runAsOwner,
     })
     expect(linked).toEqual({ ok: false, error: "Permission denied" })
@@ -128,11 +193,74 @@ describe("finalizeGoadDeployLinkage", () => {
       rangeId: "alice-range",
       instanceId: "inst-1",
       username: "alice",
+      directoryOwner: "root",
       runAsOwner,
     })
     expect(linked).toEqual({ ok: false, error: "chown failed" })
     expect(chownGoadInstance).toHaveBeenCalled()
     expect(writeGoadRangeId).not.toHaveBeenCalled()
     expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+  })
+})
+
+describe("scheduleGoadDeployLinkage", () => {
+  beforeEach(() => {
+    order.length = 0
+    vi.clearAllMocks()
+    vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "ludus" } as ReturnType<typeof getSettings>)
+    vi.mocked(createDeployHandoff).mockReturnValue({
+      id: "handoff-1",
+      rangeId: "bob-range",
+      username: "bob",
+      createdAt: 0,
+    })
+  })
+
+  it("does not chown a known workspace owned by someone else", async () => {
+    vi.mocked(listGoadInstances).mockResolvedValue([workspace("alice-ws", "alice")])
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    scheduleGoadDeployLinkage({
+      taskId: "task-1",
+      rangeId: "bob-range",
+      username: "bob",
+      instanceId: "alice-ws",
+      runAsOwner,
+    })
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        "[goad-deploy-link] finalize known instance:",
+        "Workspace is owned by alice",
+      )
+    })
+    expect(chownGoadInstance).not.toHaveBeenCalled()
+    expect(writeGoadRangeId).not.toHaveBeenCalled()
+    expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it("skips another user's new workspace and links a host-owned one", async () => {
+    vi.useFakeTimers()
+    try {
+      let listed = [workspace("alice-ws", "alice")]
+      vi.mocked(listGoadInstances).mockImplementation(async () => listed)
+      scheduleGoadDeployLinkage({
+        taskId: "task-1",
+        rangeId: "bob-range",
+        username: "bob",
+        beforeInstanceIds: [],
+        runAsOwner,
+      })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+
+      listed = [workspace("alice-ws", "alice"), workspace("bob-ws", "ludus")]
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(chownGoadInstance).toHaveBeenCalledWith("bob-ws", "bob", undefined)
+      expect(writeGoadRangeId).toHaveBeenCalledWith("bob-ws", "bob-range", runAsOwner)
+      expect(setInstanceRangeLocal).toHaveBeenCalledWith("bob-ws", "bob-range")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

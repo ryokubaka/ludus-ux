@@ -19,6 +19,16 @@ import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 const POLL_MS = 3_000
 const POLL_MAX_MS = 5 * 60 * 1000
 
+function sameLinuxUser(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase()
+  const right = b.trim().toLowerCase()
+  return left.length > 0 && left === right
+}
+
+function mayChownDeployWorkspace(directoryOwner: string, targetUser: string, hostUser: string): boolean {
+  return sameLinuxUser(directoryOwner, hostUser) || sameLinuxUser(directoryOwner, targetUser)
+}
+
 export type GoadOwnerExec = (
   command: string,
 ) => Promise<{ stdout: string; stderr: string; code: number }>
@@ -36,6 +46,10 @@ export type GoadDeployLinkageOpts = {
   beforeInstanceIds?: Iterable<string>
   runAsOwner: GoadOwnerExec
 }
+
+export type GoadDeployLinkageResult =
+  | { ok: true }
+  | { ok: false; error: string; skip?: boolean }
 
 /** Pure helper — pick the new instance from a list (exported for tests). */
 export function pickNewGoadInstanceId(
@@ -57,11 +71,19 @@ export async function finalizeGoadDeployLinkage(opts: {
   username: string
   apiKey?: string | null
   runAsOwner: GoadOwnerExec
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { taskId, rangeId, instanceId, username, apiKey, runAsOwner } = opts
+  /** Linux owner of the workspace directory (from the host account's instance list). */
+  directoryOwner: string
+}): Promise<GoadDeployLinkageResult> {
+  const { taskId, rangeId, instanceId, username, apiKey, runAsOwner, directoryOwner } = opts
   const settings = getSettings()
   const rootCreds = rootPasswordCredsIfSet(settings)
   const ownerLinux = username.trim()
+  const hostUser = (settings.proxmoxSshUser || "root").trim()
+
+  if (!mayChownDeployWorkspace(directoryOwner, ownerLinux, hostUser)) {
+    const who = directoryOwner.trim() || "unknown"
+    return { ok: false, error: `Workspace is owned by ${who}`, skip: true }
+  }
 
   if (ownerLinux && ownerLinux.toLowerCase() !== "root") {
     try {
@@ -114,16 +136,22 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
   linkHandoffToTask(handoff.id, opts.taskId)
 
   if (opts.instanceId?.trim()) {
-    void finalizeGoadDeployLinkage({
-      taskId: opts.taskId,
-      rangeId,
-      instanceId: opts.instanceId.trim(),
-      username,
-      apiKey: opts.apiKey,
-      runAsOwner: opts.runAsOwner,
-    }).then((linked) => {
+    const instanceId = opts.instanceId.trim()
+    void (async () => {
+      const listed = await listGoadInstances(rootPasswordCredsIfSet(getSettings()))
+      const directoryOwner =
+        listed.find((i) => i.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
+      const linked = await finalizeGoadDeployLinkage({
+        taskId: opts.taskId,
+        rangeId,
+        instanceId,
+        username,
+        apiKey: opts.apiKey,
+        runAsOwner: opts.runAsOwner,
+        directoryOwner,
+      })
       if (!linked.ok) console.warn("[goad-deploy-link] finalize known instance:", linked.error)
-    }).catch((err) => console.error("[goad-deploy-link] finalize known instance:", err))
+    })().catch((err) => console.error("[goad-deploy-link] finalize known instance:", err))
     return { handoffId: handoff.id }
   }
 
@@ -141,6 +169,8 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
         const instances = await listGoadInstances(rootCreds)
         const newId = pickNewGoadInstanceId(instances, { rangeId, beforeIds })
         if (!newId) continue
+        const directoryOwner =
+          instances.find((i) => i.instanceId === newId)?.ownerUserId?.trim() ?? ""
         const linked = await finalizeGoadDeployLinkage({
           taskId: opts.taskId,
           rangeId,
@@ -148,9 +178,15 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
           username,
           apiKey: opts.apiKey,
           runAsOwner: opts.runAsOwner,
+          directoryOwner,
         })
         if (!linked.ok) {
+          if (linked.skip) {
+            beforeIds.add(newId)
+            continue
+          }
           console.warn("[goad-deploy-link] finalize:", linked.error)
+          return
         }
         return
       } catch (err) {

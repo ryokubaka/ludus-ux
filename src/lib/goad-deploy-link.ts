@@ -261,7 +261,7 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
       if (!heldId) await sleep(POLL_MS)
       try {
         const instances = await listGoadInstances(rootCreds)
-        const newId = heldId ?? pickNewGoadInstanceId(instances, { rangeId, beforeIds })
+        const newId: string | null = heldId ?? pickNewGoadInstanceId(instances, { rangeId, beforeIds })
         if (!newId) continue
         const directoryOwner =
           instances.find((i) => i.instanceId === newId)?.ownerUserId?.trim() ?? ""

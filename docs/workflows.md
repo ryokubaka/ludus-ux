@@ -67,14 +67,14 @@ You do not need to trigger Stage 2 manually. LUX coordinates the handoff.
 1. Go to **GOAD → Deploy New Instance**
 2. Pick a **lab type** (e.g. GOAD-Mini)
 3. Optionally add **extensions** (e.g. Exchange)
-4. Optionally configure **firewall rules** — allow/deny specific IPs or domains. You can skip this now and add them later
+4. **Network Rules** lists rules from the selected extensions and from an existing range. The generated configuration shows that same list. Clearing every rule writes an empty list and keeps the existing range's other network settings. You can edit the list or skip the step
 5. Click **Deploy**
 
 What happens next (automatically):
 1. LUX creates a dedicated Ludus range for this lab (named `<you>-<lab>`)
 2. The GOAD wizard sends the install command to the Ludus server over SSH
 3. The terminal on the Deploy Status tab shows live GOAD output as VMs are created and configured
-4. When GOAD finishes, Ludus automatically deploys the range to apply networking and any firewall rules you set
+4. When GOAD finishes, LUX merges the Network Rules list back and Ludus deploys the range
 5. Once both stages complete, your lab is live
 
 **The wizard redirects you to the instance page immediately after GOAD starts** — you do not need to stay on the wizard screen. LUX tracks progress server-side and resumes the log stream if you navigate back.
@@ -99,13 +99,7 @@ Redeployment is faster than a fresh deploy because the Ludus range and workspace
 
 ## The Firewall / Network Rules Queue
 
-If you configure firewall rules in the GOAD wizard, there is an important timing consideration: **GOAD's own install process rewrites the Ludus range config** as it sets up the lab. If LUX applied your rules before GOAD ran, GOAD would overwrite them.
-
-To solve this, LUX uses a **pending-network queue**:
-
-1. When you click Deploy, LUX saves your firewall rules to the server
-2. GOAD runs and completes (potentially overwriting the range config)
-3. LUX **automatically re-applies your firewall rules** after GOAD finishes, then triggers a final Ludus "network" deploy to enforce them
+GOAD's install rewrites the Ludus range config, so LUX saves the **Network Rules** list and merges it back after GOAD finishes, then starts a Ludus deploy with the network tag. Existing rules stay in their stored order. The rest of that merge is under Range YAML vs Range Configuration in [Features](features.md).
 
 You do not need to do anything. The Deploy Status tab shows a "Applying network rules..." step when this is happening. The entire process runs on the server — you can safely navigate away.
 

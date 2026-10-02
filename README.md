@@ -51,7 +51,7 @@ Admins can start the same switch from **Settings → About**. Full behavior, pre
 
 | | |
 |---|---|
-| **Ludus** | **2.0 only.** LUX does not support Ludus 1.x. API **8080**, SSH **22** |
+| **Ludus** | v2.x, not 1.x. API **8080**, SSH **22**. [Requirements](docs/getting-started.md#requirements) |
 | **Host** | Docker + Compose (v2 plugin or `docker-compose`) |
 | **GOAD** (optional) | GOAD repo on the Ludus server + `python3.11-venv` |
 | **LudusHound** (optional) | Clone [LudusHound](https://github.com/bagelByt3s/LudusHound) to `/opt/LudusHound` + `go` for first build |

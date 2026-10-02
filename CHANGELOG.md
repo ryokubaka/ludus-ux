@@ -148,7 +148,7 @@ Each bullet uses a single tag:
 - [Improve] **Router template gate** — Block GOAD/`deployRange` until `debian-11-x64-server-template` is Packer-built (Ludus range router). Enforced in proxy, Dashboard Deploy, range wizards, and `executeGoad`; included in GOAD `templateAudit`.
 - [Improve] **Sources** — Source ID always shown (Ludus 2.3.0+ may auto-prefix with userID); register dialog documents that behavior.
 - [Improve] **Settings** — Ansible verbose + force quirk warning only when connected Ludus is ≤2.2.3 (or version unknown).
-- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/`** and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
+- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/**` and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
 - [Fix] **GOAD venv / exit code** — Recreate broken `~/.goad/.venv` (missing activate) and pip-install when `rich` missing; preserve `goad.sh` exit status so failures are not reported as EXIT 0.
 - [Docs] Features / environment notes for `ludus_extensions` preservation and version-gated verbose warning.
 
@@ -289,7 +289,7 @@ Each bullet uses a single tag:
 - [Add] **LogViewer compound API** — `LogViewerCompound.Root|Toolbar|Search|Body` for composable log panes; adopted on Dashboard, Range Logs, Admin → Application Logs, Templates, Testing, and Range Config.
 - [Add] **E2E** — GOAD task ACL unauthenticated (`e2e/goad-task-acl.spec.ts`); deploy tab smoke (`e2e/goad-instance-deploy.spec.ts`); Extensions/History tabs with auth (`e2e/goad-instance-tabs.spec.ts`).
 - [Add] **Tests** — Unit coverage for bashrc API-key parsing, selected-range cookie resolution, Ludus group list parsing, snapshots view grouping, and Ludus proxy cache invalidation (112 tests).
-- [Improve] **GOAD instance page** — Six typed tab modules (`goad-instance-tabs/`*), shell components (header, action bar, reassign dialog, tab triggers), and action hooks (`use-goad-run-action`, `use-goad-instance-action-handlers`); orchestrator ~1.2k lines (down from ~2.8k).
+- [Improve] **GOAD instance page** — Six typed tab modules (`goad-instance-tabs/*`), shell components (header, action bar, reassign dialog, tab triggers), and action hooks (`use-goad-run-action`, `use-goad-instance-action-handlers`); orchestrator ~1.2k lines (down from ~2.8k).
 - [Improve] **Next 16 proxy** — Renamed `middleware.ts` → `proxy.ts` and `middleware()` → `proxy()` per Next 16 network-boundary convention (auth gate + security headers unchanged).
 - [Improve] **Cache Components hygiene** — `markRouteDynamic()` in `getLayoutSession` and `requireAdminPage` before cookie reads under `cacheComponents`; `cached-lux-version` uses stable `cacheLife` import.
 - [Improve] **Shared parsers** — `parseLudusGroupList`, `buildSnapshotsViewData`, and `NetworkSnapshot` type for Ludus list/YAML/network handling.
@@ -394,7 +394,7 @@ Each bullet uses a single tag:
 
 - [Add] **Quickstart** — `scripts/quickstart.sh` supports `--full`, `--menu`, and an in-script choice of a lighter **menu** versus the **full wizard** again.
 - [Add] **Quickstart** — During interactive setup, the script can install `sudo` on the Ludus/Proxmox SSH target where minimal Debian-style installs omit it
-- [Improve] **Quickstart** — Publishes your `SSH_KEY_PATH`**/**`id_rsa` public half to the Ludus server to address SSH key only based authentication 
+- [Improve] **Quickstart** — Publishes your `SSH_KEY_PATH`/`id_rsa` public half to the Ludus server to address SSH key only based authentication 
 - [Fix] **Range creation** `userID` — Client `ludusApi.createRange` resolves the caller’s Ludus `userID` instead of incorrect `name`
 - [Fix] **Admin impersonation** — “Manage as” stores `userID`, `name`, and **SSH login** separately so Ludus range APIs see the real `userID`, SSH/GOAD still use `proxmoxUsername` (`name` fallback), instead of collapsing everything into `name` and breaking impersonated workflows
 - [Fix] **Settings merge** — Empty `proxmoxSshPassword` / `proxmoxSshUser` values stored in SQLite no longer override `PROXMOX_SSH_*` from the environment (same idea as the root API key), so `.env` Proxmox SSH credentials are not masked after a Settings save with blank fields.
@@ -429,7 +429,7 @@ Each bullet uses a single tag:
 - [Security] **Impersonation API key** removed from `sessionStorage` — key lives only in the encrypted `httpOnly` session cookie; all server routes derive it via `resolveAdminImpersonationFromRequest`
 - [Security] **Task stream IDOR** — non-admin access to `/api/goad/tasks/:id/stream` for an unknown task now returns 404
 - [Security] **Proxy error sanitisation** — internal exception details logged server-side only; client receives generic `"Internal proxy error"`
-- [Security] **Impersonation header merge** — both `X-Impersonate-`* headers required together; a single header falls back to the session cookie
+- [Security] **Impersonation header merge** — both `X-Impersonate-*` headers required together; a single header falls back to the session cookie
 - [Perf] **GOAD wizard redirect** — instant redirect to instance page on first `[TASKID]` SSE event; 30-minute poll removed
 - [Perf] **TanStack** `staleTime` **audit** — admin ranges, GOAD instance lists, and task lists promoted to `STALE.medium`
 

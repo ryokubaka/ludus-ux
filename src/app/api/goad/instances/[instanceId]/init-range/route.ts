@@ -17,8 +17,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
-import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -46,7 +45,12 @@ export async function POST(
   const { instanceId } = await params
   const settings = getSettings()
 
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
 
   const { apiKey: impersonateApiKey, ludusPrincipal, ludusUserId: impLudusUid, sshLogin } =
     resolveAdminImpersonationFromRequest(session, request)
@@ -54,7 +58,7 @@ export async function POST(
   const ludusHint = ((impersonateApiKey ? ludusPrincipal : null) || session.username).trim()
   const sshForSlug = (impersonateApiKey ? sshLogin || ludusPrincipal || "" : session.username).trim()
 
-  const existing = await readGoadRangeId(instanceId, rootCreds)
+  const existing = await readGoadRangeId(instanceId, undefined, runAsOwner)
   if (existing) {
     const whoHeal = await ludusRequest<unknown>("/user", { apiKey: effectiveApiKey })
     const callerHeal =
@@ -135,7 +139,7 @@ export async function POST(
   }
 
   try {
-    await writeGoadRangeId(instanceId, rangeId, rootCreds)
+    await writeGoadRangeId(instanceId, rangeId, undefined, runAsOwner)
   } catch (err) {
     return NextResponse.json(
       {

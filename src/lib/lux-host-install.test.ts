@@ -41,13 +41,31 @@ describe("lux-host-install", () => {
     expect(script).toContain("pipefail; umask 077")
   })
 
+  it("prefers self-update once the helper can replace itself", () => {
+    expect(selectLuxHostInstallMode({
+      uid: 1000,
+      sudoAll: true,
+      sudoHelper: true,
+      helperSupportsSelfUpdate: true,
+      hasUserPassword: false,
+    })).toBe("self-update")
+  })
+
   it("refreshes through the lux-host helper when that sudo is already passwordless", () => {
     expect(selectLuxHostInstallMode({
       uid: 1000,
       sudoAll: false,
       sudoHelper: true,
+      helperIsLegacy: true,
       hasUserPassword: false,
     })).toBe("helper")
+    expect(selectLuxHostInstallMode({
+      uid: 1000,
+      sudoAll: false,
+      sudoHelper: true,
+      helperIsLegacy: false,
+      hasUserPassword: false,
+    })).toBeNull()
     const dir = mkdtempSync(path.join(tmpdir(), "lux-host-install-helper-"))
     const argsFile = path.join(dir, "args")
     writeFileSync(

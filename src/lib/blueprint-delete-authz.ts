@@ -3,14 +3,16 @@ import { isSourceCatalogBlueprintId } from "@/lib/blueprint-list-normalize"
 /**
  * Authorization for deleting a blueprint.
  *
- * Source-catalog (global) blueprints are shared/server-managed, so only admins
- * may delete them. Personal blueprints (non-source IDs) may be deleted by any
- * authenticated user (Ludus still enforces ownership via the API key).
+ * A source blueprint (`user-source/name`) belongs to its owner. That owner may
+ * delete it. Admins may also delete one. Other users may not, even when the
+ * blueprint was shared with them.
  */
 export function canDeleteBlueprint(
   session: { isAdmin?: boolean },
   blueprintId: string,
+  opts?: { owns?: boolean },
 ): boolean {
-  if (isSourceCatalogBlueprintId(blueprintId)) return Boolean(session.isAdmin)
-  return true
+  if (!isSourceCatalogBlueprintId(blueprintId)) return true
+  if (session.isAdmin) return true
+  return opts?.owns === true
 }

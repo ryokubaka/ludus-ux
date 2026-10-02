@@ -556,7 +556,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   const [logoKey] = useState(0)
   const [depsCount, setDepsCount] = useState<number | null>(null)
   const [changelogCount, setChangelogCount] = useState<number | null>(null)
-  const [notesOpen, setNotesOpen] = useState(true)
+  const [notesOpen, setNotesOpen] = useState(false)
   const [depsOpen, setDepsOpen] = useState(false)
 
   useEffect(() => {
@@ -578,24 +578,23 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   }, [])
 
   return (
-    <div className="space-y-6">
-      {/* App identity */}
-      <div className="flex flex-col items-center py-8 gap-4">
-        <div className="h-20 w-20 rounded-xl overflow-hidden border border-border/50 shadow-sm">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
+        <div className="h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-border/50">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/api/logo?v=${logoKey}`} alt="LUX Logo" className="h-full w-full object-contain" />
         </div>
-        <div className="text-center space-y-1">
-          <h2 className="text-lg font-semibold">Ludus UX (LUX)</h2>
-          <p className="text-sm text-muted-foreground">Cyber Range Manager</p>
-          <div className="flex items-center justify-center gap-2 pt-1">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-semibold">Ludus UX</h2>
             <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
             {APP_VERSION_LABEL ? (
               <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
             ) : null}
           </div>
+          <p className="text-xs text-muted-foreground mt-0.5">Cyber range manager</p>
         </div>
-        <div className="flex items-center gap-4 text-xs text-muted-foreground/70">
+        <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
           <a
             href="https://github.com/ryokubaka/ludus-ux"
             target="_blank"
@@ -604,24 +603,25 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
           >
             GitHub
           </a>
-          <span>·</span>
+          <span className="text-border">·</span>
           <span>Apache 2.0</span>
-          <span>·</span>
+          <span className="text-border">·</span>
           <a
             href="https://docs.ludus.cloud"
             target="_blank"
             rel="noopener noreferrer"
             className="hover:text-primary transition-colors"
           >
-            Ludus Docs
+            Ludus docs
           </a>
         </div>
       </div>
 
       <LuxReleasesPanel isAdmin={isAdmin} />
 
+      <div className="grid gap-4 lg:grid-cols-2">
       {/* Release notes */}
-      <div className="rounded-lg border border-border bg-card">
+      <div className={cn("rounded-lg border border-border bg-card", notesOpen && "lg:col-span-2")}>
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
@@ -646,7 +646,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
       </div>
 
       {/* Dependencies */}
-      <div className="rounded-lg border border-border bg-card">
+      <div className={cn("rounded-lg border border-border bg-card", depsOpen && "lg:col-span-2")}>
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
@@ -668,6 +668,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
             <DependenciesList />
           </div>
         )}
+      </div>
       </div>
     </div>
   )
@@ -1000,8 +1001,7 @@ function SettingsContent() {
                 </Label>
                 <Input id="admin-url" value={draft?.ludusAdminUrl || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludusAdminUrl: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="https://your-ludus-host:8081" />
                 <p className="text-xs text-muted-foreground">
-                  User/group admin calls use Ludus port <strong>8081</strong>. Use{" "}
-                  <code className="text-primary">https://127.0.0.1:18081</code> only when relying on the optional SSH tunnel.
+                  Port 8081. Use 127.0.0.1:18081 only with the SSH tunnel.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -1018,10 +1018,7 @@ function SettingsContent() {
                   <Alert variant="default" className="mt-2 border-status-warning/40 bg-status-warning/10">
                     <Info className="h-4 w-4 text-status-warning" />
                     <AlertDescription className="text-xs text-amber-100/90">
-                      <strong>LUDUS_ROOT_API_KEY</strong> is set in the container environment, so that value is used for
-                      admin API calls and overrides anything saved in SQLite. If admin actions return 401, fix or remove
-                      the env entry in Docker Compose / <code className="text-primary">.env</code> so it matches the
-                      Ludus root key file above.
+                      The environment value overrides this field. A 401 means that value does not match the server key.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -1053,18 +1050,14 @@ function SettingsContent() {
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">GOAD Integration</p>
-                  <p className="text-xs text-muted-foreground">
-                    Show or hide GOAD in the sidebar. Set <code className="text-primary">ENABLE_GOAD=false</code> in <code className="text-primary">.env</code> to disable permanently.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Show GOAD in the sidebar.</p>
                 </div>
                 <Switch checked={draft?.goadEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, goadEnabled: v } : d)} disabled={!session?.isAdmin} />
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">LudusHound Integration</p>
-                  <p className="text-xs text-muted-foreground">
-                    Show or hide LudusHound in the sidebar. Set <code className="text-primary">ENABLE_LUDUSHOUND=false</code> in <code className="text-primary">.env</code> to disable permanently.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Show LudusHound in the sidebar.</p>
                 </div>
                 <Switch checked={draft?.ludushoundEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, ludushoundEnabled: v } : d)} disabled={!session?.isAdmin} />
               </div>
@@ -1072,13 +1065,9 @@ function SettingsContent() {
                 <div>
                   <p className="text-sm font-medium">Ludus Ansible verbose</p>
                   <p className="text-xs text-muted-foreground">
-                    Pass <code className="text-primary">--verbose-ansible</code> / API <code className="text-primary">verbose</code> on range deploy.
-                    Default on. Set <code className="text-primary">LUDUS_ANSIBLE_VERBOSE=false</code> in <code className="text-primary">.env</code> to default off.
+                    Verbose Ansible on deploy.
                     {showVerboseForceQuirk && (
-                      <>
-                        {" "}Stock Ludus ≤2.2.3 may ignore this when <code className="text-primary">force</code> is set (upstream bug
-                        {ludusVersion ? <> — connected: <code className="text-primary">{ludusVersion}</code></> : null}).
-                      </>
+                      <> Ludus ≤2.2.3 may ignore this when force is set{ludusVersion ? ` (${ludusVersion})` : ""}.</>
                     )}
                   </p>
                 </div>
@@ -1133,8 +1122,7 @@ function SettingsContent() {
               <div className="border-t border-border pt-4 space-y-3">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host SSH Credentials</p>
                 <p className="text-xs text-muted-foreground">
-                  Used for privileged admin operations: template copies under /opt/ludus, pvesh over SSH, user password changes, and API key updates.
-                  <code className="text-primary">root</code> works outright. Another account works when it can run <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. The button below installs that helper and a sudoers rule for it alone. A normal login with neither is denied those writes.
+                  Root, or an account that can run lux-host. The button below installs that rule.
                   GOAD runs as each user&apos;s own SSH session — these host credentials are not used for normal GOAD.
                 </p>
                 <div className="grid grid-cols-3 gap-4">
@@ -1210,8 +1198,8 @@ function SettingsContent() {
                                 {credentialTestResult.rootSsh.sudo != null && (
                                   <> · sudo -n: {credentialTestResult.rootSsh.sudo ? "yes" : "no"}</>
                                 )}
-                                {credentialTestResult.rootSsh.packerDir && (
-                                  <> · {credentialTestResult.rootSsh.packerDir} writable: {credentialTestResult.rootSsh.packerWritable ? "yes" : "no"}</>
+                                {credentialTestResult.rootSsh.packerWritable === false && credentialTestResult.rootSsh.packerDir && (
+                                  <> · {credentialTestResult.rootSsh.packerDir} is not writable</>
                                 )}
                               </p>
                             )}
@@ -1269,11 +1257,10 @@ function SettingsContent() {
                           </DialogDescription>
                         </DialogHeader>
                         <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
-                          <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs one host script as root.</li>
+                          <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs a fixed list of host operations as root. It does not run a shell.</li>
                           <li><span className="font-mono">/etc/sudoers.d/lux-host</span> lets {draft?.proxmoxSshUser?.trim() || "this user"} run that helper with <span className="font-mono">sudo -n</span>.</li>
-                          <li>Other sudo commands still ask for a password.</li>
-                          <li>Key auth that can already run <span className="font-mono">sudo -n /usr/local/sbin/lux-host</span> installs or refreshes the helper with no password.</li>
-                          <li>The root password is optional and is not saved. Enter it only when this account is not in sudoers.</li>
+                          <li>Other sudo commands still ask for a password. The helper cannot replace itself.</li>
+                          <li>The Ludus host root password is required. LUX uses it to write the files and does not save it.</li>
                         </ul>
                         <div className="space-y-1.5">
                           <Label htmlFor="lux-host-root-password">Root password</Label>
@@ -1283,11 +1270,12 @@ function SettingsContent() {
                             value={luxHostRootPassword}
                             onChange={(e) => setLuxHostRootPassword(e.target.value)}
                             className="font-mono text-xs"
-                            placeholder="Optional. Used once as root. Not saved."
+                            placeholder="Ludus host root password"
                             autoComplete="off"
+                            required
                           />
                           <p className="text-xs text-muted-foreground">
-                            Leave blank when {draft?.proxmoxSshUser?.trim() || "this account"} can already run sudo -n /usr/local/sbin/lux-host. The root password is not saved. Enter it only when this account is not in sudoers.
+                            Required. LUX logs in as root on the Ludus host to write the helper and the sudoers rule, then drops the password.
                           </p>
                         </div>
                         <DialogFooter>

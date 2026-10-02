@@ -15,14 +15,59 @@ export function normalizeGitSourceUrl(url: string): string {
   return url.trim().replace(/\/$/, "").replace(/\.git$/i, "").toLowerCase()
 }
 
-function sanitizeSourceIdPart(raw: string): string {
-  return raw
+/**
+ * Ludus source ids must match `^[A-Za-z][A-Za-z0-9_-]*$`.
+ * Dots in a branch like `feat/securityonion-3.3.0` are not allowed.
+ */
+export function toLudusSourceId(raw: string): string {
+  const id = raw
     .trim()
     .toLowerCase()
     .replace(/\.git$/i, "")
-    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
+    .replace(/^[^a-z]+/, "")
+  return id
+}
+
+function sanitizeSourceIdPart(raw: string): string {
+  return toLudusSourceId(raw)
+}
+
+/**
+ * Ludus source IDs are `{userID}-{repo slug}`. The user prefix is who registered
+ * the source. Returns that user when the id is longer than the repo-derived slug.
+ */
+export function ludusSourceRegistrant(
+  sourceId: string,
+  gitUrl?: string | null,
+  ref?: string | null,
+): string | null {
+  const id = sourceId.trim().toLowerCase()
+  const url = gitUrl?.trim()
+  if (!id || !url) return null
+  const suggested = suggestedLudusSourceId(url, ref?.trim() || DEFAULT_SOURCE_GIT_REF)
+  if (!suggested || id === suggested) return null
+  const suffix = `-${suggested}`
+  if (!id.endsWith(suffix) || id.length <= suffix.length) return null
+  const user = id.slice(0, id.length - suffix.length)
+  return user || null
+}
+
+/** Owner to show in the UI. Prefers Ludus `ownerUserID`, then the user prefix on the source id. */
+export function sourceOwnerLabel(source: {
+  sourceID?: string | null
+  id?: string | null
+  url?: string | null
+  ref?: string | null
+  ownerUserID?: string | null
+}): string | null {
+  const explicit = source.ownerUserID?.trim()
+  if (explicit) return explicit
+  const id = (source.sourceID || source.id || "").trim()
+  if (!id) return null
+  return ludusSourceRegistrant(id, source.url, source.ref)
 }
 
 /**

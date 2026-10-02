@@ -8,18 +8,9 @@ import {
   findMissingAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
-import {
-  buildVerifyGoadCollectionsShell,
-  GOAD_COLLECTION_CANARY_FILES,
-} from "@/lib/goad-ansible-env"
+import { GOAD_COLLECTION_CANARY_FILES } from "@/lib/goad-ansible-env"
 import { sshExec, type SSHCreds } from "@/lib/goad-ssh"
 import { resolveGoadPath, resolveLudusInstallPath } from "@/lib/runtime-paths"
-
-function wrapShellForUser(inner: string, runAsUser?: string): string {
-  const user = runAsUser?.trim()
-  if (!user) return inner
-  return `sudo -H -u '${user.replace(/'/g, "")}' bash -lc '${inner.replace(/'/g, `'\\''`)}'`
-}
 
 /** Read GOAD ansible/requirements*.yml from the Ludus host (matches GOAD venv Python version when present). */
 export async function readGoadAnsibleRequirementsYaml(
@@ -59,16 +50,22 @@ function parseBrokenCollectionNames(stdout: string): string[] {
 /** Collections Ludus lists as installed but missing canary plugin files on disk. */
 export async function findBrokenGoadCollectionsOnDisk(
   required: BlueprintRequirement[],
-  creds?: SSHCreds,
+  _creds?: SSHCreds,
   runAsUser?: string,
-  ludusInstallPath = resolveLudusInstallPath(),
+  _ludusInstallPath = resolveLudusInstallPath(),
 ): Promise<BlueprintRequirement[]> {
   const names = collectionsToVerify(required)
-  if (names.length === 0) return []
+  const user = runAsUser?.trim().toLowerCase()
+  if (names.length === 0 || !user) return []
 
-  const inner = buildVerifyGoadCollectionsShell(ludusInstallPath, names)
-  const { stdout } = await sshExec(wrapShellForUser(inner, runAsUser), creds)
-  const brokenNames = new Set(parseBrokenCollectionNames(stdout))
+  const brokenNames = new Set<string>()
+  for (const name of names) {
+    const rel = GOAD_COLLECTION_CANARY_FILES[name]
+    const [ns, col] = name.split(".")
+    if (!rel || !ns || !col) continue
+    const { stdout } = await sshExec(["ansible-collection-file", user, ns, col, rel])
+    for (const line of parseBrokenCollectionNames(stdout)) brokenNames.add(line)
+  }
 
   return required.filter((r) => r.kind === "collection" && brokenNames.has(r.name))
 }

@@ -2,7 +2,7 @@
 
 ### Range management
 
-- **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, **per-VM destroy** (Ludus `DELETE /vm/{vmID}`), range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal; **Deploy History** deep-links to a GOAD instance’s Logs History (side-by-side Ludus + GOAD) when the range is mapped in LUX’s GOAD range store
+- **Dashboard** — VM table (sortable by display name), power state, bulk/per-VM power controls, **per-VM destroy** (Ludus `DELETE /vm/{vmID}`), range state, deploy/abort, SSE deployment logs, optional Ansible inventory modal, and a **Ludus host** box with cluster CPU and memory from Proxmox (one total when several nodes are present; Settings → Performance keeps one line per node); **Deploy History** deep-links to a GOAD instance’s Logs History (side-by-side Ludus + GOAD) when the range is mapped in LUX’s GOAD range store
 - **Range Config Editor** — Monaco YAML for `range-config.yml`, save, selective Ansible tags, host limit (`--limit`), only-roles (`--only-roles`), live logs
 - **Firewall Rules Editor** — Collapsible visual panel on the Config page to add, edit, reorder (drag-and-drop), and delete `network.rules` entries without hand-editing YAML; "Apply to Config" merges rules into the Monaco editor. Also available as a wizard step in Deploy New Range and Deploy New GOAD Instance flows.
 - **New Range Wizard** — Guided flow: range selection → templates → domain → **firewall rules** → **Review & Deploy** (editable config + **Advanced tag options** for tags/only-roles)
@@ -17,10 +17,10 @@
 
 ### Infrastructure
 
-- **Templates** — List, build, stop, delete Packer templates; install from official Ludus GitLab or custom sources
-- **Blueprints** — Save/share/deploy range configs; user & group ACLs, unshare, apply-to-range workflow
+- **Sources** — Register a git repo once. Templates and Blueprints install from that list. Cards show the owner and the tracked branch. An admin can share a source so other users install its blueprints without registering it again. Two branches of one repo stay separate; **Re-sync outdated** follows the branch you are looking at. Ansible keeps one copy of a role or collection name. A different branch can replace that copy. It does not install a second version beside it.
+- **Templates** — List, build, stop, delete Packer templates; install from a registered source. The git folder stays as-is (`templates/debian13`); Ludus registers the Packer `vm_name`.
+- **Blueprints** — Save/share/deploy range configs; user & group ACLs, unshare, apply-to-range workflow. Cards show the owner. Install a blueprint from a shared source without registering that source yourself.
 - **Ansible Roles** — Galaxy roles and collections (add with version pin, list, remove)
-- **Security Onion sniff** — On SO lab deploy, LUX enables bridge hub-mode during deploy and ensures sniff `net1` after IP config (never before — same-VLAN collision); reverses on range/VM delete (Proxmox is source of truth)
 
 ### VM access
 
@@ -89,4 +89,5 @@ This is the recommended way to recover from a broken install or update the lab a
 - Runtime settings persisted in SQLite (URLs, SSH, GOAD path, secrets)
 - Custom logo upload
 - Ludus API and SSH connectivity tests
+- **lux-host** — Settings → SSH & GOAD installs `/usr/local/sbin/lux-host` and a sudoers rule for that path only, so `PROXMOX_SSH_USER` does not have to be root. The dialog requires the Ludus host root password and does not save it. [What lux-host is](ssh-and-auth.md#lux-host).
 - LUX release check, upgrade, and downgrade (Settings → About)

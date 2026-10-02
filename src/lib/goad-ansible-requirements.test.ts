@@ -35,7 +35,7 @@ roles:
 
 describe("ensureGoadAnsibleRequirements", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   it("installs missing deps via Ludus API before GOAD runs", async () => {
@@ -71,8 +71,10 @@ describe("ensureGoadAnsibleRequirements", () => {
   it("force reinstalls collections that fail on-disk verification", async () => {
     vi.mocked(sshExec)
       .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\nLUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:ansible.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([])
     vi.mocked(installMissingAnsibleRequirementsServer).mockResolvedValue({
       ok: true,
@@ -85,13 +87,14 @@ describe("ensureGoadAnsibleRequirements", () => {
       undefined,
       () => {},
       goadPathFromEnv(),
+      "labuser",
     )
 
     expect(result.ok).toBe(true)
     expect(installMissingAnsibleRequirementsServer).toHaveBeenCalledWith(
       "ROOT.test-key",
       [expect.objectContaining({ name: "ansible.windows" })],
-      { force: true },
+      { force: true, linuxUser: "labuser" },
     )
   })
 
@@ -109,8 +112,14 @@ describe("ensureGoadAnsibleRequirements", () => {
       IMPERSONATED_SSH_USER,
     )
 
-    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).not.toContain("sudo -H -u")
-    expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toContain(`sudo -H -u '${IMPERSONATED_SSH_USER}'`)
+    expect(String(vi.mocked(sshExec).mock.calls[0]?.[0])).not.toContain("sudo -H -u")
+    expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toEqual([
+      "ansible-collection-file",
+      IMPERSONATED_SSH_USER,
+      "ansible",
+      "windows",
+      "plugins/modules/win_dns_client.ps1",
+    ])
   })
 
   it("passes impersonated linuxUser to Ludus API install for ansible home repair", async () => {

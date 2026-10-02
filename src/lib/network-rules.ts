@@ -145,16 +145,20 @@ function rawToRule(r: Record<string, unknown>): NetworkRule {
  * Parse a range-config YAML string and return the network rules array.
  * Returns [] if there are none or the YAML is unparseable.
  */
-export function extractNetworkRules(yamlText: string): NetworkRule[] {
+export function extractNetworkRules(
+  yamlText: string,
+  options?: { fileOrder?: boolean },
+): NetworkRule[] {
   try {
     const doc = yaml.load(yamlText) as Record<string, unknown> | null
     if (!doc || typeof doc !== "object") return []
     const network = doc.network as Record<string, unknown> | undefined
     if (!network || !Array.isArray(network.rules)) return []
-    // Reverse on read: YAML is stored reversed (Ludus -I insert semantics), so
-    // reversing here restores the order the user expects (= iptables eval order).
-    return [...network.rules]
-      .reverse()
+    // Range config stores rules reversed (Ludus iptables -I). Reversing on read
+    // restores evaluation order. GOAD extension templates are already written
+    // in evaluation order, so those callers pass fileOrder.
+    const rules = options?.fileOrder ? network.rules : [...network.rules].reverse()
+    return rules
       .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
       .map(rawToRule)
   } catch {
@@ -312,6 +316,44 @@ export function applyNetworkSection(yamlText: string, network: NetworkSnapshot |
     doc = {}
   }
   doc.network = structuredClone(network) as Record<string, unknown>
+  return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
+function ruleName(rule: unknown): string {
+  if (!rule || typeof rule !== "object") return ""
+  const name = (rule as { name?: unknown }).name
+  return typeof name === "string" ? name : ""
+}
+
+/**
+ * Keep the snapshot's defaults and rules, then append rules from `yamlText`
+ * whose names are not already present. A second `network:` block must not
+ * replace rules the range already has.
+ */
+export function mergeNetworkSection(yamlText: string, snapshot: NetworkSnapshot): string {
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    doc = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>
+  } catch {
+    doc = {}
+  }
+  const current = doc.network
+  const currentNet =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? (current as Record<string, unknown>)
+      : {}
+  const currentRules = Array.isArray(currentNet.rules) ? currentNet.rules : []
+  const kept = Array.isArray(snapshot.rules) ? [...snapshot.rules] : []
+  const seen = new Set(kept.map(ruleName).filter(Boolean))
+  for (const rule of currentRules) {
+    const name = ruleName(rule)
+    if (name && seen.has(name)) continue
+    kept.push(rule)
+    if (name) seen.add(name)
+  }
+  const { rules: _snapshotRules, ...snapshotRest } = snapshot
+  doc.network = { ...currentNet, ...snapshotRest, rules: kept }
   return yaml.dump(doc, YAML_DUMP_OPTS)
 }
 

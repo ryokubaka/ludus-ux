@@ -4,6 +4,7 @@ import {
   injectNetworkRules,
   extractNetworkSection,
   applyNetworkSection,
+  mergeNetworkSection,
   buildNetworkYaml,
   extractVlansFromConfig,
   removeExtensionVmsFromRangeConfig,
@@ -264,6 +265,43 @@ describe("extractNetworkSection", () => {
 
   it("returns null when network is an array", () => {
     expect(extractNetworkSection("network:\n  - item\n")).toBeNull()
+  })
+})
+
+describe("mergeNetworkSection", () => {
+  it("keeps existing rules and appends new names", () => {
+    const yaml = `
+ludus: []
+network:
+  inter_vlan_default: ACCEPT
+  rules:
+    - name: Allow targets to SO Fleet
+      vlan_src: 10
+      vlan_dst: 20
+      protocol: tcp
+      ports: "8220,5055,8443"
+      action: ACCEPT
+`
+    const result = mergeNetworkSection(yaml, {
+      inter_vlan_default: "DROP",
+      rules: [
+        {
+          name: "Allow clients to DC",
+          vlan_src: 10,
+          vlan_dst: 10,
+          protocol: "tcp",
+          ports: "445",
+          action: "ACCEPT",
+        },
+      ],
+    })
+    const section = extractNetworkSection(result)
+    expect(section?.inter_vlan_default).toBe("DROP")
+    const stored = (section?.rules ?? []) as { name: string }[]
+    expect(stored.map((rule) => rule.name)).toEqual([
+      "Allow clients to DC",
+      "Allow targets to SO Fleet",
+    ])
   })
 })
 

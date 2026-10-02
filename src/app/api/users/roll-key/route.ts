@@ -118,7 +118,8 @@ export async function POST(request: NextRequest) {
         try {
           homeDir = await sshExec(
             settings.sshHost, settings.sshPort, sshUser, sshPw,
-            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
+            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`,
+            { elevate: false },
           )
         } catch {
           homeDir = ""
@@ -130,17 +131,14 @@ export async function POST(request: NextRequest) {
       if (homeDir?.trim()) {
         await sshExec(
           settings.sshHost, settings.sshPort, sshUser, sshPw,
-          `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
-          `sed -i '/\\(export \\)\\?LUDUS_VERSION=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
-          `echo 'export LUDUS_API_KEY=${newKey}' >> ${homeDir}/.bashrc; ` +
-          `echo 'export LUDUS_VERSION=2' >> ${homeDir}/.bashrc`
+          ["bashrc-apikey-set", linuxUser],
+          { stdin: `${newKey}\n` },
         )
         const verify = await sshExec(
           settings.sshHost, settings.sshPort, sshUser, sshPw,
-          `grep -c 'LUDUS_API_KEY=' "${homeDir}/.bashrc" 2>/dev/null || printf 0`
+          ["bashrc-apikey-get", linuxUser],
         )
-        const n = parseInt(String(verify).trim(), 10)
-        if (Number.isFinite(n) && n > 0) {
+        if (verify.includes(newKey)) {
           bashrcUpdated = true
           try {
             await ensureAnsibleHomeLayoutAsRoot(linuxUser)

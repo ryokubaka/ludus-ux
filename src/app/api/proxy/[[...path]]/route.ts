@@ -113,51 +113,6 @@ async function handler(
         )
       }
     }
-    if (request.method === "POST" && basePath === "/range/deploy" && linuxUser) {
-      const { ensureLudusPlatformAnsibleRequirements } = await import(
-        "@/lib/ludus-platform-ansible-requirements"
-      )
-      const platformResult = await ensureLudusPlatformAnsibleRequirements(
-        effectiveApiKey,
-        undefined,
-        () => {},
-        undefined,
-        linuxUser,
-      )
-      if (!platformResult.ok) {
-        return NextResponse.json(
-          { error: platformResult.error ?? "Ludus platform Ansible dependency install failed" },
-          { status: 500 },
-        )
-      }
-      await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
-    }
-
-    // Before Ludus deletes a range (or its VMs), reverse SO sniff NIC / bridge-ageing.
-    if (request.method === "DELETE") {
-      const rangeVmMatch = basePath.match(/^\/range\/([^/]+)\/vms$/)
-      const rangeIdFromPath = rangeVmMatch?.[1]
-        ? decodeURIComponent(rangeVmMatch[1])
-        : null
-      const rangeIdFromQuery =
-        request.nextUrl.searchParams.get("rangeID") ||
-        request.nextUrl.searchParams.get("rangeId")
-      const rangeId =
-        (basePath === "/range" ? rangeIdFromQuery : null) || rangeIdFromPath
-      if (rangeId?.trim() && (basePath === "/range" || rangeVmMatch)) {
-        try {
-          const { cleanupSoSniffAfterRangeDelete } = await import("@/lib/so-sniff-workflow")
-          const cleaned = await cleanupSoSniffAfterRangeDelete({ rangeId: rangeId.trim() })
-          if (!cleaned.ok) {
-            console.warn(`[so-sniff] pre-delete cleanup: ${cleaned.detail}`)
-          }
-        } catch (e) {
-          console.warn(
-            `[so-sniff] pre-delete cleanup error: ${e instanceof Error ? e.message : String(e)}`,
-          )
-        }
-      }
-    }
 
     const result = await ludusRequest(fullPath, {
       method: request.method,
@@ -209,23 +164,6 @@ async function handler(
       if (linuxUser && shouldRepairAnsibleHomeAfterProxyMutation(request.method, basePath, body)) {
         await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
         console.info(formatAnsibleHomeRepairLogLine(linuxUser))
-      }
-    }
-
-    // After a successful range deploy, attach SO sniff NIC while VMs come up.
-    if (request.method === "POST" && basePath === "/range/deploy" && effectiveApiKey) {
-      const rangeId =
-        request.nextUrl.searchParams.get("rangeID") ||
-        request.nextUrl.searchParams.get("rangeId")
-      if (rangeId?.trim()) {
-        try {
-          const { startSoSniffWatcher } = await import("@/lib/so-sniff-workflow")
-          startSoSniffWatcher({ rangeId: rangeId.trim(), apiKey: effectiveApiKey })
-        } catch (e) {
-          console.warn(
-            `[so-sniff] watcher start error: ${e instanceof Error ? e.message : String(e)}`,
-          )
-        }
       }
     }
 

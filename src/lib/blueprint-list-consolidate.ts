@@ -1,5 +1,9 @@
 import type { BlueprintListItem } from "@/lib/types"
-import { blueprintShortName } from "@/lib/registered-ludus-sources"
+import {
+  blueprintShortName,
+  blueprintSourcePrefix,
+  sourceIdsAreSameRegistration,
+} from "@/lib/registered-ludus-sources"
 import { isGlobalSourceCatalogBlueprint } from "@/lib/blueprint-list-normalize"
 
 export interface BlueprintListGate {
@@ -58,7 +62,25 @@ function scoreBlueprint(bp: BlueprintListItem, gate?: BlueprintListGate): number
   return score
 }
 
-/** One row per blueprint type — collapse duplicate source installs that share the same folder slug. */
+function blueprintIdOf(bp: BlueprintListItem): string {
+  return (bp.id || bp.blueprintID || "").trim()
+}
+
+/** Split a shared slug into one cluster per source registration (branch refs stay apart). */
+function clusterBySourceRegistration(members: BlueprintListItem[]): BlueprintListItem[][] {
+  const clusters: BlueprintListItem[][] = []
+  for (const bp of members) {
+    const prefix = blueprintSourcePrefix(blueprintIdOf(bp))
+    const cluster = clusters.find((group) =>
+      sourceIdsAreSameRegistration(prefix, blueprintSourcePrefix(blueprintIdOf(group[0]!))),
+    )
+    if (cluster) cluster.push(bp)
+    else clusters.push([bp])
+  }
+  return clusters
+}
+
+/** One row per source registration — collapse only userID-prefixed copies of the same source. */
 export function consolidateBlueprintList(
   blueprints: BlueprintListItem[],
   gate?: BlueprintListGate,
@@ -74,25 +96,36 @@ export function consolidateBlueprintList(
 
   const consolidated: ConsolidatedBlueprint[] = []
   for (const [typeKey, members] of groups) {
-    const sorted = [...members].sort((a, b) => scoreBlueprint(b, gate) - scoreBlueprint(a, gate))
-    const primary = sorted[0]!
-    const primaryId = (primary.id || primary.blueprintID || "").trim()
-    if (!primaryId) continue
-    const aliasIds = sorted
-      .slice(1)
-      .map((b) => (b.id || b.blueprintID || "").trim())
-      .filter(Boolean)
-    consolidated.push({
-      primaryId,
-      typeKey,
-      displayName: primary.name?.trim() || typeKey,
-      description: primary.description,
-      blueprint: primary,
-      aliasIds,
-      aliasCount: aliasIds.length,
-      isSourceCatalog: isGlobalSourceCatalogBlueprint(primary, gate),
-    })
+    for (const cluster of clusterBySourceRegistration(members)) {
+      pushConsolidated(consolidated, typeKey, cluster, gate)
+    }
   }
 
-  return consolidated.sort((a, b) => a.typeKey.localeCompare(b.typeKey))
+  return consolidated.sort((a, b) => a.primaryId.localeCompare(b.primaryId))
+}
+
+function pushConsolidated(
+  consolidated: ConsolidatedBlueprint[],
+  typeKey: string,
+  members: BlueprintListItem[],
+  gate?: BlueprintListGate,
+): void {
+  const sorted = [...members].sort((a, b) => scoreBlueprint(b, gate) - scoreBlueprint(a, gate))
+  const primary = sorted[0]!
+  const primaryId = (primary.id || primary.blueprintID || "").trim()
+  if (!primaryId) return
+  const aliasIds = sorted
+    .slice(1)
+    .map((b) => (b.id || b.blueprintID || "").trim())
+    .filter(Boolean)
+  consolidated.push({
+    primaryId,
+    typeKey,
+    displayName: primary.name?.trim() || typeKey,
+    description: primary.description,
+    blueprint: primary,
+    aliasIds,
+    aliasCount: aliasIds.length,
+    isSourceCatalog: isGlobalSourceCatalogBlueprint(primary, gate),
+  })
 }

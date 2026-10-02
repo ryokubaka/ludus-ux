@@ -78,9 +78,7 @@ async function findTemplatesDir(): Promise<string> {
   if (cachedTemplatesDir?.root === ludusRoot) return cachedTemplatesDir.dir
 
   // Prefer built-in packer tree; never treat Ludus Sources mirrors as install targets.
-  const findResult = await sshExec(
-    `find ${shellSingleQuote(`${ludusRoot}/packer`)} -maxdepth 3 -name '*.pkr.hcl' ! -path '*/sources/*' 2>/dev/null | head -1`,
-  )
+  const findResult = await sshExec(["find-packer"])
   const firstPath = (findResult.stdout || "").trim().split("\n")[0]?.trim()
   if (firstPath) {
     const dir = derivePackerRootFromPkrPath(firstPath)
@@ -91,7 +89,7 @@ async function findTemplatesDir(): Promise<string> {
   }
 
   for (const candidate of packerRootCandidates(ludusRoot)) {
-    const check = await sshExec(`test -d ${shellSingleQuote(candidate)} && echo ok`)
+    const check = await sshExec(["dir-exists", candidate]).catch(() => ({ stdout: "", stderr: "", code: 1 }))
     if ((check.stdout || "").trim() === "ok") {
       cachedTemplatesDir = { root: ludusRoot, dir: candidate }
       return candidate
@@ -167,8 +165,7 @@ async function addTemplate(
       subdirs.add(`${destDir}/${parts.join("/")}`)
     }
   }
-  const mkdirCmd = Array.from(subdirs).map((d) => shellSingleQuote(d)).join(" ")
-  const mkdirResult = await sshExec(`mkdir -p ${mkdirCmd}`)
+  const mkdirResult = await sshExec(["mkdir", ...subdirs])
   if (mkdirResult.code !== 0) {
     throw new Error(`Failed to create template dirs under ${destDir}: ${mkdirResult.stderr}`)
   }
@@ -178,17 +175,17 @@ async function addTemplate(
     try {
       await writeRemoteFileViaSsh(destPath, file.content)
     } catch (err) {
-      await sshExec(`rm -rf ${shellSingleQuote(destDir)}`).catch(() => {})
+      await sshExec(["rm-tree", destDir]).catch(() => {})
       throw new Error(`Failed to write ${file.relativePath}: ${(err as Error).message}`)
     }
   }
 
-  await sshExec(`chown -R ludus:ludus ${shellSingleQuote(destDir)} && chmod -R 755 ${shellSingleQuote(destDir)}`).catch(() => {
+  await sshExec(["chown-ludus", destDir]).catch(() => {
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
   const addCmd = buildLudusTemplateAddCmd(destDir, ctx.ludusApiKey)
-  const addResult = await sshExec(`${addCmd} 2>&1`)
+  const addResult = await sshExec(addCmd)
   const rawMsg = (addResult.stdout + addResult.stderr).trim()
 
   if (isLudusCliTemplateAddFailure(rawMsg, addResult.code)) {

@@ -429,7 +429,12 @@ export function completeTask(
   // underlying SSH stream then closes and calls completeTask again with "error".
   // Without this check the second call would silently overwrite "aborted" with
   // "error", making the UI show the wrong final state.
-  if (entry.task.status !== "running") return
+  if (entry.task.status !== "running") {
+    // Stop marks the task aborted before the SSH channel closes. If the log
+    // then shows GOAD actually failed, that close must be allowed to replace
+    // aborted with error. A clean Ctrl+C stays aborted.
+    if (!(entry.task.status === "aborted" && status === "error")) return
+  }
   const now = Date.now()
   entry.task.status = status
   entry.task.exitCode = exitCode

@@ -30,7 +30,13 @@ export function stripAnsi(text: string): string {
 /** Split log blob into display lines with ANSI/control chars normalized. */
 export function splitLogText(text: string): string[] {
   if (!text) return []
-  const lines = text.split(/\r?\n/).map(stripAnsi)
+  const lines = text.split(/\r?\n/).flatMap((line) => {
+    const stripped = stripAnsi(line)
+    // Ansible wait_for paints progress with NUL/C0 bytes and no newline. That
+    // is not a blank separator — drop it so it doesn't become one giant line.
+    if (stripped.length === 0 && /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/.test(line)) return []
+    return [stripped]
+  })
   // Drop only trailing blank lines (from a final newline); keep intentional
   // interior blanks that separate log phases (e.g. Packer build steps).
   while (lines.length > 0 && lines[lines.length - 1].length === 0) lines.pop()

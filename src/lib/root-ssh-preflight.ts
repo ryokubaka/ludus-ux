@@ -48,13 +48,35 @@ export function assessConfiguredSshUser(settingsUser: string | null | undefined)
 export const LUX_HOST_SUDO_BIN = "/usr/local/sbin/lux-host"
 
 /**
- * Run a privileged host command. Root runs it directly. Any other SSH user
- * runs it through `sudo -n /usr/local/sbin/lux-host` so a password prompt
- * cannot hang the session and other sudo commands stay password-gated.
+ * Run one named lux-host operation. Arguments are single-quoted so the remote
+ * shell cannot reinterpret them. The helper refuses anything that is not one
+ * of its operations. Root runs the binary directly. Any other account uses
+ * `sudo -n` for that path only.
+ */
+export function formatLuxHost(username: string, args: readonly string[]): string {
+  if (args.length === 0) {
+    throw new Error("lux-host needs an operation")
+  }
+  for (const arg of args) {
+    if (arg.includes("\0") || arg.includes("\n") || arg.includes("\r")) {
+      throw new Error("lux-host arguments cannot contain newlines")
+    }
+  }
+  const quoted = args.map((arg) => shellSingleQuote(arg)).join(" ")
+  const user = cleanUser(username)
+  if (user === "root" || !user) return `${LUX_HOST_SUDO_BIN} ${quoted}`
+  return `sudo -n ${LUX_HOST_SUDO_BIN} ${quoted}`
+}
+
+/**
+ * Root may run a host command directly. A non-root account cannot pass an
+ * arbitrary shell string through lux-host.
  */
 export function asPrivilegedShell(username: string, command: string): string {
   if (cleanUser(username) === "root" || !cleanUser(username)) return command
-  return `sudo -n ${LUX_HOST_SUDO_BIN} ${shellSingleQuote(command)}`
+  throw new Error(
+    "Refusing to run an arbitrary shell command through lux-host. Use a named lux-host operation.",
+  )
 }
 
 function sudoProbeClauses(): string[] {
@@ -77,7 +99,7 @@ export function buildRootSshProbeCommand(packerDir: string): string {
     "printf 'uid=%s\\n' \"$(id -u)\"",
     "printf 'user=%s\\n' \"$(id -un)\"",
     ...sudoProbeClauses(),
-    `if [ -d ${dir} ] && [ -w ${dir} ]; then printf 'packer_writable=yes\\n'; elif sudo -n ${LUX_HOST_SUDO_BIN} "[ -d ${dir} ] && [ -w ${dir} ]"; then printf 'packer_writable=yes\\n'; else printf 'packer_writable=no\\n'; fi`,
+    `if [ -d ${dir} ] && [ -w ${dir} ]; then printf 'packer_writable=yes\\n'; elif sudo -n ${LUX_HOST_SUDO_BIN} writable-dir ${dir}; then printf 'packer_writable=yes\\n'; else printf 'packer_writable=no\\n'; fi`,
   ].join("; ")
 }
 
@@ -108,7 +130,7 @@ export type LuxHostInstallProbe = {
   sudoAll?: boolean | null
 }
 
-/** Whether the Settings dialog may submit the lux-host installer. */
+/** Whether the Settings dialog may submit the lux-host installer. The host root password is required. */
 export function canSubmitLuxHostInstall(input: {
   installing: boolean
   sshPassword: string
@@ -117,20 +139,7 @@ export function canSubmitLuxHostInstall(input: {
   probe: LuxHostInstallProbe | null
 }): boolean {
   if (input.installing) return false
-  if (input.sshPassword.trim() || input.rootPassword.trim()) return true
-  const probe = input.probe
-  if (!probe) return true
-  const same =
-    probe.user === input.account.user.trim() &&
-    probe.host === input.account.host.trim() &&
-    probe.port === (input.account.port || 22)
-  if (!same) return true
-  if (probe.authAttempted === "none") return false
-  if (probe.uid === 0) return true
-  if (probe.sudo === true) return true
-  if (probe.authAttempted === "private_key" && probe.sudoAll === true) return true
-  if (probe.sudoAll === false) return false
-  return probe.authAttempted === "private_key"
+  return input.rootPassword.trim().length > 0
 }
 
 /** Why a successful login is still not usable for host writes. Null when it is. */

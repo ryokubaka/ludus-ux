@@ -13,14 +13,10 @@ import { resolveLudusInstallPath } from "@/lib/runtime-paths"
 
 /** Read Ludus platform ansible/requirements.yml (range deploy roles like nexus3-oss). */
 export async function readLudusPlatformRequirementsYaml(
-  ludusInstallPath = resolveLudusInstallPath(),
-  creds?: SSHCreds,
+  _ludusInstallPath = resolveLudusInstallPath(),
+  _creds?: SSHCreds,
 ): Promise<string | null> {
-  const safeRoot = ludusInstallPath.replace(/'/g, "")
-  const { stdout } = await sshExec(
-    `cat '${safeRoot}/ansible/requirements.yml' 2>/dev/null || true`,
-    creds,
-  )
+  const { stdout } = await sshExec(["read-ludus-requirements"])
   const text = stdout.trim()
   return text || null
 }

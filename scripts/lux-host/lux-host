@@ -1,13 +1,706 @@
 #!/bin/bash
 # LUX host helper. Passwordless sudo is granted for this path only.
-# It runs one host script as root (template dirs, chown, pvesh, qm, chpasswd).
-# It is not a grant of every sudo command.
+# It does not run a caller-supplied shell. Each operation below is fixed.
+# Arguments are checked here. A non-root SSH account cannot become an
+# unrestricted root shell by calling this program.
+#
+# Operations:
+#   version
+#   revision
+#   self-update                       (new script on stdin; LUX ships updates this way)
+#   true
+#   id
+#   writable-dir <path>
+#   date-epoch
+#   getent-home <user>
+#   bashrc-apikey-get <user>
+#   bashrc-apikey-set <user>          (API key on stdin, one line)
+#   chpasswd <user>                   (password on stdin, one line)
+#   pvesh <get|create|delete> <path> [flags]
+#   qm-config <vmid>
+#   qm-shutdown <vmid>
+#   qm-start <vmid>
+#   qm-rollback <vmid> <snap>
+#   qm-enroll-efi <vmid>
+#   testing-rollback <vmid> <node> <snap>
+#   testing-enroll <vmid> <node> <0|1>
+#   range-log <read|mtime|bytes> <rangeId>
+#   mkdir <path>
+#   chown-ludus <path>
+#   chmod-tree <755|644> <path>
+#   rm-tree <path>
+#   b64-init <id>
+#   b64-append <id> <chunk>
+#   b64-finish <id> <dest>
+#   b64-abort <id>
+#   ludus-template-add <dir> <apiKey>
+#   ludus-template-rm <name> <apiKey>
+#   template-purge <name>
+#   sources-repair [id]
+#   ansible-home <user>
+#   ansible-collection-file <user> <namespace> <name> <relative-path>
+#   mkdir-goad-workspace <goadPath>
+#   prepare-goad-submodule <goadPath> <user>
+#   chown-goad <user> <goadPath> <instanceId>
+#   wizard-reap
+#   wizard-yaml <uuid>                (YAML on stdin)
+#   proxmox-token
+#   upgrade-probe [repo]
+#   upgrade-start <repo> <tag>
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
   exit 1
 fi
-if [[ $# -ne 1 ]]; then
-  echo "lux-host: expected one command string" >&2
+
+die() {
+  echo "lux-host: $*" >&2
   exit 2
-fi
-exec bash --noprofile --norc -lc "$1"
+}
+
+is_login() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+is_vmid() {
+  [[ "$1" =~ ^[1-9][0-9]{0,8}$ ]]
+}
+
+is_node() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+is_snap() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]{1,64}$ ]]
+}
+
+is_range_id() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
+}
+
+is_uuid() {
+  [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+# Absolute path, no newlines, no "..", no shell metacharacters.
+is_abs_path() {
+  local p="$1"
+  [[ "$p" == /* ]] || return 1
+  [[ "$p" != *$'\n'* && "$p" != *$'\r'* ]] || return 1
+  [[ "$p" != *..* ]] || return 1
+  [[ "$p" =~ ^/[A-Za-z0-9._/@+-]+$ ]] || return 1
+  return 0
+}
+
+# Refuse paths that leave an allowed prefix through a symlink.
+realpath_under() {
+  local path="$1"
+  local prefix="$2"
+  local real
+  if [[ -e "$path" || -L "$path" ]]; then
+    real=$(realpath -m -- "$path") || die "cannot resolve $path"
+  else
+    local parent
+    parent=$(dirname -- "$path")
+    [[ -d "$parent" ]] || die "parent missing: $parent"
+    real="$(realpath -m -- "$parent")/$(basename -- "$path")"
+  fi
+  [[ "$real" == "$prefix" || "$real" == "$prefix"/* ]] || die "path escapes $prefix"
+  printf '%s' "$real"
+}
+
+assert_packer_path() {
+  is_abs_path "$1" || die "bad path"
+  [[ "$1" == /opt/ludus/packer/* ]] || die "path must be under /opt/ludus/packer"
+  [[ "$1" != "/opt/ludus/packer" ]] || die "refusing packer root"
+  realpath_under "$1" /opt/ludus/packer >/dev/null
+}
+
+assert_not_symlink() {
+  if [[ -L "$1" ]]; then
+    die "refusing symlink $1"
+  fi
+}
+
+home_of() {
+  local user="$1" home
+  is_login "$user" || die "bad user"
+  [[ "$user" != "root" ]] || die "refusing root"
+  home=$(getent passwd "$user" | cut -d: -f6)
+  [[ "$home" == "/home/$user" ]] || die "home for $user is not /home/$user"
+  printf '%s' "$home"
+}
+
+reject_privileged_account() {
+  local user="$1" uid
+  is_login "$user" || die "bad user"
+  case "$user" in
+    root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|ludus)
+      die "refusing account $user"
+      ;;
+  esac
+  uid=$(id -u "$user" 2>/dev/null || true)
+  [[ -n "$uid" ]] || die "no such user $user"
+  [[ "$uid" -ge 1000 ]] || die "refusing uid $uid"
+}
+
+pvesh_path_ok() {
+  local method="$1" path="$2"
+  [[ "$path" != *..* ]] || return 1
+  case "$method:$path" in
+    get:/nodes|get:/pools/ADMIN|get:/version|get:/cluster/resources) return 0 ;;
+  esac
+  if [[ "$method" == "get" && "$path" =~ ^/nodes/[A-Za-z0-9._-]+/status$ ]]; then
+    return 0
+  fi
+  if [[ "$path" =~ ^/nodes/[A-Za-z0-9._-]+/qemu/[1-9][0-9]{0,8}(/status/(current|start|stop|shutdown|reset)|/agent/network-get-interfaces|/spiceproxy|/vncproxy)?$ ]]; then
+    case "$method" in
+      get)
+        [[ "$path" == */status/current || "$path" == */agent/network-get-interfaces || "$path" =~ ^/nodes/[^/]+/qemu/[0-9]+$ ]]
+        return
+        ;;
+      create)
+        [[ "$path" == */status/start || "$path" == */status/stop || "$path" == */status/shutdown || "$path" == */status/reset || "$path" == */spiceproxy || "$path" == */vncproxy ]]
+        return
+        ;;
+      delete)
+        [[ "$path" =~ ^/nodes/[^/]+/qemu/[0-9]+$ ]]
+        return
+        ;;
+    esac
+  fi
+  return 1
+}
+
+cmd_pvesh() {
+  local method="$1" path="$2"
+  shift 2 || die "pvesh needs a method and path"
+  [[ "$method" == "get" || "$method" == "create" || "$method" == "delete" ]] || die "pvesh method"
+  pvesh_path_ok "$method" "$path" || die "pvesh path not allowed"
+  local -a extra=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-format)
+        [[ "${2:-}" == "json" ]] || die "output format"
+        extra+=(--output-format json)
+        shift 2
+        ;;
+      --skiplock)
+        [[ "${2:-}" == "1" ]] || die "skiplock"
+        extra+=(--skiplock 1)
+        shift 2
+        ;;
+      --type)
+        [[ "${2:-}" == "vm" || "${2:-}" == "node" ]] || die "type"
+        extra+=(--type "$2")
+        shift 2
+        ;;
+      --proxy)
+        [[ "${2:-}" =~ ^http://[A-Za-z0-9._-]+:[0-9]{1,5}$ ]] || die "proxy"
+        extra+=(--proxy "$2")
+        shift 2
+        ;;
+      *)
+        die "pvesh flag not allowed"
+        ;;
+    esac
+  done
+  exec pvesh "$method" "$path" "${extra[@]}"
+}
+
+cmd_qm_shutdown() {
+  local id="$1"
+  is_vmid "$id" || die "vmid"
+  qm shutdown "$id" --timeout 90 --forceStop 1
+}
+
+writable_by_sudo_user() {
+  local path="$1"
+  [[ -n "${SUDO_USER:-}" ]] || return 1
+  sudo -u "$SUDO_USER" test -w "$path"
+}
+
+op="${1:-}"
+shift || true
+
+case "$op" in
+  version)
+    echo 3
+    ;;
+  revision)
+    [[ $# -eq 0 ]] || die "revision"
+    sha256sum "$0" | awk '{print $1}'
+    ;;
+  self-update)
+    # The SSH account that may run lux-host is the host admin LUX uses.
+    # Later LUX releases push a new helper here so operators are not asked
+    # to reinstall it by hand. The body must be this program, not a shell.
+    [[ $# -eq 0 ]] || die "self-update"
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    head -c 524289 > "$tmp"
+    [[ -s "$tmp" ]] || die "empty"
+    [[ "$(wc -c < "$tmp")" -le 524288 ]] || die "too large"
+    head -n 1 "$tmp" | grep -qx '#!/bin/bash' || die "shebang"
+    grep -q 'lux-host: must run as root via sudo' "$tmp" || die "marker"
+    grep -q 'self-update)' "$tmp" || die "marker"
+    bash -n "$tmp" || die "syntax"
+    install -o root -g root -m 755 "$tmp" /usr/local/sbin/lux-host
+    ;;
+  true)
+    exit 0
+    ;;
+  id)
+    id -u
+    ;;
+  find-packer)
+    [[ $# -eq 0 ]] || die "find-packer"
+    find /opt/ludus/packer -maxdepth 3 -name '*.pkr.hcl' ! -path '*/sources/*' 2>/dev/null | head -1
+    ;;
+  dir-exists)
+    [[ $# -eq 1 ]] || die "path"
+    is_abs_path "$1" || die "bad path"
+    [[ "$1" == /opt/ludus || "$1" == /opt/ludus/* ]] || die "path"
+    if [[ -d "$1" ]]; then echo ok; else exit 1; fi
+    ;;
+  writable-dir)
+    [[ $# -eq 1 ]] || die "writable-dir needs one path"
+    is_abs_path "$1" || die "bad path"
+    [[ "$1" == /opt/ludus/* || "$1" == /opt/ludus ]] || die "path"
+    if [[ -d "$1" && -w "$1" ]]; then
+      echo yes
+    else
+      echo no
+      exit 1
+    fi
+    ;;
+  date-epoch)
+    date +%s
+    ;;
+  getent-home)
+    [[ $# -eq 1 ]] || die "user"
+    home_of "$1"
+    echo
+    ;;
+  bashrc-apikey-get)
+    [[ $# -eq 1 ]] || die "user"
+    home=$(home_of "$1") || exit $?
+    grep -E '^(export[[:space:]]+)?LUDUS_API_KEY=' "$home/.bashrc" "$home/.profile" 2>/dev/null | tail -1 || true
+    ;;
+  bashrc-apikey-set)
+    [[ $# -eq 1 ]] || die "user"
+    home=$(home_of "$1") || exit $?
+    IFS= read -r key || true
+    [[ -n "$key" ]] || die "empty key"
+    [[ "$key" != *$'\n'* ]] || die "key"
+    [[ "$key" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "key charset"
+    touch "$home/.bashrc"
+    chown "$1:$1" "$home/.bashrc"
+    tmp=$(mktemp)
+    grep -Ev '^(export[[:space:]]+)?LUDUS_API_KEY=' "$home/.bashrc" >"$tmp" || true
+    grep -Ev '^(export[[:space:]]+)?LUDUS_VERSION=' "$tmp" >"$tmp.2" || true
+    mv "$tmp.2" "$tmp"
+    printf 'export LUDUS_API_KEY=%s\nexport LUDUS_VERSION=2\n' "$key" >>"$tmp"
+    install -o "$1" -g "$1" -m 644 "$tmp" "$home/.bashrc"
+    rm -f "$tmp"
+    ;;
+  chpasswd)
+    [[ $# -eq 1 ]] || die "user"
+    reject_privileged_account "$1"
+    IFS= read -r pw || true
+    [[ -n "$pw" && "$pw" != *$'\n'* ]] || die "password"
+    printf '%s:%s\n' "$1" "$pw" | chpasswd
+    ;;
+  pvesh)
+    cmd_pvesh "$@"
+    ;;
+  qm-config)
+    [[ $# -eq 1 ]] || die "vmid"
+    is_vmid "$1" || die "vmid"
+    qm config "$1"
+    ;;
+  qm-shutdown)
+    [[ $# -eq 1 ]] || die "vmid"
+    cmd_qm_shutdown "$1"
+    ;;
+  qm-start)
+    [[ $# -eq 1 ]] || die "vmid"
+    is_vmid "$1" || die "vmid"
+    exec qm start "$1"
+    ;;
+  qm-rollback)
+    [[ $# -eq 2 ]] || die "rollback"
+    is_vmid "$1" || die "vmid"
+    is_snap "$2" || die "snap"
+    exec qm rollback "$1" "$2"
+    ;;
+  qm-enroll-efi)
+    [[ $# -eq 1 ]] || die "vmid"
+    is_vmid "$1" || die "vmid"
+    exec qm enroll-efi-keys "$1"
+    ;;
+  testing-rollback)
+    [[ $# -eq 3 ]] || die "testing-rollback"
+    is_vmid "$1" || die "vmid"
+    is_node "$2" || die "node"
+    is_snap "$3" || die "snap"
+    echo "[lux-testing-stop] rollback prep vmid=$1 node=$2 snap=$3"
+    cmd_qm_shutdown "$1" || pvesh create "/nodes/$2/qemu/$1/status/stop" --skiplock 1 || true
+    if qm listsnapshot "$1" 2>/dev/null | grep -qF "$3"; then
+      echo "[lux-testing-stop] qm rollback $1 $3"
+      qm rollback "$1" "$3"
+    else
+      echo "[lux-testing-stop] snapshot $3 missing on $1"
+    fi
+    echo "[lux-testing-stop] rollback prep done $1"
+    ;;
+  testing-enroll)
+    [[ $# -eq 3 ]] || die "testing-enroll"
+    is_vmid "$1" || die "vmid"
+    is_node "$2" || die "node"
+    [[ "$3" == "0" || "$3" == "1" ]] || die "restart"
+    echo "[lux-testing-efi] enroll vmid=$1 node=$2 restart=$3"
+    cmd_qm_shutdown "$1" || pvesh create "/nodes/$2/qemu/$1/status/stop" --skiplock 1 || true
+    echo "[lux-testing-efi] enroll-efi-keys $1"
+    qm enroll-efi-keys "$1"
+    if qm config "$1" 2>/dev/null | grep -qF 'ms-cert=2023k'; then
+      echo "[lux-testing-efi] ms-cert=2023k ok $1"
+    else
+      echo "[lux-testing-efi] ms-cert=2023k MISSING $1"
+    fi
+    if [[ "$3" == "1" ]]; then
+      qm start "$1" || pvesh create "/nodes/$2/qemu/$1/status/start" || true
+      echo "[lux-testing-start] restarted $1"
+    fi
+    echo "[lux-testing-efi] enroll done $1"
+    ;;
+  range-log)
+    [[ "$1" == "suffix" && $# -eq 4 || "$1" != "suffix" && $# -eq 2 ]] || die "range-log"
+    [[ "$1" == "read" || "$1" == "mtime" || "$1" == "bytes" || "$1" == "suffix" ]] || die "range-log op"
+    is_range_id "$2" || die "range id"
+    log="/opt/ludus/ranges/$2/ansible.log"
+    assert_not_symlink "$log" 2>/dev/null || true
+    case "$1" in
+      read) cat "$log" 2>/dev/null || true ;;
+      mtime) stat -c %Y "$log" 2>/dev/null || echo 0 ;;
+      bytes) stat -c %s "$log" 2>/dev/null || echo 0 ;;
+      suffix)
+        [[ "${3:-}" =~ ^[0-9]+$ && "${4:-}" =~ ^[0-9]+$ ]] || die "suffix"
+        tail -c "+$3" "$log" 2>/dev/null | head -c "$4" || true
+        ;;
+    esac
+    ;;
+  mkdir)
+    [[ $# -ge 1 ]] || die "mkdir"
+    for p in "$@"; do
+      assert_packer_path "$p"
+      mkdir -p -- "$p"
+    done
+    ;;
+  chown-ludus)
+    [[ $# -eq 1 ]] || die "path"
+    assert_packer_path "$1"
+    assert_not_symlink "$1"
+    chown -R ludus:ludus -- "$1"
+    chmod -R 755 -- "$1"
+    ;;
+  chmod-tree)
+    [[ $# -eq 2 ]] || die "chmod"
+    [[ "$1" == "755" || "$1" == "644" ]] || die "mode"
+    assert_packer_path "$2"
+    assert_not_symlink "$2"
+    chmod -R "$1" -- "$2"
+    ;;
+  rm-tree)
+    [[ $# -eq 1 ]] || die "path"
+    assert_packer_path "$1"
+    assert_not_symlink "$1"
+    real=$(realpath_under "$1" /opt/ludus/packer)
+    rm -rf -- "$real"
+    ;;
+  b64-init)
+    [[ $# -eq 1 ]] || die "id"
+    is_uuid "$1" || die "id"
+    mkdir -p /tmp/lux-host-b64
+    chmod 700 /tmp/lux-host-b64
+    : >"/tmp/lux-host-b64/$1"
+    ;;
+  b64-append)
+    [[ $# -eq 2 ]] || die "append"
+    is_uuid "$1" || die "id"
+    [[ "$2" =~ ^[A-Za-z0-9+/=]+$ ]] || die "chunk"
+    [[ -f "/tmp/lux-host-b64/$1" ]] || die "missing upload"
+    printf '%s' "$2" >>"/tmp/lux-host-b64/$1"
+    ;;
+  b64-finish)
+    [[ $# -eq 2 ]] || die "finish"
+    is_uuid "$1" || die "id"
+    assert_packer_path "$2"
+    mkdir -p -- "$(dirname -- "$2")"
+    base64 -d "/tmp/lux-host-b64/$1" >"$2"
+    rm -f "/tmp/lux-host-b64/$1"
+    ;;
+  b64-abort)
+    [[ $# -eq 1 ]] || die "id"
+    is_uuid "$1" || die "id"
+    rm -f "/tmp/lux-host-b64/$1"
+    ;;
+  ludus-template-add)
+    [[ $# -eq 2 ]] || die "template-add"
+    assert_packer_path "$1"
+    [[ "$2" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
+    env LUDUS_VERSION=2 LUDUS_API_KEY="$2" ludus templates add -d "$1"
+    ;;
+  ludus-template-rm)
+    [[ $# -eq 2 ]] || die "template-rm"
+    [[ "$1" =~ ^[A-Za-z0-9._+-]{1,128}$ ]] || die "name"
+    [[ "$2" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
+    env LUDUS_VERSION=2 LUDUS_API_KEY="$2" ludus templates rm -n "$1" || true
+    ;;
+  template-purge)
+    [[ $# -eq 1 ]] || die "name"
+    [[ "$1" =~ ^[A-Za-z0-9._+-]{1,128}$ ]] || die "name"
+    name="$1"
+    root=/opt/ludus
+    rm -rf -- "$root/packer/$name" "$root/packer/templates/$name"
+    for d in "$root"/users/*/packer; do
+      [[ -d "$d" ]] && rm -rf -- "$d/$name"
+    done
+    for d in "$root"/sources/*/templates; do
+      [[ -d "$d/$name" ]] && rm -rf -- "$d/$name"
+    done
+    echo ok
+    ;;
+  sources-repair)
+    id="${1:-}"
+    if [[ -n "$id" ]]; then
+      [[ "$id" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || die "id"
+      target="/opt/ludus/sources/$id"
+    else
+      target="/opt/ludus/sources"
+    fi
+    [[ -d "$target" ]] || { echo "[LUX] ludus sources path missing: $target"; exit 0; }
+    assert_not_symlink "$target"
+    chown -R ludus:ludus -- "$target"
+    find "$target" -type d -exec chmod u+rwx {} +
+    echo "[LUX] repaired ludus ownership under $target"
+    ;;
+  ansible-home)
+    [[ $# -eq 1 ]] || die "user"
+    is_login "$1" || die "user"
+    [[ "$1" != "root" ]] || die "user"
+    user="$1"
+    base="/opt/ludus/users/$user/.ansible"
+    mkdir -p "$base/cp" "$base/tmp"
+    chown ludus:ludus "$base/cp" "$base/tmp"
+    chmod 700 "$base/cp" "$base/tmp"
+    for d in "$base/collections" "$base/roles" "$base/galaxy_cache"; do
+      if [[ -e "$d" ]]; then
+        chown -R "$user:ludus" -- "$d"
+        chmod -R u=rwX,g=rwX,o= -- "$d"
+      fi
+    done
+    if [[ -f "$base/galaxy_token" ]]; then
+      chown "$user:ludus" "$base/galaxy_token"
+      chmod 660 "$base/galaxy_token"
+    fi
+    chmod 770 "$base" 2>/dev/null || true
+    ;;
+  ansible-collection-file)
+    [[ $# -eq 4 ]] || die "ansible-collection-file"
+    is_login "$1" || die "user"
+    [[ "$2" =~ ^[A-Za-z0-9_]+$ ]] || die "namespace"
+    [[ "$3" =~ ^[A-Za-z0-9_]+$ ]] || die "name"
+    [[ "$4" =~ ^[A-Za-z0-9._/-]+$ && "$4" != /* && "$4" != *..* ]] || die "path"
+    file="/opt/ludus/users/$1/.ansible/collections/ansible_collections/$2/$3/$4"
+    if [[ -f "$file" && ! -L "$file" ]]; then
+      echo "OK:$2.$3"
+    else
+      echo "FAIL:$2.$3"
+    fi
+    ;;
+  mkdir-goad-workspace)
+    [[ $# -eq 1 ]] || die "path"
+    is_abs_path "$1" || die "path"
+    [[ "$1" == /opt/* && "$1" != /opt/ludus && "$1" != /opt/ludus/* ]] || die "goad path"
+    dest="$1/workspace"
+    mkdir -p -- "$dest"
+    chmod 1777 -- "$dest"
+    ;;
+  prepare-goad-submodule)
+    # GOAD provision runs as the Ludus Linux user. The repo under /opt is
+    # root-owned, so `git submodule update` cannot lock
+    # .git/modules/.../config and the extension phase dies with
+    # "Permission denied" while Ludus itself is fine.
+    [[ $# -eq 2 ]] || die "args"
+    is_abs_path "$1" || die "path"
+    [[ "$1" == /opt/* && "$1" != /opt/ludus && "$1" != /opt/ludus/* ]] || die "goad path"
+    is_login "$2" || die "user"
+    [[ "$2" != "root" ]] || die "user"
+    id -u "$2" >/dev/null 2>&1 || die "user"
+    root="$1"
+    [[ -d "$root/.git" && -f "$root/.gitmodules" ]] || exit 0
+    # The extension roles are a submodule pin. Fast-forward a clean main
+    # checkout, or a detached checkout of an older main commit, so a new pin
+    # is used without a manual git pull.
+    branch="$(git -C "$root" rev-parse --abbrev-ref HEAD)"
+    if git -C "$root" diff --quiet && git -C "$root" diff --cached --quiet; then
+      GIT_TERMINAL_PROMPT=0 git -C "$root" fetch origin main || true
+      if git -C "$root" merge-base --is-ancestor HEAD origin/main; then
+        if [[ "$branch" == "main" ]]; then
+          GIT_TERMINAL_PROMPT=0 git -C "$root" merge --ff-only origin/main || true
+        elif [[ "$branch" == "HEAD" ]]; then
+          git -C "$root" checkout --detach origin/main || true
+        fi
+      fi
+    fi
+    git -C "$root" submodule update --init --recursive
+    if [[ -d "$root/.git/modules" ]]; then
+      chown -R "$2:$2" -- "$root/.git/modules"
+    fi
+    vendor="$root/extensions/securityonion/vendor/ludus-source-meow"
+    if [[ -d "$vendor" ]]; then
+      chown -R "$2:$2" -- "$vendor"
+    fi
+    ;;
+  chown-goad)
+    [[ $# -eq 3 ]] || die "chown-goad"
+    is_login "$1" || die "user"
+    [[ "$1" != "root" ]] || die "user"
+    is_abs_path "$2" || die "path"
+    [[ "$2" == /opt/* && "$2" != /opt/ludus && "$2" != /opt/ludus/* ]] || die "goad path"
+    is_range_id "$3" || die "instance"
+    dest="$2/workspace/$3"
+    [[ -d "$dest" ]] || die "missing $dest"
+    assert_not_symlink "$dest"
+    realpath_under "$dest" "$2/workspace" >/dev/null
+    chown -R "$1:$1" -- "$dest"
+    ;;
+  wizard-reap)
+    [[ $# -eq 0 ]] || die "wizard-reap"
+    find /tmp -maxdepth 1 -type f -name 'lux-wizard-config-*.yml' -mmin +720 -delete
+    ;;
+  wizard-yaml)
+    [[ $# -eq 1 ]] || die "uuid"
+    is_uuid "$1" || die "uuid"
+    dest="/tmp/lux-wizard-config-$1.yml"
+    cat >"$dest"
+    chmod 644 "$dest"
+    ;;
+  proxmox-token)
+    python3 - <<'PY'
+import sys
+url = node = host = secret = ""
+try:
+    import yaml
+    cfg = yaml.safe_load(open("/opt/ludus/config.yml"))
+    url = str(cfg.get("proxmox_url") or "").rstrip("/")
+    node = str(cfg.get("proxmox_node") or cfg.get("proxmox_hostname") or "").strip()
+    host = str(cfg.get("proxmox_hostname") or node or "127.0.0.1").strip()
+except Exception as e:
+    print("ERR read config.yml: " + str(e), file=sys.stderr)
+    sys.exit(2)
+token_id = "root@pam!ludus-token"
+try:
+    with open("/etc/pve/priv/token.cfg") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == token_id:
+                secret = parts[1]
+                break
+except Exception as e:
+    print("ERR read token.cfg: " + str(e), file=sys.stderr)
+    sys.exit(2)
+if not url or not secret:
+    print("ERR missing proxmox_url or token secret", file=sys.stderr)
+    sys.exit(3)
+print("|".join([url, "root@pam", token_id, secret, node, host]))
+PY
+    ;;
+  read-ludus-requirements)
+    [[ $# -eq 0 ]] || die "read-ludus-requirements"
+    cat /opt/ludus/ansible/requirements.yml
+    ;;
+  install-go)
+    [[ $# -eq 1 ]] || die "version"
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version"
+    export PATH="/usr/local/go/bin:$PATH"
+    if command -v go >/dev/null 2>&1; then
+      echo "GO_OK already $(go version)"
+      exit 0
+    fi
+    arch=$(uname -m)
+    case "$arch" in
+      x86_64|amd64) goarch=amd64 ;;
+      aarch64|arm64) goarch=arm64 ;;
+      *) die "unsupported arch" ;;
+    esac
+    url="https://go.dev/dl/go${1}.linux-${goarch}.tar.gz"
+    tmp=$(mktemp /tmp/lux-host-go-XXXXXX.tar.gz)
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$url" -o "$tmp"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$tmp" "$url"
+    else
+      rm -f "$tmp"
+      die "curl or wget required"
+    fi
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf "$tmp"
+    rm -f "$tmp"
+    ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+    ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    echo "GO_OK installed $(/usr/local/go/bin/go version)"
+    ;;
+  upgrade-probe)
+    [[ $# -le 1 ]] || die "repo"
+    if [[ $# -eq 1 ]]; then
+      is_abs_path "$1" || die "repo"
+      repo="$1"
+    else
+      repo=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' ludus-ux 2>/dev/null || true)
+    fi
+    printf 'repo=%s\n' "$repo"
+    if [[ -z "$repo" || ! -d "$repo" ]]; then printf 'ok=no\nreason=not_found\n'; exit 0; fi
+    [[ -f "$repo/docker-compose.yml" ]] && printf 'compose=yes\n' || printf 'compose=no\n'
+    [[ -f "$repo/scripts/upgrade.sh" ]] && printf 'script=yes\n' || printf 'script=no\n'
+    [[ -d "$repo/.git" ]] && printf 'git=yes\n' || printf 'git=no\n'
+    if ! cd "$repo"; then printf 'ok=no\nreason=not_found\n'; exit 0; fi
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$PWD"
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      printf 'git_ok=no\nok=no\nreason=git_failed\n'
+      exit 0
+    fi
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then printf 'dirty=yes\n'; else printf 'dirty=no\n'; fi
+    printf 'checkout=%s\n' "$(git describe --tags --exact-match 2>/dev/null || git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    printf 'ok=yes\n'
+    ;;
+  upgrade-start)
+    [[ $# -eq 2 ]] || die "upgrade-start"
+    is_abs_path "$1" || die "repo"
+    [[ "$2" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "tag"
+    [[ -f "$1/scripts/upgrade.sh" && -f "$1/docker-compose.yml" ]] || die "not a lux checkout"
+    if [[ -n "${SUDO_USER:-}" ]] && sudo -u "$SUDO_USER" test -w "$1/scripts/upgrade.sh"; then
+      die "upgrade script is writable by the caller"
+    fi
+    repo="$1"
+    tag="$2"
+    data=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}' ludus-ux 2>/dev/null || true)
+    [[ -n "$data" ]] || data="$repo/data"
+    mkdir -p "$data"
+    log="$data/lux-upgrade.log"
+    printf '%s\n' "=== LUX switch to $tag started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >"$log"
+    command -v systemd-run >/dev/null 2>&1 || die "systemd-run not found"
+    systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 \
+      /bin/bash -c "bash \"\$REPO/scripts/upgrade.sh\" \"\$TAG\" >> \"\$LOG\" 2>&1; echo \"LUX_UPGRADE_EXIT:\$?\" >> \"\$LOG\""
+    echo started
+    ;;
+  "")
+    die "missing operation"
+    ;;
+  *)
+    die "operation not allowed: $op"
+    ;;
+esac

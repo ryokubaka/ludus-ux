@@ -58,7 +58,7 @@ Logs are written under `/opt/ludus/users/<username>/packer/` on the Ludus host.
 
 The collapsible **Add Templates from Source** panel installs template directories that are not bundled with Ludus:
 
-1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom git repo you configure). The name in the list is the Packer `vm_name` when that file sets one. The git folder can differ: `templates/debian13` is registered as `debian-13-x64-server-template`, and the panel shows `folder debian13`.
+1. Pick a source that is already registered on the **Sources** page. LUX loads its templates with `GET /api/templates/sources`. Add a custom git repo on Sources, not on this panel. The name in the list is the Packer `vm_name` when that file sets one. The git folder can differ: `templates/debian13` is registered as `debian-13-x64-server-template`, and the panel shows `folder debian13`.
 2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files in that git folder under the server templates directory (not under the `vm_name`), runs `ludus templates add -d …`, and registers the Packer `vm_name` in Ludus.
 
 After a successful add, the template appears as **Not Built** until you run **Build**.

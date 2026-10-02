@@ -600,6 +600,22 @@ EOS
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
     fi
+  elif lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host version" | grep -qx 2; then
+    echo "lux-host is already the allowlisted helper and cannot replace itself."
+    echo "Install the update from a root shell, or enter a sudo password."
+    local sudo_pw=""
+    read -r -s -p "sudo password for ${target_user} on ${LUDUS_SSH_HOST} (used once to write the rule): " sudo_pw
+    echo
+    if [[ -z "$sudo_pw" ]]; then
+      echo "Skipped." >&2
+      return 0
+    fi
+    if ! printf '%s\n' "$sudo_pw" | lux_ssh_as_target "sudo -S -p '' bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"; then
+      unset sudo_pw
+      echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
+      return 1
+    fi
+    unset sudo_pw
   elif lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host true"; then
     local helper_cmd
     helper_cmd="bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
@@ -629,7 +645,7 @@ EOS
     unset sudo_pw
   fi
 
-  if lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host 'id -u'" | grep -qx 0; then
+  if lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host id" | grep -qx 0; then
     echo "Installed. ${target_user} can run sudo -n /usr/local/sbin/lux-host. Other sudo commands still need a password."
     return 0
   fi

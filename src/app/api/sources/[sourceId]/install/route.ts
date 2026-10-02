@@ -18,6 +18,7 @@ import {
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ensureSourceFresh, sourceIdOf } from "@/lib/source-auto-sync"
 import { pinSourceInstallSelection } from "@/lib/source-content-pins"
+import { isSourcePublished } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
@@ -57,6 +58,16 @@ export async function POST(
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
   }
 
+  if (!session.isAdmin && isSourcePublished(sourceId)) {
+    return NextResponse.json(
+      {
+        error:
+          "This source is shared with all users. An admin installs and updates its blueprints, templates, roles, and collections.",
+      },
+      { status: 403 },
+    )
+  }
+
   const hasItems =
     (selection.blueprints?.length ?? 0) > 0 ||
     (selection.templates?.length ?? 0) > 0 ||
@@ -81,55 +92,32 @@ export async function POST(
       await rememberBlueprintOperator(adminInstallKey)
     }
 
-    if (installingBlueprints && !isAdminInstall) {
+    if (installingBlueprints && !isAdminInstall && !force) {
       const missing: string[] = []
-      const repairWarnings: string[] = []
       for (const name of blueprintNames) {
         const existingForViewer = await resolveExistingSourceBlueprintInstall(
           viewerApiKey,
           name,
           sourceId,
         )
-        if (existingForViewer) continue
-        const existingGlobal = await resolveExistingSourceBlueprintInstall(
-          globalLookupApiKey,
-          name,
-          sourceId,
-        )
-        if (existingGlobal) {
-          repairWarnings.push(
-            ...(await finalizeGlobalSourceBlueprintInstall(globalLookupApiKey, existingGlobal)),
-          )
-          continue
-        }
-        missing.push(name)
+        if (!existingForViewer) missing.push(name)
       }
-      if (missing.length > 0) {
-        return NextResponse.json(
-          {
-            error:
-              "Community source blueprints must be installed once by a Ludus administrator for all users. Ask an admin to install from Sources or Blueprints.",
-          },
-          { status: 403 },
-        )
-      }
-      // Without force, existing blueprints only need access sync (no overwrite).
-      if (!force) {
+      if (missing.length === 0) {
         const scopeTag = effectiveScopeTagFromSession(session)
         revalidateAfterSourceMutation(scopeTag)
         logLuxRouteAction(request, session, {
           outcome: "success",
-          detail: `install-source=${sourceId} access-sync`,
+          detail: `install-source=${sourceId} already-installed`,
         })
         return NextResponse.json({
-          warnings: repairWarnings,
-          data: { result: "Blueprint access synced for all users" },
+          warnings: [],
+          data: { result: "Already installed for this user" },
         })
       }
     }
 
     const installApiKey =
-      installingBlueprints && isAdminInstall && adminInstallKey ? adminInstallKey : apiKey
+      installingBlueprints && isAdminInstall && adminInstallKey ? adminInstallKey : viewerApiKey
 
     // Pull tip before install/re-sync so Ludus applies current git tree, not a stale sync.
     try {
@@ -155,7 +143,7 @@ export async function POST(
     }
 
     const shareWarnings: string[] = []
-    if (installingBlueprints && globalLookupApiKey) {
+    if (installingBlueprints && isAdminInstall && globalLookupApiKey) {
       for (const name of blueprintNames) {
         const blueprintId = await resolveExistingSourceBlueprintInstall(
           globalLookupApiKey,

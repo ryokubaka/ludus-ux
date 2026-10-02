@@ -146,7 +146,7 @@ export default function LoginPage() {
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Sign In</CardTitle>
                 <CardDescription>
-                  Connect using your Ludus server SSH credentials
+                  Your Ludus account, not the host root user.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -165,7 +165,7 @@ export default function LoginPage() {
                       <Input
                         id="username"
                         autoComplete="username"
-                        placeholder="Ludus username (not root)"
+                        placeholder="Username"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                         className="pl-9 font-mono"
@@ -173,9 +173,6 @@ export default function LoginPage() {
                         disabled={loading}
                       />
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Login with your personal Ludus account (not root)
-                    </p>
                   </div>
 
                   <div className="space-y-1.5">
@@ -218,11 +215,8 @@ export default function LoginPage() {
 
                 <div className="mt-5 p-3 rounded-md bg-muted/40 border border-border/50">
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    <span className="text-foreground font-medium">How it works:</span>{" "}
-                    The UI connects to your Ludus server over SSH, reads your{" "}
-                    <code className="text-primary">LUDUS_API_KEY</code> from{" "}
-                    <code className="text-primary">~/.bashrc</code>, and creates an
-                    authenticated session. Credentials are never stored.
+                    SSH reads <code className="text-primary">LUDUS_API_KEY</code> from{" "}
+                    <code className="text-primary">~/.bashrc</code>. The password is not saved.
                   </p>
                 </div>
               </CardContent>

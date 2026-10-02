@@ -1,0 +1,58 @@
+# After a pull request merges to main, publish the changelog version if that tag
+# does not exist yet. Title shape matches existing releases: vX.Y.Z — short description.
+
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.pull_request.base.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read version from CHANGELOG.md
+        id: changelog
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/release-notes.md"
+          parsed="$(LUX_RELEASE_NOTES="$notes" bash scripts/changelog-release.sh)"
+          tag="$(printf '%s\n' "$parsed" | sed -n 's/^tag=//p')"
+          title="$(printf '%s\n' "$parsed" | sed -n 's/^title=//p')"
+          {
+            echo "tag=$tag"
+            echo "title=$title"
+            echo "notes=$notes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.changelog.outputs.tag }}"
+          title="${{ steps.changelog.outputs.title }}"
+          notes="${{ steps.changelog.outputs.notes }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists"
+            exit 0
+          fi
+          gh release create "$tag" \
+            --target "${{ github.event.pull_request.merge_commit_sha }}" \
+            --title "$title" \
+            --notes-file "$notes"

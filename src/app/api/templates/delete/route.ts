@@ -91,7 +91,7 @@ export async function DELETE(request: NextRequest) {
   // CLI unregister first (API often soft-refuses shared/source packer paths).
   let cliOut = ""
   try {
-    const cli = await sshExec(`${buildLudusTemplateRmCliCmd(name, apiKey)}`)
+    const cli = await sshExec(buildLudusTemplateRmCliCmd(name, apiKey))
     cliOut = (cli.stdout + cli.stderr).trim()
   } catch (err) {
     cliOut = logAndSafeError("templates/delete", err, "ludus templates rm failed")
@@ -101,7 +101,7 @@ export async function DELETE(request: NextRequest) {
   let sshOk = false
   let sshOut = ""
   try {
-    const rm = await sshExec(`${rmCmd} 2>&1`)
+    const rm = await sshExec(rmCmd)
     sshOut = (rm.stdout + rm.stderr).trim()
     sshOk = rm.code === 0
   } catch (err) {

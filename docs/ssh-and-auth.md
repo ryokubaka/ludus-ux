@@ -4,7 +4,7 @@
 
 | Mechanism | What it’s for |
 |---|---|
-| **`PROXMOX_SSH_USER` + password or key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side SSH for admin tunnel, `pvesh`, template install, `chown` under `/opt/ludus`, `chpasswd`, and API keys in `~/.bashrc`. The account is **root**, or another user allowed to run **`sudo -n /usr/local/sbin/lux-host`**. That helper is the only passwordless command. A normal Ludus login with neither is not enough. **Key auth is the recommended default** on hardened Proxmox hosts. |
+| **`PROXMOX_SSH_USER` + password or key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side SSH for the admin tunnel, `pvesh`, template install, `chown` under `/opt/ludus`, `chpasswd`, and API keys in `~/.bashrc`. Any account can do this. Root runs those commands directly. Any other account runs them through [lux-host](#lux-host). A normal Ludus login, with neither root nor lux-host, is not enough. **Key auth is the recommended default** on hardened Proxmox hosts. |
 | **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when that host password or key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
 
 Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
@@ -63,30 +63,30 @@ chmod 600 "$HOME/.ssh/authorized_keys"
 
 Then restart LUX’s container and run **Settings → Test host SSH & admin API**.
 
-When the account is not root, privileged host commands need `sudo -n /usr/local/sbin/lux-host` (the scoped rule in the next section, not `NOPASSWD: ALL`).
+When the account is not root, privileged host commands need [lux-host](#lux-host).
 
-## Non-root host SSH
+## lux-host
 
-`scripts/quickstart.sh` asks before it installs anything when `PROXMOX_SSH_USER` is not root. Answering yes writes:
-
-- `/usr/local/sbin/lux-host` (root-owned, mode 755)
-- `/etc/sudoers.d/lux-host`
-
-The sudoers rule is only:
+LUX used to require `PROXMOX_SSH_USER=root` because template installs, `chown`, `pvesh`, `qm`, password changes, and `~/.bashrc` updates run as root on the Ludus host. **lux-host** is the replacement: a small root-owned program at `/usr/local/sbin/lux-host`. Passwordless sudo is granted for that path only. The program does not run a caller-supplied shell. It accepts one named operation and checks every argument. The operations are listed at the top of `scripts/lux-host/lux-host`.
 
 ```
 Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
 <user> ALL=(root) NOPASSWD: LUX_HOST
 ```
 
-It does **not** grant `NOPASSWD: ALL`. `sudo apt`, `sudo bash`, and other commands still ask for a password. LUX calls `sudo -n /usr/local/sbin/lux-host` for template directories, `chown`, `pvesh`, `qm`, `chpasswd`, and `~/.bashrc` updates. The same prompt is menu item **5** (`bash scripts/quickstart.sh --menu`). Settings → SSH & GOAD can install the same two files (**Install lux-host sudo rule**). Leave the root password blank when this account can already run `sudo -n /usr/local/sbin/lux-host`. Key auth can install or refresh the helper with no password; `sudo -n true` and `sudo -n bash` are not required. A password login that cannot yet run the helper uses the SSH password once as the sudo password. If the account is not in sudoers, enter the Ludus host root password. That password is used once to SSH as root and is not saved.
+`sudo apt`, `sudo bash`, and every other command still ask for a password. LUX calls `sudo -n /usr/local/sbin/lux-host`. Root SSH does not use the helper.
 
-The templates live in `scripts/lux-host/`. To install by hand, replace `__LUX_SSH_USER__` in `sudoers.in`, check it with `visudo -cf`, and install both files as root (`lux-host` mode 755, sudoers mode 440).
+Install it in any of these ways when `PROXMOX_SSH_USER` is not root:
 
-**Alternative (cleaner):** generate a **new** keypair only for LUX on your workstation (`ssh-keygen`), append the **`.pub`** line to that account’s `authorized_keys` (`/root/.ssh/authorized_keys` when `PROXMOX_SSH_USER` is root, or `/home/<user>/.ssh/authorized_keys` when it is not), and mount only that **private** key in `./ssh/id_rsa`.
+- **Quickstart** asks before it writes anything. Menu item **5** (`bash scripts/quickstart.sh --menu`) installs the same files.
+- **Settings → SSH & GOAD → Install lux-host sudo rule** writes `/usr/local/sbin/lux-host` (mode 755) and `/etc/sudoers.d/lux-host` (mode 440) the first time. The Ludus host root password is required for that first install. LUX logs in as root to write the files and does not save that password. After the helper is installed, LUX compares it with the copy shipped in this build and updates it on its own: as root, with passwordless `sudo`, or through the helper's `self-update` operation. Operators do not reinstall it by hand when a new LUX version adds a host operation.
+- **By hand:** the files are in `scripts/lux-host/`. Replace `__LUX_SSH_USER__` in `sudoers.in`, check it with `visudo -cf`, and install both files as root.
+
+The credential test fails when the account is not root and cannot run the helper, or cannot write the Packer directory.
 
 ## Other SSH key notes
 
+- Prefer a keypair that exists only for LUX. Generate it on the workstation (`ssh-keygen`), append the **`.pub`** line to that account’s `authorized_keys` (`/root/.ssh/authorized_keys` for root, `/home/<user>/.ssh/authorized_keys` otherwise), and mount only the private key at `./ssh/id_rsa`.
 - The image has **no `ssh` CLI** — use **Settings → Test host SSH & admin API**, not `docker exec … ssh`.
 - Use **OpenSSH PEM** keys (`id_rsa` / `id_ed25519`), not PuTTY **`.ppk`**.
 - **CRLF** in the key file is normalized when LUX loads the key; **`dos2unix ./ssh/id_rsa`** on the host is still safe if you hit parse errors.

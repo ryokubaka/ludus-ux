@@ -5,6 +5,7 @@ import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   asPrivilegedShell,
+  formatLuxHost,
   assessConfiguredSshUser,
   buildLuxHostAuthProbeCommand,
   buildRootSshProbeCommand,
@@ -87,18 +88,18 @@ describe("asPrivilegedShell", () => {
     expect(asPrivilegedShell("root", "id -u")).toBe("id -u")
   })
 
-  it("wraps other users in the host helper, not a root shell", () => {
-    expect(asPrivilegedShell("lux-ssh-test", "id -u")).toBe(
-      "sudo -n /usr/local/sbin/lux-host 'id -u'",
-    )
-    expect(asPrivilegedShell("lux-ssh-test", "id -u")).not.toContain("bash")
+  it("refuses to wrap an arbitrary command for a non-root account", () => {
+    expect(() => asPrivilegedShell("lux-ssh-test", "id -u")).toThrow(/arbitrary shell/)
   })
+})
 
-  it("escapes single quotes in the command", () => {
-    expect(asPrivilegedShell("lux-ssh-test", "echo 'ok'")).toContain(
-      "sudo -n /usr/local/sbin/lux-host ",
+describe("formatLuxHost", () => {
+  it("quotes each argument and does not invoke bash", () => {
+    expect(formatLuxHost("lux-ssh-test", ["pvesh", "get", "/nodes"])).toBe(
+      "sudo -n /usr/local/sbin/lux-host 'pvesh' 'get' '/nodes'",
     )
-    expect(asPrivilegedShell("lux-ssh-test", "echo 'ok'")).toContain("'\\''")
+    expect(formatLuxHost("root", ["id"])).toBe("/usr/local/sbin/lux-host 'id'")
+    expect(formatLuxHost("lux-ssh-test", ["echo", "o'brien"])).toContain("'\\''")
   })
 })
 
@@ -171,27 +172,10 @@ describe("buildRootSshProbeCommand", () => {
 const account = { user: "lux", host: "ludus.local", port: 22 }
 
 describe("canSubmitLuxHostInstall", () => {
-  it("allows a blank root password when key auth already has passwordless sudo", () => {
+  it("requires the Ludus host root password", () => {
     expect(canSubmitLuxHostInstall({
       installing: false,
-      sshPassword: "",
-      rootPassword: "",
-      account,
-      probe: {
-        user: "lux",
-        host: "ludus.local",
-        port: 22,
-        authAttempted: "private_key",
-        uid: 1000,
-        sudoAll: true,
-      },
-    })).toBe(true)
-  })
-
-  it("allows a blank password when key auth can already run the lux-host helper", () => {
-    expect(canSubmitLuxHostInstall({
-      installing: false,
-      sshPassword: "",
+      sshPassword: "secret",
       rootPassword: "",
       account,
       probe: {
@@ -201,96 +185,32 @@ describe("canSubmitLuxHostInstall", () => {
         authAttempted: "private_key",
         uid: 1000,
         sudo: true,
-        sudoAll: false,
-      },
-    })).toBe(true)
-  })
-
-  it("requires a password when that account cannot sudo and no root password was entered", () => {
-    expect(canSubmitLuxHostInstall({
-      installing: false,
-      sshPassword: "",
-      rootPassword: "",
-      account,
-      probe: {
-        user: "lux",
-        host: "ludus.local",
-        port: 22,
-        authAttempted: "private_key",
-        uid: 1000,
-        sudoAll: false,
+        sudoAll: true,
       },
     })).toBe(false)
-  })
-
-  it("accepts the SSH password or the root password when sudo is not passwordless", () => {
-    const denied = {
-      user: "lux",
-      host: "ludus.local",
-      port: 22,
-      authAttempted: "private_key",
-      uid: 1000,
-      sudoAll: false,
-    }
-    expect(canSubmitLuxHostInstall({
-      installing: false,
-      sshPassword: "secret",
-      rootPassword: "",
-      account,
-      probe: denied,
-    })).toBe(true)
     expect(canSubmitLuxHostInstall({
       installing: false,
       sshPassword: "",
       rootPassword: "root-secret",
       account,
-      probe: denied,
+      probe: null,
     })).toBe(true)
   })
 
-  it("lets an unprobed key login try, and blocks a login that has no key", () => {
-    expect(canSubmitLuxHostInstall({
-      installing: false,
-      sshPassword: "",
-      rootPassword: "",
-      account,
-      probe: null,
-    })).toBe(true)
+  it("rejects a blank root password and a submit already in progress", () => {
     expect(canSubmitLuxHostInstall({
       installing: true,
-      sshPassword: "secret",
-      rootPassword: "",
+      sshPassword: "",
+      rootPassword: "root-secret",
       account,
       probe: null,
     })).toBe(false)
     expect(canSubmitLuxHostInstall({
       installing: false,
-      sshPassword: " ",
+      sshPassword: "secret",
       rootPassword: " ",
       account,
-      probe: {
-        user: "lux",
-        host: "ludus.local",
-        port: 22,
-        authAttempted: "none",
-        sudoAll: null,
-      },
+      probe: null,
     })).toBe(false)
-  })
-
-  it("does not apply a sudo denial from a different account", () => {
-    expect(canSubmitLuxHostInstall({
-      installing: false,
-      sshPassword: "",
-      rootPassword: "",
-      account,
-      probe: {
-        user: "other",
-        host: "ludus.local",
-        port: 22,
-        authAttempted: "private_key",
-        sudoAll: false,
-      },
-    })).toBe(true)
   })
 })

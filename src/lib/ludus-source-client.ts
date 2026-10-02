@@ -10,6 +10,7 @@ import {
   normalizeGitSourceUrl,
   normalizeLudusSourceRef,
   suggestedLudusSourceId,
+  toLudusSourceId,
 } from "@/lib/ludus-source-ref"
 import {
   rewriteSourceInstallWarning,
@@ -20,6 +21,7 @@ import {
   isLudusSourceGitPermissionError,
   repairLudusSourcesOwnershipAsRoot,
 } from "@/lib/ludus-source-ownership"
+import { installedBlueprintMatchesSource } from "@/lib/registered-ludus-sources"
 import { extractLudusList } from "@/lib/utils"
 
 const BADSL_GIT_URL = "https://github.com/badsectorlabs/ludus-source-bsl"
@@ -63,6 +65,8 @@ export interface SourceBlueprintRow {
 export interface SourceTemplateRow {
   name?: string
   version?: string
+  /** Repo directory, e.g. `templates/debian13`, when the install name is the Packer `vm_name`. */
+  path?: string
 }
 
 export type SourceCatalogInstallState = "not_installed" | "installed" | "upgrade_available" | string
@@ -215,7 +219,7 @@ export async function createGitSource(
   form.append("type", "git")
   form.append("url", gitUrl.replace(/\/$/, ""))
   form.append("ref", resolvedRef)
-  const id = (opts?.id || suggestedLudusSourceId(gitUrl, resolvedRef)).trim()
+  const id = toLudusSourceId(opts?.id || suggestedLudusSourceId(gitUrl, resolvedRef))
   if (id) form.append("id", id)
 
   const created = await ludusJson<{ sourceID?: string; error?: string }>("/sources", apiKey, {
@@ -656,6 +660,26 @@ export async function resolveSourcePublicKey(apiKey: string, sourceID: string): 
   return sourceID
 }
 
+export function selectInstalledBlueprintId(
+  rows: Array<{ id?: string; blueprintID?: string }>,
+  shortName: string,
+  sourceIDs: string[] = [],
+): string | null {
+  const sources = sourceIDs.map((s) => s.trim()).filter(Boolean)
+  for (const row of rows) {
+    const id = (row.id || row.blueprintID || "").trim()
+    if (!id) continue
+    if (sources.length === 0) {
+      if (id === shortName || id.endsWith(`/${shortName}`)) return id
+      continue
+    }
+    if (sources.some((sourceID) => installedBlueprintMatchesSource(id, shortName, sourceID))) {
+      return id
+    }
+  }
+  return null
+}
+
 export async function findInstalledBlueprintId(
   apiKey: string,
   shortName: string,
@@ -664,19 +688,13 @@ export async function findInstalledBlueprintId(
   const res = await ludusJson<unknown>("/blueprints", apiKey, { method: "GET" })
   if (!res.ok) return null
   const rows = ludusRows<{ id?: string; blueprintID?: string }>(res.data)
-  const candidates = new Set<string>([shortName])
-  if (sourceID) {
+  const sourceIDs: string[] = []
+  if (sourceID?.trim()) {
+    sourceIDs.push(sourceID.trim())
     const publicKey = await resolveSourcePublicKey(apiKey, sourceID)
-    candidates.add(`${publicKey}/${shortName}`)
-    candidates.add(`${sourceID}/${shortName}`)
+    if (publicKey && publicKey !== sourceID) sourceIDs.push(publicKey)
   }
-  for (const row of rows) {
-    const id = (row.id || row.blueprintID || "").trim()
-    if (!id) continue
-    if (candidates.has(id)) return id
-    if (id.endsWith(`/${shortName}`)) return id
-  }
-  return null
+  return selectInstalledBlueprintId(rows, shortName, sourceIDs)
 }
 
 export function gitUrlForBadsectorlabs(): string {

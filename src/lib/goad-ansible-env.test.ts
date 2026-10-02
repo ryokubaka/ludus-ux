@@ -15,6 +15,11 @@ describe("buildLudusAnsibleEnvShell", () => {
     expect(sh).toContain('export ANSIBLE_COLLECTIONS_PATH="$_LUX_LUDUS_COLLECTIONS:')
     expect(sh).toContain("/users/$_LUX_ANSIBLE_USER/.ansible/collections")
     expect(sh).toContain('export ANSIBLE_SSH_CONTROL_PATH_DIR="$HOME/.goad/ansible-cp"')
+    expect(sh).toContain('export ANSIBLE_LOCAL_TEMP="$HOME/.goad/ansible-local"')
+    expect(sh).toContain('"$HOME/.goad/ansible-remote"')
+    expect(sh).toContain("termios.TIOCGWINSZ")
+    expect(sh).toContain('struct.pack("HHHH", 24, 80, 0, 0)')
+    expect(sh).toContain('"$HOME/.goad/py"')
     expect(sh).not.toContain(".ansible/cp")
     expect(sh).not.toContain(".goad/ansible_collections")
   })
@@ -31,7 +36,8 @@ describe("buildLudusAnsibleEnvShell", () => {
 
 describe("buildVerifyGoadCollectionsShell", () => {
   it("checks canary plugin files under Ludus collections path", () => {
-    const sh = buildVerifyGoadCollectionsShell(ludusInstallPathFromEnv(), ["ansible.windows"])
+    const sh = buildVerifyGoadCollectionsShell(ludusInstallPathFromEnv(), ["ansible.windows"], "labuser")
+    expect(sh).toContain("_LUX_ANSIBLE_USER='labuser'")
     expect(sh).toContain("ansible_collections/ansible/windows/plugins/modules/win_dns_client.ps1")
     expect(sh).toContain("FAIL:ansible.windows")
     expect(sh).toContain("LUX_ANSIBLE_VERIFY_DONE")

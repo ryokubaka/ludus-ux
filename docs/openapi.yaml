@@ -19,7 +19,7 @@ info:
     - `X-Ludus-Admin: true` — route to admin API port (8081)
     - `X-Ludus-User` — override Ludus user context
   # Keep in sync with package.json / APP_VERSION (src/lib/changelog.ts).
-  version: 1.3.3
+  version: 1.4.0
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -829,6 +829,23 @@ paths:
   # --------------------------------------------------------------------------
   # Health
   # --------------------------------------------------------------------------
+  /api/host-resources:
+    get:
+      tags: [Health]
+      summary: Ludus host CPU and memory
+      description: >
+        Signed-in sessions. One Proxmox `pvesh /cluster/resources` read for node
+        CPU and memory. The dashboard polls this. Replies are reused for about
+        10 seconds.
+      operationId: hostResources
+      responses:
+        '200':
+          description: Current node samples.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Host SSH is not configured.
+
   /api/health:
     get:
       tags: [Health]
@@ -849,14 +866,14 @@ paths:
                   version:
                     type: string
                     description: LUX app version (`package.json` / `APP_VERSION`).
-                    example: "1.3.3"
+                    example: "1.4.0"
                   timestamp:
                     type: string
                     format: date-time
                 required: [status, version, timestamp]
               example:
                 status: ok
-                version: "1.3.3"
+                version: "1.4.0"
                 timestamp: "2026-08-09T16:30:00.000Z"
 
   # --------------------------------------------------------------------------
@@ -932,7 +949,7 @@ paths:
         Writes `/usr/local/sbin/lux-host` and a sudoers rule for that helper only.
         `PROXMOX_SSH_USER` does not have to be root. A non-root account is valid when
         it can run `sudo -n /usr/local/sbin/lux-host`. If that account is not in
-        sudoers, `rootPassword` is used once to SSH as root and is not saved.
+        sudoers. `rootPassword` is required. LUX SSHes as root to write the files and does not save it.
         Admin required.
       operationId: installLuxHost
       security:
@@ -1011,7 +1028,7 @@ paths:
                 properties:
                   current:
                     type: string
-                    example: "1.3.3"
+                    example: "1.4.0"
                   latestStable:
                     type: string
                     nullable: true
@@ -1024,7 +1041,7 @@ paths:
                       properties:
                         tag:
                           type: string
-                          example: v1.3.3
+                          example: v1.4.0
                         name:
                           type: string
                         publishedAt:
@@ -1094,7 +1111,7 @@ paths:
       summary: Start an in-app upgrade or downgrade
       description: |
         Admin only. Checks out the release tag and rebuilds the stack. A target
-        older than v1.3.3 requires `acknowledgeVersionManagementLoss`. Returns
+        older than v1.4.0 requires `acknowledgeVersionManagementLoss`. Returns
         as soon as the host script has started.
       operationId: switchLuxRelease
       security:
@@ -1109,10 +1126,10 @@ paths:
                 tag:
                   type: string
                   description: GitHub release tag (`vX.Y.Z`).
-                  example: v1.3.3
+                  example: v1.4.0
                 acknowledgeVersionManagementLoss:
                   type: boolean
-                  description: Required when `tag` is older than v1.3.3.
+                  description: Required when `tag` is older than v1.4.0.
               required: [tag]
       responses:
         '202':
@@ -1128,7 +1145,7 @@ paths:
                     type: string
                 required: [started, tag]
         '400':
-          description: Missing tag, unknown tag, or a downgrade below v1.3.3 without acknowledgement.
+          description: Missing tag, unknown tag, or a downgrade below v1.4.0 without acknowledgement.
           content:
             application/json:
               schema:

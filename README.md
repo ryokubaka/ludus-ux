@@ -3,7 +3,7 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.3.3-green)]()
+[![Version](https://img.shields.io/badge/version-1.4.0-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
@@ -51,7 +51,7 @@ Admins can start the same switch from **Settings → About**. Full behavior, pre
 
 | | |
 |---|---|
-| **Ludus** | v2.x, API **8080**, SSH **22** |
+| **Ludus** | **2.0 only.** LUX does not support Ludus 1.x. API **8080**, SSH **22** |
 | **Host** | Docker + Compose (v2 plugin or `docker-compose`) |
 | **GOAD** (optional) | GOAD repo on the Ludus server + `python3.11-venv` |
 | **LudusHound** (optional) | Clone [LudusHound](https://github.com/bagelByt3s/LudusHound) to `/opt/LudusHound` + `go` for first build |
@@ -67,7 +67,7 @@ LUX is a small Docker stack (Next.js app + nginx + SQLite). Heavy work (VMs, Pac
 | **Disk** | ~10 GiB free (image + `./data` + logs) | ~20 GiB free |
 | **Network** | Reach Ludus API (`:8080`, and `:8081` or tunnel) + SSH (`:22`) on the Ludus/Proxmox host | Same |
 
-**Host SSH (strongly recommended):** mount a private key for `PROXMOX_SSH_USER` under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). That account is root, or another user who can run `sudo -n /usr/local/sbin/lux-host`. Without host SSH, API-only browsing still works; most automation does not.
+**Host SSH (strongly recommended):** mount a private key for `PROXMOX_SSH_USER` under `./ssh` (or set `PROXMOX_SSH_PASSWORD`). The account can be any user. Root runs host commands directly. Any other account runs them through [lux-host](docs/ssh-and-auth.md#lux-host), a root-owned helper that sudoers allows by itself. Quickstart or Settings → SSH & GOAD can install it. Without host SSH, API-only browsing still works; most automation does not.
 
 Details: [SSH and auth](docs/ssh-and-auth.md), [Getting started](docs/getting-started.md).
 

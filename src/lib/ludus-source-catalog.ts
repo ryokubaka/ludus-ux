@@ -88,7 +88,7 @@ async function enrichBlueprintCatalogFromGit(
         ...entry,
         title: manifest.title ?? entry.title,
         description: entry.description || manifest.description,
-        version: entry.version || manifest.version,
+        version: manifest.version || entry.version,
         min_ludus_version: entry.min_ludus_version || manifest.min_ludus_version,
       }
     }),
@@ -162,7 +162,7 @@ export async function fetchRegisteredTemplateCatalog(
     .filter((t) => t.name)
     .map((t) => ({
       name: t.name!,
-      path: `templates/${t.name}`,
+      path: t.path || `templates/${t.name}`,
       files: [],
       apiBase: meta.apiBase,
       ref: meta.ref,
@@ -194,14 +194,14 @@ export async function fetchLudusTemplateCatalog(
   apiBase: string,
 ): Promise<LudusCatalogTemplate[] | null> {
   try {
-    const { listSourceTemplates } = await import("@/lib/ludus-source-client")
     const sourceID = await ensureGitSource(apiKey, gitUrl, ref)
-    const rows = await listSourceTemplates(apiKey, sourceID)
-    return rows
+    const { items } = await resolveSourceTemplates(apiKey, sourceID)
+    if (items.length === 0) return null
+    return items
       .filter((t) => t.name)
       .map((t) => ({
         name: t.name!,
-        path: `templates/${t.name}`,
+        path: t.path || `templates/${t.name}`,
         files: [],
         apiBase,
         ref,

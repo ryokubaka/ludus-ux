@@ -1,11 +1,8 @@
 # LUX host SSH. Passwordless sudo for /usr/local/sbin/lux-host only.
 # This is not NOPASSWD: ALL. Other sudo commands still require a password.
 #
-# The helper runs LUX host scripts as root:
-#   mkdir, rm, chown, chmod under /opt/ludus, GOAD, and LudusHound
-#   pvesh and qm
-#   chpasswd
-#   getent, and writes to a Ludus user's ~/.bashrc
-#   ownership repair for /opt/ludus/sources and ~/.ansible
+# The helper does not run a shell. Allowed operations are listed in
+# /usr/local/sbin/lux-host (pvesh, qm, chpasswd, packer files, ansible home,
+# GOAD workspace ownership, range logs).
 Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
 __LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST

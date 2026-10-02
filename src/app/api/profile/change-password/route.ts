@@ -55,18 +55,12 @@ export async function POST(request: NextRequest) {
   } catch { /* fallback to username */ }
 
   // Change password via root SSH + chpasswd
-  const escapedUser = linuxUser.replace(/"/g, '\\"')
-  const escapedPw = newPassword
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
-
   try {
     await sshExec(
       settings.sshHost, settings.sshPort,
       settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",
-      `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
+      ["chpasswd", linuxUser],
+      { stdin: `${newPassword}\n` },
     )
   } catch (err) {
     logLuxRouteAction(request, session, { outcome: "failure", detail: "Failed to change password" })

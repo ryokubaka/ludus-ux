@@ -395,7 +395,7 @@ export function Sidebar() {
         )}
 
         {/* Navigation */}
-        <nav className={cn("flex-1 overflow-y-auto py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
+        <nav className={cn("flex-1 overflow-y-auto overscroll-y-contain py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((item) => navItemVisible(item, navCtx))
             if (visibleItems.length === 0) return null

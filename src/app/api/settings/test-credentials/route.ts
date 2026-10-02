@@ -151,9 +151,9 @@ export async function POST(request: NextRequest) {
       } else if (problem) {
         rootSsh.detail = problem
       } else if (probe.uid === 0) {
-        rootSsh.detail = `uid 0 (${probe.username}). ${packerDir} is writable.`
+        rootSsh.detail = `uid 0 (${probe.username}).`
       } else {
-        rootSsh.detail = `uid ${probe.uid} (${probe.username}) with passwordless sudo. ${packerDir} is writable.`
+        rootSsh.detail = `uid ${probe.uid} (${probe.username}) with passwordless sudo.`
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

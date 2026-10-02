@@ -173,31 +173,8 @@ export async function installGoToolchain(opts?: {
     return { ok: false, detail: "Invalid Go version", stdout: "", stderr: "" }
   }
 
-  const cmd = [
-    `export PATH="/usr/local/go/bin:$PATH"`,
-    `if command -v go >/dev/null 2>&1; then echo "GO_OK already $(go version)"; exit 0; fi`,
-    `ARCH=$(uname -m)`,
-    `case "$ARCH" in`,
-    `  x86_64|amd64) GOARCH=amd64 ;;`,
-    `  aarch64|arm64) GOARCH=arm64 ;;`,
-    `  *) echo "Unsupported arch: $ARCH"; exit 3 ;;`,
-    `esac`,
-    `URL="https://go.dev/dl/go${version}.linux-$GOARCH.tar.gz"`,
-    `command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo 'curl or wget required'; exit 4; }`,
-    `TMP=$(mktemp /tmp/go-XXXXXX.tar.gz)`,
-    `if command -v curl >/dev/null 2>&1; then curl -fsSL "$URL" -o "$TMP"; else wget -qO "$TMP" "$URL"; fi`,
-    `rm -rf /usr/local/go`,
-    `tar -C /usr/local -xzf "$TMP"`,
-    `rm -f "$TMP"`,
-    `ln -sfn /usr/local/go/bin/go /usr/local/bin/go`,
-    `ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt`,
-    `export PATH="/usr/local/go/bin:$PATH"`,
-    `command -v go >/dev/null 2>&1 || { echo 'go still missing after install'; exit 5; }`,
-    `echo "GO_OK installed $(go version)"`,
-  ].join("\n")
-
   try {
-    const { stdout, stderr, code } = await sshExec(cmd, undefined)
+    const { stdout, stderr, code } = await sshExec(["install-go", version])
     if (code !== 0 || !stdout.includes("GO_OK")) {
       return {
         ok: false,

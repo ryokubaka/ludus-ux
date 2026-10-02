@@ -114,6 +114,18 @@ export function isGlobalSourceCatalogBlueprint(
   return true
 }
 
+/** True for a blueprint installed from this source. User copies (`-copy` / "(Copy)") are not included. */
+export function blueprintInstalledFromSource(
+  sourceId: string,
+  bp: Pick<BlueprintListItem, "id" | "blueprintID" | "name" | "ownerID" | "sourceID">,
+): boolean {
+  const source = sourceId.trim().toLowerCase()
+  if (!source || isLikelyUserBlueprintCopy(bp)) return false
+  const id = (bp.id || bp.blueprintID || "").trim().toLowerCase()
+  if (id.startsWith(`${source}/`)) return true
+  return (bp.sourceID || "").trim().toLowerCase() === source
+}
+
 export function isSourceCatalogBlueprint(bp: Pick<BlueprintListItem, "id" | "blueprintID" | "sourceID">): boolean {
   const id = (bp.id || bp.blueprintID || "").trim()
   if (bp.sourceID?.trim()) return true

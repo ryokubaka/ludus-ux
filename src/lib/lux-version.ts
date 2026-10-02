@@ -1,5 +1,5 @@
 /** First LUX release that ships in-app version checks and upgrades. */
-export const LUX_VERSION_MANAGEMENT_SINCE = "1.3.3"
+export const LUX_VERSION_MANAGEMENT_SINCE = "1.4.0"
 
 /** Strict release tags only — no branches, suffixes, or shell metacharacters. */
 export const LUX_RELEASE_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/

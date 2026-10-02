@@ -61,16 +61,19 @@ describe("buildLudusTemplateAddCmd", () => {
       "/opt/ludus/packer/ubuntu-24.04-x64-server",
       "USER.testkey123",
     )
-    expect(cmd).toBe(
-      "env LUDUS_VERSION=2 LUDUS_API_KEY='USER.testkey123' ludus templates add -d '/opt/ludus/packer/ubuntu-24.04-x64-server'",
-    )
-    expect(cmd).not.toContain("sudo")
-    expect(cmd).not.toContain("runuser")
+    expect(cmd).toEqual([
+      "ludus-template-add",
+      "/opt/ludus/packer/ubuntu-24.04-x64-server",
+      "USER.testkey123",
+    ])
   })
 
-  it("escapes single quotes in api key", () => {
-    const cmd = buildLudusTemplateAddCmd("/opt/ludus/packer/t", "KEY'part")
-    expect(cmd).toContain("LUDUS_API_KEY='KEY'\\''part'")
+  it("passes the api key as an argument, not a shell snippet", () => {
+    expect(buildLudusTemplateAddCmd("/opt/ludus/packer/t", "KEY'part")).toEqual([
+      "ludus-template-add",
+      "/opt/ludus/packer/t",
+      "KEY'part",
+    ])
   })
 })
 
@@ -111,22 +114,19 @@ describe("templateDirNameAliases", () => {
 
 describe("buildLudusTemplateRmCliCmd", () => {
   it("runs ludus templates rm with API key", () => {
-    const cmd = buildLudusTemplateRmCliCmd("securityonion-2.4-x64-template", "USER.key")
-    expect(cmd).toContain("ludus templates rm -n 'securityonion-2.4-x64-template'")
-    expect(cmd).toContain("LUDUS_API_KEY='USER.key'")
+    expect(buildLudusTemplateRmCliCmd("securityonion-2.4-x64-template", "USER.key")).toEqual([
+      "ludus-template-rm",
+      "securityonion-2.4-x64-template",
+      "USER.key",
+    ])
   })
 })
 
 describe("buildLudusTemplateDeleteCmd", () => {
   it("removes both list-name and catalog-dir aliases under packer and sources", () => {
-    const cmd = buildLudusTemplateDeleteCmd("/opt/ludus", "ubuntu-24.04-x64-desktop-template")
-    expect(cmd).toContain("rm -rf")
-    expect(cmd).toContain("/packer/")
-    expect(cmd).toContain('"$ROOT/users"')
-    expect(cmd).toContain("sources")
-    expect(cmd).toContain("ubuntu-24.04-x64-desktop-template")
-    expect(cmd).toContain("ubuntu-24.04-x64-desktop")
-    expect(cmd).toContain("vm_name")
-    expect(cmd.startsWith("bash -lc ")).toBe(true)
+    expect(buildLudusTemplateDeleteCmd("/opt/ludus", "ubuntu-24.04-x64-desktop-template")).toEqual([
+      "template-purge",
+      "ubuntu-24.04-x64-desktop-template",
+    ])
   })
 })

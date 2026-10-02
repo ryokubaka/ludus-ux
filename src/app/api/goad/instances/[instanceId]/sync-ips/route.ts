@@ -25,9 +25,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
-import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
-import { getSettings } from "@/lib/settings-store"
+import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -49,9 +47,15 @@ export async function POST(
   const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
-  const settings = getSettings()
   const goadPath = resolveGoadPath()
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const safeIdEarly = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
+  const workspacePathEarly = `${goadPath}/workspace/${safeIdEarly}`
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds, workspacePathEarly)
 
   // ── 1. Resolve rangeID ────────────────────────────────────────────────────
   let ludusRangeId: string | null = bodyRangeId || null
@@ -60,7 +64,7 @@ export async function POST(
   }
   if (!ludusRangeId) {
     try {
-      ludusRangeId = await readGoadRangeId(instanceId, rootCreds) ?? null
+      ludusRangeId = await readGoadRangeId(instanceId, undefined, runAsOwner) ?? null
     } catch {
       // ignore
     }
@@ -107,9 +111,8 @@ export async function POST(
   // ── 3. Read current ip_range from instance.json ───────────────────────────
   let oldIpRange: string | null = null
   try {
-    const { stdout } = await sshExec(
+    const { stdout } = await runAsOwner(
       `python3 -c "import json; d=json.load(open('${workspacePath}/instance.json')); print(d.get('ip_range',''))"`,
-      rootCreds
     )
     oldIpRange = stdout.trim() || null
   } catch {
@@ -129,7 +132,7 @@ export async function POST(
       `d['ip_range']='${newIpRange}'; ` +
       `open(path,'w').write(json.dumps(d, indent=2)); ` +
       `print('[+] instance.json updated')"`
-    const { stdout, code } = await sshExec(updateJsonCmd, rootCreds)
+    const { stdout, code } = await runAsOwner(updateJsonCmd)
     if (code === 0) {
       updates.push("instance.json")
     } else {
@@ -167,17 +170,12 @@ export async function POST(
   // Always also replace the GOAD default fallback so the button works even
   // when instance.json already had the correct prefix but inventories didn't.
   sedCmds.push(`${findInventories} -exec sed -i "s|192\\.168\\.56|${newIpRange}|g" {} +`)
-  // Security Onion Ludus VMs sit on vlan 20 (10.R.20.20), not vlan 10.
-  // Prefix rewrite above turns {{ip_range}}.20 into 10.R.10.20 — fix third octet.
-  sedCmds.push(
-    `find '${workspacePath}' -maxdepth 1 -type f -name 'securityonion*_inventory' -exec sed -i "s|ansible_host=10\\.${rangeNumber}\\.10\\.20|ansible_host=10.${rangeNumber}.20.20|g" {} +`,
-  )
   sedCmds.push(`echo "[+] Inventory sync complete"`)
 
   const inventoryUpdateCmd = sedCmds.join(" && ")
 
   try {
-    const { stdout, code, stderr } = await sshExec(inventoryUpdateCmd, rootCreds)
+    const { stdout, code, stderr } = await runAsOwner(inventoryUpdateCmd)
     if (code === 0) {
       updates.push("inventory files")
     } else {

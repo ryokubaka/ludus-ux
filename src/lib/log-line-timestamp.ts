@@ -61,6 +61,22 @@ export function deployLogLineHasLeadingWallTimestamp(line: string): boolean {
 }
 
 /**
+ * Ansible prints a blank line between tasks. The live stream used to stamp
+ * those with the poll clock, and the GOAD ansible log re-sent every one of
+ * them because empty lines are not deduped. A line is blank when nothing
+ * remains after the role prefix and wall-clock stamp.
+ */
+export function isBlankDeployLogLine(line: string): boolean {
+  const withoutRole = line.replace(/^\[(?:LUDUS|GOAD|ERROR)\]\s*/, "")
+  const { body } = splitLeadingWallTimestamp(withoutRole)
+  return body.trim().length === 0
+}
+
+export function omitBlankLogLines(lines: string[]): string[] {
+  return lines.filter((line) => !isBlankDeployLogLine(line))
+}
+
+/**
  * Split `[HH:MM:SS]` or `[YYYY-MM-DDTHH:mm:ss…]` wall prefix from the rest of the line.
  */
 export function splitLeadingWallTimestamp(line: string): { ts: string | null; body: string } {
@@ -91,10 +107,14 @@ export function augmentLudusDeployHistoryLines(
   lines: string[],
   startIso: string,
   endIso: string,
+  nowMs: number = Date.now(),
 ): string[] {
   const t0 = new Date(startIso).getTime()
   const t1Raw = new Date(endIso || startIso).getTime()
-  const t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0
+  let t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0
+  // A still-running log has no end. Spreading one second per line from `start`
+  // stamps the tail after "now". Never project past the current instant.
+  if (Number.isFinite(nowMs) && t1 > nowMs) t1 = Math.max(t0, nowMs)
   let span = Math.max(0, t1 - t0)
 
   const augmentableIdx: number[] = []
@@ -107,9 +127,11 @@ export function augmentLudusDeployHistoryLines(
   })
   const m = augmentableIdx.length
   if (m > 1 && span < 1) {
+    const elapsed = Number.isFinite(nowMs) ? Math.max(0, nowMs - t0) : 0
+    const synthetic = (m - 1) * HISTORY_INTERPOLATE_MIN_GAP_MS
     span = Math.min(
       HISTORY_INTERPOLATE_MAX_SPAN_MS,
-      Math.max(span, (m - 1) * HISTORY_INTERPOLATE_MIN_GAP_MS),
+      elapsed > 0 ? Math.min(synthetic, elapsed) : 0,
     )
   }
 

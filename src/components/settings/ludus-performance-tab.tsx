@@ -154,9 +154,9 @@ export function LudusPerformanceTab() {
 
       {anyData && (
         <div className="grid gap-4 md:grid-cols-1">
-          <ChartCard title="CPU" description="Host CPU usage (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="cpu" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
-          <ChartCard title="Memory" description="RAM used (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="mem" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
-          <ChartCard title="Load (1m)" description="One-minute load average" rows={rows} nodeNames={nodeNames} fieldPrefix="load" unit="" domain={[0, "auto"]} chartMargins={chartMargins} />
+          <ChartCard title="CPU" description="One line per Proxmox node (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="cpu" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
+          <ChartCard title="Memory" description="One line per Proxmox node (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="mem" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
+          <ChartCard title="Load (1m)" description="One line per Proxmox node" rows={rows} nodeNames={nodeNames} fieldPrefix="load" unit="" domain={[0, "auto"]} chartMargins={chartMargins} />
         </div>
       )}
 

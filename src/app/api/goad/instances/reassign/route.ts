@@ -21,9 +21,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { getSettings } from "@/lib/settings-store"
-import { chownGoadInstance, writeGoadRangeId, type SSHCreds } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { chownGoadInstance, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { setPbRangeOwner } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -43,15 +41,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "instanceId and targetUserId are required" }, { status: 400 })
   }
 
-  const settings = getSettings()
-  const rootCreds: SSHCreds | undefined = rootPasswordCredsIfSet(settings)
-
   const errors: string[] = []
 
   // Step 1: Change OS-level file ownership of the GOAD workspace directory.
-  // This updates the ownerUserId that listGoadInstances reads from the filesystem.
+  // Elevated through lux-host / root — the host SSH account is not root.
   try {
-    await chownGoadInstance(instanceId, targetUserId, rootCreds)
+    await chownGoadInstance(instanceId, targetUserId)
   } catch (err) {
     errors.push(`chown failed: ${(err as Error).message}`)
   }
@@ -63,7 +58,14 @@ export async function POST(request: NextRequest) {
 
     // Step 3: Write .goad_range_id tracking file on the server (best-effort)
     try {
-      await writeGoadRangeId(instanceId, rangeId, rootCreds)
+      await writeGoadRangeId(instanceId, rangeId, undefined, (command) =>
+        sshExecAsWorkspaceUser(
+          request,
+          { ...session, username: targetUserId, isAdmin: false },
+          command,
+          undefined,
+        ),
+      )
     } catch {
       // SSH write is best-effort; local DB already updated above
     }

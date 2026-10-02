@@ -10,9 +10,7 @@ import {
   loadLuxHostInstallPayload,
   luxHostSudoUsernameError,
   redactSecret,
-  selectLuxHostInstallMode,
 } from "@/lib/lux-host-install"
-import { buildLuxHostAuthProbeCommand, parseRootSshProbe } from "@/lib/root-ssh-preflight"
 
 type Body = Partial<{
   sshHost: string
@@ -61,6 +59,15 @@ export async function POST(request: NextRequest) {
   }
   const password = (settings.proxmoxSshPassword || "").trim()
   const rootPassword = typeof body.rootPassword === "string" ? body.rootPassword.trim() : ""
+  if (!rootPassword) {
+    return finishAdminResponse(
+      NextResponse.json(
+        { error: "The Ludus host root password is required to install lux-host." },
+        { status: 400 },
+      ),
+      admin,
+    )
+  }
   for (const secret of [password, rootPassword]) {
     if (secret.includes("\n") || secret.includes("\r")) {
       return finishAdminResponse(
@@ -78,30 +85,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = loadLuxHostInstallPayload(user)
-    if (rootPassword) {
-      await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"))
-    } else {
-      const who = await runAsUser(buildLuxHostAuthProbeCommand())
-      const auth = parseRootSshProbe(who)
-      const mode = selectLuxHostInstallMode({
-        uid: auth.uid,
-        sudoAll: auth.sudoAll === true,
-        sudoHelper: auth.sudo === true,
-        hasUserPassword: password.length > 0,
-      })
-      if (!mode) {
-        return finishAdminResponse(
-          NextResponse.json({
-            error: "Enter this account's password, or the Ludus host root password. The root password is used once and is not saved.",
-          }, { status: 400 }),
-          admin,
-        )
-      }
-      await runAsUser(
-        buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, mode),
-        mode === "sudo-s" ? `${password}\n` : undefined,
-      )
-    }
+    await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"))
 
     const verify = (await runAsUser(LUX_HOST_VERIFY_CMD)).trim()
     if (verify !== "0") {

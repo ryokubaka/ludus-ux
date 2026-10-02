@@ -8,7 +8,6 @@ import "server-only"
 
 import { sshExec } from "@/lib/goad-ssh"
 import { resolveLudusInstallPath } from "@/lib/runtime-paths"
-import { shellSingleQuote } from "@/lib/template-packer-paths"
 
 /** True when Ludus/git reported a root-owned / unwritable source clone. */
 export function isLudusSourceGitPermissionError(message: string): boolean {
@@ -27,29 +26,11 @@ export function isLudusSourceGitPermissionError(message: string): boolean {
  * the user-facing `sourceID`.
  */
 export function buildRepairLudusSourcesOwnershipCmd(
-  ludusRoot: string,
+  _ludusRoot: string,
   cloneDirId?: string,
-): string {
-  const root = ludusRoot.replace(/\/$/, "") || "/opt/ludus"
-  const safeRoot = shellSingleQuote(root)
+): readonly string[] {
   const id = (cloneDirId || "").trim().replace(/[^a-zA-Z0-9_-]/g, "")
-  const target = id
-    ? `${root}/sources/${id}`
-    : `${root}/sources`
-  const safeTarget = shellSingleQuote(target)
-
-  return [
-    `LUDUS_ROOT=${safeRoot}`,
-    `TARGET=${safeTarget}`,
-    'if [ ! -d "$TARGET" ]; then',
-    '  echo "[LUX] ludus sources path missing: $TARGET (skip ownership repair)"',
-    "  exit 0",
-    "fi",
-    'chown -R ludus:ludus "$TARGET"',
-    // Dirs must stay user-writable so fetch can create new object shards.
-    'find "$TARGET" -type d -exec chmod u+rwx {} +',
-    'echo "[LUX] repaired ludus ownership under $TARGET"',
-  ].join("\n")
+  return id ? ["sources-repair", id] : ["sources-repair"]
 }
 
 /**

@@ -57,7 +57,7 @@ import { GoadReassignDialog } from "@/components/goad/goad-instance-tabs/goad-re
 import { GoadInstanceTabTriggers } from "@/components/goad/goad-instance-tabs/goad-instance-tab-triggers"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import {
-  applyNetworkSection,
+  mergeNetworkSection,
   networkSectionEqual,
   type NetworkSnapshot,
 } from "@/lib/network-rules"
@@ -305,11 +305,15 @@ function GoadInstancePage() {
     const isTerminalError = rangeState === "ERROR" || rangeState === "ABORTED"
     if (!isTerminalError || !isRunning || !sawDeployingRef.current || autoStoppedRef.current) return
     autoStoppedRef.current = true
-    stop()
+    // ERROR is a failed deploy. ABORTED is the operator stopping the range.
+    void stop({ asError: rangeState === "ERROR" })
     toast({
       variant: "destructive",
-      title: "Range deployment failed",
-      description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
+      title: rangeState === "ERROR" ? "Range deployment failed" : "Range deployment aborted",
+      description:
+        rangeState === "ERROR"
+          ? "The Ludus range reported an error. The GOAD command was stopped and marked failed."
+          : "The Ludus range was aborted. The GOAD command has been stopped.",
     })
   // Intentionally omits `stop` and `toast` — both are stable refs; adding them
   // would cause unnecessary re-registrations without changing behavior.
@@ -600,7 +604,7 @@ function GoadInstancePage() {
           const current = await ludusApi.getRangeConfig(rangeId)
           const yaml = current.data?.result
           if (yaml && !networkSectionEqual(yaml, snapshot)) {
-            const merged = applyNetworkSection(yaml, snapshot)
+            const merged = mergeNetworkSection(yaml, snapshot)
             await ludusApi.setRangeConfig(merged, rangeId)
           }
           // Match runAction / startNetworkTagDeploy: do not start a tag deploy while

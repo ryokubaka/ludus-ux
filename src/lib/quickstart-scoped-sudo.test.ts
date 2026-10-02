@@ -40,7 +40,7 @@ case "$cmd" in
     ;;
   "sudo -n /usr/local/sbin/lux-host "*)
     if [[ "\${FAKE_HELPER}" == "1" ]]; then
-      if [[ "$cmd" == *"'id -u'"* ]]; then echo 0; fi
+      if [[ "$cmd" == *"'id -u'"* || "$cmd" == *"lux-host id" ]]; then echo 0; fi
       exit 0
     fi
     ;;

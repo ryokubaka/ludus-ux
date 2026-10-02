@@ -220,6 +220,34 @@ export async function resolveSourceBlueprints(
   return { items, catalogSource, catalogRef }
 }
 
+/**
+ * Membership comes from the git tree. A Ludus source cache that only knows
+ * installed templates must not hide the rest of `templates/`.
+ */
+export function mergeSourceTemplateRows(
+  ludus: SourceTemplateRow[],
+  git: Array<{ name: string; path?: string }>,
+): SourceTemplateRow[] {
+  const byName = new Map<string, SourceTemplateRow>()
+  for (const row of ludus) {
+    const name = (row.name ?? "").trim()
+    if (!name) continue
+    byName.set(name.toLowerCase(), { ...row, name })
+  }
+  for (const entry of git) {
+    const name = entry.name.trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    const existing = byName.get(key)
+    if (existing) {
+      if (!existing.path && entry.path) byName.set(key, { ...existing, path: entry.path })
+      continue
+    }
+    byName.set(key, { name, path: entry.path })
+  }
+  return [...byName.values()].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+}
+
 export async function resolveSourceTemplates(
   apiKey: string,
   sourceID: string,
@@ -227,13 +255,19 @@ export async function resolveSourceTemplates(
   const src = await prepareRegisteredSource(apiKey, sourceID)
   const catalogRef = ludusSourceGitRef(src)
   const ludus = await ludusCatalogOrEmpty(() => listSourceTemplates(apiKey, sourceID))
-  if (ludus.length > 0) return { items: ludus, catalogSource: "ludus", catalogRef }
 
+  let git: Array<{ name: string; path: string }> = []
   if (src?.url) {
-    const git = await listGitSourceTemplates(src.url, catalogRef)
-    if (git.length > 0) return { items: git, catalogSource: "github", catalogRef }
+    git = await listGitSourceTemplates(src.url, catalogRef)
   }
-  return { items: [], catalogSource: "ludus", catalogRef }
+
+  if (ludus.length === 0 && git.length === 0) {
+    return { items: [], catalogSource: "ludus", catalogRef }
+  }
+
+  const items = mergeSourceTemplateRows(ludus, git)
+  const catalogSource: SourceCatalogOrigin = ludus.length === 0 && git.length > 0 ? "github" : "ludus"
+  return { items, catalogSource, catalogRef }
 }
 
 export async function resolveSourceRoles(

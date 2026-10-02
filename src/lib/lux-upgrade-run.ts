@@ -1,7 +1,7 @@
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { listKnownLuxReleaseTags } from "@/lib/lux-releases"
-import { losesVersionManagement, validateLuxSwitchTag } from "@/lib/lux-version"
+import { LUX_VERSION_MANAGEMENT_SINCE, losesVersionManagement, validateLuxSwitchTag } from "@/lib/lux-version"
 import { dockerSocketAvailable, runHostScriptViaDocker } from "@/lib/lux-upgrade-docker"
 import {
   buildHostProbeCmd,
@@ -85,7 +85,7 @@ export async function startLuxUpgrade(
       ok: false,
       status: 400,
       error:
-        "Downgrading below v1.3.3 removes in-app version management. Confirm that acknowledgement to continue.",
+        `Downgrading below v${LUX_VERSION_MANAGEMENT_SINCE} removes in-app version management. Confirm that acknowledgement to continue.`,
     }
   }
 

@@ -9,17 +9,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { getSettings } from "@/lib/settings-store"
-import { writeGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -31,8 +29,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeId and instanceIds are required" }, { status: 400 })
   }
 
-  const settings = getSettings()
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
 
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
@@ -45,7 +47,7 @@ export async function POST(request: NextRequest) {
     // Best-effort SSH write to the .goad_range_id file on the remote server.
     // This keeps the on-server record in sync for any tooling that reads it directly.
     try {
-      await writeGoadRangeId(instanceId, rangeId, rootCreds)
+      await writeGoadRangeId(instanceId, rangeId, undefined, runAsOwner)
       results.push({ instanceId, ok: true })
     } catch (err) {
       // SSH write failed — local DB is already updated so the UI will still show

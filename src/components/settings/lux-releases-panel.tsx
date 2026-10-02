@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { AlertTriangle, ExternalLink, Loader2 } from "lucide-react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -55,6 +56,7 @@ function relationLabel(relation: LuxVersionRelation): string {
 
 export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   const [releases, setReleases] = useState<ReleasesResponse | null>(null)
+  const [showAllReleases, setShowAllReleases] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [host, setHost] = useState<HostStatus | null>(null)
   const [hostLoading, setHostLoading] = useState(false)
@@ -280,7 +282,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           <span className="text-sm font-medium">Releases</span>
           {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
-        <div className="max-h-80 overflow-y-auto divide-y divide-border/40">
+        <div className="divide-y divide-border/40">
           {!releases && !loadError && (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -290,49 +292,53 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           {releases && releases.releases.length === 0 && (
             <p className="px-4 py-6 text-sm text-muted-foreground text-center">No published releases found.</p>
           )}
-          {releases?.releases.map((release) => (
-            <div key={release.tag} className="flex items-start justify-between gap-3 px-4 py-3">
-              <div className="min-w-0 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-sm">{release.tag}</span>
-                  {release.relation === "current" && <Badge variant="secondary">Current</Badge>}
-                  {release.prerelease && <Badge variant="outline">Pre-release</Badge>}
-                </div>
+          {previewSlice(releases?.releases ?? [], showAllReleases).map((release) => (
+            <div key={release.tag} className="flex items-center gap-3 px-4 py-2">
+              <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-mono text-sm">{release.tag}</span>
+                {release.relation === "current" && <Badge variant="secondary">Current</Badge>}
+                {release.prerelease && <Badge variant="outline">Pre-release</Badge>}
                 {release.publishedAt && (
-                  <p className="text-xs text-muted-foreground">{release.publishedAt.slice(0, 10)}</p>
-                )}
-                {release.notesExcerpt && (
-                  <p className="text-xs text-muted-foreground line-clamp-2">{release.notesExcerpt}</p>
-                )}
-                {release.htmlUrl && (
-                  <a
-                    href={release.htmlUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
-                  >
-                    Release notes
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
+                  <span className="text-xs text-muted-foreground">{release.publishedAt.slice(0, 10)}</span>
                 )}
               </div>
-              {isAdmin && release.relation !== "current" && (
-                <Button
-                  size="sm"
-                  variant={release.relation === "downgrade" ? "outline" : "default"}
-                  disabled={!canAct}
-                  onClick={() => openConfirm(release)}
-                >
-                  {relationLabel(release.relation)}
-                </Button>
-              )}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {release.htmlUrl && (
+                  <Button variant="ghost" size="icon-sm" asChild>
+                    <a
+                      href={release.htmlUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Release notes for ${release.tag}`}
+                      title="Release notes"
+                    >
+                      <ExternalLink />
+                    </a>
+                  </Button>
+                )}
+                {isAdmin && release.relation !== "current" && (
+                  <Button
+                    size="sm"
+                    variant={release.relation === "downgrade" ? "outline" : "default"}
+                    disabled={!canAct}
+                    onClick={() => openConfirm(release)}
+                  >
+                    {relationLabel(release.relation)}
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
+          <ShowAllBar
+            expanded={showAllReleases}
+            count={releases?.releases.length ?? 0}
+            onToggle={() => setShowAllReleases((v) => !v)}
+          />
         </div>
       </div>
 
       {logTail && (switchingTag || switchError) && (
-        <pre className="max-h-40 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-[11px] leading-relaxed font-mono whitespace-pre-wrap">
+        <pre className="max-h-40 overflow-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap">
           {logTail}
         </pre>
       )}

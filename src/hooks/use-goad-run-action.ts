@@ -7,7 +7,7 @@ import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
 import {
   extractNetworkSection,
-  applyNetworkSection,
+  mergeNetworkSection,
   networkSnapshotNeedsRedeploy,
   networkSectionEqual,
   type NetworkSnapshot,
@@ -169,7 +169,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
             const networkAlreadyCorrect =
               !networkSnapshot || networkSectionEqual(workingYaml, networkSnapshot)
             if (networkSnapshot && !networkAlreadyCorrect) {
-              workingYaml = applyNetworkSection(workingYaml, networkSnapshot)
+              workingYaml = mergeNetworkSection(workingYaml, networkSnapshot)
             }
             const extensionsAlreadyCorrect =
               extensionsSnapshot == null ||
@@ -243,7 +243,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                   const yamlNow = fresh.data?.result
                   if (yamlNow != null) {
                     let mergedNow = yamlNow
-                    if (networkSnapshot) mergedNow = applyNetworkSection(mergedNow, networkSnapshot)
+                    if (networkSnapshot) mergedNow = mergeNetworkSection(mergedNow, networkSnapshot)
                     if (extensionsSnapshot != null) {
                       mergedNow = applyLudusExtensions(mergedNow, extensionsSnapshot)
                     }

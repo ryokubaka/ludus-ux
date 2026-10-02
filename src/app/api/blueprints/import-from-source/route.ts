@@ -30,6 +30,10 @@ import {
   resolveGlobalBlueprintServiceApiKey,
   resolveGlobalSourceBlueprintInstallApiKey,
 } from "@/lib/blueprint-global-install"
+import { isSourcePublished } from "@/lib/source-publication"
+import { shareBlueprintWithUsersAs } from "@/lib/blueprint-share"
+import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
+import { ludusRequest } from "@/lib/ludus-client"
 import { resolveSession } from "@/lib/session"
 import {
   buildLudusApiUrl,
@@ -171,6 +175,50 @@ async function importViaSourcesApi(
   return { blueprintID, message }
 }
 
+function fatalShareWarnings(warnings: string[]): string[] {
+  return warnings.filter((warning) => !/already/i.test(warning))
+}
+
+/** Install one blueprint on a shared source with the admin key, then grant it to this user. */
+async function installPublishedSourceBlueprintForViewer(
+  name: string,
+  sourceId: string,
+  serviceKey: string,
+  viewerApiKey: string,
+): Promise<{ success: true; blueprintID: string; message: string } | { success: false; message: string }> {
+  let warnings: string[] = []
+  try {
+    const installed = await installSourceBlueprints(serviceKey, sourceId, [name])
+    warnings = installed.warnings
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Install failed"
+    if (!/already installed|already exists/i.test(message)) {
+      return { success: false, message }
+    }
+  }
+
+  const blueprintID = await findInstalledBlueprintId(serviceKey, name, sourceId)
+  if (!blueprintID) {
+    return {
+      success: false,
+      message: `Install finished but "${name}" is not on the shared source.`,
+    }
+  }
+
+  const who = await ludusRequest<unknown>("/user", { apiKey: viewerApiKey })
+  const viewerId = who.error ? undefined : ludusCallerFromGetUser(who.data, "")?.userId
+  const shareWarnings = viewerId
+    ? fatalShareWarnings(await shareBlueprintWithUsersAs(serviceKey, blueprintID, [viewerId]))
+    : ["Could not read your Ludus user id to grant access"]
+  let message = `Blueprint "${blueprintID}" installed from the shared source`
+  const notes = [...warnings, ...shareWarnings].filter(Boolean)
+  if (notes.length > 0) message += `. ${notes.join("; ")}`
+  if (!viewerId || shareWarnings.length > 0) {
+    return { success: false, message }
+  }
+  return { success: true, blueprintID, message }
+}
+
 async function importBlueprintFromSource(
   spec: BlueprintSpec,
   installApiKey: string,
@@ -197,28 +245,39 @@ async function importBlueprintFromSource(
     }
   }
 
-  const existingGlobal = await resolveExistingSourceBlueprintInstall(
-    globalLookupApiKey,
-    normalized.name,
-    sourceHint,
-  )
-  if (existingGlobal) {
-    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(
-      globalLookupApiKey,
-      existingGlobal,
+  if (!options.canInstallGlobally && sourceHint && isSourcePublished(sourceHint)) {
+    const serviceKey =
+      globalLookupApiKey && globalLookupApiKey !== viewerApiKey ? globalLookupApiKey : null
+    if (!serviceKey) {
+      return {
+        success: false,
+        message: "This shared source cannot be installed until an admin shares it again.",
+      }
+    }
+    return installPublishedSourceBlueprintForViewer(
+      normalized.name,
+      sourceHint,
+      serviceKey,
+      viewerApiKey,
     )
-    let message = options.canInstallGlobally
-      ? `Blueprint "${existingGlobal}" is already installed — shared with all users`
-      : `Blueprint "${existingGlobal}" is installed — access synced for all users`
-    if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
-    return { success: true, blueprintID: existingGlobal, message }
   }
 
-  if (!options.canInstallGlobally) {
-    return {
-      success: false,
-      message:
-        "Community source blueprints must be installed once by a Ludus administrator for all users. Ask an admin to install from Blueprints → Add from Source.",
+  // Admins install once and share with every user. Other users install for themselves
+  // (Ludus source add / blueprint install). Do not block on someone else's copy.
+  if (options.canInstallGlobally) {
+    const existingGlobal = await resolveExistingSourceBlueprintInstall(
+      globalLookupApiKey,
+      normalized.name,
+      sourceHint,
+    )
+    if (existingGlobal) {
+      const shareWarnings = await finalizeGlobalSourceBlueprintInstall(
+        globalLookupApiKey,
+        existingGlobal,
+      )
+      let message = `Blueprint "${existingGlobal}" is already installed — shared with all users`
+      if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
+      return { success: true, blueprintID: existingGlobal, message }
     }
   }
 
@@ -232,7 +291,9 @@ async function importBlueprintFromSource(
   // 1. Ludus Sources (git catalog install)
   try {
     const r = await importViaSourcesApi(normalized, installApiKey)
-    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    const shareWarnings = options.canInstallGlobally
+      ? await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+      : []
     let message = r.message
     if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
     return { success: true, blueprintID: r.blueprintID, message }
@@ -256,7 +317,9 @@ async function importBlueprintFromSource(
   // 2. POST /blueprints with YAML from repo
   try {
     const r = await createBlueprintFromRepoBundle(installApiKey, bundle)
-    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    const shareWarnings = options.canInstallGlobally
+      ? await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+      : []
     let message = r.message
     if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
     return { success: true, blueprintID: r.blueprintID, message }
@@ -267,7 +330,9 @@ async function importBlueprintFromSource(
   // 3. from-range + config upload
   try {
     const r = await createBlueprintFromRangeBundle(installApiKey, bundle)
-    const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+    const shareWarnings = options.canInstallGlobally
+      ? await finalizeGlobalSourceBlueprintInstall(installApiKey, r.blueprintID)
+      : []
     let message = r.message
     if (shareWarnings.length > 0) message += `. ${shareWarnings.join("; ")}`
     return { success: true, blueprintID: r.blueprintID, message }
@@ -279,7 +344,7 @@ async function importBlueprintFromSource(
   try {
     const r = await importViaTarArchive({ ...spec, ...repoPath }, installApiKey)
     const blueprintID = r.blueprintID
-    if (blueprintID) {
+    if (blueprintID && options.canInstallGlobally) {
       const shareWarnings = await finalizeGlobalSourceBlueprintInstall(installApiKey, blueprintID)
       if (shareWarnings.length > 0) {
         r.message += `. ${shareWarnings.join("; ")}`

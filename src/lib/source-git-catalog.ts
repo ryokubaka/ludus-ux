@@ -169,18 +169,35 @@ export async function resolveGitTemplateInstallName(
   return dirName
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  const workers = Math.min(Math.max(limit, 1), items.length)
+  await Promise.all(Array.from({ length: workers }, () => worker()))
+  return results
+}
+
 export async function listGitSourceTemplates(
   gitUrl: string,
   ref: string,
-): Promise<Array<{ name: string }>> {
+): Promise<Array<{ name: string; path: string }>> {
   const names = await listGitSubdirs(gitUrl, ref, "templates")
   const apiBase = gitUrlToGithubApiBase(gitUrl)
-  if (!apiBase) return names.map((name) => ({ name }))
-  return Promise.all(
-    names.map(async (dir) => ({
-      name: await resolveGitTemplateInstallName(apiBase, ref, dir),
-    })),
-  )
+  if (!apiBase) return names.map((name) => ({ name, path: `templates/${name}` }))
+  return mapWithConcurrency(names, 5, async (dir) => ({
+    name: await resolveGitTemplateInstallName(apiBase, ref, dir),
+    path: `templates/${dir}`,
+  }))
 }
 
 /** Parse `meta/version.yml` or galaxy_info.version from role meta/main.yml. */

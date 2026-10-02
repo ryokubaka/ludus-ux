@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { shellSingleQuote } from "@/lib/template-packer-paths"
@@ -6,16 +7,21 @@ import { LUX_HOST_SUDO_BIN } from "@/lib/root-ssh-preflight"
 /** Same shape quickstart accepts for PROXMOX_SSH_USER. */
 const LINUX_USER = /^[a-z_][a-z0-9_-]{0,31}$/
 
-export type LuxHostInstallMode = "root" | "helper" | "sudo-n" | "sudo-s"
+export type LuxHostInstallMode = "root" | "helper" | "sudo-n" | "sudo-s" | "self-update"
 
 export function selectLuxHostInstallMode(input: {
   uid: number | null
   sudoAll: boolean
   sudoHelper: boolean
+  /** True when the installed helper accepts `self-update` (version 3+). */
+  helperSupportsSelfUpdate?: boolean
+  /** True only for the old helper that runs a shell string. */
+  helperIsLegacy?: boolean
   hasUserPassword: boolean
 }): LuxHostInstallMode | null {
   if (input.uid === 0) return "root"
-  if (input.sudoHelper) return "helper"
+  if (input.sudoHelper && input.helperSupportsSelfUpdate) return "self-update"
+  if (input.sudoHelper && input.helperIsLegacy) return "helper"
   if (input.sudoAll) return "sudo-n"
   if (input.hasUserPassword) return "sudo-s"
   return null
@@ -39,7 +45,7 @@ export function renderLuxHostSudoers(template: string, user: string): string {
 export function buildLuxHostInstallShell(
   helperB64: string,
   sudoersB64: string,
-  mode: LuxHostInstallMode,
+  mode: Exclude<LuxHostInstallMode, "self-update">,
 ): string {
   const script = [
     "set -euo pipefail",
@@ -56,7 +62,7 @@ export function buildLuxHostInstallShell(
   ].join("; ")
   const scriptB64 = Buffer.from(script).toString("base64")
   const write = `printf '%s' ${shellSingleQuote(scriptB64)} | base64 -d > /tmp/lux-host-install.sh`
-  const run: Record<LuxHostInstallMode, string> = {
+  const run: Record<Exclude<LuxHostInstallMode, "self-update">, string> = {
     root: "bash /tmp/lux-host-install.sh",
     helper: `sudo -n ${LUX_HOST_SUDO_BIN} ${shellSingleQuote("bash /tmp/lux-host-install.sh")}`,
     "sudo-n": "sudo -n bash /tmp/lux-host-install.sh",
@@ -67,9 +73,38 @@ export function buildLuxHostInstallShell(
   return `printf '%s' ${shellSingleQuote(wrapperB64)} | base64 -d > /tmp/lux-host-install.wrap && bash /tmp/lux-host-install.wrap`
 }
 
+export function buildLuxHostBinaryInstallShell(
+  helperB64: string,
+  mode: "root" | "sudo-n",
+): string {
+  const script = [
+    "set -euo pipefail",
+    "umask 077",
+    "mkdir -p /usr/local/sbin",
+    `printf '%s' ${shellSingleQuote(helperB64)} | base64 -d > /usr/local/sbin/lux-host`,
+    "chown root:root /usr/local/sbin/lux-host",
+    "chmod 755 /usr/local/sbin/lux-host",
+  ].join("; ")
+  const scriptB64 = Buffer.from(script).toString("base64")
+  const write = `printf '%s' ${shellSingleQuote(scriptB64)} | base64 -d > /tmp/lux-host-install.sh`
+  const run = mode === "root" ? "bash /tmp/lux-host-install.sh" : "sudo -n bash /tmp/lux-host-install.sh"
+  const wrapper = `${write} && ${run}; status=$?; rm -f /tmp/lux-host-install.sh /tmp/lux-host-install.wrap; exit $status`
+  const wrapperB64 = Buffer.from(wrapper).toString("base64")
+  return `printf '%s' ${shellSingleQuote(wrapperB64)} | base64 -d > /tmp/lux-host-install.wrap && bash /tmp/lux-host-install.wrap`
+}
+
+export function loadLuxHostScriptText(): string {
+  const dir = path.join(process.cwd(), "scripts", "lux-host")
+  return readFileSync(path.join(dir, "lux-host"), "utf8").replace(/\r\n/g, "\n")
+}
+
+export function bundledLuxHostSha256(): string {
+  return createHash("sha256").update(loadLuxHostScriptText()).digest("hex")
+}
+
 export function loadLuxHostInstallPayload(user: string): { helperB64: string; sudoersB64: string } {
   const dir = path.join(process.cwd(), "scripts", "lux-host")
-  const helper = readFileSync(path.join(dir, "lux-host"), "utf8").replace(/\r\n/g, "\n")
+  const helper = loadLuxHostScriptText()
   const template = readFileSync(path.join(dir, "sudoers.in"), "utf8")
   return {
     helperB64: Buffer.from(helper).toString("base64"),
@@ -94,4 +129,4 @@ export function redactSecret(message: string, secret: string): string {
   return message.split(value).join("***")
 }
 
-export const LUX_HOST_VERIFY_CMD = `sudo -n ${LUX_HOST_SUDO_BIN} 'id -u'`
+export const LUX_HOST_VERIFY_CMD = `sudo -n ${LUX_HOST_SUDO_BIN} id`

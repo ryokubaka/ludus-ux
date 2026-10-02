@@ -14,25 +14,17 @@ describe("ludus-ansible-preflight", () => {
     expect(shellQuoteUser("testuser3")).toBe("testuser3")
   })
 
-  it("buildEnsureAnsibleHomeRootCmd keeps cp/tmp ludus-owned for server range deploy", () => {
-    const cmd = buildEnsureAnsibleHomeRootCmd("testuser3")
-    expect(cmd).toContain("getent passwd")
-    expect(cmd).toContain('chown ludus:ludus "$_HD/.ansible/cp" "$_HD/.ansible/tmp"')
-    expect(cmd).toContain('chown -R "$_LU:ludus" "$_d"')
-    expect(cmd).not.toContain('chown -R "$_LU:$_LU"')
+  it("buildEnsureAnsibleHomeRootCmd names the lux-host operation", () => {
+    expect(buildEnsureAnsibleHomeRootCmd("testuser3")).toEqual(["ansible-home", "testuser3"])
   })
 
-  it("buildEnsureAnsibleHomeRootCmd quotes usernames with apostrophes", () => {
-    const cmd = buildEnsureAnsibleHomeRootCmd("pw-test")
-    expect(cmd).toContain("_LU='pw-test'")
-    const cmdApostrophe = buildEnsureAnsibleHomeRootCmd("o'brien")
-    expect(cmdApostrophe).toContain("o'\\''brien")
+  it("buildEnsureAnsibleHomeRootCmd rejects usernames that are not a login token", () => {
+    expect(buildEnsureAnsibleHomeRootCmd("pw-test")).toEqual(["ansible-home", "pw-test"])
+    expect(() => buildEnsureAnsibleHomeRootCmd("o'brien")).toThrow(/invalid linux user/)
   })
 
-  it("buildVerifyAnsibleHomeShell checks ludus can write cp", () => {
-    const cmd = buildVerifyAnsibleHomeShell("demouser")
-    expect(cmd).toContain('sudo -u ludus test -w "$_HD/.ansible/cp"')
-    expect(cmd).toContain("exit 1")
+  it("buildVerifyAnsibleHomeShell uses the same repair operation", () => {
+    expect(buildVerifyAnsibleHomeShell("demouser")).toEqual(["ansible-home", "demouser"])
   })
 
   it("formatAnsibleHomeRepairLogLine describes split layout", () => {
@@ -60,7 +52,7 @@ describe("ludus-ansible-preflight", () => {
     expect(resolveGoadLinuxUser({ sessionUsername: "melchior" })).toBe("melchior")
     expect(
       resolveGoadLinuxUser({ creds: { username: "admin" }, sessionUsername: "melchior" }),
-    ).toBe("admin")
+    ).toBe("melchior")
     expect(resolveGoadLinuxUser({})).toBeNull()
     expect(resolveGoadLinuxUser({ impersonateAs: { username: "  " } })).toBeNull()
   })

@@ -69,9 +69,9 @@ The trash icon removes a template via LUX `DELETE /api/templates/delete`:
 
 1. Ludus API `DELETE /template/{name}` (clears built Proxmox VM when possible)
 2. `ludus templates rm -n …` over host SSH (unregisters when API soft-refuses)
-3. Disk cleanup of `/opt/ludus/packer/<aliases>`, `/opt/ludus/users/*/packer/<aliases>`, and `/opt/ludus/sources/*/templates/<aliases>`
+3. Disk cleanup of install trees `/opt/ludus/packer/<aliases>`, `/opt/ludus/packer/templates/<aliases>`, and `/opt/ludus/users/*/packer/<aliases>`, plus the same alias directory names under `/opt/ludus/sources/*/templates/`
 
-Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). Cleanup also removes a packer directory whose `vm_name` is that list name, such as `debian13` for `debian-13-x64-server-template`. If one of those directories is still present, the delete fails. Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
+Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). On the install trees, cleanup also removes a directory whose Packer `vm_name` equals that list name, such as `debian13` for `debian-13-x64-server-template`. It does not remove a source git checkout by `vm_name`. Delete fails when an install-tree directory is still present. A template that remains only in the source checkout does not fail the delete. Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
 
 ---
 

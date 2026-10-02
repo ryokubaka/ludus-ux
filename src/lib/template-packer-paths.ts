@@ -109,11 +109,13 @@ export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: st
 }
 
 /**
- * Root SSH: remove template dirs under shared packer, per-user packer, and source mirrors.
- * Matches list name and catalog-dir aliases; also finds dirs via Packer `vm_name`.
+ * Root SSH: remove alias dirs under packer, packer/templates, per-user packer, and source mirrors.
+ * The first name is the Ludus list name. lux-host matches Packer `vm_name` to that name only,
+ * and only on those install trees.
  * `templateName` must already match a safe charset (letters, digits, ._-).
  */
 export function buildLudusTemplateDeleteCmd(_ludusRoot: string, templateName: string): readonly string[] {
-  const aliases = templateDirNameAliases(templateName)
-  return ["template-purge", ...(aliases.length > 0 ? aliases : [templateName])]
+  const listName = templateName.trim()
+  const aliases = templateDirNameAliases(listName).filter((name) => name !== listName)
+  return ["template-purge", ...(listName ? [listName, ...aliases] : [])]
 }

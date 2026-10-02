@@ -20,7 +20,7 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Fix] **lux-host** — The Settings install writes an update key that `self-update` and the SSH version switch check. Quickstart writes and stores the same key. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.
-- [Fix] **Template delete** — Delete removes catalog-dir aliases and the packer folder whose `vm_name` matches, and fails if that folder is still on disk.
+- [Fix] **Template delete** — Delete removes install-tree aliases and the packer folder whose `vm_name` is the list name, and fails if that install folder is still on disk. A source checkout is not removed by `vm_name` and does not block the delete.
 - [Fix] **Shared source import** — A blueprint is not shared from a source whose git URL differs, including another fork whose id ends with the same repo slug.
 - [Security] **Releases** — The changelog title is passed to the release job in the environment, not interpolated into the shell.
 - [Fix] **In-app releases** — The SSH fallback sends this build's `scripts/upgrade.sh` with an HMAC from the lux-host update key and runs that root-owned copy, so a checkout the SSH user owns can still switch. About stays off when the key is missing or the start would fail. The Docker socket path does not need the key.

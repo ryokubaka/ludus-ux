@@ -2,8 +2,11 @@
  * DELETE /api/templates/delete
  *
  * Removes a Packer template: Ludus API delete, then `ludus templates rm` + root SSH
- * disk cleanup under packer, users packer trees, and sources templates. API often
- * soft-refuses shared/source installs ("included template").
+ * disk cleanup. Install trees are packer, packer/templates, and per-user packer,
+ * including alias directory names and a directory whose Packer `vm_name` is the
+ * list name. Named aliases under sources are removed. A source checkout that
+ * still contains the template does not fail this route. API often soft-refuses
+ * shared/source installs ("included template").
  *
  * Disk dir often omits `-template` / `-x64` while Ludus lists Packer `vm_name`.
  * Cleanup tries name aliases and verifies via GET /templates.

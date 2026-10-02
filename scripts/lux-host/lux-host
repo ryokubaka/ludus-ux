@@ -36,7 +36,7 @@
 #   b64-abort <id>
 #   ludus-template-add <dir> <apiKey>
 #   ludus-template-rm <name> <apiKey>
-#   template-purge <name> [name...]
+#   template-purge <list-name> [alias...]
 #   sources-repair [id]
 #   ansible-home <user>
 #   ansible-collection-file <user> <namespace> <name> <relative-path>
@@ -549,6 +549,7 @@ case "$op" in
       [[ "$arg" =~ ^[A-Za-z0-9._+-]{1,128}$ ]] || die "name"
       names+=("$arg")
     done
+    list_name="${names[0]}"
     root=/opt/ludus
     purge_named_dirs() {
       local name d
@@ -591,42 +592,43 @@ case "$op" in
         END { exit found ? 0 : 1 }
       ' "$1"
     }
-    matching_vm_dirs() {
-      local base f dir name real
-      for base in "$@"; do
-        [[ -d "$base" ]] || continue
-        while IFS= read -r -d "" f; do
-          for name in "${names[@]}"; do
-            if vm_name_is "$f" "$name"; then
-              dir=$(dirname -- "$f")
-              [[ "$dir" == "$base" || "$dir" != "$base"/* || "$dir" == *..* ]] && break
-              [[ -L "$dir" ]] && break
-              real=$(realpath -m -- "$dir" 2>/dev/null) || break
-              [[ "$real" == "$base" || "$real" == "$base"/* ]] || break
-              printf "%s\n" "$dir"
-              break
-            fi
-          done
-        done < <(find "$base" -mindepth 1 -maxdepth 4 -type f \( -name "*.pkr.hcl" -o -name "*.pkr.json" \) -print0 2>/dev/null)
-      done
-    }
-    purge_bases() {
+    install_bases() {
       local d
       local -a bases=()
       [[ -d "$root/packer" ]] && bases+=("$root/packer")
       [[ -d "$root/packer/templates" ]] && bases+=("$root/packer/templates")
-      for d in "$root"/users/*/packer "$root"/sources/*/templates; do
+      for d in "$root"/users/*/packer; do
         [[ -d "$d" ]] && bases+=("$d")
       done
       if [[ ${#bases[@]} -gt 0 ]]; then
         printf "%s\n" "${bases[@]}"
       fi
     }
+    matching_vm_dirs() {
+      local base="$1" want="$2" f dir real
+      [[ -d "$base" ]] || return 0
+      while IFS= read -r -d "" f; do
+        vm_name_is "$f" "$want" || continue
+        dir=$(dirname -- "$f")
+        [[ "$dir" == "$base" || "$dir" != "$base"/* || "$dir" == *..* ]] && continue
+        [[ -L "$dir" ]] && continue
+        real=$(realpath -m -- "$dir" 2>/dev/null) || continue
+        [[ "$real" == "$base" || "$real" == "$base"/* ]] || continue
+        printf "%s\n" "$dir"
+      done < <(find "$base" -mindepth 1 -maxdepth 4 -type f \( -name "*.pkr.hcl" -o -name "*.pkr.json" \) -print0 2>/dev/null)
+    }
+    list_vm_dirs() {
+      local base
+      while IFS= read -r base; do
+        [[ -n "$base" ]] || continue
+        matching_vm_dirs "$base" "$list_name"
+      done < <(install_bases)
+    }
     purge_named_dirs
     while IFS= read -r dir; do
       [[ -n "$dir" ]] || continue
       rm -rf -- "$dir"
-    done < <(purge_bases | while IFS= read -r base; do matching_vm_dirs "$base"; done)
+    done <<< "$(list_vm_dirs)"
     still=0
     for name in "${names[@]}"; do
       for path in "$root/packer/$name" "$root/packer/templates/$name"; do
@@ -635,14 +637,14 @@ case "$op" in
           still=1
         fi
       done
-      for d in "$root"/users/*/packer "$root"/sources/*/templates; do
+      for d in "$root"/users/*/packer; do
         if [[ -d "$d/$name" ]]; then
           echo "still present: $d/$name" >&2
           still=1
         fi
       done
     done
-    if [[ -n "$(purge_bases | while IFS= read -r base; do matching_vm_dirs "$base"; done)" ]]; then
+    if [[ -n "$(list_vm_dirs)" ]]; then
       echo "still present: packer vm_name" >&2
       still=1
     fi

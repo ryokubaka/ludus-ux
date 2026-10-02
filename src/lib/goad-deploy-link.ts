@@ -66,7 +66,7 @@ export function setRangeHostProcessActive(instanceId: string): boolean {
 
 function hostGoadProcessActive(taskId: string, instanceId: string): boolean {
   if (getTask(taskId)?.status === "running") return true
-  return getRunningTasksForInstance(instanceId).length > 0
+  return setRangeHostProcessActive(instanceId)
 }
 
 function sleep(ms: number): Promise<void> {

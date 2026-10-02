@@ -21,9 +21,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
+import { setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
 import { buildWorkspaceSshExecPlan, chownGoadInstance, listGoadInstances, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad-ssh"
-import { getRunningTasksForInstance } from "@/lib/goad-task-store"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { setPbRangeOwner } from "@/lib/pocketbase-client"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -60,7 +59,7 @@ export async function POST(request: NextRequest) {
       directoryOwner,
       targetUser: targetUserId,
       hostUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
-      hostProcessActive: getRunningTasksForInstance(instanceId).length > 0,
+      hostProcessActive: setRangeHostProcessActive(instanceId),
     })
   ) {
     return NextResponse.json(

@@ -12,11 +12,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { resolveSession } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
 import {
-  goadCommandRunsAsHostAccount,
   setRangeHostProcessActive,
   shouldDeferHostWorkspaceChown,
 } from "@/lib/goad-deploy-link"
@@ -47,14 +45,9 @@ export async function POST(request: NextRequest) {
   const runAsOwner = (command: string) =>
     sshExecAsWorkspaceUser(request, session, command, userCreds)
   const owner = workspaceOwnerLinuxUser(session, request)
-  const imp = resolveAdminImpersonationFromRequest(session, request)
-  const runsAsHost = goadCommandRunsAsHostAccount({
-    sshPassword: session.sshPassword,
-    impersonating: session.isAdmin === true && !!imp.apiKey,
-  })
   const hostUser = effectivePrivilegedSshUser(getSettings().proxmoxSshUser)
   const owners = new Map<string, string>()
-  if (runsAsHost && instanceIds.some((id) => setRangeHostProcessActive(id))) {
+  if (instanceIds.some((id) => setRangeHostProcessActive(id))) {
     try {
       const listed = await listGoadInstances()
       for (const inst of listed) owners.set(inst.instanceId, inst.ownerUserId?.trim() ?? "")
@@ -66,7 +59,7 @@ export async function POST(request: NextRequest) {
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
   for (const instanceId of instanceIds) {
-    const hostProcessActive = runsAsHost && setRangeHostProcessActive(instanceId)
+    const hostProcessActive = setRangeHostProcessActive(instanceId)
     if (
       shouldDeferHostWorkspaceChown({
         directoryOwner: owners.get(instanceId) ?? "",

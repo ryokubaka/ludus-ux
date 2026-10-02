@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const taskGate = vi.hoisted(() => ({ status: "absent" as "absent" | "running" | "completed" }))
+const taskGate = vi.hoisted(() => ({
+  status: "absent" as "absent" | "running" | "completed",
+  listed: [] as { status: string; instanceId?: string }[],
+}))
 
 const order: string[] = []
 
@@ -24,7 +27,7 @@ vi.mock("@/lib/goad-task-store", () => ({
   updateTaskInstance: vi.fn(),
   getTask: vi.fn(() => (taskGate.status === "absent" ? null : { status: taskGate.status })),
   getRunningTasksForInstance: vi.fn(() => []),
-  listTasks: vi.fn(() => []),
+  listTasks: vi.fn(() => taskGate.listed),
 }))
 
 vi.mock("@/lib/goad-deploy-handoff-store", () => ({
@@ -62,6 +65,7 @@ import {
   goadCommandRunsAsHostAccount,
   pickNewGoadInstanceId,
   scheduleGoadDeployLinkage,
+  setRangeHostProcessActive,
   shouldDeferHostWorkspaceChown,
 } from "./goad-deploy-link"
 
@@ -125,6 +129,7 @@ describe("finalizeGoadDeployLinkage", () => {
   beforeEach(() => {
     order.length = 0
     taskGate.status = "absent"
+    taskGate.listed = []
     vi.clearAllMocks()
     delete process.env.GOAD_SSH_USER
     vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "root" } as ReturnType<typeof getSettings>)
@@ -346,6 +351,7 @@ describe("scheduleGoadDeployLinkage", () => {
   beforeEach(() => {
     order.length = 0
     taskGate.status = "absent"
+    taskGate.listed = []
     vi.clearAllMocks()
     delete process.env.GOAD_SSH_USER
     vi.mocked(getSettings).mockReturnValue({ proxmoxSshUser: "ludus" } as ReturnType<typeof getSettings>)
@@ -518,6 +524,36 @@ describe("scheduleGoadDeployLinkage", () => {
       expect(writeGoadRangeId).toHaveBeenCalledWith("new-ws", "alice-range", runAsOwner)
     } finally {
       taskGate.status = "absent"
+      taskGate.listed = []
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not chown a host-owned workspace while another install has no instance id", async () => {
+    vi.useFakeTimers()
+    try {
+      taskGate.status = "completed"
+      taskGate.listed = [{ status: "running", instanceId: "" }]
+      vi.mocked(listGoadInstances).mockResolvedValue([workspace("new-ws", "ludus")])
+      scheduleGoadDeployLinkage({
+        taskId: "task-1",
+        rangeId: "alice-range",
+        username: "alice",
+        beforeInstanceIds: [],
+        runAsOwner,
+      })
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(chownGoadInstance).not.toHaveBeenCalled()
+      expect(setInstanceRangeLocal).not.toHaveBeenCalled()
+      taskGate.listed = []
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(order).toEqual(["chown", "write", "sqlite"])
+      expect(chownGoadInstance).toHaveBeenCalledWith("new-ws", "alice", undefined)
+    } finally {
+      taskGate.status = "absent"
+      taskGate.listed = []
       vi.useRealTimers()
     }
   })
@@ -561,6 +597,18 @@ describe("host workspace chown deferral", () => {
       hostUser: "ludus",
       hostProcessActive: true,
     })).toBe(false)
+  })
+
+  it("treats a running task with no instance id as active for any workspace", () => {
+    taskGate.listed = [{ status: "running", instanceId: "" }]
+    expect(setRangeHostProcessActive("new-ws")).toBe(true)
+    taskGate.listed = [{ status: "running" }]
+    expect(setRangeHostProcessActive("new-ws")).toBe(true)
+    taskGate.listed = [{ status: "completed", instanceId: "" }]
+    expect(setRangeHostProcessActive("new-ws")).toBe(false)
+    taskGate.listed = [{ status: "running", instanceId: "other-ws" }]
+    expect(setRangeHostProcessActive("new-ws")).toBe(false)
+    taskGate.listed = []
   })
 
   it("treats a password or impersonation as the target user's process", () => {

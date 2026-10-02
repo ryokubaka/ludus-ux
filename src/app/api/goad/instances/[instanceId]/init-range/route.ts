@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
-import { goadCommandRunsAsHostAccount, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
+import { goadCommandRunsAsHostAccount, setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
 import { chownGoadInstance, listGoadInstances, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
@@ -145,8 +145,9 @@ export async function POST(
     sshPassword: session.sshPassword,
     impersonating: session.isAdmin === true && !!impersonateApiKey,
   })
+  const taskActive = setRangeHostProcessActive(instanceId)
   let directoryOwner = ""
-  if (runsAsHost) {
+  if (runsAsHost || taskActive) {
     try {
       const listed = await listGoadInstances()
       directoryOwner = listed.find((item) => item.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
@@ -159,7 +160,7 @@ export async function POST(
       directoryOwner,
       targetUser: ownerLinux,
       hostUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
-      hostProcessActive: runsAsHost,
+      hostProcessActive: runsAsHost || taskActive,
     })
   ) {
     logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })

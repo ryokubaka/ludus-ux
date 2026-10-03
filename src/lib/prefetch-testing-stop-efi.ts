@@ -3,7 +3,8 @@
  * Hits GET /api/range/testing-stop-preflight so SQLite + sessionStorage are ready
  * for Start Testing confirm copy.
  *
- * Re-probes only when session is missing or the range gained a new VMID.
+ * Skips the network when sessionStorage already has a preview for this range.
+ * Callers that pass `forceValidate` still re-fetch; the Testing page does not.
  */
 
 import { getImpersonationHeaders } from "@/lib/api"

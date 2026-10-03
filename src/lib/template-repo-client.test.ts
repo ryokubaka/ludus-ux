@@ -1,21 +1,16 @@
 import { describe, expect, it } from "vitest"
-import { apiBaseToGitUrl, gitUrlToRepoApiBase } from "@/lib/template-repo-client"
+import { githubRawFileUrl } from "@/lib/template-repo-client"
 
-describe("gitUrlToRepoApiBase", () => {
-  it("maps GitHub clone URLs", () => {
-    expect(gitUrlToRepoApiBase("https://github.com/acme/my-ludus-source.git")).toBe(
-      "https://api.github.com/repos/acme/my-ludus-source",
+describe("githubRawFileUrl", () => {
+  it("encodes a branch name that contains slashes", () => {
+    expect(
+      githubRawFileUrl(
+        "https://api.github.com/repos/ryokubaka/ludus-source-meow",
+        "ansible/roles/ludus_so_elastic_agent/meta/version.yml",
+        "feat/securityonion-3.3.0",
+      ),
+    ).toBe(
+      "https://raw.githubusercontent.com/ryokubaka/ludus-source-meow/feat/securityonion-3.3.0/ansible/roles/ludus_so_elastic_agent/meta/version.yml",
     )
-  })
-
-  it("maps GitLab.com clone URLs", () => {
-    expect(gitUrlToRepoApiBase("https://gitlab.com/acme/my-ludus-source")).toBe(
-      "https://gitlab.com/api/v4/projects/acme%2Fmy-ludus-source/repository",
-    )
-  })
-
-  it("round-trips GitHub apiBase via apiBaseToGitUrl", () => {
-    const api = gitUrlToRepoApiBase("https://github.com/badsectorlabs/ludus-source-bsl")!
-    expect(apiBaseToGitUrl(api)).toBe("https://github.com/badsectorlabs/ludus-source-bsl")
   })
 })

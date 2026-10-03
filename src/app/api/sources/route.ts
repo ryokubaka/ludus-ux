@@ -4,6 +4,7 @@ import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { createGitSource, isHttp404Error, listSources } from "@/lib/ludus-source-client"
+import { listVisibleLudusSources } from "@/lib/list-visible-ludus-sources"
 import {
   DEFAULT_SOURCE_GIT_REF,
   ludusSourceGitRef,
@@ -34,9 +35,10 @@ export async function GET(request: NextRequest) {
       void rememberBlueprintOperator(apiKey)
     }
 
-    const sources = await listSources(apiKey)
+    const sources = await listVisibleLudusSources({ isAdmin: session.isAdmin, apiKey })
+    const own = sources.filter((row) => row.sharedCatalog !== true)
     // Refresh stale git trees in the background; don't block the list response.
-    void ensureSourcesFresh(apiKey, sources).catch((err) => {
+    void ensureSourcesFresh(apiKey, own).catch((err) => {
       console.warn("[sources/list] auto-sync failed", err)
     })
     return NextResponse.json({
@@ -109,6 +111,8 @@ export async function POST(request: NextRequest) {
     logLuxRouteAction(request, session, { outcome: "success", detail: `source=${sourceID}` })
     return NextResponse.json({ sourceID, message: "Source registered" })
   } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.error("[sources/create]", detail)
     logLuxRouteAction(request, session, { outcome: "failure", detail: "create-source" })
     if (isHttp404Error(err)) {
       return NextResponse.json(
@@ -117,7 +121,7 @@ export async function POST(request: NextRequest) {
       )
     }
     return NextResponse.json(
-      { error: logAndSafeError("sources/create", err, "Failed to register source") },
+      { error: detail || "Failed to register source" },
       { status: 502 },
     )
   }

@@ -70,7 +70,8 @@ export async function POST(request: NextRequest) {
         homeDir = await sshExec(
           sshHost, sshPort,
           sshUser, sshPass,
-          `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
+          `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`,
+          { elevate: false },
         )
       } catch {
         homeDir = ""
@@ -92,17 +93,12 @@ export async function POST(request: NextRequest) {
   }
 
   // Change password via chpasswd — handle special characters safely
-  const escapedUser = linuxUser.replace(/"/g, '\\"')
-  const escapedPw = newPassword
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
   try {
     await sshExec(
       sshHost, sshPort,
       sshUser, sshPass,
-      `printf '%s:%s\\n' "${escapedUser}" "${escapedPw}" | chpasswd`
+      ["chpasswd", linuxUser],
+      { stdin: `${newPassword}\n` },
     )
   } catch (err) {
     logLuxRouteAction(request, session, { outcome: "failure", detail: "Failed to change password" })

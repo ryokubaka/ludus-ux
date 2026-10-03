@@ -7,6 +7,7 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+COPY vendor/braces ./vendor/braces
 # Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
 RUN npm install -g npm@11.14.0
 RUN npm install --legacy-peer-deps
@@ -78,8 +79,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/docs ./docs
 
-# Patch OS packages (e.g. zlib CVEs) and install openssl for runtime TLS
-RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl
+# Patch OS packages (e.g. zlib CVEs), install openssl for runtime TLS, and
+# util-linux-misc so this image contains /usr/bin/nsenter for the in-app host helper.
+RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl util-linux-misc
 
 # Standalone Next runs with `node` only. The official Node image ships npm under
 # /usr/local/lib/node_modules/npm with its own dependency tree; Trivy reports those

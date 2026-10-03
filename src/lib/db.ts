@@ -494,6 +494,17 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON source_content_pins(source_id);
       `)
     },
+
+    // v18 — Admin-published sources are listed for every user (Ludus source list is per-user).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS source_publication (
+          source_id   TEXT    PRIMARY KEY,
+          published   INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

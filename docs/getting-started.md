@@ -4,7 +4,7 @@
 
 | Requirement | Details |
 |---|---|
-| **Ludus server** | v2.x with API access on port 8080 (tested with [**Ludus v2.1.0**](https://gitlab.com/badsectorlabs/ludus/-/releases)) |
+| **Ludus server** | v2.x with API access on port 8080 (compatible through [**Ludus 2.3.5**](https://gitlab.com/badsectorlabs/ludus/-/releases)). Ludus 2.3.2+ defaults the range router to Debian 13. |
 | **Docker + Docker Compose** | Any recent version (tested on Docker 24+) |
 | **Network access** | Container must reach the Ludus server on ports 8080 (API) and 22 (SSH) |
 
@@ -80,26 +80,43 @@ cp .env.example .env
    | `LUDUS_SSH_HOST` | Ludus server hostname or IP (SSH, GOAD, and default Ludus API URLs) |
    | `APP_SECRET` | Long random secret for session encryption (`openssl rand -hex 32`) |
    | `LUDUS_ROOT_API_KEY` | Ludus v2 root API key (admin users/ranges) — from `/opt/ludus/install/root-api-key` on the server |
-   | Root SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** set `PROXMOX_SSH_PASSWORD` for server-side admin operations. In-browser noVNC uses the logged-in user's PAM password separately. |
+   | Host SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** `PROXMOX_SSH_PASSWORD`, for `PROXMOX_SSH_USER`. See [SSH and authentication](ssh-and-auth.md). In-browser noVNC uses the logged-in user's PAM password separately. |
 
 > As of **0.9.5**, the `PROXMOX_SSH_PASSWORD` value saved through Settings is encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
 
-3. **Root SSH private key: from the Ludus server onto the LUX host**
+3. **Host SSH private key: from the Ludus server onto the LUX host**
 
-   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **root SSH** to the **same** machine Ludus runs on (the Proxmox host). The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
+   Privileged operations (admin API tunnel, `pvesh`, password changes, etc.) use **host SSH** (`PROXMOX_SSH_USER`) to the **same** machine Ludus runs on (the Proxmox host). Quickstart, and individual action **2**, ask whether that account is root or a non-root user. Root setup copies and authorizes root's key. A non-root user gets that same key setup, then [lux-host](ssh-and-auth.md#lux-host): a root-owned helper at `/usr/local/sbin/lux-host`, with passwordless sudo for that path only. Settings → SSH & GOAD can install the helper later. The **private key normally originates on that Ludus server** — you **copy it off the server** and place it on the machine where you run Docker (the LUX host).
 
    - **`SSH_KEY_PATH`** (in `docker-compose.yml`, overridable via `.env`) is the **host** directory that is bind-mounted to **`/app/ssh`** in the container. Default: **`./ssh`** next to the `docker-compose.yml`.
      - Put the key in `./ssh` as a **normal file**, e.g. **`./ssh/id_rsa`**.
    - **`PROXMOX_SSH_KEY_PATH`** in `.env` is the path **inside** the container (default **`/app/ssh/id_rsa`**) and should match that filename.
 
-   **If the key “is there” but LUX cannot read it:** use **Settings → Test root SSH** and inspect **SSH key probe**
+   **If the key “is there” but LUX cannot read it:** use **Settings → Test host SSH & admin API** and inspect **SSH key probe**
 
-   Example: copy **`/root/.ssh/id_rsa`** from the Ludus server to the default mount directory:
+   Copy **`PROXMOX_SSH_USER`’s** private key into that directory. sshd must trust the matching public key in **that account’s** `authorized_keys` ([SSH and authentication](ssh-and-auth.md)).
+
+   - **`PROXMOX_SSH_USER` is root:** private key **`/root/.ssh/id_rsa`**, `authorized_keys` **`/root/.ssh/authorized_keys`**.
+   - **Account is not root:** both files are in that user’s home. For user `ludus`, that is **`/home/ludus/.ssh/id_rsa`** and **`/home/ludus/.ssh/authorized_keys`**. Privileged host commands then go through [lux-host](ssh-and-auth.md#lux-host).
+
+   Create the mount directory, copy **one** of those keys, and restrict the file:
 
 ```bash
 mkdir -p ssh
 chmod 755 ssh
+```
+
+   Root:
+
+```bash
 scp -P 22 root@<ludus-host>:/root/.ssh/id_rsa ssh/id_rsa
+chmod 600 ssh/id_rsa
+```
+
+   Not root (example user `ludus`):
+
+```bash
+scp -P 22 ludus@<ludus-host>:/home/ludus/.ssh/id_rsa ssh/id_rsa
 chmod 600 ssh/id_rsa
 ```
 
@@ -129,7 +146,7 @@ docker compose up -d --build
 # https://localhost   (port 443 — expected self-signed cert warning if using generated certs)
 ```
 
-7. Log in with your Ludus user’s (not root!) **SSH username and password**. LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible.
+7. Log in with your Ludus user’s **SSH username and password** (the person using LUX, not the host root account). LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible. Host writes (templates, `pvesh`, password changes) use `PROXMOX_SSH_USER` separately. That account can be any user; if it is not root, it needs [lux-host](ssh-and-auth.md#lux-host).
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash
@@ -164,6 +181,16 @@ bash scripts/upgrade.sh v1.0.1
 ```
 
 Persistent data (`./data`, `./ssh`, `./docker/nginx/certificates`, `.env`) are on the host unchanged; SQLite settings and uploads survive the rebuild. Read release notes in [`CHANGELOG.md`](../CHANGELOG.md) before major jumps—database migrations are forward-compatible when noted there; **downgrading** to an older branch may not be supported if schema or env expectations changed.
+
+`LUX_UPGRADE_YES=1` skips the dirty-tree prompt and discards uncommitted changes. The in-app switch sets that variable and runs the script in the background so the UI can restart.
+
+### From Settings → About
+
+An admin can check GitHub releases and upgrade or downgrade without a shell. The page lists published `vX.Y.Z` tags. A newer **stable** release shows an update banner (pre-releases are listed, and they do not drive the banner).
+
+The switch uses the local Docker daemon. Compose mounts `/var/run/docker.sock` into the app container. The app starts a one-shot container that enters the host namespaces and starts this script with `systemd-run`, so the switch keeps running after that container exits. The host needs `systemd-run`. That path does not use the Proxmox SSH key. SSH is only a fallback when the socket is not mounted. That fallback sends this build's `scripts/upgrade.sh` with an HMAC-SHA256 from the lux-host update key. `lux-host` checks the HMAC against `/etc/lux-host.update-key`, writes the script to a root-owned temp file, and starts that file with `systemd-run`. It refuses an unsigned script and a checkout copy of `scripts/upgrade.sh` that the SSH user can write. The key is created by the one-time Settings lux-host install, or by quickstart when it installs the helper. Without that key, About does not offer the SSH fallback. The Docker socket path does not need the key. The repo path is `LUX_REPO_PATH` when set, otherwise the Compose project directory from `docker inspect ludus-ux`.
+
+Every upgrade and downgrade asks you to confirm first. The dialog covers the host checkout, image rebuild, UI restart, and that `./data`, `./ssh`, and `.env` stay on the host. A downgrade also warns that an older release may not understand settings or schema written by a newer version. A target older than v1.4.0 adds a required acknowledgement: that release has no Releases panel and no in-app upgrade or downgrade, so later changes use `bash scripts/upgrade.sh` on the host.
 
 ## Quick SSH sanity check
 

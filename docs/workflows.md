@@ -67,14 +67,14 @@ You do not need to trigger Stage 2 manually. LUX coordinates the handoff.
 1. Go to **GOAD → Deploy New Instance**
 2. Pick a **lab type** (e.g. GOAD-Mini)
 3. Optionally add **extensions** (e.g. Exchange)
-4. Optionally configure **firewall rules** — allow/deny specific IPs or domains. You can skip this now and add them later
+4. **Network Rules** lists rules from the selected extensions and from an existing range. The generated configuration shows that same list. Clearing every rule writes an empty list and keeps the existing range's other network settings. You can edit the list or skip the step
 5. Click **Deploy**
 
 What happens next (automatically):
 1. LUX creates a dedicated Ludus range for this lab (named `<you>-<lab>`)
 2. The GOAD wizard sends the install command to the Ludus server over SSH
 3. The terminal on the Deploy Status tab shows live GOAD output as VMs are created and configured
-4. When GOAD finishes, Ludus automatically deploys the range to apply networking and any firewall rules you set
+4. When GOAD finishes, LUX merges the Network Rules list back and Ludus deploys the range
 5. Once both stages complete, your lab is live
 
 **The wizard redirects you to the instance page immediately after GOAD starts** — you do not need to stay on the wizard screen. LUX tracks progress server-side and resumes the log stream if you navigate back.
@@ -99,13 +99,7 @@ Redeployment is faster than a fresh deploy because the Ludus range and workspace
 
 ## The Firewall / Network Rules Queue
 
-If you configure firewall rules in the GOAD wizard, there is an important timing consideration: **GOAD's own install process rewrites the Ludus range config** as it sets up the lab. If LUX applied your rules before GOAD ran, GOAD would overwrite them.
-
-To solve this, LUX uses a **pending-network queue**:
-
-1. When you click Deploy, LUX saves your firewall rules to the server
-2. GOAD runs and completes (potentially overwriting the range config)
-3. LUX **automatically re-applies your firewall rules** after GOAD finishes, then triggers a final Ludus "network" deploy to enforce them
+GOAD's install rewrites the Ludus range config, so LUX saves the **Network Rules** list and merges it back after GOAD finishes, then starts a Ludus deploy with the network tag. Existing rules stay in their stored order. The rest of that merge is under Range YAML vs Range Configuration in [Features](features.md).
 
 You do not need to do anything. The Deploy Status tab shows a "Applying network rules..." step when this is happening. The entire process runs on the server — you can safely navigate away.
 
@@ -169,26 +163,3 @@ LUX builds the binary and installs `bagelByt3s.ludushound` from the local collec
 6. Pick or create a Ludus range → **Generate YAML** → confirm templates are built → **Deploy range**
 
 Live Neo4j must already contain SharpHound data (or use FilesMap / Attack Path instead).
-
----
-
-## Security Onion sniff lifecycle
-
-Labs from [ludus-source-meow](https://github.com/ryokubaka/ludus-source-meow) (`securityonion-lab` / `securityonion3-lab`) need a second Proxmox NIC for packet sniffing. Ludus only attaches one NIC per VM, so **LUX** owns the host-side mutation:
-
-**On deploy** (`POST /range/deploy` via the Ludus proxy):
-
-1. LUX starts a background watcher if root Proxmox SSH is configured
-2. While the range is `DEPLOYING` / `WAITING`, LUX only sets `bridge-ageing 0` on `vmbr10XX` (hub mode — see [Ludus Packet Capture](https://docs.ludus.cloud/docs/networking)). It does **not** add `net1` yet — a second NIC on the same VLAN tag breaks Ludus MAC→interface lookup during configure-ip.
-3. `ludus_securityonion` attaches sniff `net1` during the roles phase (after IP/hostname). After deploy leaves `DEPLOYING`, LUX idempotently ensures `net1` + hub-mode if still missing.
-4. Optional audit marker: `/opt/ludus/lux/so-sniff/<rangeId>.json` on the Proxmox host
-
-**Source of truth is Proxmox** (`qm config` + bridge ageing), not LUX SQLite. Markers are convenience only; cleanup rediscovers from live state.
-
-**On range delete / destroy-all-VMs:**
-
-1. Remove matching sniff `net1`
-2. If no remaining sniff NICs on that bridge → restore ageing to **300** seconds
-3. Delete the host marker if present
-
-The Ansible role `ludus_securityonion` waits for the second NIC, then runs `so-setup iso standalone-net`. No manual SSH to Proxmox is required in the happy path.

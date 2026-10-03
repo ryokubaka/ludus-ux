@@ -1,10 +1,14 @@
-import { ludusSourceGitRef } from "@/lib/ludus-source-ref"
+import { ludusSourceGitRef, normalizeGitSourceUrl } from "@/lib/ludus-source-ref"
 
 export interface RegisteredLudusSource {
   id: string
   name?: string
   url?: string
   ref?: string
+  /** Admin published this catalog for every user. */
+  published?: boolean
+  /** Shown from an admin's catalog. This user did not register it. */
+  sharedCatalog?: boolean
 }
 
 export function mapRegisteredSources(
@@ -19,6 +23,8 @@ export function mapRegisteredSources(
     Branch?: string
     gitRef?: string
     git_ref?: string
+    published?: boolean
+    sharedCatalog?: boolean
   }>,
 ): RegisteredLudusSource[] {
   return rows
@@ -27,6 +33,8 @@ export function mapRegisteredSources(
       name: r.name,
       url: r.url,
       ref: ludusSourceGitRef(r),
+      published: r.published === true,
+      sharedCatalog: r.sharedCatalog === true,
     }))
     .filter((r) => r.id)
     .sort((a, b) =>
@@ -44,18 +52,27 @@ export function pickDefaultRegisteredSource(
   return badsl ?? sources[0]
 }
 
+export function registeredSourceOptionLabel(source: RegisteredLudusSource): string {
+  const name = registeredSourceLabel(source)
+  if (source.sharedCatalog || source.published) return `${name} · all users`
+  return name
+}
+
 export function registeredSourceLabel(source: RegisteredLudusSource): string {
-  if (source.name?.trim()) return source.name.trim()
-  if (source.url?.trim()) {
+  let base = source.id
+  if (source.name?.trim()) base = source.name.trim()
+  else if (source.url?.trim()) {
     try {
       const u = new URL(source.url.replace(/\.git$/, ""))
       const parts = u.pathname.split("/").filter(Boolean)
-      if (parts.length >= 2) return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`
+      if (parts.length >= 2) base = `${parts[parts.length - 2]}/${parts[parts.length - 1]}`
     } catch {
       /* ignore */
     }
   }
-  return source.id
+  const ref = source.ref?.trim()
+  if (!ref) return base
+  return `${base} · ${ref}`
 }
 
 /** Directory name for install/API — strips `sourceID/` prefix; ignores manifest display titles. */
@@ -73,6 +90,89 @@ export function blueprintShortName(
   const slash = name.lastIndexOf("/")
   if (slash >= 0) return name.slice(slash + 1)
   return name
+}
+
+/**
+ * Same Ludus source registration, including the optional `userID-` prefix
+ * (`ludus-source-bsl` and `badsectorlabs-ludus-source-bsl`).
+ * A branch-specific id (`…-meow` vs `…-meow-feat-securityonion-3-3-0`) is not the same.
+ */
+export function sourceIdsAreSameRegistration(a: string, b: string): boolean {
+  const left = a.trim().toLowerCase()
+  const right = b.trim().toLowerCase()
+  if (!left || !right) return false
+  if (left === right) return true
+  const [shorter, longer] = left.length < right.length ? [left, right] : [right, left]
+  if (left.length === right.length) return false
+  return longer.endsWith(`-${shorter}`)
+}
+
+export function blueprintSourcePrefix(id: string): string {
+  const slash = id.lastIndexOf("/")
+  return slash >= 0 ? id.slice(0, slash) : ""
+}
+
+function gitRemoteSlug(url: string): string {
+  const cleaned = normalizeGitSourceUrl(url)
+  try {
+    const parts = new URL(cleaned).pathname.split("/").filter(Boolean)
+    return (parts[parts.length - 1] || "").toLowerCase()
+  } catch {
+    const parts = cleaned.split("/").filter(Boolean)
+    return (parts[parts.length - 1] || "").toLowerCase()
+  }
+}
+
+/**
+ * Same git remote. A missing installed URL still matches the requested source id
+ * or that URL's repo slug (Ludus `userID-` prefix of the same repo). Any other
+ * id, including another fork of the same slug, does not match.
+ */
+export function installedSourceRemoteMatches(
+  installedPrefix: string,
+  requestedSourceId: string,
+  installedGitUrl: string | null | undefined,
+  requestedGitUrl: string | null | undefined,
+): boolean {
+  const requested = requestedGitUrl?.trim() ?? ""
+  const installed = installedGitUrl?.trim() ?? ""
+  if (!requested) return false
+  if (installed) return normalizeGitSourceUrl(installed) === normalizeGitSourceUrl(requested)
+  const prefix = installedPrefix.trim().toLowerCase()
+  const requestedId = requestedSourceId.trim().toLowerCase()
+  if (prefix && prefix === requestedId) return true
+  const slug = gitRemoteSlug(requested)
+  return Boolean(slug && prefix === slug)
+}
+
+/** Installed blueprint belongs to this source (not another ref that shares the slug). */
+export function installedBlueprintMatchesSource(
+  installedId: string,
+  shortName: string,
+  sourceID: string,
+  remote?: {
+    installedUrl?: string | null
+    requestedUrl?: string | null
+    requestedSourceId?: string | null
+  },
+): boolean {
+  const id = installedId.trim()
+  const short = shortName.trim()
+  const source = sourceID.trim()
+  if (!id || !short || !source) return false
+  const slash = id.lastIndexOf("/")
+  const slug = slash >= 0 ? id.slice(slash + 1) : id
+  if (slug !== short) return false
+  const prefix = slash >= 0 ? id.slice(0, slash) : ""
+  if (!prefix) return false
+  if (!sourceIdsAreSameRegistration(prefix, source)) return false
+  if (!remote) return true
+  return installedSourceRemoteMatches(
+    prefix,
+    remote.requestedSourceId?.trim() || source,
+    remote.installedUrl,
+    remote.requestedUrl,
+  )
 }
 
 export function sourceBlueprintInstallId(

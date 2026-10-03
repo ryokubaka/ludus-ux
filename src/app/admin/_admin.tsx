@@ -38,7 +38,7 @@ import {
   Share2,
   Play,
 } from "lucide-react"
-import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete, cleanupSoSniffBeforeRangeDelete } from "@/lib/api"
+import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -349,10 +349,6 @@ export function AdminPageClient() {
       const statusRes = await ludusApi.getRangeStatus(rangeID)
       const ipsForHosts =
         statusRes.data?.VMs?.map((v) => v.ip).filter((ip) => typeof ip === "string" && ip.trim() !== "") ?? []
-      await cleanupSoSniffBeforeRangeDelete(rangeID, {
-        rangeNumber: statusRes.data?.rangeNumber,
-        vmNames: statusRes.data?.VMs?.map((v) => v.name).filter((n) => typeof n === "string"),
-      })
       const res = await ludusApi.deleteRange(rangeID)
       if (res.error) {
         if (
@@ -411,7 +407,7 @@ export function AdminPageClient() {
   }
 
   /**
-   * Attempt to auto-read the user's LUDUS_API_KEY from their ~/.bashrc via root SSH.
+   * Attempt to auto-read the user's LUDUS_API_KEY from their ~/.bashrc via host SSH.
    * If found, immediately commit the impersonation and navigate to /goad.
    * If not found, fall back to the manual-entry dialog.
    */
@@ -512,8 +508,8 @@ export function AdminPageClient() {
               <Alert>
                 <KeyRound className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  Could not auto-read the API key from <code>~/.bashrc</code>. Enter it manually below.
-                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.fields.sshLogin}</code>.
+                  Could not auto-read the API key from <code>~/.bashrc</code> over host SSH. Enter it manually below.
+                  Commands will run via that host SSH account (root, or <code>sudo -n /usr/local/sbin/lux-host</code>) and <code>sudo -u {impersonateTarget.fields.sshLogin}</code>.
                 </AlertDescription>
               </Alert>
               <div className="space-y-1.5">

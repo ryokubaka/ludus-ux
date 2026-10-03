@@ -560,7 +560,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
     )
   }, [connectToStream])
 
-  const stop = useCallback(async () => {
+  const stop = useCallback(async (opts?: { asError?: boolean }) => {
     // Capture current taskId before any state updates
     const tid = taskId
     if (tid) {
@@ -572,7 +572,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
         await fetch(`/api/goad/tasks/${tid}/stop`, {
           method: "POST",
           credentials: "include",
-          headers: { ...extra },
+          headers: { "Content-Type": "application/json", ...extra },
+          body: JSON.stringify({ asError: opts?.asError === true }),
         })
       } catch {
         // Best-effort; continue to tear down the client side regardless

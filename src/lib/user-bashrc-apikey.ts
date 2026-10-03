@@ -42,6 +42,7 @@ async function resolveHomeDir(
         sshUser,
         sshPw,
         `getent passwd ${shellQuote(linuxUser)} 2>/dev/null | cut -d: -f6`,
+        { elevate: false },
       )
     ).trim()
     if (home) return home
@@ -61,9 +62,11 @@ async function readKeyFromHome(
   // Quote full paths — shellQuote(homeDir) + "/.bashrc" leaves quotes inside $f and breaks -f tests.
   const bashrc = shellQuote(`${homeDir}/.bashrc`)
   const profile = shellQuote(`${homeDir}/.profile`)
-  const extractCmd =
-    `(grep -E '(export[[:space:]]+)?LUDUS_API_KEY=' ${bashrc} 2>/dev/null; ` +
-    `grep -E '(export[[:space:]]+)?LUDUS_API_KEY=' ${profile} 2>/dev/null) | tail -1; true`
+  const extractUser = homeDir.startsWith("/home/") ? homeDir.slice("/home/".length) : ""
+  const extractCmd = extractUser
+    ? (["bashrc-apikey-get", extractUser] as const)
+    : `(grep -E '(export[[:space:]]+)?LUDUS_API_KEY=' ${bashrc} 2>/dev/null; ` +
+      `grep -E '(export[[:space:]]+)?LUDUS_API_KEY=' ${profile} 2>/dev/null) | tail -1; true`
 
   try {
     const line = await sshExec(host, port, sshUser, sshPw, extractCmd)
@@ -75,7 +78,7 @@ async function readKeyFromHome(
 }
 
 /**
- * Read LUDUS_API_KEY from a Ludus user's shell init files via root SSH.
+ * Read LUDUS_API_KEY from a Ludus user's shell init files via host SSH.
  * Mirrors roll-key SSH path: settings host + proxmox-ssh + getent home dir.
  */
 export async function readUserApiKeyFromBashrc(
@@ -94,7 +97,7 @@ export async function readUserApiKeyFromBashrc(
   if (!isRootProxmoxSshConfigured(settings)) {
     return {
       apiKey: null,
-      message: "Root SSH not configured (set PROXMOX_SSH_PASSWORD or mount a root private key)",
+      message: "Host SSH is not configured (set PROXMOX_SSH_PASSWORD, or mount a private key for PROXMOX_SSH_USER)",
     }
   }
 

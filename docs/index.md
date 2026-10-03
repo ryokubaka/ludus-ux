@@ -7,7 +7,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [About LUX](about.md) | Why use it, Ludus Pro vs LUX, GOAD/Ludus relationship |
 | [Workflows](workflows.md) | **How it works** — Ludus ranges, GOAD instances, LudusHound, deploy steps, redeployment, firewall queue, impersonation (start here if you're new) |
 | [Getting started](getting-started.md) | Requirements, Docker, install (quickstart or manual), upgrade |
-| [SSH and authentication](ssh-and-auth.md) | Root vs session auth, consoles, admin API URL, SSH keys |
+| [SSH and authentication](ssh-and-auth.md) | Host SSH for any user, lux-host, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |
 | [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
 | [Templates](templates.md) | Packer template builds in LUX, add-from-source, Proxmox ACL troubleshooting |

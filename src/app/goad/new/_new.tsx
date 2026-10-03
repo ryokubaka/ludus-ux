@@ -45,7 +45,7 @@ import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
+import { type NetworkRule, injectNetworkRules, extractNetworkSection, extractNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import {
   ensureUserDefinedRolesTag,
@@ -57,6 +57,7 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { GoadAnsibleDependenciesPanel } from "@/components/goad/goad-ansible-dependencies-panel"
 import {
+  combineWizardNetworkRules,
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
 } from "@/lib/goad-preview-config"
@@ -211,8 +212,17 @@ export function NewGoadInstancePageClient() {
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const [currentUsername, setCurrentUsername] = useState<string>("")
 
-  // Step 3: Network Rules
+  // Step 3: Network Rules. Extension and existing-range rules are filled in
+  // when this step loads; rules the user adds stay in the same list.
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+  const [networkRulesLoading, setNetworkRulesLoading] = useState(false)
+  const [wizardVlans, setWizardVlans] = useState<number[]>([])
+  const networkRulesRef = useRef(networkRules)
+  networkRulesRef.current = networkRules
+  const importedKeyRef = useRef("")
+  const importedNamesRef = useRef<Set<string>>(new Set())
+  const previewYamlRef = useRef("")
+  const existingYamlRef = useRef<string | null>(null)
 
   // Optional Ludus deploy tags — set from Review & Deploy (advanced panel); forwarded to `ludus range deploy --tags`
   const [selectedLudusDeployTags, setSelectedLudusDeployTags] = useState<string[]>([])
@@ -230,6 +240,10 @@ export function NewGoadInstancePageClient() {
   const configYamlDirty = reviewConfigYaml !== generatedConfigYaml
   configYamlDirtyRef.current = configYamlDirty
   const yamlValidation = useMemo(() => validateGoadConfigYaml(reviewConfigYaml), [reviewConfigYaml])
+  const reviewRuleCount = useMemo(
+    () => extractNetworkRules(reviewConfigYaml).length,
+    [reviewConfigYaml],
+  )
 
   // Installed Ansible roles/collections (extension step gate + review deps)
   const [ansibleInstalled, setAnsibleInstalled] = useState<ReturnType<
@@ -445,9 +459,22 @@ export function NewGoadInstancePageClient() {
       .finally(() => setAnsibleInstalledLoading(false))
   }, [step])
 
+  const applyPreviewYaml = useCallback((preview: string, rules: NetworkRule[], existingRangeYaml: string | null) => {
+    previewYamlRef.current = preview
+    existingYamlRef.current = existingRangeYaml
+    const merged = mergeGoadPreviewWithNetworkRules(preview, rules, existingRangeYaml, {
+      rulesAreComplete: importedKeyRef.current !== "",
+    })
+    setGeneratedConfigYaml(merged)
+    if (!configYamlDirtyRef.current) {
+      setReviewConfigYaml(merged)
+    }
+  }, [])
+
   const loadConfigPreview = useCallback(async () => {
     if (!selectedLab) return
     setConfigPreviewLoading(true)
+    setNetworkRulesLoading(true)
     setConfigPreviewError(null)
     try {
       const res = await fetch("/api/goad/preview-config", {
@@ -461,22 +488,43 @@ export function NewGoadInstancePageClient() {
       })
       const data = (await res.json()) as { yaml?: string; error?: string }
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-      const merged = mergeGoadPreviewWithNetworkRules(data.yaml ?? "", networkRules)
-      setGeneratedConfigYaml(merged)
-      if (!configYamlDirtyRef.current) {
-        setReviewConfigYaml(merged)
+      let existingRangeYaml: string | null = null
+      if (rangeMode === "existing" && selectedExistingRange) {
+        const cfg = await ludusApi.getRangeConfig(selectedExistingRange)
+        if (cfg.error) throw new Error(cfg.error)
+        existingRangeYaml = cfg.data?.result ?? ""
       }
+      const preview = data.yaml ?? ""
+      const importKey = `${selectedLab}|${Array.from(selectedExtensions).sort().join(",")}|${rangeMode}|${selectedExistingRange}`
+      let rules = networkRulesRef.current
+      if (importedKeyRef.current !== importKey) {
+        const importedBefore = importedNamesRef.current
+        const userKept = rules.filter((rule) => !rule.name.trim() || !importedBefore.has(rule.name.trim()))
+        const imported = combineWizardNetworkRules(existingRangeYaml, preview, [])
+        rules = combineWizardNetworkRules(existingRangeYaml, preview, userKept)
+        importedNamesRef.current = new Set(imported.map((rule) => rule.name.trim()).filter(Boolean))
+        importedKeyRef.current = importKey
+        setNetworkRules(rules)
+      }
+      setWizardVlans(extractVlansFromConfig(`${existingRangeYaml ?? ""}\n${preview}`))
+      applyPreviewYaml(preview, rules, existingRangeYaml)
     } catch (err) {
       setConfigPreviewError(err instanceof Error ? err.message : String(err))
     } finally {
       setConfigPreviewLoading(false)
+      setNetworkRulesLoading(false)
     }
-  }, [selectedLab, selectedExtensions, networkRules])
+  }, [selectedLab, selectedExtensions, rangeMode, selectedExistingRange, applyPreviewYaml])
 
   useEffect(() => {
-    if (step !== 4 || !selectedLab) return
+    if ((step !== 3 && step !== 4) || !selectedLab) return
     void loadConfigPreview()
-  }, [step, selectedLab, selectedExtensions, networkRules, loadConfigPreview])
+  }, [step, selectedLab, loadConfigPreview])
+
+  useEffect(() => {
+    if (!previewYamlRef.current) return
+    applyPreviewYaml(previewYamlRef.current, networkRules, existingYamlRef.current)
+  }, [networkRules, applyPreviewYaml])
 
   // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
   // e.g. "user1-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
@@ -658,7 +706,8 @@ export function NewGoadInstancePageClient() {
       return
     }
 
-    // When wizard YAML is canonical, network is injected via LUX_WIZARD_CONFIG_YML at deploy.
+    // Review YAML already combines the existing range rules with extension rules.
+    // It is copied onto the Ludus config at `range config set`, before deploy.
     if (networkRules.length > 0 && rangeId && !useWizardYaml) {
       try {
         await ludusApi.setRangeConfig(injectNetworkRules("", networkRules), rangeId)
@@ -1138,8 +1187,8 @@ export function NewGoadInstancePageClient() {
                           <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{lab.description}</p>
                         )}
                         {!ludusOk ? (
-                          <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">
-                            No <code>providers/ludus/</code> directory — this lab cannot be deployed with Ludus
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            No Ludus provider. This lab cannot be deployed here.
                           </p>
                         ) : (
                           <TemplateChips required={lab.requiredTemplates ?? []} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
@@ -1368,12 +1417,26 @@ export function NewGoadInstancePageClient() {
                 <span className="text-xs text-muted-foreground font-normal">(optional)</span>
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                Define custom iptables rules for the GOAD range router. Leave empty to use Ludus
-                defaults (all inter-VLAN and external traffic accepted).
+                Rules from the selected extensions and from the existing range are listed here, and the generated configuration shows that same list. Clearing every row writes an empty list and keeps the existing range&apos;s other network settings, including inter_vlan_default. An empty list does not accept all inter-VLAN traffic.
               </p>
             </CardHeader>
             <CardContent>
-              <NetworkRulesEditor rules={networkRules} onChange={setNetworkRules} availableVlans={[]} />
+              {networkRulesLoading && networkRules.length === 0 ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-6 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading firewall rules…
+                </div>
+              ) : (
+                <NetworkRulesEditor
+                  rules={networkRules}
+                  onChange={setNetworkRules}
+                  availableVlans={wizardVlans}
+                  emptyMessage="No firewall rules in this list. An empty list keeps the existing range's other network settings, including inter_vlan_default, and does not accept all inter-VLAN traffic."
+                />
+              )}
+              {configPreviewError && (
+                <p className="text-[10px] text-status-error mt-2">{configPreviewError}</p>
+              )}
             </CardContent>
           </Card>
           <div className="flex justify-between">
@@ -1452,9 +1515,9 @@ export function NewGoadInstancePageClient() {
                 <div className="flex items-center gap-1.5">
                   <Shield className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-sm">
-                    {networkRules.length > 0
-                      ? `${networkRules.length} custom rule${networkRules.length !== 1 ? "s" : ""}`
-                      : "Ludus defaults"}
+                    {reviewRuleCount > 0
+                      ? `${reviewRuleCount} rule${reviewRuleCount !== 1 ? "s" : ""}`
+                      : "None"}
                   </span>
                 </div>
               </div>
@@ -1484,8 +1547,8 @@ export function NewGoadInstancePageClient() {
                     <FileCode2 className="h-3.5 w-3.5 text-primary" />
                     Generated Configuration
                   </CardTitle>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Ludus <code className="text-primary">provider/config.yml</code> preview — edit before deploy if needed
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Edit the generated config before deploy if you need to.
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5">

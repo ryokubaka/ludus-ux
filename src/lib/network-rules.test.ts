@@ -4,6 +4,7 @@ import {
   injectNetworkRules,
   extractNetworkSection,
   applyNetworkSection,
+  mergeNetworkSection,
   buildNetworkYaml,
   extractVlansFromConfig,
   removeExtensionVmsFromRangeConfig,
@@ -230,6 +231,15 @@ describe("injectNetworkRules", () => {
     expect(result).toContain("ludus:")
   })
 
+  it("keeps other network fields when an empty rule list is explicit", () => {
+    const result = injectNetworkRules(SAMPLE_YAML, [], { emptyRules: "keep" })
+    const snap = extractNetworkSection(result)
+    expect(snap?.rules).toEqual([])
+    expect(snap?.external_default).toBe("REJECT")
+    expect(result).toContain("ludus:")
+    expect(result).not.toContain("allow-ssh")
+  })
+
   it("preserves existing ludus key", () => {
     const result = injectNetworkRules(SAMPLE_YAML, [
       { name: "new", vlan_src: 10, vlan_dst: 20, protocol: "all", ports: "all", action: "ACCEPT" },
@@ -264,6 +274,96 @@ describe("extractNetworkSection", () => {
 
   it("returns null when network is an array", () => {
     expect(extractNetworkSection("network:\n  - item\n")).toBeNull()
+  })
+})
+
+describe("mergeNetworkSection", () => {
+  it("stores rules that exist only on the current config before the snapshot so they evaluate after it", () => {
+    const yaml = `
+ludus: []
+network:
+  inter_vlan_default: ACCEPT
+  rules:
+    - name: Allow targets to SO Fleet
+      vlan_src: 10
+      vlan_dst: 20
+      protocol: tcp
+      ports: "8220,5055,8443"
+      action: ACCEPT
+`
+    const result = mergeNetworkSection(yaml, {
+      inter_vlan_default: "DROP",
+      rules: [
+        {
+          name: "Allow clients to DC",
+          vlan_src: 10,
+          vlan_dst: 10,
+          protocol: "tcp",
+          ports: "445",
+          action: "ACCEPT",
+        },
+      ],
+    })
+    const section = extractNetworkSection(result)
+    expect(section?.inter_vlan_default).toBe("DROP")
+    const stored = (section?.rules ?? []) as { name: string }[]
+    expect(stored.map((rule) => rule.name)).toEqual([
+      "Allow targets to SO Fleet",
+      "Allow clients to DC",
+    ])
+  })
+
+  it("keeps a pre-provide range in storage order and a same-name rule body from that range", () => {
+    const yaml = `
+network:
+  inter_vlan_default: ACCEPT
+  rules:
+    - name: ext-c
+      vlan_src: 30
+      vlan_dst: 30
+      protocol: tcp
+      ports: "1"
+      action: ACCEPT
+    - name: existing-b
+      vlan_src: 20
+      vlan_dst: 20
+      protocol: tcp
+      ports: "9"
+      action: ACCEPT
+    - name: existing-a
+      vlan_src: 10
+      vlan_dst: 10
+      protocol: tcp
+      ports: "9"
+      action: ACCEPT
+`
+    const result = mergeNetworkSection(yaml, {
+      inter_vlan_default: "DROP",
+      rules: [
+        {
+          name: "existing-b",
+          vlan_src: 20,
+          vlan_dst: 20,
+          protocol: "tcp",
+          ports: "2",
+          action: "ACCEPT",
+        },
+        {
+          name: "existing-a",
+          vlan_src: 10,
+          vlan_dst: 10,
+          protocol: "tcp",
+          ports: "3",
+          action: "ACCEPT",
+        },
+      ],
+    })
+    const section = extractNetworkSection(result)
+    expect(section?.inter_vlan_default).toBe("DROP")
+    const stored = (section?.rules ?? []) as { name: string; ports: string }[]
+    expect(stored.map((rule) => rule.name)).toEqual(["ext-c", "existing-b", "existing-a"])
+    expect(stored.find((rule) => rule.name === "existing-b")?.ports).toBe("2")
+    expect(stored.find((rule) => rule.name === "existing-a")?.ports).toBe("3")
   })
 })
 

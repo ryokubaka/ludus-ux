@@ -14,6 +14,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
 import { Filter, Loader2, RefreshCw } from "lucide-react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 
 export type DeployLimitHostSource = "config" | "range"
 
@@ -38,6 +39,7 @@ export function DeployLimitSelector({
 }: DeployLimitSelectorProps) {
   const { toast } = useToast()
   const [search, setSearch] = useState("")
+  const [showAll, setShowAll] = useState(false)
   const [showCustom, setShowCustom] = useState(false)
   const [rangeLoading, setRangeLoading] = useState(false)
   const [hostSource, setHostSource] = useState<DeployLimitHostSource>("config")
@@ -115,8 +117,8 @@ export function DeployLimitSelector({
 
   const sourceLabel =
     hostSource === "range"
-      ? `Showing ${availableHosts.length} host${availableHosts.length !== 1 ? "s" : ""} from deployed VMs (GET /range)`
-      : `Showing ${availableHosts.length} host${availableHosts.length !== 1 ? "s" : ""} from range config`
+      ? `${availableHosts.length} deployed VMs`
+      : `${availableHosts.length} hosts from config`
 
   return (
     <Card>
@@ -124,14 +126,7 @@ export function DeployLimitSelector({
         <CardTitle className="text-sm flex items-center gap-2">
           <Filter className="h-4 w-4" />
           Deploy Host Limit
-          <span className="text-xs text-muted-foreground font-normal">
-            (leave empty for all hosts — Ludus CLI{" "}
-            <code className="text-[11px] text-primary/90">--limit</code>)
-          </span>
         </CardTitle>
-        <p className="text-xs text-muted-foreground mt-1 leading-snug">
-          Limits which hosts the deploy runs against (Ludus matches <code className="text-[11px] text-primary/90">vm_name</code>, not Ansible hostname). Combinable with deploy tags (tags = steps, limit = hosts). The range router is auto-included at deploy and is not listed here.
-        </p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -169,7 +164,7 @@ export function DeployLimitSelector({
           )}
         </div>
 
-        <p className="text-[11px] text-muted-foreground">{sourceLabel}</p>
+        <p className="text-xs text-muted-foreground">{sourceLabel}. Empty means every host. The router is included automatically.</p>
 
         {availableHosts.length === 0 ? (
           <p className="text-xs text-muted-foreground py-2">
@@ -178,8 +173,9 @@ export function DeployLimitSelector({
         ) : filteredHosts.length === 0 ? (
           <p className="text-xs text-muted-foreground py-2">No hosts match your search.</p>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
-            {filteredHosts.map((host) => (
+          <div className="rounded-md border border-border">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 p-2">
+            {previewSlice(filteredHosts, showAll).map((host) => (
               <label
                 key={host}
                 className={cn(
@@ -200,6 +196,8 @@ export function DeployLimitSelector({
                 </code>
               </label>
             ))}
+            </div>
+            <ShowAllBar expanded={showAll} count={filteredHosts.length} onToggle={() => setShowAll((v) => !v)} />
           </div>
         )}
 
@@ -227,8 +225,8 @@ export function DeployLimitSelector({
                 className="h-8 font-mono text-xs"
                 disabled={disabled}
               />
-              <p className="text-[11px] text-muted-foreground">
-                When set, overrides checkbox selection (groups, globs, comma-separated hosts).
+              <p className="text-xs text-muted-foreground">
+                Overrides the checkboxes.
               </p>
             </>
           )}

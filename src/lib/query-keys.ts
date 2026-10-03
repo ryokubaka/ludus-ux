@@ -126,6 +126,7 @@ export function isVolatileQueryKey(queryKey: readonly unknown[]): boolean {
   }
   if (head === "goad" && sub === "tasks") return true
   if (head === "vm-operation-log") return true
+  if (head === "lux") return true
   if (head === "admin" && (sub === "range-vms" || sub === "shared-vms")) return true
   if (queryKey[0] === "goad" && queryKey[1] === "tasks") return true
   return false

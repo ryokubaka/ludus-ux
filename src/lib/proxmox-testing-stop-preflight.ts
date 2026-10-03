@@ -124,9 +124,9 @@ function assertSafeVmid(vmid: number): number {
 }
 
 /** Shell: dump qm config for one VM (read-only; no stop). */
-export function buildQmConfigShell(vmid: number): string {
+export function buildQmConfigShell(vmid: number): readonly string[] {
   const id = assertSafeVmid(vmid)
-  return `qm config ${id} 2>/dev/null || true`
+  return ["qm-config", String(id)]
 }
 
 /**
@@ -138,62 +138,34 @@ export function buildTestingStopVmRollbackShell(
   vmid: number,
   node: string,
   snapname: string,
-): string {
+): readonly string[] {
   const id = assertSafeVmid(vmid)
   const n = assertSafeNode(node)
   const snap = assertSafeSnapname(snapname)
-  const snapQ = JSON.stringify(snap)
-
-  return [
-    `echo "[lux-testing-stop] rollback prep vmid=${id} node=${n} snap=${snap}"`,
-    `qm shutdown ${id} --timeout 90 --forceStop 1 2>/dev/null || pvesh create /nodes/${n}/qemu/${id}/status/stop --skiplock 1 2>/dev/null || true`,
-    `qm listsnapshot ${id} 2>/dev/null | grep -qF ${snapQ} && echo "[lux-testing-stop] qm rollback ${id} ${snap}" && qm rollback ${id} ${snapQ} || echo "[lux-testing-stop] snapshot ${snap} missing on ${id}"`,
-    `echo "[lux-testing-stop] rollback prep done ${id}"`,
-  ].join("; ")
+  return ["testing-rollback", String(id), n, snap]
 }
 
 /**
  * Enroll UEFI 2023 certs (VM must be stopped). Leaves VM stopped.
  * Prefer {@link buildTestingStartEfiEnrollShell} before testing start (optional restart).
  */
-export function buildTestingStopVmEnrollShell(vmid: number, node: string): string {
+export function buildTestingStopVmEnrollShell(vmid: number, node: string): readonly string[] {
   const id = assertSafeVmid(vmid)
   const n = assertSafeNode(node)
-
-  return [
-    `echo "[lux-testing-efi] enroll vmid=${id} node=${n}"`,
-    `qm shutdown ${id} --timeout 90 --forceStop 1 2>/dev/null || pvesh create /nodes/${n}/qemu/${id}/status/stop --skiplock 1 2>/dev/null || true`,
-    `echo "[lux-testing-efi] enroll-efi-keys ${id}"`,
-    `qm enroll-efi-keys ${id}`,
-    `qm config ${id} 2>/dev/null | grep -qF ms-cert=2023k && echo "[lux-testing-efi] ms-cert=2023k ok ${id}" || echo "[lux-testing-efi] ms-cert=2023k MISSING ${id}"`,
-    `echo "[lux-testing-efi] enroll done ${id}"`,
-  ].join("; ")
+  return ["testing-enroll", String(id), n, "0"]
 }
 
 /**
  * Before testing-start snapshot: shutdown → `qm enroll-efi-keys` → verify → optional start.
- * Avoid `$vars` / `$(...)` / awk `$N` — `sshExec` wraps with `bash -l -c "..."`.
  */
 export function buildTestingStartEfiEnrollShell(
   vmid: number,
   node: string,
   opts: { restart: boolean },
-): string {
+): readonly string[] {
   const id = assertSafeVmid(vmid)
   const n = assertSafeNode(node)
-  const parts = [
-    `echo "[lux-testing-start] enroll vmid=${id} node=${n} restart=${opts.restart ? "1" : "0"}"`,
-    `qm shutdown ${id} --timeout 90 --forceStop 1 2>/dev/null || pvesh create /nodes/${n}/qemu/${id}/status/stop --skiplock 1 2>/dev/null || true`,
-    `echo "[lux-testing-start] enroll-efi-keys ${id}"`,
-    `qm enroll-efi-keys ${id}`,
-    `qm config ${id} 2>/dev/null | grep -qF ms-cert=2023k && echo "[lux-testing-start] ms-cert=2023k ok ${id}" || echo "[lux-testing-start] ms-cert=2023k MISSING ${id}"`,
-  ]
-  if (opts.restart) {
-    parts.push(`qm start ${id} 2>/dev/null || pvesh create /nodes/${n}/qemu/${id}/status/start 2>/dev/null || true`)
-    parts.push(`echo "[lux-testing-start] restarted ${id}"`)
-  }
-  parts.push(`echo "[lux-testing-start] enroll done ${id}"`)
-  return parts.join("; ")
+  return ["testing-enroll", String(id), n, opts.restart ? "1" : "0"]
 }
 
 /** @deprecated Use buildTestingStopVmRollbackShell + buildTestingStopVmEnrollShell */
@@ -201,12 +173,30 @@ export function buildTestingStopVmPrepShell(
   vmid: number,
   node: string,
   snapname: string,
-): string {
+): readonly string[] {
   return buildTestingStopVmRollbackShell(vmid, node, snapname)
 }
 
-async function sshRun(creds: ProxmoxSshCredentials, command: string): Promise<string> {
+async function sshRun(creds: ProxmoxSshCredentials, command: string | readonly string[]): Promise<string> {
   return sshExec(creds.sshHost, creds.sshPort, creds.sshUser, creds.sshPass, command)
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return []
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++
+      out[idx] = await fn(items[idx])
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 function proxmoxIdForVm(vm: VMObject): number | null {
@@ -235,12 +225,12 @@ async function resolveVmidNodes(
   creds: ProxmoxSshCredentials,
   vmids: number[],
 ): Promise<Map<number, string>> {
-  const json = await sshRun(creds, "pvesh get /cluster/resources --type vm --output-format json")
+  const json = await sshRun(creds, ["pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json"])
   const map = parseClusterVmidNodeMap(json)
   const missing = vmids.filter((id) => !map.has(id))
   if (missing.length === 0) return map
 
-  const nodesJson = await sshRun(creds, "pvesh get /nodes --output-format json")
+  const nodesJson = await sshRun(creds, ["pvesh", "get", "/nodes", "--output-format", "json"])
   let fallback = "localhost"
   try {
     const nodes = JSON.parse(nodesJson) as Array<{ node?: string }>
@@ -366,23 +356,28 @@ export async function listTestingStopEfiEnrollCandidates(opts: {
     }
   }
 
-  const candidates: EfiEnrollCandidate[] = []
-  for (const [vmid, vm] of targetsById) {
-    try {
-      const cfg = await sshRun(ssh.creds, buildQmConfigShell(vmid))
-      if (!efiDiskNeedsMsCert2023(cfg)) continue
-      candidates.push({
-        vmid,
-        name: vmLabel(vm),
-        node: nodeMap.get(vmid) || "localhost",
-      })
-    } catch (err) {
-      console.warn(
-        `[testing-efi-preflight] qm config ${vmid} failed:`,
-        err instanceof Error ? err.message : err,
-      )
-    }
-  }
+  const probed = await mapPool(
+    [...targetsById.entries()],
+    6,
+    async ([vmid, vm]) => {
+      try {
+        const cfg = await sshRun(ssh.creds, buildQmConfigShell(vmid))
+        if (!efiDiskNeedsMsCert2023(cfg)) return null
+        return {
+          vmid,
+          name: vmLabel(vm),
+          node: nodeMap.get(vmid) || "localhost",
+        } satisfies EfiEnrollCandidate
+      } catch (err) {
+        console.warn(
+          `[testing-efi-preflight] qm config ${vmid} failed:`,
+          err instanceof Error ? err.message : err,
+        )
+        return null
+      }
+    },
+  )
+  const candidates = probed.filter((row): row is EfiEnrollCandidate => row != null)
 
   const unique = dedupeEfiEnrollCandidates(candidates)
   setTestingStopEfiCache(opts.rangeId, vmFingerprint, unique)

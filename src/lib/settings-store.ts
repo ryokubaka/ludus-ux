@@ -48,12 +48,12 @@ export interface RuntimeSettings {
   blueprintOperatorApiKey: string
   /** Ludus userID of the admin who installed global source blueprints. */
   blueprintOperatorUserId: string
-  /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
+  /** Host SSH user (PROXMOX_SSH_USER) for pvesh (SPICE) and other host writes. Defaults to "root". */
   proxmoxSshUser: string
-  /** Proxmox/root SSH password — used for VM console (SPICE) access. */
+  /** Password for PROXMOX_SSH_USER. Used for pvesh (SPICE) and other host writes. */
   proxmoxSshPassword: string
   /**
-   * Optional path to root SSH private key inside the container (e.g. /app/ssh/id_rsa).
+   * Optional path to the PROXMOX_SSH_USER private key inside the container (e.g. /app/ssh/id_rsa).
    * When set, tried before PROXMOX_SSH_KEY_PATH env — survives Next/env oddities and is saved in SQLite.
    */
   proxmoxSshKeyPath: string
@@ -227,4 +227,37 @@ export function getSettings(): RuntimeSettings {
 export function updateSettings(patch: Partial<RuntimeSettings>): RuntimeSettings {
   saveOverridesToDb(patch)
   return getSettings()
+}
+
+const LUX_HOST_UPDATE_KEY_SETTING = "luxHostUpdateKey"
+
+/** HMAC key for lux-host self-update. Empty when Settings has not installed the helper. */
+export function getLuxHostUpdateKey(): string {
+  try {
+    const db = getDb()
+    const row = db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(LUX_HOST_UPDATE_KEY_SETTING) as { value: string } | undefined
+    const stored = row?.value ?? ""
+    if (!stored || !isSettingsValueAtRestEncrypted(stored)) return ""
+    const key = decryptSettingsValueAtRest(stored, appSecretForSettingsAtRest()).trim()
+    return /^[0-9a-f]{64}$/.test(key) ? key : ""
+  } catch {
+    return ""
+  }
+}
+
+export function setLuxHostUpdateKey(key: string): void {
+  const trimmed = key.trim()
+  if (!/^[0-9a-f]{64}$/.test(trimmed)) {
+    throw new Error("lux-host update key is invalid")
+  }
+  const db = getDb()
+  db.prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  ).run(
+    LUX_HOST_UPDATE_KEY_SETTING,
+    encryptSettingsValueAtRest(trimmed, appSecretForSettingsAtRest()),
+    Date.now(),
+  )
 }

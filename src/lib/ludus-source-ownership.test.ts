@@ -21,21 +21,20 @@ describe("isLudusSourceGitPermissionError", () => {
 
 describe("buildRepairLudusSourcesOwnershipCmd", () => {
   it("chowns all sources by default", () => {
-    const cmd = buildRepairLudusSourcesOwnershipCmd("/opt/ludus")
-    expect(cmd).toContain("TARGET='/opt/ludus/sources'")
-    expect(cmd).toContain('chown -R ludus:ludus "$TARGET"')
-    expect(cmd).toContain("find \"$TARGET\" -type d -exec chmod u+rwx {} +")
+    expect(buildRepairLudusSourcesOwnershipCmd("/opt/ludus")).toEqual(["sources-repair"])
   })
 
   it("scopes to one clone dir when id provided", () => {
-    const cmd = buildRepairLudusSourcesOwnershipCmd("/opt/ludus", "abc123source")
-    expect(cmd).toContain("TARGET='/opt/ludus/sources/abc123source'")
+    expect(buildRepairLudusSourcesOwnershipCmd("/opt/ludus", "abc123source")).toEqual([
+      "sources-repair",
+      "abc123source",
+    ])
   })
 
   it("strips unsafe characters from clone dir id", () => {
-    const cmd = buildRepairLudusSourcesOwnershipCmd("/opt/ludus", "../evil;rm")
-    expect(cmd).toContain("TARGET='/opt/ludus/sources/evilrm'")
-    expect(cmd).not.toContain("..")
-    expect(cmd).not.toContain(";")
+    expect(buildRepairLudusSourcesOwnershipCmd("/opt/ludus", "../evil;rm")).toEqual([
+      "sources-repair",
+      "evilrm",
+    ])
   })
 })

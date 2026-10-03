@@ -16,8 +16,9 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 
 | Variable | Description | Default |
 |---|---|---|
-| `SSH_KEY_PATH` | **Host** directory where you put the root private key **copied from the Ludus server**. Mounted at **`/app/ssh`** in the container. | `./ssh` |
+| `SSH_KEY_PATH` | **Host** directory for the `PROXMOX_SSH_USER` private key copied from the Ludus server. Mounted at **`/app/ssh`** in the container. Who that account is: [SSH and authentication](ssh-and-auth.md). | `./ssh` |
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
+| `LUX_REPO_PATH` | Absolute path of the LUX git clone on the Docker host. Settings → About uses it when `docker inspect` cannot see the Compose project directory. | unset |
 
 ## Admin / user management
 
@@ -25,8 +26,8 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 |---|---|
 | `LUDUS_ADMIN_URL` | Admin API base URL (port **8081**). Compose default uses `LUDUS_SSH_HOST` with `:8081` (override in `.env` if needed). Prefer `https://<ludus-host>:8081` when reachable from the container. SSH tunnel to `127.0.0.1:18081` is optional when 8081 is loopback-only; remote URLs are not overwritten by the tunnel. |
 | `LUDUS_ROOT_API_KEY` | Root API key (from `<LUDUS_INSTALL_PATH>/install/root-api-key` on the server) |
-| `PROXMOX_SSH_USER` | Root (or privileged) SSH user for server-side Proxmox/Ludus operations |
-| `PROXMOX_SSH_PASSWORD` | Optional for server-side root SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not the root key. |
+| `PROXMOX_SSH_USER` | SSH account for server-side host commands. Root, or any other user who can run `sudo -n /usr/local/sbin/lux-host`. That helper is the only passwordless sudo command. Quickstart or Settings → SSH & GOAD can install it. Not the LUX login user unless that account can elevate. See [lux-host](ssh-and-auth.md#lux-host). |
+| `PROXMOX_SSH_PASSWORD` | Optional for server-side host SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not this key. |
 | `PROXMOX_SSH_KEY_PATH` | Private key path **inside** the container; must match the file under `SSH_KEY_PATH` on the host (default `/app/ssh/id_rsa`) |
 | `PROXMOX_SSH_KEY_PASSPHRASE` | Optional passphrase for the key |
 

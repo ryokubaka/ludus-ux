@@ -1,8 +1,8 @@
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
@@ -12,6 +12,10 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
+import { useResolvedSession } from "@/hooks/use-resolved-session"
+import { useConfirm } from "@/hooks/use-confirm"
+import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
   Dialog,
   DialogContent,
@@ -37,7 +41,7 @@ import {
   Check,
   type LucideIcon,
 } from "lucide-react"
-import { suggestedLudusSourceId } from "@/lib/ludus-source-ref"
+import { sourceOwnerLabel, suggestedLudusSourceId } from "@/lib/ludus-source-ref"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
 import { LUDUS_SOURCES_DOCS_URL } from "@/components/sources/source-catalog-banner"
@@ -59,16 +63,23 @@ import {
   buildInstalledAnsibleVersions,
   buildInstalledBlueprintIds,
   buildInstalledTemplateVersions,
+  branchResyncNeeded,
+  catalogVersionsDiffer,
   formatVersionTransition,
+  isAnsibleCatalogNameInstalled,
+  lookupCatalogPinVersion,
   lookupInstalledAnsibleVersion,
   lookupInstalledBlueprintVersion,
   lookupInstalledTemplateVersion,
   mergeInstalledVersionsWithPins,
-  sourceCatalogAnsibleInstallState,
+  normalizeCatalogVersion,
+  resolveAnsibleBranchView,
+  siblingRefForInstalledVersion,
   sourceCatalogBlueprintInstallState,
   sourceCatalogTemplateInstallState,
 } from "@/lib/source-catalog-presence"
 import { postSourceInstall } from "@/lib/source-install-client"
+import { ShowAllBar } from "@/components/ui/show-all-bar"
 import type { SourceInstallSelection } from "@/lib/ludus-source-client"
 
 interface LudusSource {
@@ -81,6 +92,9 @@ interface LudusSource {
   lastSyncedAt?: string
   lastSyncStatus?: string
   lastSyncError?: string
+  ownerUserID?: string
+  published?: boolean
+  sharedCatalog?: boolean
 }
 
 interface SourceBlueprint {
@@ -90,7 +104,6 @@ interface SourceBlueprint {
   description?: string
   version?: string
   state?: string
-  min_ludus_version?: string
 }
 
 interface SourceTemplate {
@@ -119,6 +132,41 @@ function sourceId(row: LudusSource): string {
   return row.sourceID || row.id || ""
 }
 
+function CatalogVersionNote({
+  installed,
+  catalog,
+  fromRef,
+  catalogAhead,
+}: {
+  installed?: string
+  catalog?: string
+  fromRef?: string
+  catalogAhead: boolean
+}) {
+  if (!catalogVersionsDiffer(installed, catalog)) return null
+  const installedLabel = normalizeCatalogVersion(installed) || "—"
+  const catalogLabel = normalizeCatalogVersion(catalog) || "—"
+  if (catalogAhead) {
+    return (
+      <span className="text-xs font-mono text-muted-foreground" title="Installed version, then this branch">
+        {installedLabel} → {catalogLabel}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="text-xs text-muted-foreground"
+      title="Ludus keeps one copy of this name. Re-sync replaces that copy with this branch."
+    >
+      Installed {installedLabel}
+      {fromRef ? ` from ${fromRef}` : ""}
+      {` · this branch ${catalogLabel}`}
+    </span>
+  )
+}
+
+const CATALOG_PREVIEW = 6
+
 function CatalogSectionHeader({
   icon: Icon,
   title,
@@ -135,14 +183,14 @@ function CatalogSectionHeader({
   manageLabel: string
 }) {
   return (
-    <div className="flex items-center gap-2 mb-2">
-      <p className="text-xs font-semibold text-muted-foreground uppercase flex items-center gap-1.5">
-        <Icon className="h-3.5 w-3.5" /> {title}
-        {!loading && <Badge variant="secondary" className="text-[10px]">{count}</Badge>}
+    <div className="flex items-center gap-2">
+      <p className="text-sm font-medium flex items-center gap-2">
+        <Icon className="h-4 w-4 text-muted-foreground" /> {title}
+        {!loading && <span className="text-xs text-muted-foreground tabular-nums">{count}</span>}
       </p>
       <Link
         href={href}
-        className="ml-auto inline-flex items-center gap-1 text-[10px] text-primary hover:underline"
+        className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-primary"
       >
         {manageLabel}
         <ExternalLink className="h-3 w-3" />
@@ -151,15 +199,94 @@ function CatalogSectionHeader({
   )
 }
 
-function SourceDetailPanel({ source }: { source: LudusSource }) {
+function CatalogPanel({
+  header,
+  loading,
+  empty,
+  count,
+  expanded,
+  onToggle,
+  children,
+}: {
+  header: ReactNode
+  loading: boolean
+  empty: ReactNode
+  count: number
+  expanded: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className="min-w-0 rounded-lg border border-border bg-background/30">
+      <div className="border-b border-border px-3 py-2.5">{header}</div>
+      {loading ? (
+        <div className="px-3 py-4">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      ) : count === 0 ? (
+        <div className="px-3 py-4 text-sm text-muted-foreground">{empty}</div>
+      ) : (
+        <>
+          <div className="divide-y divide-border">{children}</div>
+          <ShowAllBar expanded={expanded} count={count} preview={CATALOG_PREVIEW} onToggle={onToggle} />
+        </>
+      )}
+    </section>
+  )
+}
+
+function SourceDetailPanel({
+  source,
+  sources,
+  readOnly = false,
+}: {
+  source: LudusSource
+  sources: LudusSource[]
+  readOnly?: boolean
+}) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
   const sid = sourceId(source)
   const [resyncingKey, setResyncingKey] = useState<string | null>(null)
   const [bulkResyncing, setBulkResyncing] = useState(false)
+  const [openLists, setOpenLists] = useState<Record<string, boolean>>({})
+  const listOpen = (key: string) => openLists[key] === true
+  const toggleList = (key: string) =>
+    setOpenLists((prev) => ({ ...prev, [key]: !prev[key] }))
 
   const sourceRef = (source.ref || "").trim()
+  const siblingSources = sources.filter((row) => sourceId(row) !== sid)
+  const siblingRoleQueries = useQueries({
+    queries: siblingSources.map((row) => {
+      const id = sourceId(row)
+      return {
+        queryKey: queryKeys.sourceRoles(scopeTag, id, (row.ref || "").trim()),
+        queryFn: () => fetchSourceCatalog<SourceRole>(id, "roles"),
+        staleTime: STALE.short,
+      }
+    }),
+  })
+  const siblingCollectionQueries = useQueries({
+    queries: siblingSources.map((row) => {
+      const id = sourceId(row)
+      return {
+        queryKey: queryKeys.sourceCollections(scopeTag, id, (row.ref || "").trim()),
+        queryFn: () => fetchSourceCatalog<SourceCollection>(id, "collections"),
+        staleTime: STALE.short,
+      }
+    }),
+  })
+  const siblingRoles = siblingSources.map((row, index) => ({
+    ref: (row.ref || "").trim(),
+    label: row.name || sourceId(row),
+    items: sourceCatalogItems(siblingRoleQueries[index]?.data),
+  }))
+  const siblingCollections = siblingSources.map((row, index) => ({
+    ref: (row.ref || "").trim(),
+    label: row.name || sourceId(row),
+    items: sourceCatalogItems(siblingCollectionQueries[index]?.data),
+  }))
 
   const { data: blueprintPayload, isLoading: bpLoading } = useQuery({
     queryKey: queryKeys.sourceBlueprints(scopeTag, sid, sourceRef),
@@ -291,16 +418,9 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     () => buildInstalledAnsibleNames(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
     [ansibleData],
   )
-  const installedAnsibleVersions = useMemo(
-    () =>
-      mergeInstalledVersionsWithPins(
-        buildInstalledAnsibleVersions(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
-        {
-          ...(rolePayload?.pins ?? {}),
-          ...(collectionPayload?.pins ?? {}),
-        },
-      ),
-    [ansibleData, rolePayload?.pins, collectionPayload?.pins],
+  const ludusAnsibleVersions = useMemo(
+    () => buildInstalledAnsibleVersions(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
+    [ansibleData],
   )
 
   const blueprints = useMemo(
@@ -313,16 +433,6 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     () => collectionPayload?.items ?? [],
     [collectionPayload?.items],
   )
-  const catalogFromGit = [blueprintPayload, templatePayload, rolePayload, collectionPayload].some(
-    (p) => p?.catalogSource === "github",
-  )
-  const catalogRef =
-    blueprintPayload?.catalogRef ||
-    templatePayload?.catalogRef ||
-    rolePayload?.catalogRef ||
-    collectionPayload?.catalogRef ||
-    sourceRef ||
-    undefined
 
   const invalidateInstalled = useCallback(() => {
     // Prefix matches list + blueprintDetail caches.
@@ -337,6 +447,7 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
   }, [queryClient, scopeTag, sid])
 
   const handleResync = async (key: string, selection: SourceInstallSelection) => {
+    if (readOnly) return
     setResyncingKey(key)
     try {
       const { warnings } = await postSourceInstall(sid, selection, { force: true })
@@ -357,6 +468,46 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     }
   }
 
+  const ansibleBranchView = useCallback(
+    (item: { name?: string; fqcn?: string; version?: string }, kind: "role" | "collection") => {
+      const pins = kind === "role" ? rolePayload?.pins : collectionPayload?.pins
+      const siblings = kind === "role" ? siblingRoles : siblingCollections
+      const name = item.fqcn || item.name || ""
+      const host = lookupInstalledAnsibleVersion(name, ludusAnsibleVersions)
+      return resolveAnsibleBranchView({
+        catalogVersion: item.version,
+        hostVersion: host,
+        pinVersion:
+          lookupCatalogPinVersion(name, pins) || lookupCatalogPinVersion(item.name, pins),
+        otherRef: siblingRefForInstalledVersion(
+          [item.fqcn || "", item.name || ""],
+          host,
+          siblings,
+        ),
+        namePresent:
+          isAnsibleCatalogNameInstalled(name, installedAnsibleNames) ||
+          isAnsibleCatalogNameInstalled(item.name || "", installedAnsibleNames),
+      })
+    },
+    [
+      rolePayload?.pins,
+      collectionPayload?.pins,
+      ludusAnsibleVersions,
+      siblingRoles,
+      siblingCollections,
+      installedAnsibleNames,
+    ],
+  )
+
+  const ownedAnsibleVersion = useCallback(
+    (item: { name?: string; fqcn?: string; version?: string }, kind: "role" | "collection") => {
+      const view = ansibleBranchView(item, kind)
+      if (!view.installedHere && !view.catalogAhead) return undefined
+      return view.installedVersion
+    },
+    [ansibleBranchView],
+  )
+
   const outdatedSelection = useMemo(() => {
     const selection: SourceInstallSelection = {
       blueprints: [],
@@ -365,47 +516,25 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
       localCollections: [],
     }
     for (const bp of blueprints) {
-      const state = sourceCatalogBlueprintInstallState(
-        bp,
-        sid,
-        installedBlueprintIds,
-        installedBlueprintVersions,
-      )
-      if (state === "upgrade_available" && (bp.name || bp.sourceBlueprintID)) {
-        selection.blueprints!.push(bp.name || bp.sourceBlueprintID!)
-      }
+      const name = bp.name || bp.sourceBlueprintID
+      if (!name) continue
+      const installedVer = lookupInstalledBlueprintVersion(bp, sid, installedBlueprintVersions)
+      if (branchResyncNeeded(installedVer, bp.version)) selection.blueprints!.push(name)
     }
     for (const tpl of templates) {
       if (!tpl.name) continue
-      const tplName = tpl.name
-      const presence = getCatalogTemplatePresence(tplName, templatePresence)
-      const installedVer = lookupInstalledTemplateVersion(
-        tplName,
-        ludusTemplates,
-        installedTemplateVersions,
-      )
-      const state = sourceCatalogTemplateInstallState(
-        { name: tplName, version: tpl.version, state: tpl.state },
-        presence !== "none",
-        installedVer,
-      )
-      if (state === "upgrade_available") selection.templates!.push(tplName)
+      const installedVer = lookupInstalledTemplateVersion(tpl.name, ludusTemplates, installedTemplateVersions)
+      if (branchResyncNeeded(installedVer, tpl.version)) selection.templates!.push(tpl.name)
     }
     for (const role of roles) {
       if (!role.name || role.scope === "subscription") continue
-      if (
-        sourceCatalogAnsibleInstallState(role, installedAnsibleNames, installedAnsibleVersions) ===
-        "upgrade_available"
-      ) {
+      if (branchResyncNeeded(ownedAnsibleVersion(role, "role"), role.version)) {
         selection.localRoles!.push(role.name)
       }
     }
     for (const coll of collections) {
       if (!coll.name || coll.scope === "subscription") continue
-      if (
-        sourceCatalogAnsibleInstallState(coll, installedAnsibleNames, installedAnsibleVersions) ===
-        "upgrade_available"
-      ) {
+      if (branchResyncNeeded(ownedAnsibleVersion(coll, "collection"), coll.version)) {
         selection.localCollections!.push(coll.name)
       }
     }
@@ -416,13 +545,10 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
     roles,
     collections,
     sid,
-    installedBlueprintIds,
     installedBlueprintVersions,
-    templatePresence,
     ludusTemplates,
     installedTemplateVersions,
-    installedAnsibleNames,
-    installedAnsibleVersions,
+    ownedAnsibleVersion,
   ])
 
   const outdatedCount =
@@ -453,13 +579,8 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
   }
 
   return (
-    <div className="mt-3 space-y-4 border-t border-border pt-3">
-      <p className="text-[11px] text-muted-foreground">
-        <span className="font-medium text-foreground">Sync</span> refreshes the git catalog only.{" "}
-        <span className="font-medium text-foreground">Re-sync</span> overwrites only the selected
-        item(s) from the catalog (blueprint re-sync skips ansible deps — re-sync roles separately).
-      </p>
-      {outdatedCount > 0 && (
+    <div className="mt-3 space-y-3 border-t border-border pt-3">
+      {outdatedCount > 0 && !readOnly && (
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -476,48 +597,27 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
           </Button>
         </div>
       )}
-      {catalogRef && (
-        <p className="text-xs text-muted-foreground">
-          Git catalog ref:{" "}
-          <code className="font-mono text-foreground">{catalogRef}</code>
-          {catalogFromGit ? " (tree read from this branch/tag — Ludus sync cache empty for some categories)" : null}
-        </p>
-      )}
-      {catalogFromGit && (
-        <p className="text-xs text-muted-foreground rounded border border-border bg-muted/30 px-3 py-2">
-          Install from the{" "}
-          <Link href="/blueprints" className="text-primary underline underline-offset-2">
-            Blueprints
-          </Link>
-          ,{" "}
-          <Link href="/templates" className="text-primary underline underline-offset-2">
-            Templates
-          </Link>
-          , and{" "}
-          <Link href="/ansible" className="text-primary underline underline-offset-2">
-            Ansible
-          </Link>{" "}
-          pages.
-        </p>
-      )}
-      <div className="grid md:grid-cols-2 gap-4">
-        <div>
-          <CatalogSectionHeader
-            icon={Package}
-            title="Blueprints"
-            count={blueprints.length}
-            loading={bpLoading}
-            href="/blueprints"
-            manageLabel="Manage blueprints"
-          />
-          {bpLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          ) : blueprints.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No blueprints synced yet — try Sync above.</p>
-          ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+      <div className="grid md:grid-cols-2 gap-3">
+        <CatalogPanel
+          header={
+            <CatalogSectionHeader
+              icon={Package}
+              title="Blueprints"
+              count={blueprints.length}
+              loading={bpLoading}
+              href="/blueprints"
+              manageLabel="Blueprints"
+            />
+          }
+          loading={bpLoading}
+          empty="No blueprints in this source."
+          count={blueprints.length}
+          expanded={listOpen("bp")}
+          onToggle={() => toggleList("bp")}
+        >
               {[...blueprints]
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                .slice(0, listOpen("bp") ? undefined : CATALOG_PREVIEW)
                 .map((bp) => {
                   const name = bp.name || bp.sourceBlueprintID || ""
                   const key = sourceBlueprintInstallId(bp, sid)
@@ -528,52 +628,47 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                     installedBlueprintVersions,
                   )
                   const installed = state !== "not_installed"
-                  const upgrade = state === "upgrade_available"
                   const installedVer = lookupInstalledBlueprintVersion(
                     bp,
                     sid,
                     installedBlueprintVersions,
                   )
-                  const transition = formatVersionTransition(installedVer, bp.version)
+                  const resync = branchResyncNeeded(installedVer, bp.version)
+                  const versionLabel = resync
+                    ? formatVersionTransition(installedVer, bp.version)
+                    : normalizeCatalogVersion(installed && installedVer ? installedVer : bp.version)
                   const resyncKey = `bp:${name}`
                   return (
-                    <div
-                      key={key}
-                      className="flex items-start gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
-                    >
+                      <div
+                        key={key}
+                        className="flex items-start gap-2 px-3 py-2 hover:bg-muted/40"
+                      >
                       <div className="min-w-0 flex-1">
-                        <code className="text-xs font-mono text-primary">{name}</code>
+                        <code className="text-sm font-mono text-primary">{name}</code>
                         {bp.description && (
-                          <p className="text-[10px] text-muted-foreground line-clamp-2">{bp.description}</p>
-                        )}
-                        {bp.min_ludus_version && (
-                          <Badge variant="outline" className="text-[10px] mt-0.5">
-                            Ludus {bp.min_ludus_version}+
-                          </Badge>
+                          <p className="text-xs text-muted-foreground line-clamp-1">{bp.description}</p>
                         )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        {transition && (
-                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
-                            {transition}
+                        {versionLabel && (
+                          <span
+                            className="text-xs text-muted-foreground font-mono"
+                            title={resync ? "Installed from this branch, then this branch's catalog" : "This branch"}
+                          >
+                            {versionLabel}
                           </span>
                         )}
-                        {upgrade ? (
-                          <Badge variant="warning" className="text-[10px]">Update available</Badge>
-                        ) : (
-                          <Badge
-                            variant={installed ? "success" : "outline"}
-                            className="text-[10px]"
-                          >
-                            {installed ? "Installed" : "Not installed"}
-                          </Badge>
-                        )}
+                        {resync ? (
+                          <Badge variant="warning" className="text-xs">Update</Badge>
+                        ) : installed ? (
+                          <Badge variant="success" className="text-xs">Installed</Badge>
+                        ) : null}
                         {installed && (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-6 px-2 text-[10px]"
+                            className={cn("h-6 px-2 text-xs", readOnly && "hidden")}
                             disabled={resyncingKey === resyncKey || bulkResyncing}
                             title="Overwrite installed blueprint from source catalog"
                             onClick={() => void handleResync(resyncKey, { blueprints: [name] })}
@@ -590,26 +685,27 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                     </div>
                   )
                 })}
-            </div>
-          )}
-        </div>
-        <div>
-          <CatalogSectionHeader
-            icon={BookTemplate}
-            title="Templates"
-            count={templates.length}
-            loading={tplLoading}
-            href="/templates"
-            manageLabel="Manage templates"
-          />
-          {tplLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          ) : templates.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No templates synced yet — try Sync above.</p>
-          ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+        </CatalogPanel>
+        <CatalogPanel
+          header={
+            <CatalogSectionHeader
+              icon={BookTemplate}
+              title="Templates"
+              count={templates.length}
+              loading={tplLoading}
+              href="/templates"
+              manageLabel="Templates"
+            />
+          }
+          loading={tplLoading}
+          empty="No templates in this source."
+          count={templates.length}
+          expanded={listOpen("tpl")}
+          onToggle={() => toggleList("tpl")}
+        >
               {[...templates]
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                .slice(0, listOpen("tpl") ? undefined : CATALOG_PREVIEW)
                 .map((tpl) => {
                   const name = tpl.name || ""
                   const presence = getCatalogTemplatePresence(name, templatePresence)
@@ -623,29 +719,33 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                     presence !== "none",
                     installedVer,
                   )
-                  const upgrade = state === "upgrade_available"
-                  const transition = formatVersionTransition(installedVer, tpl.version)
+                  const resync = branchResyncNeeded(installedVer, tpl.version)
+                  const versionLabel = resync
+                    ? formatVersionTransition(installedVer, tpl.version)
+                    : normalizeCatalogVersion(
+                        state !== "not_installed" && installedVer ? installedVer : tpl.version,
+                      )
                   const resyncKey = `tpl:${name}`
                   return (
                     <div
                       key={name}
-                      className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-muted/40"
                     >
-                      <code className="text-xs font-mono text-primary truncate">{name}</code>
+                      <code className="text-sm font-mono text-primary truncate">{name}</code>
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                        {transition && (
-                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
-                            {transition}
+                        {versionLabel && (
+                          <span className="text-xs text-muted-foreground font-mono" title="This branch">
+                            {versionLabel}
                           </span>
                         )}
-                        {upgrade ? (
+                        {resync ? (
                           <>
-                            <Badge variant="warning" className="text-[10px]">Update available</Badge>
+                            <Badge variant="warning" className="text-xs">Update</Badge>
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
-                              className="h-6 px-2 text-[10px]"
+                              className={cn("h-6 px-2 text-xs", readOnly && "hidden")}
                               disabled={resyncingKey === resyncKey || bulkResyncing}
                               onClick={() => void handleResync(resyncKey, { templates: [name] })}
                             >
@@ -658,15 +758,15 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                             </Button>
                           </>
                         ) : presence === "built" ? (
-                          <Badge variant="success" className="text-[10px]">Built</Badge>
+                          <Badge variant="success" className="text-xs">Built</Badge>
                         ) : presence === "added" ? (
                           <>
-                            <Badge variant="warning" className="text-[10px]">Added</Badge>
+                            <Badge variant="warning" className="text-xs">Added</Badge>
                             <Button
                               type="button"
                               size="sm"
                               variant="outline"
-                              className="h-6 px-2 text-[10px]"
+                              className={cn("h-6 px-2 text-xs", readOnly && "hidden")}
                               disabled={resyncingKey === resyncKey || bulkResyncing}
                               onClick={() => void handleResync(resyncKey, { templates: [name] })}
                             >
@@ -678,85 +778,88 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                               Re-sync
                             </Button>
                           </>
-                        ) : (
-                          <Badge variant="outline" className="text-[10px]">Not added</Badge>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   )
                 })}
-            </div>
-          )}
-        </div>
-        <div>
-          <CatalogSectionHeader
-            icon={Zap}
-            title="Ansible Roles"
-            count={roles.length}
-            loading={roleLoading}
-            href="/ansible"
-            manageLabel="Manage ansible"
-          />
-          {roleLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          ) : roles.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No roles in this source catalog.</p>
-          ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+        </CatalogPanel>
+        <CatalogPanel
+          header={
+            <CatalogSectionHeader
+              icon={Zap}
+              title="Ansible roles"
+              count={roles.length}
+              loading={roleLoading}
+              href="/ansible"
+              manageLabel="Ansible"
+            />
+          }
+          loading={roleLoading}
+          empty="No roles in this source."
+          count={roles.length}
+          expanded={listOpen("roles")}
+          onToggle={() => toggleList("roles")}
+        >
               {[...roles]
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                .slice(0, listOpen("roles") ? undefined : CATALOG_PREVIEW)
                 .map((role) => {
                   const name = role.name || ""
-                  const state = sourceCatalogAnsibleInstallState(
-                    role,
-                    installedAnsibleNames,
-                    installedAnsibleVersions,
-                  )
-                  const installed = state !== "not_installed"
-                  const upgrade = state === "upgrade_available"
-                  const installedVer = lookupInstalledAnsibleVersion(
-                    role.fqcn || name,
-                    installedAnsibleVersions,
-                  )
-                  const transition = formatVersionTransition(installedVer, role.version)
+                  const view = ansibleBranchView(role, "role")
+                  const ownedVer = view.installedVersion
+                  const fromRef = view.otherRef
+                  const installed = view.installedHere
+                  const catalogAhead = view.catalogAhead
                   const resyncKey = `role:${name}`
                   return (
                     <div
                       key={name}
-                      className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
+                      className="flex items-start gap-2 px-3 py-2 hover:bg-muted/40"
                     >
-                      <code className="text-xs font-mono text-primary truncate">{name}</code>
-                      {role.scope && (
-                        <Badge variant="outline" className="text-[10px] capitalize shrink-0">
-                          {role.scope}
-                        </Badge>
-                      )}
-                      <div className="flex items-center gap-1 ml-auto shrink-0">
-                        {transition && (
-                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
-                            {transition}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm font-mono text-primary truncate">{name}</code>
+                          {role.scope && role.scope !== "local" && (
+                            <Badge variant="outline" className="text-xs capitalize shrink-0">
+                              {role.scope}
+                            </Badge>
+                          )}
+                        </div>
+                        <CatalogVersionNote
+                          installed={ownedVer}
+                          catalog={role.version}
+                          fromRef={fromRef}
+                          catalogAhead={catalogAhead}
+                        />
+                        {installed && (
+                          <span className="text-xs font-mono text-muted-foreground">
+                            {normalizeCatalogVersion(ownedVer || role.version)}
                           </span>
                         )}
-                        {upgrade ? (
-                          <Badge variant="warning" className="text-[10px]" title={transition || undefined}>
-                            Update available
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {catalogAhead ? (
+                          <Badge variant="warning" className="text-xs">
+                            Update
                           </Badge>
-                        ) : (
-                          <Badge
-                            variant={installed ? "success" : "outline"}
-                            className="text-[10px]"
-                          >
-                            {installed ? "Installed" : "Not installed"}
-                          </Badge>
-                        )}
-                        {installed && role.scope !== "subscription" && (
+                        ) : fromRef ? (
+                          <Badge variant="outline" className="text-xs">Other branch</Badge>
+                        ) : installed ? (
+                          <Badge variant="success" className="text-xs">Installed</Badge>
+                        ) : null}
+                        {view.showResync && role.scope !== "subscription" && (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-6 px-2 text-[10px]"
+                            className={cn("h-6 px-2 text-xs", readOnly && "hidden")}
                             disabled={resyncingKey === resyncKey || bulkResyncing}
-                            title="Overwrite installed role from source catalog"
+                            title={
+                              fromRef
+                                ? "Replace the installed copy with this branch"
+                                : "Overwrite the installed copy from this branch"
+                            }
                             onClick={() => void handleResync(resyncKey, { localRoles: [name] })}
                           >
                             {resyncingKey === resyncKey ? (
@@ -771,78 +874,83 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                     </div>
                   )
                 })}
-            </div>
-          )}
-        </div>
-        <div>
-          <CatalogSectionHeader
-            icon={BookOpen}
-            title="Ansible Collections"
-            count={collections.length}
-            loading={collLoading}
-            href="/ansible"
-            manageLabel="Manage ansible"
-          />
-          {collLoading ? (
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          ) : collections.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No collections in this source catalog.</p>
-          ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto">
+        </CatalogPanel>
+        <CatalogPanel
+          header={
+            <CatalogSectionHeader
+              icon={BookOpen}
+              title="Ansible collections"
+              count={collections.length}
+              loading={collLoading}
+              href="/ansible"
+              manageLabel="Ansible"
+            />
+          }
+          loading={collLoading}
+          empty="No collections in this source."
+          count={collections.length}
+          expanded={listOpen("coll")}
+          onToggle={() => toggleList("coll")}
+        >
               {[...collections]
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+                .slice(0, listOpen("coll") ? undefined : CATALOG_PREVIEW)
                 .map((coll) => {
                   const name = coll.name || ""
-                  const state = sourceCatalogAnsibleInstallState(
-                    coll,
-                    installedAnsibleNames,
-                    installedAnsibleVersions,
-                  )
-                  const installed = state !== "not_installed"
-                  const upgrade = state === "upgrade_available"
-                  const installedVer = lookupInstalledAnsibleVersion(
-                    coll.fqcn || name,
-                    installedAnsibleVersions,
-                  )
-                  const transition = formatVersionTransition(installedVer, coll.version)
+                  const view = ansibleBranchView(coll, "collection")
+                  const ownedVer = view.installedVersion
+                  const fromRef = view.otherRef
+                  const installed = view.installedHere
+                  const catalogAhead = view.catalogAhead
                   const resyncKey = `coll:${name}`
                   return (
                     <div
                       key={name}
-                      className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-muted/50"
+                      className="flex items-start gap-2 px-3 py-2 hover:bg-muted/40"
                     >
-                      <code className="text-xs font-mono text-primary truncate">{name}</code>
-                      {coll.scope && (
-                        <Badge variant="outline" className="text-[10px] capitalize shrink-0">
-                          {coll.scope}
-                        </Badge>
-                      )}
-                      <div className="flex items-center gap-1 ml-auto shrink-0">
-                        {transition && (
-                          <span className="text-[10px] text-muted-foreground font-mono" title="installed → catalog">
-                            {transition}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <code className="text-sm font-mono text-primary truncate">{name}</code>
+                          {coll.scope && coll.scope !== "local" && (
+                            <Badge variant="outline" className="text-xs capitalize shrink-0">
+                              {coll.scope}
+                            </Badge>
+                          )}
+                        </div>
+                        <CatalogVersionNote
+                          installed={ownedVer}
+                          catalog={coll.version}
+                          fromRef={fromRef}
+                          catalogAhead={catalogAhead}
+                        />
+                        {installed && (
+                          <span className="text-xs font-mono text-muted-foreground">
+                            {normalizeCatalogVersion(ownedVer || coll.version)}
                           </span>
                         )}
-                        {upgrade ? (
-                          <Badge variant="warning" className="text-[10px]" title={transition || undefined}>
-                            Update available
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {catalogAhead ? (
+                          <Badge variant="warning" className="text-xs">
+                            Update
                           </Badge>
-                        ) : (
-                          <Badge
-                            variant={installed ? "success" : "outline"}
-                            className="text-[10px]"
-                          >
-                            {installed ? "Installed" : "Not installed"}
-                          </Badge>
-                        )}
-                        {installed && coll.scope !== "subscription" && (
+                        ) : fromRef ? (
+                          <Badge variant="outline" className="text-xs">Other branch</Badge>
+                        ) : installed ? (
+                          <Badge variant="success" className="text-xs">Installed</Badge>
+                        ) : null}
+                        {view.showResync && coll.scope !== "subscription" && (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-6 px-2 text-[10px]"
+                            className={cn("h-6 px-2 text-xs", readOnly && "hidden")}
                             disabled={resyncingKey === resyncKey || bulkResyncing}
-                            title="Overwrite installed collection from source catalog"
+                            title={
+                              fromRef
+                                ? "Replace the installed copy with this branch"
+                                : "Overwrite the installed copy from this branch"
+                            }
                             onClick={() =>
                               void handleResync(resyncKey, { localCollections: [name] })
                             }
@@ -859,9 +967,7 @@ function SourceDetailPanel({ source }: { source: LudusSource }) {
                     </div>
                   )
                 })}
-            </div>
-          )}
-        </div>
+        </CatalogPanel>
       </div>
     </div>
   )
@@ -871,6 +977,11 @@ export function SourcesPageClient() {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
+  const session = useResolvedSession()
+  const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
+  const publishInFlight = useRef(new Set<string>())
+  const publishClickLock = useRef(false)
+  const [publishOverride, setPublishOverride] = useState<Record<string, boolean>>({})
   const [addOpen, setAddOpen] = useState(false)
   const [newUrl, setNewUrl] = useState("https://github.com/badsectorlabs/ludus-source-bsl")
   const [newRef, setNewRef] = useState("main")
@@ -882,6 +993,7 @@ export function SourcesPageClient() {
   const [purgeOnDelete, setPurgeOnDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [publishingId, setPublishingId] = useState<string | null>(null)
   const [refTarget, setRefTarget] = useState<LudusSource | null>(null)
   const [editRef, setEditRef] = useState("")
   const [updatingRef, setUpdatingRef] = useState(false)
@@ -959,7 +1071,7 @@ export function SourcesPageClient() {
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
-      toast({ title: "Source registered", description: json.sourceID || newUrl })
+      toast({ title: "Source registered", description: (json.name as string) || newUrl.trim() })
       setAddOpen(false)
       setIdTouched(false)
       setNewId("")
@@ -971,6 +1083,63 @@ export function SourcesPageClient() {
     }
   }
 
+  const shownPublished = (source: LudusSource) => {
+    const sid = sourceId(source)
+    if (sid in publishOverride) return publishOverride[sid] === true
+    return source.published === true
+  }
+
+  useEffect(() => {
+    const list = data?.sources ?? []
+    setPublishOverride((prev) => {
+      const next = { ...prev }
+      let changed = false
+      for (const source of list) {
+        const sid = sourceId(source)
+        if (!(sid in next)) continue
+        if (next[sid] === (source.published === true)) {
+          delete next[sid]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data?.sources])
+
+  const handlePublish = async (source: LudusSource, published: boolean) => {
+    const sid = sourceId(source)
+    if (publishInFlight.current.has(sid)) return
+    publishInFlight.current.add(sid)
+    setPublishOverride((prev) => ({ ...prev, [sid]: published }))
+    setPublishingId(sid)
+    try {
+      const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ published }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
+      const warnings = Array.isArray(json.warnings) ? json.warnings.filter(Boolean) : []
+      toast({
+        title: published ? "Source available to all users" : "Source is only yours",
+        description: warnings.length > 0 ? warnings.slice(0, 2).join(" · ") : source.name || sid,
+        variant: warnings.length > 0 ? "destructive" : "default",
+      })
+      invalidateSources()
+    } catch (err) {
+      setPublishOverride((prev) => {
+        const next = { ...prev }
+        delete next[sid]
+        return next
+      })
+      toast({ variant: "destructive", title: "Could not update source", description: (err as Error).message })
+    } finally {
+      publishInFlight.current.delete(sid)
+      setPublishingId(null)
+    }
+  }
+
   const handleSync = async (source: LudusSource) => {
     const sid = sourceId(source)
     setSyncingId(sid)
@@ -978,7 +1147,7 @@ export function SourcesPageClient() {
       const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force: true, globalRoles: true }),
+        body: JSON.stringify({ force: true }),
       })
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`)
@@ -1085,16 +1254,14 @@ export function SourcesPageClient() {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <p className="text-sm text-muted-foreground">
-          Register git repositories as Ludus Sources to sync blueprints, templates, and bundled Ansible content.
-          LUX auto-syncs git sources about every 5 minutes (and on catalog view when stale) so tip versions stay current — Sync is still available for an immediate pull.
-          On Ludus 2.3.0+, source IDs may be auto-prefixed with your userID.{" "}
+          A source you register is only yours. Admins can share a source so other users do not register it again.{" "}
           <a
             href={LUDUS_SOURCES_DOCS_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline inline-flex items-center gap-0.5"
           >
-            Documentation
+            Docs
             <ExternalLink className="h-3 w-3" />
           </a>
         </p>
@@ -1127,7 +1294,9 @@ export function SourcesPageClient() {
         <div className="space-y-3">
           {sources.map((source) => {
             const sid = sourceId(source)
+            const owner = sourceOwnerLabel(source)
             const isExpanded = expanded === sid
+            const shared = source.sharedCatalog === true
             return (
               <Card key={sid}>
                 <CardHeader className="p-0">
@@ -1146,32 +1315,81 @@ export function SourcesPageClient() {
                         <CardTitle className="text-sm font-semibold leading-tight">
                           {source.name || sid}
                         </CardTitle>
-                        {sid && (
-                          <p className="text-[10px] font-mono text-muted-foreground truncate mt-0.5">
-                            ID: {sid}
+                        <p className="mt-1 flex items-center gap-1.5 text-sm text-foreground">
+                          <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="font-mono font-medium">{source.ref?.trim() || "main"}</span>
+                        </p>
+                        {owner && (
+                          <p className="text-xs text-muted-foreground truncate mt-0.5">
+                            Owner: <code className="font-mono">{owner}</code>
                           </p>
                         )}
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          {shownPublished(source) && (
+                            <Badge variant="secondary" className="text-xs">All users</Badge>
+                          )}
+                          {shared && (
+                            <span className="text-xs text-muted-foreground">Shared catalog. You do not register this source.</span>
+                          )}
+                        </div>
                         {source.url && (
                           <p className="text-xs text-muted-foreground truncate">{source.url}</p>
                         )}
                         <div className="flex flex-wrap items-center gap-2 mt-1">
-                          {source.ref && (
-                            <Badge variant="secondary" className="text-[10px]">{source.ref}</Badge>
-                          )}
                           {source.lastSyncStatus && (
                             <Badge
                               variant={source.lastSyncStatus === "ok" ? "success" : "warning"}
-                              className="text-[10px]"
+                              className="text-xs"
                             >
                               sync: {source.lastSyncStatus}
                             </Badge>
                           )}
                         </div>
                         {source.lastSyncError && (
-                          <p className="text-[10px] text-status-error mt-1">{source.lastSyncError}</p>
+                          <p className="text-xs text-status-error mt-1">{source.lastSyncError}</p>
                         )}
                       </div>
                     </button>
+                    {session?.isAdmin && !shared && (
+                      <div
+                        className="flex flex-col items-end gap-1 shrink-0"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                          <Switch
+                            id={`source-publish-${sid}`}
+                            checked={shownPublished(source)}
+                            disabled={publishingId === sid}
+                            onCheckedChange={(checked) => {
+                              if (publishClickLock.current || publishInFlight.current.has(sid)) return
+                              if (checked === shownPublished(source)) return
+                              publishClickLock.current = true
+                              window.setTimeout(() => {
+                                publishClickLock.current = false
+                              }, 300)
+                              if (!checked) {
+                                confirm(
+                                  "Stop sharing this source and remove blueprints, templates, roles, and collections installed from it? Copies stay.",
+                                  () => void handlePublish(source, false),
+                                  `publish:${sid}`,
+                                )
+                                return
+                              }
+                              void handlePublish(source, true)
+                            }}
+                          />
+                          <span>Available to all users</span>
+                        </div>
+                        <ConfirmBar
+                          pending={pendingAction}
+                          scope={`publish:${sid}`}
+                          onConfirm={commitConfirm}
+                          onCancel={cancelConfirm}
+                        />
+                      </div>
+                    )}
+                    {!shared && (
                     <div className="flex items-center gap-1 shrink-0 self-center">
                       <Button
                         size="icon-sm"
@@ -1210,11 +1428,12 @@ export function SourcesPageClient() {
                         <Trash2 className="h-3.5 w-3.5 text-status-error" />
                       </Button>
                     </div>
+                    )}
                   </div>
                 </CardHeader>
                 {isExpanded && (
                   <CardContent className="pt-0">
-                    <SourceDetailPanel source={source} />
+                    <SourceDetailPanel source={source} sources={sources} readOnly={shared} />
                   </CardContent>
                 )}
               </Card>
@@ -1238,8 +1457,7 @@ export function SourcesPageClient() {
             <DialogTitle>Register Git Source</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">
-            Same repo + different branch needs a distinct source ID (ref is appended for non-main).
-            Ludus 2.3.0+ may also prefix with your userID.
+            Ludus records you as the owner. Use a custom id only when this repo is already registered on another branch.
           </p>
           <div className="space-y-3">
             <div>
@@ -1271,7 +1489,7 @@ export function SourcesPageClient() {
                 }}
                 placeholder={suggestedId}
               />
-              <p className="text-[10px] text-muted-foreground mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 e.g. register <code className="text-primary">elastic</code> →{" "}
                 <code className="text-primary">…-meow-elastic</code> so it does not replace{" "}
                 <code className="text-primary">main</code>.
@@ -1303,7 +1521,7 @@ export function SourcesPageClient() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Pick a branch/tag for{" "}
-            <code className="text-primary">{refTarget ? sourceId(refTarget) : ""}</code>.
+            <span className="text-foreground">{refTarget?.name || "this source"}</span>.
             Ludus clones are single-branch — LUX re-registers (no purge) for the new ref.
           </p>
 
@@ -1354,7 +1572,7 @@ export function SourcesPageClient() {
                           <span className="font-mono text-xs truncate">{branch.name}</span>
                           <span className="flex items-center gap-1 shrink-0">
                             {current && (
-                              <Badge variant="secondary" className="text-[10px]">
+                              <Badge variant="secondary" className="text-xs">
                                 current
                               </Badge>
                             )}
@@ -1436,7 +1654,7 @@ export function SourcesPageClient() {
             <DialogTitle>Delete source</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Remove <code className="text-primary">{deleteTarget ? sourceId(deleteTarget) : ""}</code> from Ludus?
+            Remove <span className="text-foreground">{deleteTarget?.name || "this source"}</span> from Ludus?
           </p>
           <label className="flex items-start gap-2 cursor-pointer">
             <Checkbox checked={purgeOnDelete} onCheckedChange={(v) => setPurgeOnDelete(v === true)} />

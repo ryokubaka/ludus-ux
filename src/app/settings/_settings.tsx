@@ -11,6 +11,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   CheckCircle2,
   XCircle,
   Loader2,
@@ -37,11 +45,13 @@ import {
   ShieldAlert,
   OctagonAlert,
   Zap,
+  Copy,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { LuxReleasesPanel } from "@/components/settings/lux-releases-panel"
 import { cn } from "@/lib/utils"
 import { statusBadge } from "@/lib/status-colors"
 import { useResolvedSession } from "@/hooks/use-resolved-session"
@@ -49,6 +59,8 @@ import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
+import { luxHostManualInstallCommand } from "@/lib/lux-host-manual-command"
+import { canSubmitLuxHostInstall } from "@/lib/root-ssh-preflight"
 import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus-version"
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -542,11 +554,11 @@ function DependenciesList() {
 
 // ── About tab ─────────────────────────────────────────────────────────────
 
-function AboutTab() {
+function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   const [logoKey] = useState(0)
   const [depsCount, setDepsCount] = useState<number | null>(null)
   const [changelogCount, setChangelogCount] = useState<number | null>(null)
-  const [notesOpen, setNotesOpen] = useState(true)
+  const [notesOpen, setNotesOpen] = useState(false)
   const [depsOpen, setDepsOpen] = useState(false)
 
   useEffect(() => {
@@ -568,24 +580,23 @@ function AboutTab() {
   }, [])
 
   return (
-    <div className="space-y-6">
-      {/* App identity */}
-      <div className="flex flex-col items-center py-8 gap-4">
-        <div className="h-20 w-20 rounded-xl overflow-hidden border border-border/50 shadow-sm">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
+        <div className="h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-border/50">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={`/api/logo?v=${logoKey}`} alt="LUX Logo" className="h-full w-full object-contain" />
         </div>
-        <div className="text-center space-y-1">
-          <h2 className="text-lg font-semibold">Ludus UX (LUX)</h2>
-          <p className="text-sm text-muted-foreground">Cyber Range Manager</p>
-          <div className="flex items-center justify-center gap-2 pt-1">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-semibold">Ludus UX</h2>
             <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
             {APP_VERSION_LABEL ? (
               <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
             ) : null}
           </div>
+          <p className="text-xs text-muted-foreground mt-0.5">Cyber range manager</p>
         </div>
-        <div className="flex items-center gap-4 text-xs text-muted-foreground/70">
+        <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
           <a
             href="https://github.com/ryokubaka/ludus-ux"
             target="_blank"
@@ -594,22 +605,25 @@ function AboutTab() {
           >
             GitHub
           </a>
-          <span>·</span>
+          <span className="text-border">·</span>
           <span>Apache 2.0</span>
-          <span>·</span>
+          <span className="text-border">·</span>
           <a
             href="https://docs.ludus.cloud"
             target="_blank"
             rel="noopener noreferrer"
             className="hover:text-primary transition-colors"
           >
-            Ludus Docs
+            Ludus docs
           </a>
         </div>
       </div>
 
+      <LuxReleasesPanel isAdmin={isAdmin} />
+
+      <div className="grid gap-4 lg:grid-cols-2">
       {/* Release notes */}
-      <div className="rounded-lg border border-border bg-card">
+      <div className={cn("rounded-lg border border-border bg-card", notesOpen && "lg:col-span-2")}>
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
@@ -634,7 +648,7 @@ function AboutTab() {
       </div>
 
       {/* Dependencies */}
-      <div className="rounded-lg border border-border bg-card">
+      <div className={cn("rounded-lg border border-border bg-card", depsOpen && "lg:col-span-2")}>
         <button
           type="button"
           className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
@@ -657,13 +671,14 @@ function AboutTab() {
           </div>
         )}
       </div>
+      </div>
     </div>
   )
 }
 
 // ── Main settings page ─────────────────────────────────────────────────────
 
-function SettingsContent() {
+function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -691,10 +706,24 @@ function SettingsContent() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; version?: string } | null>(null)
   const [credentialTesting, setCredentialTesting] = useState(false)
+  const [luxHostDialogOpen, setLuxHostDialogOpen] = useState(false)
+  const [installingLuxHost, setInstallingLuxHost] = useState(false)
+  const [luxHostRootPassword, setLuxHostRootPassword] = useState("")
+  const [luxHostMode, setLuxHostMode] = useState<"shell" | "ssh">("shell")
+  const luxHostManual = useMemo(() => {
+    const user = draft?.proxmoxSshUser?.trim() ?? ""
+    try {
+      return { command: luxHostManualInstallCommand(user, luxHostScript), error: "" }
+    } catch (e) {
+      return { command: "", error: e instanceof Error ? e.message : "Enter a plain Linux username." }
+    }
+  }, [draft?.proxmoxSshUser, luxHostScript])
   const [credentialTestResult, setCredentialTestResult] = useState<{
     rootSsh: {
       ok: boolean; host: string; port: number; user: string
       authAttempted: string; privateKeyPath: string | null; detail?: string
+      uid?: number | null; remoteUser?: string | null; privileged?: boolean
+      sudo?: boolean | null; sudoAll?: boolean | null; packerDir?: string; packerWritable?: boolean | null
     }
     adminApi: { ok: boolean; baseUrl: string; detail?: string; hint?: string }
     keyProbe?: {
@@ -827,6 +856,45 @@ function SettingsContent() {
     }
   }
 
+  const handleInstallLuxHost = async () => {
+    if (!draft || !session?.isAdmin) return
+    setInstallingLuxHost(true)
+    try {
+      const res = await fetch("/api/settings/install-lux-host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sshHost: draft.sshHost,
+          sshPort: draft.sshPort,
+          proxmoxSshUser: draft.proxmoxSshUser,
+          proxmoxSshPassword: draft.proxmoxSshPassword,
+          rootPassword: luxHostRootPassword,
+        }),
+      })
+      const data = await res.json().catch(() => null) as { error?: string; message?: string } | null
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title: "lux-host install failed",
+          description: data?.error || res.statusText,
+        })
+        return
+      }
+      setLuxHostDialogOpen(false)
+      setLuxHostRootPassword("")
+      toast({ title: "lux-host installed", description: data?.message || "Passwordless sudo is limited to lux-host." })
+      await handleTestCredentials()
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "lux-host install failed",
+        description: e instanceof Error ? e.message : "Network error",
+      })
+    } finally {
+      setInstallingLuxHost(false)
+    }
+  }
+
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -856,6 +924,16 @@ function SettingsContent() {
       toast({ variant: "destructive", title: "Delete failed" })
     }
     setLogoDeleting(false)
+  }
+
+  const handleCopyLuxHostManual = async () => {
+    if (!luxHostManual.command) return
+    try {
+      await navigator.clipboard.writeText(luxHostManual.command)
+      toast({ title: "Copied", description: "Paste it into a root shell on the Ludus host and run it." })
+    } catch {
+      toast({ variant: "destructive", title: "Copy failed" })
+    }
   }
 
   if (loading) {
@@ -944,8 +1022,7 @@ function SettingsContent() {
                 </Label>
                 <Input id="admin-url" value={draft?.ludusAdminUrl || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludusAdminUrl: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="https://your-ludus-host:8081" />
                 <p className="text-xs text-muted-foreground">
-                  User/group admin calls use Ludus port <strong>8081</strong>. Use{" "}
-                  <code className="text-primary">https://127.0.0.1:18081</code> only when relying on the optional SSH tunnel.
+                  Port 8081. Use 127.0.0.1:18081 only with the SSH tunnel.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -962,10 +1039,7 @@ function SettingsContent() {
                   <Alert variant="default" className="mt-2 border-status-warning/40 bg-status-warning/10">
                     <Info className="h-4 w-4 text-status-warning" />
                     <AlertDescription className="text-xs text-amber-100/90">
-                      <strong>LUDUS_ROOT_API_KEY</strong> is set in the container environment, so that value is used for
-                      admin API calls and overrides anything saved in SQLite. If admin actions return 401, fix or remove
-                      the env entry in Docker Compose / <code className="text-primary">.env</code> so it matches the
-                      Ludus root key file above.
+                      The environment value overrides this field. A 401 means that value does not match the server key.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -997,18 +1071,14 @@ function SettingsContent() {
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">GOAD Integration</p>
-                  <p className="text-xs text-muted-foreground">
-                    Show or hide GOAD in the sidebar. Set <code className="text-primary">ENABLE_GOAD=false</code> in <code className="text-primary">.env</code> to disable permanently.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Show GOAD in the sidebar.</p>
                 </div>
                 <Switch checked={draft?.goadEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, goadEnabled: v } : d)} disabled={!session?.isAdmin} />
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
                   <p className="text-sm font-medium">LudusHound Integration</p>
-                  <p className="text-xs text-muted-foreground">
-                    Show or hide LudusHound in the sidebar. Set <code className="text-primary">ENABLE_LUDUSHOUND=false</code> in <code className="text-primary">.env</code> to disable permanently.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Show LudusHound in the sidebar.</p>
                 </div>
                 <Switch checked={draft?.ludushoundEnabled ?? true} onCheckedChange={(v) => setDraft((d) => d ? { ...d, ludushoundEnabled: v } : d)} disabled={!session?.isAdmin} />
               </div>
@@ -1016,13 +1086,9 @@ function SettingsContent() {
                 <div>
                   <p className="text-sm font-medium">Ludus Ansible verbose</p>
                   <p className="text-xs text-muted-foreground">
-                    Pass <code className="text-primary">--verbose-ansible</code> / API <code className="text-primary">verbose</code> on range deploy.
-                    Default on. Set <code className="text-primary">LUDUS_ANSIBLE_VERBOSE=false</code> in <code className="text-primary">.env</code> to default off.
+                    Verbose Ansible on deploy.
                     {showVerboseForceQuirk && (
-                      <>
-                        {" "}Stock Ludus ≤2.2.3 may ignore this when <code className="text-primary">force</code> is set (upstream bug
-                        {ludusVersion ? <> — connected: <code className="text-primary">{ludusVersion}</code></> : null}).
-                      </>
+                      <> Ludus ≤2.2.3 may ignore this when force is set{ludusVersion ? ` (${ludusVersion})` : ""}.</>
                     )}
                   </p>
                 </div>
@@ -1075,10 +1141,10 @@ function SettingsContent() {
               </div>
 
               <div className="border-t border-border pt-4 space-y-3">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Root SSH Credentials</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host SSH Credentials</p>
                 <p className="text-xs text-muted-foreground">
-                  Used for privileged admin operations: pvesh over SSH, user password changes, and API key updates.
-                  GOAD runs as each user&apos;s own SSH session — root creds here are not used for normal GOAD.
+                  Root, or an account that can run lux-host. The button below installs that rule.
+                  GOAD runs as each user&apos;s own SSH session — these host credentials are not used for normal GOAD.
                 </p>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="space-y-1.5">
@@ -1087,6 +1153,11 @@ function SettingsContent() {
                       <span className="ml-2 text-xs text-muted-foreground font-normal">PROXMOX_SSH_USER</span>
                     </Label>
                     <Input id="ssh-user" value={draft?.proxmoxSshUser || ""} onChange={(e) => setDraft((d) => d ? { ...d, proxmoxSshUser: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="root" />
+                    {draft?.proxmoxSshUser?.trim() && draft.proxmoxSshUser.trim() !== "root" && (
+                      <p className="text-xs text-muted-foreground">
+                        {draft.proxmoxSshUser.trim()} is not root. Host writes use <code className="text-primary">sudo -n /usr/local/sbin/lux-host</code>. That rule does not allow every sudo command. Install it here, then run the test.
+                      </p>
+                    )}
                   </div>
                   <div className="col-span-2 space-y-1.5">
                     <Label htmlFor="ssh-password">
@@ -1114,12 +1185,20 @@ function SettingsContent() {
                 </div>
                 {session?.isAdmin && (
                   <div className="space-y-3">
-                    <Button type="button" size="sm" variant="secondary" onClick={handleTestCredentials} disabled={credentialTesting} className="gap-2">
-                      {credentialTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
-                      Test root SSH &amp; admin API
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="secondary" onClick={handleTestCredentials} disabled={credentialTesting} className="gap-2">
+                        {credentialTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+                        Test host SSH &amp; admin API
+                      </Button>
+                      {draft?.proxmoxSshUser?.trim() && draft.proxmoxSshUser.trim() !== "root" && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => setLuxHostDialogOpen(true)} disabled={installingLuxHost} className="gap-2">
+                          {installingLuxHost ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                          Install lux-host sudo rule
+                        </Button>
+                      )}
+                    </div>
                     <p className="text-xs text-muted-foreground">
-                      Runs from the app container using the values in this form. Confirms root SSH and admin API reachability with your session Ludus API key.
+                      Runs from the app container using the values in this form. Confirms this SSH account can do host writes, and that the admin API answers with your session Ludus API key.
                     </p>
                     {credentialTestResult && (
                       <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-xs">
@@ -1128,12 +1207,23 @@ function SettingsContent() {
                             ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500 mt-0.5" />
                             : <XCircle className="h-4 w-4 shrink-0 text-destructive mt-0.5" />}
                           <div>
-                            <p className="font-semibold">Root SSH → {credentialTestResult.rootSsh.host}:{credentialTestResult.rootSsh.port} ({credentialTestResult.rootSsh.user})</p>
+                            <p className="font-semibold">Host SSH → {credentialTestResult.rootSsh.host}:{credentialTestResult.rootSsh.port} ({credentialTestResult.rootSsh.user})</p>
                             <p className="text-muted-foreground">
                               Auth: <code className="text-primary">{credentialTestResult.rootSsh.authAttempted}</code>
                               {credentialTestResult.rootSsh.privateKeyPath && <> · key: <code className="text-primary">{credentialTestResult.rootSsh.privateKeyPath}</code></>}
                             </p>
                             {credentialTestResult.rootSsh.detail && <p className="mt-1 text-foreground/90 whitespace-pre-wrap break-words">{credentialTestResult.rootSsh.detail}</p>}
+                            {credentialTestResult.rootSsh.privileged != null && (
+                              <p className="mt-1 text-muted-foreground">
+                                uid {credentialTestResult.rootSsh.uid ?? "?"} ({credentialTestResult.rootSsh.remoteUser || credentialTestResult.rootSsh.user})
+                                {credentialTestResult.rootSsh.sudo != null && (
+                                  <> · sudo -n: {credentialTestResult.rootSsh.sudo ? "yes" : "no"}</>
+                                )}
+                                {credentialTestResult.rootSsh.packerWritable === false && credentialTestResult.rootSsh.packerDir && (
+                                  <> · {credentialTestResult.rootSsh.packerDir} is not writable</>
+                                )}
+                              </p>
+                            )}
                             {credentialTestResult.keyProbe && (
                               <div className="mt-2 rounded border border-border/80 bg-background/50 p-2 space-y-1.5 font-mono text-[11px]">
                                 <p className="font-sans font-semibold text-foreground">SSH key probe</p>
@@ -1175,6 +1265,128 @@ function SettingsContent() {
                         </div>
                       </div>
                     )}
+                    <Dialog open={luxHostDialogOpen} onOpenChange={(open) => {
+                      if (installingLuxHost) return
+                      setLuxHostDialogOpen(open)
+                      if (!open) {
+                        setLuxHostRootPassword("")
+                        setLuxHostMode("shell")
+                      }
+                    }}>
+                      <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] max-w-lg overflow-x-hidden overflow-y-auto">
+                        <DialogHeader>
+                          <DialogTitle>Install lux-host for {draft?.proxmoxSshUser?.trim() || "this account"}?</DialogTitle>
+                          <DialogDescription className="break-words">
+                            This writes the helper and a sudoers rule for that helper only. It does not grant every sudo command.
+                          </DialogDescription>
+                        </DialogHeader>
+                        <ul className="list-disc space-y-1.5 break-words pl-5 text-sm text-muted-foreground">
+                          <li><span className="font-mono">/usr/local/sbin/lux-host</span> runs a fixed list of host operations as root. It does not run a shell.</li>
+                          <li><span className="font-mono">/etc/sudoers.d/lux-host</span> lets {draft?.proxmoxSshUser?.trim() || "this user"} run that helper with <span className="font-mono">sudo -n</span>.</li>
+                          <li>Other sudo commands still ask for a password. The helper cannot replace itself.</li>
+                        </ul>
+                        <div role="radiogroup" aria-label="How to install lux-host" className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            role="radio"
+                            aria-checked={luxHostMode === "shell"}
+                            variant={luxHostMode === "shell" ? "secondary" : "outline"}
+                            className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+                            onClick={() => setLuxHostMode("shell")}
+                          >
+                            <span className="text-sm font-medium">Run as root</span>
+                            <span className="text-xs font-normal text-muted-foreground">Paste one command in a root shell.</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            role="radio"
+                            aria-checked={luxHostMode === "ssh"}
+                            variant={luxHostMode === "ssh" ? "secondary" : "outline"}
+                            className="h-auto flex-col items-start gap-0.5 whitespace-normal px-3 py-2 text-left"
+                            onClick={() => setLuxHostMode("ssh")}
+                          >
+                            <span className="text-sm font-medium">Root SSH password</span>
+                            <span className="text-xs font-normal text-muted-foreground">sshd allows root login.</span>
+                          </Button>
+                        </div>
+                        {luxHostMode === "shell" ? (
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-medium">Root shell command</p>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="shrink-0 gap-1.5"
+                                onClick={() => { void handleCopyLuxHostManual() }}
+                                disabled={!luxHostManual.command}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                Copy
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground break-words">
+                              Paste this into a root shell on the Ludus host and run it. The block is the whole install.
+                            </p>
+                            {luxHostManual.error ? (
+                              <p className="text-xs text-destructive">{luxHostManual.error}</p>
+                            ) : (
+                              <pre className="max-h-40 min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+                                {luxHostManual.command}
+                              </pre>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            <Label htmlFor="lux-host-root-password">Root password</Label>
+                            <Input
+                              id="lux-host-root-password"
+                              type="password"
+                              value={luxHostRootPassword}
+                              onChange={(e) => setLuxHostRootPassword(e.target.value)}
+                              className="font-mono text-xs"
+                              placeholder="Ludus host root password"
+                              autoComplete="off"
+                            />
+                            <p className="text-xs text-muted-foreground break-words">
+                              LUX logs in as root over SSH, writes the helper and the sudoers rule, and drops the password.
+                            </p>
+                          </div>
+                        )}
+                        <DialogFooter>
+                          <Button variant="outline" onClick={() => { setLuxHostDialogOpen(false); setLuxHostRootPassword(""); setLuxHostMode("shell") }} disabled={installingLuxHost}>Cancel</Button>
+                          {luxHostMode === "ssh" && (
+                            <Button
+                              onClick={() => { void handleInstallLuxHost() }}
+                              disabled={!canSubmitLuxHostInstall({
+                                installing: installingLuxHost,
+                                sshPassword: draft?.proxmoxSshPassword ?? "",
+                                rootPassword: luxHostRootPassword,
+                                account: {
+                                  user: draft?.proxmoxSshUser ?? "",
+                                  host: draft?.sshHost ?? "",
+                                  port: draft?.sshPort || 22,
+                                },
+                                probe: credentialTestResult
+                                  ? {
+                                      user: credentialTestResult.rootSsh.user,
+                                      host: credentialTestResult.rootSsh.host,
+                                      port: credentialTestResult.rootSsh.port,
+                                      authAttempted: credentialTestResult.rootSsh.authAttempted,
+                                      uid: credentialTestResult.rootSsh.uid,
+                                      sudo: credentialTestResult.rootSsh.sudo,
+                                      sudoAll: credentialTestResult.rootSsh.sudoAll,
+                                    }
+                                  : null,
+                              })}
+                            >
+                              {installingLuxHost && <Loader2 className="h-4 w-4 animate-spin" />}
+                              Install
+                            </Button>
+                          )}
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
                   </div>
                 )}
               </div>
@@ -1239,21 +1451,21 @@ function SettingsContent() {
 
         {/* ── About ────────────────────────────────────────────────────── */}
         <TabsContent value="about" className="mt-0">
-          <AboutTab />
+          <AboutTab isAdmin={!!session?.isAdmin} />
         </TabsContent>
       </Tabs>
     </div>
   )
 }
 
-export function SettingsPageClient() {
+export function SettingsPageClient({ luxHostScript }: { luxHostScript: string }) {
   return (
     <Suspense fallback={
       <div className="flex justify-center py-20">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     }>
-      <SettingsContent />
+      <SettingsContent luxHostScript={luxHostScript} />
     </Suspense>
   )
 }

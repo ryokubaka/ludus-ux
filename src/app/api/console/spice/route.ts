@@ -65,11 +65,9 @@ async function requestSpiceTicket(
   node: string,
   vmId: string
 ): Promise<SpiceTicket> {
-  const commands = [
-    // Preferred: include explicit proxy at ticket creation (closer to Proxmox UI flow).
-    `pvesh create /nodes/${node}/qemu/${vmId}/spiceproxy --proxy http://${sshHost}:3128 --output-format json`,
-    // Fallback: some environments work better with Proxmox defaults.
-    `pvesh create /nodes/${node}/qemu/${vmId}/spiceproxy --output-format json`,
+  const commands: readonly (readonly string[])[] = [
+    ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/spiceproxy`, "--proxy", `http://${sshHost}:3128`, "--output-format", "json"],
+    ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/spiceproxy`, "--output-format", "json"],
   ]
 
   let lastError: Error | null = null
@@ -122,7 +120,7 @@ export async function GET(request: NextRequest) {
   const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
   if (!hasSshExecAuth(settings, session.sshPassword)) {
     return NextResponse.json(
-      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a root key (./ssh), or log in with your SSH password." },
+      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a private key for PROXMOX_SSH_USER (./ssh), or log in with your SSH password." },
       { status: 503 }
     )
   }
@@ -132,7 +130,7 @@ export async function GET(request: NextRequest) {
   try {
     // Discover Proxmox node (login shell ensures pvesh is on PATH)
     const nodeJson = await sshExec(sshHost, sshPort, sshUser, sshPass,
-      "pvesh get /nodes --output-format json")
+      ["pvesh", "get", "/nodes", "--output-format", "json"])
     const nodes = JSON.parse(nodeJson) as Array<{ node: string }>
     if (!nodes?.length) throw new Error("No Proxmox nodes found")
     const node = nodes[0].node
@@ -158,7 +156,7 @@ export async function GET(request: NextRequest) {
 
     // VNC fallback
     const vncJson = await sshExec(sshHost, sshPort, sshUser, sshPass,
-      `pvesh create /nodes/${node}/qemu/${vmId}/vncproxy --output-format json`)
+      ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/vncproxy`, "--output-format", "json"])
     const vnc = JSON.parse(vncJson) as VncTicket
     if (!vnc?.ticket) throw new Error("VNC ticket missing — is the VM powered on?")
 

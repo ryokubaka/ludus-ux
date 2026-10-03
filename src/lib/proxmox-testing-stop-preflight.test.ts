@@ -52,37 +52,39 @@ describe("efiDiskNeedsMsCert2023", () => {
 
 describe("buildTestingStartEfiEnrollShell / rollback / enroll", () => {
   it("start enroll shell stops, enrolls, verifies; restarts when requested", () => {
-    const sh = buildTestingStartEfiEnrollShell(217, "pve1", { restart: true })
-    expect(sh).toContain("qm shutdown 217")
-    expect(sh).toContain("/nodes/pve1/qemu/217/status/stop")
-    expect(sh).toContain("qm enroll-efi-keys 217")
-    expect(sh).toContain("ms-cert=2023k")
-    expect(sh).toContain("qm start 217")
-    expect(sh).not.toContain("qm rollback")
-    expect(sh).not.toMatch(/\$[({A-Za-z0-9_]/)
+    expect(buildTestingStartEfiEnrollShell(217, "pve1", { restart: true })).toEqual([
+      "testing-enroll",
+      "217",
+      "pve1",
+      "1",
+    ])
   })
 
   it("start enroll shell leaves VM stopped when restart false", () => {
-    const sh = buildTestingStartEfiEnrollShell(217, "pve1", { restart: false })
-    expect(sh).toContain("qm enroll-efi-keys 217")
-    expect(sh).not.toContain("qm start 217")
-    expect(sh).not.toMatch(/\$[({A-Za-z0-9_]/)
+    expect(buildTestingStartEfiEnrollShell(217, "pve1", { restart: false })).toEqual([
+      "testing-enroll",
+      "217",
+      "pve1",
+      "0",
+    ])
   })
 
   it("rollback shell stops and rolls back without enroll", () => {
-    const sh = buildTestingStopVmRollbackShell(217, "pve1", LUDUS_TESTING_CLEAN_SNAPSHOT)
-    expect(sh).toContain("qm shutdown 217")
-    expect(sh).toContain("qm rollback 217")
-    expect(sh).not.toContain("enroll-efi-keys")
-    expect(sh).not.toMatch(/\$[({A-Za-z0-9_]/)
+    expect(buildTestingStopVmRollbackShell(217, "pve1", LUDUS_TESTING_CLEAN_SNAPSHOT)).toEqual([
+      "testing-rollback",
+      "217",
+      "pve1",
+      LUDUS_TESTING_CLEAN_SNAPSHOT,
+    ])
   })
 
   it("enroll shell enrolls after stop and checks ms-cert marker", () => {
-    const sh = buildTestingStopVmEnrollShell(217, "pve1")
-    expect(sh).toContain("qm enroll-efi-keys 217")
-    expect(sh).toContain("ms-cert=2023k")
-    expect(sh).not.toContain("qm rollback")
-    expect(sh).not.toMatch(/\$[({A-Za-z0-9_]/)
+    expect(buildTestingStopVmEnrollShell(217, "pve1")).toEqual([
+      "testing-enroll",
+      "217",
+      "pve1",
+      "0",
+    ])
   })
 
   it("rejects unsafe node or snapname", () => {
@@ -96,7 +98,7 @@ describe("buildTestingStartEfiEnrollShell / rollback / enroll", () => {
 
 describe("buildQmConfigShell", () => {
   it("reads qm config only", () => {
-    expect(buildQmConfigShell(217)).toBe("qm config 217 2>/dev/null || true")
+    expect(buildQmConfigShell(217)).toEqual(["qm-config", "217"])
   })
 })
 

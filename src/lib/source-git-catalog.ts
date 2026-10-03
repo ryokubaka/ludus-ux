@@ -9,6 +9,7 @@ import {
   type RepoTreeItem,
 } from "@/lib/template-repo-client"
 import { DEFAULT_SOURCE_GIT_REF } from "@/lib/ludus-source-ref"
+import { ludusTemplateInstallName } from "@/lib/packer-vm-name"
 import { sourceBlueprintInstallId } from "@/lib/registered-ludus-sources"
 
 const GITHUB_FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.github+json" }
@@ -140,12 +141,63 @@ export async function fetchGitBlueprintManifest(
   }
 }
 
+/**
+ * Template install id from a source directory.
+ * Ludus keys templates by Packer `vm_name`, not the folder (`debian13` → `debian-13-x64-server-template`).
+ */
+export async function resolveGitTemplateInstallName(
+  apiBase: string,
+  ref: string,
+  dirName: string,
+  fileNames?: string[],
+  templatePath?: string,
+): Promise<string> {
+  const branch = gitRefOrDefault(ref)
+  const dirPath = (templatePath || `templates/${dirName}`).replace(/\/+$/, "")
+  const listed = fileNames?.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json"))
+  const candidates = listed
+    ? [`${dirPath}/${listed}`]
+    : [`${dirPath}/${dirName}.pkr.hcl`, `${dirPath}/${dirName}.pkr.json`]
+  for (const path of candidates) {
+    try {
+      const raw = await fetchRepoRawFile(apiBase, path, branch)
+      return ludusTemplateInstallName(dirName, raw)
+    } catch {
+      /* try the next Packer filename */
+    }
+  }
+  return dirName
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  const workers = Math.min(Math.max(limit, 1), items.length)
+  await Promise.all(Array.from({ length: workers }, () => worker()))
+  return results
+}
+
 export async function listGitSourceTemplates(
   gitUrl: string,
   ref: string,
-): Promise<Array<{ name: string }>> {
+): Promise<Array<{ name: string; path: string }>> {
   const names = await listGitSubdirs(gitUrl, ref, "templates")
-  return names.map((name) => ({ name }))
+  const apiBase = gitUrlToGithubApiBase(gitUrl)
+  if (!apiBase) return names.map((name) => ({ name, path: `templates/${name}` }))
+  return mapWithConcurrency(names, 5, async (dir) => ({
+    name: await resolveGitTemplateInstallName(apiBase, ref, dir),
+    path: `templates/${dir}`,
+  }))
 }
 
 /** Parse `meta/version.yml` or galaxy_info.version from role meta/main.yml. */

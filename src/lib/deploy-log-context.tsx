@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { appendStreamLines } from "@/lib/log-buffer"
+import { isBlankDeployLogLine } from "@/lib/log-line-timestamp"
 
 export type StartRangeStreamOptions = {
   /**
@@ -180,11 +181,10 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         // Server-side error — surface it as a log line and stop
         setLines((prev) => appendStreamLines(prev, raw))
         stopStreaming()
-      } else if (raw.startsWith("[LUDUS] ")) {
-        setLines((prev) => appendStreamLines(prev, raw))
-        reconnectAttemptRef.current = 0
-      } else if (raw.startsWith("[GOAD] ")) {
-        setLines((prev) => appendStreamLines(prev, raw))
+      } else if (raw.startsWith("[LUDUS] ") || raw.startsWith("[GOAD] ")) {
+        if (!isBlankDeployLogLine(raw)) {
+          setLines((prev) => appendStreamLines(prev, raw))
+        }
         reconnectAttemptRef.current = 0
       }
       // Unknown prefix: silently ignore to stay forward-compatible

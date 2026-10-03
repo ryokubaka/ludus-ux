@@ -59,6 +59,7 @@ import {
 } from "@/lib/selected-range-cookie"
 
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { listVisibleLudusSources } from "@/lib/list-visible-ludus-sources"
 
 import {
 
@@ -88,7 +89,7 @@ import {
 
 } from "@/lib/cached-ludus-fetch"
 
-import { isHttp404Error, listSources } from "@/lib/ludus-source-client"
+import { isHttp404Error } from "@/lib/ludus-source-client"
 
 // ── L1 SWR caches (non-blocking peek; fetchers populate L2 via cached-ludus-fetch) ──
 
@@ -533,9 +534,11 @@ export async function prefetchSourcesData(session: ResolvedSession | null) {
 
     try {
 
-      const sources = await listSources(effectiveApiKey)
+      const sources = await listVisibleLudusSources({
+        isAdmin: session.isAdmin,
+        apiKey: effectiveApiKey,
+      })
 
-      // Raw Ludus rows (`sourceID`); clients map via mapRegisteredSources.
       queryClient.setQueryData(queryKeys.sources(scopeTag), { sources, available: true })
 
     } catch (err) {

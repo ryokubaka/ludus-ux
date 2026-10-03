@@ -12,13 +12,14 @@
  *  5. Write each file preserving its relative path within the template.
  *  6. Fix ownership/permissions to ludus:ludus 755.
  *  7. Register the template with `ludus templates add -d <destDir>` as the
- *     logged-in Ludus user (ROOT key / root SSH alone is not sufficient).
+ *     logged-in Ludus user (the Ludus ROOT API key or host SSH alone is not
+ *     sufficient).
  *
  * Request body:
  *   {
  *     templates: {
- *       name: string;          // directory name, used as the template sub-dir
- *       path: string;          // relative path in the repo, e.g. "templates/debian10"
+ *       name: string;          // Packer vm_name registered with Ludus
+ *       path: string;          // repo path; last segment is the on-disk directory (e.g. templates/debian13)
  *       apiBase: string;       // GitLab or GitHub repository API base URL
  *       ref:     string;       // git ref (branch/tag/sha)
  *     }[]
@@ -53,6 +54,8 @@ import {
   packerRootCandidates,
   shellSingleQuote,
 } from "@/lib/template-packer-paths"
+import { packerDirFromTemplatePath, templateBlobRelativePath } from "@/lib/packer-vm-name"
+import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { writeRemoteFileViaSsh } from "@/lib/template-remote-write"
 
 
@@ -75,9 +78,7 @@ async function findTemplatesDir(): Promise<string> {
   if (cachedTemplatesDir?.root === ludusRoot) return cachedTemplatesDir.dir
 
   // Prefer built-in packer tree; never treat Ludus Sources mirrors as install targets.
-  const findResult = await sshExec(
-    `find ${shellSingleQuote(`${ludusRoot}/packer`)} -maxdepth 3 -name '*.pkr.hcl' ! -path '*/sources/*' 2>/dev/null | head -1`,
-  )
+  const findResult = await sshExec(["find-packer"])
   const firstPath = (findResult.stdout || "").trim().split("\n")[0]?.trim()
   if (firstPath) {
     const dir = derivePackerRootFromPkrPath(firstPath)
@@ -88,7 +89,7 @@ async function findTemplatesDir(): Promise<string> {
   }
 
   for (const candidate of packerRootCandidates(ludusRoot)) {
-    const check = await sshExec(`test -d ${shellSingleQuote(candidate)} && echo ok`)
+    const check = await sshExec(["dir-exists", candidate]).catch(() => ({ stdout: "", stderr: "", code: 1 }))
     if ((check.stdout || "").trim() === "ok") {
       cachedTemplatesDir = { root: ludusRoot, dir: candidate }
       return candidate
@@ -107,6 +108,13 @@ async function addTemplate(
 ): Promise<{ success: boolean; message: string }> {
   const { name, path: templatePath, apiBase, ref } = spec
 
+  const dirName = packerDirFromTemplatePath(templatePath, name)
+  if (!dirName) {
+    throw new Error(
+      `Invalid template directory in "${templatePath}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.`,
+    )
+  }
+
   const safe = assertSafeTemplateRepoUrl(apiBase)
   if (!safe.ok) {
     throw new Error(safe.error)
@@ -122,9 +130,12 @@ async function addTemplate(
   const prefix = templatePath.endsWith("/") ? templatePath : templatePath + "/"
   const files: { relativePath: string; content: Buffer }[] = []
   for (const blob of blobs) {
-    const relativePath = blob.path.startsWith(prefix)
-      ? blob.path.slice(prefix.length)
-      : blob.name
+    const relativePath = templateBlobRelativePath(blob.path, blob.name, prefix)
+    if (!relativePath) {
+      throw new Error(
+        `Invalid template file path "${blob.path}". Each file must stay inside the template directory.`,
+      )
+    }
     const content = await fetchRepoRawFile(safeApiBase, blob.path, ref)
     files.push({ relativePath, content: Buffer.from(content) })
   }
@@ -136,15 +147,15 @@ async function addTemplate(
     const msg = logAndSafeError("templates/add", err, "Template add failed")
     if (/all configured authentication methods failed/i.test(msg) || /authentication/i.test(msg)) {
       throw new Error(
-        "Root SSH authentication failed. To add templates, configure root SSH access: " +
-        "set PROXMOX_SSH_PASSWORD (or mount a root private key: ./ssh → /app/ssh, PROXMOX_SSH_KEY_PATH) " +
-        "in your .env or Settings → SSH."
+        "Host SSH authentication failed. To add templates, configure host SSH: " +
+        "set PROXMOX_SSH_PASSWORD (or mount a private key for PROXMOX_SSH_USER: ./ssh → /app/ssh, PROXMOX_SSH_KEY_PATH) " +
+        "in your .env or Settings → SSH. The account can be root, or another user that can run sudo -n /usr/local/sbin/lux-host."
       )
     }
     throw err
   }
 
-  const destDir = `${templatesDir}/${name}`
+  const destDir = `${templatesDir}/${dirName}`
 
   const subdirs = new Set<string>()
   subdirs.add(destDir)
@@ -154,8 +165,7 @@ async function addTemplate(
       subdirs.add(`${destDir}/${parts.join("/")}`)
     }
   }
-  const mkdirCmd = Array.from(subdirs).map((d) => `'${d}'`).join(" ")
-  const mkdirResult = await sshExec(`mkdir -p ${mkdirCmd}`)
+  const mkdirResult = await sshExec(["mkdir", ...subdirs])
   if (mkdirResult.code !== 0) {
     throw new Error(`Failed to create template dirs under ${destDir}: ${mkdirResult.stderr}`)
   }
@@ -165,17 +175,17 @@ async function addTemplate(
     try {
       await writeRemoteFileViaSsh(destPath, file.content)
     } catch (err) {
-      await sshExec(`rm -rf '${destDir}'`).catch(() => {})
+      await sshExec(["rm-tree", destDir]).catch(() => {})
       throw new Error(`Failed to write ${file.relativePath}: ${(err as Error).message}`)
     }
   }
 
-  await sshExec(`chown -R ludus:ludus '${destDir}' && chmod -R 755 '${destDir}'`).catch(() => {
+  await sshExec(["chown-ludus", destDir]).catch(() => {
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
   const addCmd = buildLudusTemplateAddCmd(destDir, ctx.ludusApiKey)
-  const addResult = await sshExec(`${addCmd} 2>&1`)
+  const addResult = await sshExec(addCmd)
   const rawMsg = (addResult.stdout + addResult.stderr).trim()
 
   if (isLudusCliTemplateAddFailure(rawMsg, addResult.code)) {
@@ -245,6 +255,28 @@ async function tryInstallTemplatesViaSources(
   return out
 }
 
+/** Sources install uses Packer `vm_name`; the git path stays the short folder. */
+async function resolveTemplateSpecName(spec: TemplateSpec): Promise<TemplateSpec> {
+  const dir = packerDirFromTemplatePath(spec.path || "", spec.name)
+  if (!dir) {
+    throw new Error(
+      `Invalid template directory in "${spec.path}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.`,
+    )
+  }
+  if (spec.name !== dir && /-template$/i.test(spec.name)) return spec
+  const safe = assertSafeTemplateRepoUrl(spec.apiBase)
+  if (!safe.ok) return spec
+  const name = await resolveGitTemplateInstallName(
+    safe.apiBase,
+    spec.ref || "main",
+    dir,
+    undefined,
+    spec.path,
+  )
+  if (!name || name === spec.name) return spec
+  return { ...spec, name }
+}
+
 function resolveTemplateAddContext(
   session: NonNullable<Awaited<ReturnType<typeof resolveSession>>>,
   request: NextRequest,
@@ -300,10 +332,18 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       )
     }
+    if (!packerDirFromTemplatePath(spec.path ?? "", spec.name)) {
+      return NextResponse.json(
+        { error: `Invalid template path "${spec.path ?? ""}". Use a single directory name of letters, numbers, hyphens, underscores, and dots.` },
+        { status: 400 },
+      )
+    }
   }
 
+  const resolvedTemplates = await Promise.all(templates.map((spec) => resolveTemplateSpecName(spec)))
+
   const byRepo = new Map<string, TemplateSpec[]>()
-  for (const spec of templates) {
+  for (const spec of resolvedTemplates) {
     const key = `${spec.apiBase}|${spec.ref || "main"}`
     const group = byRepo.get(key) ?? []
     group.push(spec)
@@ -317,7 +357,7 @@ export async function POST(request: NextRequest) {
   }
 
   const mapped = await Promise.all(
-    templates.map(async (spec) => {
+    resolvedTemplates.map(async (spec) => {
       const fromSource = sourceResults.get(spec.name)
       if (fromSource?.success) {
         return { name: spec.name, ...fromSource }
@@ -342,7 +382,7 @@ export async function POST(request: NextRequest) {
   const allOk = mapped.every((r) => r.success)
   logLuxRouteAction(request, session, {
     outcome: allOk ? "success" : "failure",
-    detail: `templates=${templates.map((t) => t.name).join(",")}`,
+    detail: `templates=${resolvedTemplates.map((t) => t.name).join(",")}`,
   })
   return NextResponse.json({ results: mapped })
 }

@@ -9,12 +9,18 @@
 #   bash scripts/upgrade.sh main          # non-interactive
 #   bash scripts/upgrade.sh v0.9.8        # checkout tag (detached HEAD)
 #
+# LUX_UPGRADE_YES=1 skips the dirty-tree confirmation (used by the in-app switch).
+#
 # Run from the repository root:
 #   bash scripts/upgrade.sh
 
 set -e
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${LUX_UPGRADE_YES:-}" == "1" && -n "${REPO:-}" && -d "${REPO}" ]]; then
+  ROOT="$(cd "$REPO" && pwd)"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$ROOT"
 
 if [[ ! -f docker-compose.yml ]]; then
@@ -27,10 +33,28 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
-if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-  echo "Error: not a git repository." >&2
+SAFE_ROOT="$(cd "$ROOT" && pwd -P)"
+lux_git_n=${GIT_CONFIG_COUNT:-0}
+case "$lux_git_n" in
+  ''|*[!0-9]*) lux_git_n=0 ;;
+esac
+printf -v "GIT_CONFIG_KEY_${lux_git_n}" '%s' safe.directory
+printf -v "GIT_CONFIG_VALUE_${lux_git_n}" '%s' "$SAFE_ROOT"
+export "GIT_CONFIG_KEY_${lux_git_n}"
+export "GIT_CONFIG_VALUE_${lux_git_n}"
+GIT_CONFIG_COUNT=$((lux_git_n + 1))
+export GIT_CONFIG_COUNT
+
+git_err=""
+if ! git_err="$(git rev-parse --is-inside-work-tree 2>&1)"; then
+  if [[ "$git_err" == *"dubious ownership"* ]]; then
+    echo "Error: git refused this repository because another user owns it. Not switching versions." >&2
+  else
+    echo "Error: not a git repository." >&2
+  fi
   exit 1
 fi
+unset git_err
 
 lux_compose() {
   if docker compose version &>/dev/null 2>&1; then
@@ -199,10 +223,14 @@ if [[ -n "$DIRTY" ]]; then
   echo "Warning: working tree has uncommitted changes."
   echo "          Checkout may discard tracked changes (especially when switching branch/tag)."
   echo ""
-  read -r -p "Continue? [y/N] " cont
-  if [[ ! "$cont" =~ ^[Yy] ]]; then
-    echo "Aborted."
-    exit 0
+  if [[ "${LUX_UPGRADE_YES:-}" == "1" ]]; then
+    echo "LUX_UPGRADE_YES=1: continuing without prompt."
+  else
+    read -r -p "Continue? [y/N] " cont
+    if [[ ! "$cont" =~ ^[Yy] ]]; then
+      echo "Aborted."
+      exit 0
+    fi
   fi
 fi
 

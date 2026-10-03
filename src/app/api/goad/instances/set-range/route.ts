@@ -2,24 +2,31 @@
  * POST /api/goad/instances/set-range
  *
  * Writes a rangeId to the .goad_range_id tracking file for one or more GOAD
- * instance workspaces.  Called after a new-instance deploy completes to link
+ * instance workspaces. Called after a new-instance deploy completes to link
  * the newly created instance(s) with the pre-created dedicated Ludus range.
+ * An admin chowns the workspace to its owner before the range file is written,
+ * once a host-account GOAD process is no longer writing that directory.
+ * SQLite is updated only after that file write succeeds.
  *
  * Body: { rangeId: string; instanceIds: string[] }
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { parseJsonBody } from "@/lib/require-session"
-import { getSettings } from "@/lib/settings-store"
-import { writeGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import {
+  setRangeHostProcessActive,
+  shouldDeferHostWorkspaceChown,
+} from "@/lib/goad-deploy-link"
+import { chownGoadInstance, listGoadInstances, sshExecAsWorkspaceUser, workspaceOwnerLinuxUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
+import { getSettings } from "@/lib/settings-store"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
@@ -31,26 +38,48 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeId and instanceIds are required" }, { status: 400 })
   }
 
-  const settings = getSettings()
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
+  const owner = workspaceOwnerLinuxUser(session, request)
+  const hostUser = effectivePrivilegedSshUser(getSettings().proxmoxSshUser)
+  const owners = new Map<string, string>()
+  if (instanceIds.some((id) => setRangeHostProcessActive(id))) {
+    try {
+      const listed = await listGoadInstances()
+      for (const inst of listed) owners.set(inst.instanceId, inst.ownerUserId?.trim() ?? "")
+    } catch {
+      owners.clear()
+    }
+  }
 
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
   for (const instanceId of instanceIds) {
-    // Write to local DB first — reliable, no SSH dependency.
-    // This ensures the instances API returns the correct ludusRangeId even when
-    // root SSH credentials are not configured (SSH write is best-effort only).
-    setInstanceRangeLocal(instanceId, rangeId)
-
-    // Best-effort SSH write to the .goad_range_id file on the remote server.
-    // This keeps the on-server record in sync for any tooling that reads it directly.
+    const hostProcessActive = setRangeHostProcessActive(instanceId)
+    if (
+      shouldDeferHostWorkspaceChown({
+        directoryOwner: owners.get(instanceId) ?? "",
+        targetUser: owner ?? "",
+        hostUser,
+        hostProcessActive,
+      })
+    ) {
+      results.push({ instanceId, ok: false, error: "GOAD is still writing this workspace" })
+      continue
+    }
     try {
-      await writeGoadRangeId(instanceId, rangeId, rootCreds)
+      if (session.isAdmin && owner && owner.toLowerCase() !== "root") {
+        await chownGoadInstance(instanceId, owner)
+      }
+      await writeGoadRangeId(instanceId, rangeId, runAsOwner)
+      setInstanceRangeLocal(instanceId, rangeId)
       results.push({ instanceId, ok: true })
     } catch (err) {
-      // SSH write failed — local DB is already updated so the UI will still show
-      // the correct association.
-      results.push({ instanceId, ok: true, error: (err as Error).message })
+      results.push({ instanceId, ok: false, error: (err as Error).message })
     }
   }
 

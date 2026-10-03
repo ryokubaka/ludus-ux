@@ -368,6 +368,8 @@ export interface NetworkRulesEditorProps {
   onApply?: () => void
   /** Extra controls to the right of Apply (e.g. Save, Force, deploy shortcuts). */
   actionSlot?: ReactNode
+  /** Empty-list copy. Defaults to the Ludus accept-all message used by the range wizard. */
+  emptyMessage?: string
 }
 
 export function NetworkRulesEditor({
@@ -377,6 +379,7 @@ export function NetworkRulesEditor({
   showApplyButton,
   onApply,
   actionSlot,
+  emptyMessage,
 }: NetworkRulesEditorProps) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -461,11 +464,17 @@ export function NetworkRulesEditor({
       {rules.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-8 border border-dashed border-border rounded-md text-muted-foreground gap-2">
           <Shield className="h-8 w-8 opacity-30" />
-          <p className="text-sm">No custom firewall rules — Ludus defaults apply.</p>
-          <p className="text-xs">
-            Default: all inter-VLAN and external traffic is{" "}
-            <span className="text-status-success font-mono">ACCEPT</span>
-          </p>
+          {emptyMessage ? (
+            <p className="text-sm text-center max-w-md">{emptyMessage}</p>
+          ) : (
+            <>
+              <p className="text-sm">No custom firewall rules — Ludus defaults apply.</p>
+              <p className="text-xs">
+                Default: all inter-VLAN and external traffic is{" "}
+                <span className="text-status-success font-mono">ACCEPT</span>
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-2">

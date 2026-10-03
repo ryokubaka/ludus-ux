@@ -1,10 +1,11 @@
 import type { SourceInstallSelection } from "@/lib/ludus-source-client"
 import type { RegisteredLudusSource } from "@/lib/registered-ludus-sources"
-import { registeredSourceLabel } from "@/lib/registered-ludus-sources"
+import { registeredSourceLabel, sourceIdsAreSameRegistration } from "@/lib/registered-ludus-sources"
 import {
   ansibleCatalogNameKeys,
   catalogVersionsDiffer,
   effectiveInstalledVersion,
+  normalizeCatalogVersion,
   lookupCatalogPinVersion,
   resolveCatalogInstallState,
   type CatalogInstallState,
@@ -24,6 +25,7 @@ export interface SourceCatalogRef {
 export interface InstalledSourceMatch {
   sourceId: string
   sourceUrl?: string
+  sourceRef?: string
   sourceLabel: string
   catalogName: string
   catalogVersion?: string
@@ -37,21 +39,38 @@ export interface InstalledSourceMatch {
 function sourceMeta(
   sourceId: string,
   sources: RegisteredLudusSource[],
-): Pick<InstalledSourceMatch, "sourceId" | "sourceUrl" | "sourceLabel"> {
+): Pick<InstalledSourceMatch, "sourceId" | "sourceUrl" | "sourceRef" | "sourceLabel"> {
   const hit = sources.find((s) => s.id === sourceId)
   return {
     sourceId,
     sourceUrl: hit?.url?.trim() || undefined,
+    sourceRef: hit?.ref?.trim() || undefined,
     sourceLabel: hit ? registeredSourceLabel(hit) : sourceId,
   }
 }
 
+function versionsMatch(match: InstalledSourceMatch): boolean {
+  return (
+    !catalogVersionsDiffer(match.catalogVersion, match.installedVersion) &&
+    Boolean(normalizeCatalogVersion(match.catalogVersion)) &&
+    Boolean(normalizeCatalogVersion(match.installedVersion))
+  )
+}
+
+/**
+ * Two registrations of one repo both ship the same role name.
+ * Keep the registration whose catalog version is the installed copy.
+ * A mismatched branch is not an update of that copy.
+ */
 function preferMatch(
   current: InstalledSourceMatch | undefined,
   next: InstalledSourceMatch,
 ): InstalledSourceMatch {
   if (!current) return next
-  if (next.upgradeAvailable && !current.upgradeAvailable) return next
+  const currentMatches = versionsMatch(current)
+  const nextMatches = versionsMatch(next)
+  if (nextMatches && !currentMatches) return next
+  if (currentMatches && !nextMatches) return current
   return current
 }
 
@@ -215,14 +234,11 @@ export function buildBlueprintSourceMatchMap(
     }
 
     for (const cat of catalogs) {
-      if (preferredSourceIds.size > 0 && !preferredSourceIds.has(cat.sourceId)) {
-        // Still allow match if catalog name equals short slug (source id shapes vary).
-        const hasName = cat.items.some(
-          (row) =>
-            (row.name || "").trim() === short ||
-            (row.name || "").endsWith(`/${short}`),
-        )
-        if (!hasName) continue
+      if (
+        preferredSourceIds.size > 0 &&
+        ![...preferredSourceIds].some((prefix) => sourceIdsAreSameRegistration(prefix, cat.sourceId))
+      ) {
+        continue
       }
       for (const row of cat.items) {
         const rowName = (row.name || "").trim()

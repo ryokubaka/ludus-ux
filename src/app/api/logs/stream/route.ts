@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { ludusGet, ludusRequest } from "@/lib/ludus-client"
+import { ludusGet } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
@@ -12,9 +12,10 @@ import { readLudusAnsibleLogMtimeMs } from "@/lib/goad-ludus-reconcile"
 import {
   augmentLudusDeployHistoryLines,
   deployLogLineHasLeadingWallTimestamp,
+  omitBlankLogLines,
 } from "@/lib/log-line-timestamp"
 import { safeClientError } from "@/lib/safe-client-error"
-import { ludusRangeAnsibleLogPath } from "@/lib/runtime-paths"
+import { splitLogText } from "@/lib/strip-ansi"
 
 
 /** Read the GOAD ansible log (SSH-based). Returns new lines since lastLineCount. */
@@ -25,13 +26,13 @@ async function readGoadLog(
 ): Promise<{ lines: string[]; newCount: number }> {
   if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) return { lines: [], newCount: lastCount }
   try {
-    const logPath = ludusRangeAnsibleLogPath(rangeId)
+    const safeRange = rangeId.replace(/[^a-zA-Z0-9_-]/g, "")
     const content = await sshExec(
       settings.sshHost, settings.sshPort,
       settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",
-      `cat "${logPath}" 2>/dev/null || true`
+      ["range-log", "read", safeRange],
     )
-    const allLines = content.split("\n").filter((l) => l.trim())
+    const allLines = omitBlankLogLines(splitLogText(content))
     const newLines = allLines.slice(lastCount)
     return { lines: newLines, newCount: allLines.length }
   } catch {
@@ -114,16 +115,13 @@ export async function GET(request: NextRequest) {
         let nonDeployingAfterWasDeploying = 0
         let lastEmittedState = ""
 
-        // Idle-timeout: Ludus can get stuck in DEPLOYING when its internal
-        // goroutine exits without updating PocketBase (e.g. after an Ansible
-        // failure on a Windows VM).  Without this guard the stream would run
-        // for the full 30 min ceiling with no useful output.
-        // We track the wall-clock time of the last new log line and emit
-        // [DONE] <state> once no activity has been seen for IDLE_TIMEOUT_MS.
-        // 10 min covers Windows reboot quiet periods while still giving timely
-        // feedback when a deployment is genuinely stuck.
+        // Quiet periods are normal. Ansible's SSH/WinRM wait_for updates one line
+        // in place (NUL/CR, no new newline) for up to 900s. Treating that as a
+        // dead deploy and POSTing /range/abort closed the UI and could mark the
+        // range failed while the playbook was still cloning VMs.
         const IDLE_TIMEOUT_MS = 10 * 60 * 1000
         let lastActivityAt = Date.now()
+        let lastLogBytes = -1
         const deployDedupe = createDeployLogDedupe()
 
         /** Client may abort SSE (new stream, navigation) before next poll sees SUCCESS. */
@@ -163,7 +161,11 @@ export async function GET(request: NextRequest) {
 
           if (result.data) {
             const logText = result.data.result || ""
-            const allLines = logText.split("\n").filter((l) => l.trim())
+            if (logText.length !== lastLogBytes) {
+              lastActivityAt = Date.now()
+              lastLogBytes = logText.length
+            }
+            const allLines = omitBlankLogLines(splitLogText(logText))
             const newLines = allLines.slice(lastLudusCount)
             lastLudusCount = allLines.length
 
@@ -241,36 +243,33 @@ export async function GET(request: NextRequest) {
             wasDeploying = true
             nonDeployingAfterWasDeploying = 0
             warmupRemaining = WARMUP_POLLS  // reset warmup every time we see DEPLOYING
-
-            // Idle timeout: if no new log lines have arrived for IDLE_TIMEOUT_MS
-            // while the range is stuck in DEPLOYING, attempt a server-side abort
-            // before closing the stream so the PocketBase state gets updated.
+            // A quiet log is not a dead deploy. wait_for can sit for 15 minutes
+            // without a new line. Do not abort and do not send [DONE] while
+            // Ludus still reports DEPLOYING — that closed the pane and left
+            // the playbook running. The stream deadline still caps the connection.
             if (Date.now() - lastActivityAt > IDLE_TIMEOUT_MS) {
-              // Try aborting with user key first, then root key if available
-              try {
-                const abortResult = await ludusRequest(
-                  `/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
-                  { method: "POST", apiKey: effectiveApiKey }
-                )
-                if (!abortResult.data && settings.rootApiKey) {
-                  await ludusRequest(
-                    `/range/abort?rangeID=${encodeURIComponent(rangeId)}`,
-                    { method: "POST", apiKey: settings.rootApiKey, useAdminEndpoint: true }
-                  )
-                }
-              } catch { /* best-effort */ }
-              send("DONE", state, pollStamp)
-              streamDone = true
-              break
+              const mtime = rangeId ? await readLudusAnsibleLogMtimeMs(rangeId) : null
+              if (mtime != null && Date.now() - mtime < IDLE_TIMEOUT_MS) {
+                lastActivityAt = Date.now()
+              }
             }
           } else if (state) {
+            // A playbook can still be writing after Ludus has left DEPLOYING
+            // (or never flipped the badge). Keep the live pane up while lines arrive.
+            const recentlyActive = Date.now() - lastActivityAt < 30_000
             if (wasDeploying) {
-              nonDeployingAfterWasDeploying++
-              if (nonDeployingAfterWasDeploying >= 2) {
-                send("DONE", state, pollStamp)
-                streamDone = true
-                break
+              if (recentlyActive) {
+                nonDeployingAfterWasDeploying = 0
+              } else {
+                nonDeployingAfterWasDeploying++
+                if (nonDeployingAfterWasDeploying >= 2) {
+                  send("DONE", state, pollStamp)
+                  streamDone = true
+                  break
+                }
               }
+            } else if (recentlyActive) {
+              warmupRemaining = WARMUP_POLLS
             } else {
             // During warmup we intentionally do NOT exit immediately on ERROR/ABORTED.
             // GOAD deployments leave the range in ERROR (empty, no VMs) for several

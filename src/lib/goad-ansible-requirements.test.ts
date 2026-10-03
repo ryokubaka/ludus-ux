@@ -3,6 +3,7 @@ import { goadPathFromEnv } from "./install-path-env"
 
 vi.mock("@/lib/goad-ssh", () => ({
   sshExec: vi.fn(),
+  sshExecAccount: vi.fn(),
 }))
 
 vi.mock("@/lib/ansible-home-repair", () => ({
@@ -14,7 +15,7 @@ vi.mock("@/lib/ansible-requirements-server", () => ({
   installMissingAnsibleRequirementsServer: vi.fn(),
 }))
 
-import { sshExec } from "@/lib/goad-ssh"
+import { sshExec, sshExecAccount } from "@/lib/goad-ssh"
 import {
   findMissingAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
@@ -35,13 +36,11 @@ roles:
 
 describe("ensureGoadAnsibleRequirements", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   it("installs missing deps via Ludus API before GOAD runs", async () => {
-    vi.mocked(sshExec)
-      .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+    vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([
       { kind: "collection", name: "ansible.windows", version: "2.5.0" },
     ])
@@ -69,10 +68,12 @@ describe("ensureGoadAnsibleRequirements", () => {
   })
 
   it("force reinstalls collections that fail on-disk verification", async () => {
+    vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
     vi.mocked(sshExec)
-      .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\nLUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:ansible.windows\n", stderr: "", code: 0 })
+      .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([])
     vi.mocked(installMissingAnsibleRequirementsServer).mockResolvedValue({
       ok: true,
@@ -85,20 +86,20 @@ describe("ensureGoadAnsibleRequirements", () => {
       undefined,
       () => {},
       goadPathFromEnv(),
+      "labuser",
     )
 
     expect(result.ok).toBe(true)
     expect(installMissingAnsibleRequirementsServer).toHaveBeenCalledWith(
       "ROOT.test-key",
       [expect.objectContaining({ name: "ansible.windows" })],
-      { force: true },
+      { force: true, linuxUser: "labuser" },
     )
   })
 
   it("reads requirements via root SSH and verifies collections as impersonated user", async () => {
-    vi.mocked(sshExec)
-      .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+    vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
+    vi.mocked(sshExec).mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([])
 
     await ensureGoadAnsibleRequirements(
@@ -109,14 +110,20 @@ describe("ensureGoadAnsibleRequirements", () => {
       IMPERSONATED_SSH_USER,
     )
 
-    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).not.toContain("sudo -H -u")
-    expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toContain(`sudo -H -u '${IMPERSONATED_SSH_USER}'`)
+    expect(String(vi.mocked(sshExecAccount).mock.calls[0]?.[0])).toContain("requirements")
+    expect(String(vi.mocked(sshExecAccount).mock.calls[0]?.[0])).not.toContain("sudo -H -u")
+    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).toEqual([
+      "ansible-collection-file",
+      IMPERSONATED_SSH_USER,
+      "ansible",
+      "windows",
+      "plugins/modules/win_dns_client.ps1",
+    ])
   })
 
   it("passes impersonated linuxUser to Ludus API install for ansible home repair", async () => {
-    vi.mocked(sshExec)
-      .mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
-      .mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
+    vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
+    vi.mocked(sshExec).mockResolvedValueOnce({ stdout: "LUX_ANSIBLE_VERIFY_DONE\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([
       { kind: "role", name: "geerlingguy.mysql" },
     ])
@@ -139,5 +146,22 @@ describe("ensureGoadAnsibleRequirements", () => {
       expect.any(Array),
       { force: false, linuxUser: IMPERSONATED_SSH_USER },
     )
+  })
+
+  it("reads requirements as the logged-in user when that session has SSH credentials", async () => {
+    const creds = { username: "labuser", password: "secret" }
+    vi.mocked(sshExec).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
+    vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([])
+
+    const result = await ensureGoadAnsibleRequirements(
+      "ROOT.test-key",
+      creds,
+      () => {},
+      goadPathFromEnv(),
+    )
+
+    expect(result.ok).toBe(true)
+    expect(sshExec).toHaveBeenCalledWith(expect.stringContaining("$G/$F"), creds)
+    expect(sshExecAccount).not.toHaveBeenCalled()
   })
 })

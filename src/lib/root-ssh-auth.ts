@@ -1,5 +1,5 @@
 /**
- * Root SSH authentication to the Ludus/Proxmox host.
+ * Host SSH authentication to the Ludus/Proxmox host.
  *
  * Prefers password when set (settings or env); otherwise uses a private key
  * from PROXMOX_SSH_KEY_PATH, GOAD_SSH_KEY_PATH, or default container paths.
@@ -405,7 +405,7 @@ export function buildConnectAuthFromRootSettings(
   const key = readPrivateKey({ proxmoxSshKeyPath: settings.proxmoxSshKeyPath || "" })
   if (!key) {
     throw new Error(
-      "No root SSH authentication: set PROXMOX_SSH_PASSWORD or mount a private key (PROXMOX_SSH_KEY_PATH / ./ssh/id_rsa).",
+      "No host SSH authentication: set PROXMOX_SSH_PASSWORD or mount a private key for PROXMOX_SSH_USER (PROXMOX_SSH_KEY_PATH / ./ssh/id_rsa).",
     )
   }
   const ph = getSshKeyPassphrase()
@@ -420,7 +420,7 @@ export interface ProxmoxSshCredentials {
 }
 
 /**
- * Validate that root SSH to the Proxmox host is configured and return
+ * Validate that host SSH to the Proxmox host is configured and return
  * connection credentials. Callers should return a 503 when `ok` is false.
  */
 export function requireProxmoxSsh():
@@ -431,7 +431,7 @@ export function requireProxmoxSsh():
     return {
       ok: false,
       error:
-        "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount a root private key under ./ssh.",
+        "No Proxmox SSH auth: set PROXMOX_SSH_PASSWORD and PROXMOX_SSH_USER in .env (or Settings), or mount that user's private key under ./ssh.",
     }
   }
   return {

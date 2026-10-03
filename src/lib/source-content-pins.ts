@@ -64,6 +64,35 @@ export function sourceContentPinVersionMap(
   return out
 }
 
+/**
+ * One role or collection name has one installed copy.
+ * Installing it from this source drops the same name's pin on every other source.
+ */
+export function clearOtherSourceContentPins(opts: {
+  exceptSourceId: string
+  kind: SourceContentKind
+  name: string
+}): void {
+  const except = opts.exceptSourceId.trim()
+  const name = normalizeName(opts.name)
+  if (!except || !name) return
+  const short = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name
+  const rows = getDb()
+    .prepare(`SELECT source_id, name FROM source_content_pins WHERE kind = ?`)
+    .all(opts.kind) as Array<{ source_id: string; name: string }>
+  const del = getDb().prepare(
+    `DELETE FROM source_content_pins WHERE source_id = ? AND kind = ? AND name = ?`,
+  )
+  for (const row of rows) {
+    if (row.source_id === except) continue
+    const stored = normalizeName(row.name)
+    const storedShort = stored.includes(".") ? stored.slice(stored.lastIndexOf(".") + 1) : stored
+    if (stored === name || stored === short || storedShort === name || storedShort === short) {
+      del.run(row.source_id, opts.kind, row.name)
+    }
+  }
+}
+
 export function upsertSourceContentPin(pin: {
   sourceId: string
   kind: SourceContentKind
@@ -157,6 +186,7 @@ export async function pinSourceInstallSelection(
     for (const name of selection.localRoles) {
       const version = findVersion(items, name)
       if (version) {
+        clearOtherSourceContentPins({ exceptSourceId: sid, kind: "role", name: name.trim() })
         upsertSourceContentPin({
           sourceId: sid,
           kind: "role",
@@ -173,6 +203,11 @@ export async function pinSourceInstallSelection(
     for (const name of selection.localCollections) {
       const version = findVersion(items, name)
       if (version) {
+        clearOtherSourceContentPins({
+          exceptSourceId: sid,
+          kind: "collection",
+          name: name.trim(),
+        })
         upsertSourceContentPin({
           sourceId: sid,
           kind: "collection",

@@ -1,10 +1,9 @@
 import { NextRequest } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { streamGoadCommand, isGoadConfigured, readGoadRangeId, listGoadInstances } from "@/lib/goad-ssh"
-import { createTask, appendLine, completeTask, abortTask } from "@/lib/goad-task-store"
+import { streamGoadCommand, isGoadConfigured, readGoadRangeId, listGoadInstances, sshExecAsWorkspaceUser } from "@/lib/goad-ssh"
+import { createTask, appendLine, completeTask, getTask } from "@/lib/goad-task-store"
+import { goadLogShowsFailure } from "@/lib/goad-task-outcome"
 import { resolveSession } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
@@ -122,12 +121,17 @@ export async function POST(request: NextRequest) {
   //       The previous guard (!impersonateAs) meant impersonated destroy/start/stop
   //       commands never received range scoping, causing them to target the wrong
   //       (default) range.
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
+
   let effectiveRangeId: string | undefined = bodyRangeId || undefined
   if (!effectiveRangeId && instanceId) {
     try {
-      const settings = getSettings()
-      const rootCreds = rootPasswordCredsIfSet(settings)
-      effectiveRangeId = (await readGoadRangeId(instanceId, rootCreds)) ?? undefined
+      effectiveRangeId = (await readGoadRangeId(instanceId, undefined, runAsOwner)) ?? undefined
     } catch {
       // SSH unavailable — proceed without range targeting
     }
@@ -173,9 +177,7 @@ export async function POST(request: NextRequest) {
   if (effectiveRangeId && taskOwner) {
     let beforeInstanceIds: string[] = []
     try {
-      const settings = getSettings()
-      const rootCreds = rootPasswordCredsIfSet(settings)
-      const listed = await listGoadInstances(rootCreds)
+      const listed = await listGoadInstances()
       beforeInstanceIds = listed.map((i) => i.instanceId)
     } catch {
       /* best-effort snapshot */
@@ -187,6 +189,7 @@ export async function POST(request: NextRequest) {
       apiKey,
       instanceId: typeof instanceId === "string" ? instanceId : undefined,
       beforeInstanceIds,
+      runAsOwner,
     })
   }
 
@@ -219,8 +222,15 @@ export async function POST(request: NextRequest) {
           (line) => { send(line) },
           (code) => {
             deregisterCleanup(taskId)
-            completeTask(taskId, code, code === 0 ? "completed" : "error")
-            send(`[EXIT] Command exited with code ${code}`)
+            const logText = (getTask(taskId)?.lines ?? []).join("\n")
+            const failed = goadLogShowsFailure(logText)
+            const current = getTask(taskId)?.status
+            if (failed) {
+              completeTask(taskId, code === 0 ? 1 : code, "error")
+            } else if (current === "running") {
+              completeTask(taskId, code, code === 0 ? "completed" : "error")
+            }
+            send(`[EXIT] Command exited with code ${failed && code === 0 ? 1 : code}`)
             try { controller.close() } catch {}
             resolve()
           },
@@ -238,6 +248,7 @@ export async function POST(request: NextRequest) {
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
           typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
           ludusOnlyRoles.length > 0 ? ludusOnlyRoles : undefined,
+          session.isAdmin === true,
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

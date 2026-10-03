@@ -196,14 +196,13 @@ async function readLudusAnsibleLogViaSsh(rangeId: string): Promise<string | null
   if (!/^[\w.-]+$/.test(rid)) return null
   const settings = getSettings()
   if (!settings.sshHost?.trim() || !isRootProxmoxSshConfigured(settings)) return null
-  const logPath = ludusRangeAnsibleLogPath(rid)
   try {
     const content = await sshExec(
       settings.sshHost,
       settings.sshPort,
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
-      `cat "${logPath}" 2>/dev/null || true`,
+      ["range-log", "read", rid],
     )
     if (!content.trim()) return null
     return capLudusLogTail(content)
@@ -235,7 +234,7 @@ export async function readLudusAnsibleLogMtimeMs(rangeId: string): Promise<numbe
       settings.sshPort,
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
-      `stat -c %Y "${logPath}" 2>/dev/null || echo 0`,
+      ["range-log", "mtime", rangeId.trim()],
     )
     const sec = parseInt(out.trim(), 10)
     return Number.isFinite(sec) && sec > 0 ? sec * 1000 : null
@@ -256,7 +255,7 @@ export async function readLudusAnsibleLogByteLength(rangeId: string): Promise<nu
       settings.sshPort,
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
-      `wc -c < "${logPath}" 2>/dev/null || echo 0`,
+      ["range-log", "bytes", rangeId.trim()],
     )
     const n = parseInt(out.trim(), 10)
     return Number.isFinite(n) && n >= 0 ? n : null
@@ -283,7 +282,7 @@ export async function readLudusAnsibleLogSuffixFromByteOffset(
       settings.sshPort,
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
-      `tail -c +${start} "${logPath}" 2>/dev/null | head -c ${maxBytes} || true`,
+      ["range-log", "suffix", rangeId.trim(), String(start), String(maxBytes)],
     )
     return content.trim() ? content : null
   } catch {

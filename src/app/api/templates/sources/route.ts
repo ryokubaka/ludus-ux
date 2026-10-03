@@ -16,7 +16,9 @@ import {
   fetchRegisteredTemplateCatalog,
   resolveBadslCatalogMeta,
 } from "@/lib/ludus-source-catalog"
+import { catalogReadApiKey } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
 
@@ -121,12 +123,12 @@ export async function GET(request: NextRequest) {
   // templates when switching to a custom registered source).
   if (source === "registered" && sourceId) {
     try {
-      const { apiKey } = await requireSourcesSession(request)
-      if (!apiKey) {
+      const { session, apiKey } = await requireSourcesSession(request)
+      if (!session || !apiKey) {
         return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
       }
       const { templates, catalogSource } = await fetchRegisteredTemplateCatalog(
-        apiKey,
+        catalogReadApiKey(session, apiKey, sourceId),
         sourceId,
         searchParams.get("ref") || BADSL_REF,
       )
@@ -200,7 +202,9 @@ export async function GET(request: NextRequest) {
           apiLabel,
         )
         const files = fileTree.filter((i) => i.type === "blob").map((i) => i.name)
-        return { name: dir.name, path: dir.path, files, ref, apiBase }
+        // Folder stays `debian13`; Ludus install/build id is the Packer vm_name.
+        const name = await resolveGitTemplateInstallName(apiBase, ref, dir.name, files, dir.path)
+        return { name, path: dir.path, files, ref, apiBase }
       }),
       5,
     )

@@ -48,6 +48,7 @@ Each bullet uses a single tag:
 
 - [Security] **Next.js** 16.3.8 — closes a remote code execution bug in image generation ([GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j)).
 - [Security] **brace-expansion** 5.0.12 — closes denial-of-service bugs in a dependency ([GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr)).
+- [Security] **braces** — deeply nested patterns are rejected instead of crashing Node ([GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm)).
 - [Security] **Releases** — The release title is passed to the job as data, not pasted into a shell command.
 
 ## [1.3.2] - 2026-09-10

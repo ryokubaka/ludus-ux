@@ -7,6 +7,7 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+COPY vendor/braces ./vendor/braces
 # Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
 RUN npm install -g npm@11.14.0
 RUN npm install --legacy-peer-deps

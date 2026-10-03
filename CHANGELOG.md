@@ -17,47 +17,38 @@ Each bullet uses a single tag:
 
 ## Unreleased
 
-**Security**
-
-- [Security] **Next.js** 16.3.8 — [GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j) (next/og ImageResponse RCE). `brace-expansion` 5.0.12 — [GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr), [GHSA-qhr7-859c-m2p7](https://github.com/advisories/GHSA-qhr7-859c-m2p7), [GHSA-6j4f-fj2g-mc7p](https://github.com/advisories/GHSA-6j4f-fj2g-mc7p).
-
-**LUX**
-
-- [Fix] **lux-host** — The Settings install writes an update key that `self-update` and the SSH version switch check. Quickstart writes and stores the same key. A refresh without that key asks for the one-time root install. An admin on a non-root host account switches to another Linux user through `run-as-user`. Other users run as themselves.
-- [Fix] **Template delete** — Delete removes install-tree aliases and the packer folder whose `vm_name` is the list name, and fails if that install folder is still on disk. A source checkout is not removed by `vm_name` and does not block the delete.
-- [Fix] **Source unpublish** — Turning a shared source off runs the same install-tree template purge as template delete. A leftover install directory is a warning. The source checkout staying on disk does not fail unpublish.
-- [Fix] **Shared source import** — A blueprint is not shared from a source whose git URL differs, including another fork whose id ends with the same repo slug.
-- [Security] **Releases** — The changelog title is passed to the release job in the environment, not interpolated into the shell.
-- [Fix] **In-app releases** — The SSH fallback sends this build's `scripts/upgrade.sh` with an HMAC from the lux-host update key and runs that root-owned copy, so a checkout the SSH user owns can still switch. About stays off when the key is missing or the start would fail. The Docker socket path does not need the key.
-
-**GOAD**
-
-- [Fix] **Firewall rules** — After Provide, the safety-net merge keeps existing range rules in their current order and evaluates new extension rules after them.
-- [Fix] **Range file** — Provide chowns a new workspace only when its Linux owner is the account that created it (`GOAD_SSH_USER` when set, otherwise the Settings SSH user) or already the target owner, then writes `.goad_range_id` as that owner. That chown waits until the host-account GOAD process has exited, including when the install runs longer than instance discovery. Set-range, init-range, and reassign do not take the directory while that process still needs it, including a fresh install whose task has no instance id yet. Init-range tells a caller who is not that host account that GOAD is still writing the workspace, so Provide stops. A key-only caller still receives the range id. Reassign shows that same sentence. A directory owned by someone else is left unchanged and unlinked. A missing list entry, a blank owner, or a numeric uid is not chowned and is retried until the deadline. A failed write leaves the instance unlinked.
-- [Remove] **Sniff watcher** — LUX no longer runs a deploy-time Security Onion sniff watcher. The ludus_securityonion role attaches net1 while the role runs.
-- [Fix] **Network rules** — Clearing every rule in the wizard writes `rules: []` and keeps the existing range's other network settings, including `inter_vlan_default`.
-- [Fix] **SO inventory sync** — Sync Range IPs puts Security Onion back on VLAN 20 (`10.R.20.20`) after the `192.168.56` prefix rewrite.
-
 ## [1.4.0] - 2026-10-02
 
 **LUX**
 
-- [Add] **In-app releases** — Settings → About lists GitHub releases and confirms before an upgrade or downgrade. The switch uses the Docker socket, or this build's script over SSH when that socket is missing. `./data`, `./ssh`, and `.env` stay. A release older than v1.4.0 must be acknowledged. Set `LUX_REPO_PATH` when Docker cannot see the clone.
-- [Add] **lux-host** — Host SSH can be any account. Privileged commands run through `/usr/local/sbin/lux-host`, and sudoers allows that path only. Settings installs it with one root-shell paste, or with the root SSH password when root login is allowed. That password is used once and is not saved. A password install keeps later helper updates from asking again. [What it is](docs/ssh-and-auth.md#lux-host).
+- [Add] **In-app releases** — Settings → About lists GitHub releases and asks before an upgrade or downgrade. The switch uses the Docker socket. If that socket is missing, SSH runs this build's upgrade script. Your data, SSH keys, and `.env` stay. A release older than v1.4.0 must be acknowledged. Set `LUX_REPO_PATH` when Docker cannot see the clone.
+- [Add] **lux-host** — Host SSH can be any account. Privileged commands go through `/usr/local/sbin/lux-host`. Sudo allows that program only. Settings installs it with one command to paste in a root shell, or with the root password when root login is allowed. The password is used once and is not saved. That install stores an update key so later helper updates do not ask again. [What it is](docs/ssh-and-auth.md#lux-host).
 - [Add] **Dashboard** — A Ludus host box shows cluster CPU and memory. It refreshes every 10 seconds.
-- [Improve] **Quickstart** — Host SSH setup, in the full wizard and in individual actions, asks for root or a non-root user. A non-root user gets lux-host after the key is authorized.
+- [Improve] **Quickstart** — Host SSH setup asks whether the account is root or another user. A non-root user gets lux-host after the key is authorized.
 - [Improve] **Host SSH test** — The Packer directory path is shown only when that directory is not writable.
-- [Improve] **Sources** — Install from a source on the Sources page. Cards show the owner and branch. A shared source can be installed by other users. **Re-sync outdated** follows that branch's own install.
-- [Improve] **Lists** — Long pages preview the first rows, then a bar for the rest.
+- [Improve] **Sources** — Install from a source on the Sources page. Cards show the owner and branch. Other users can install from a shared source. Re-sync follows that branch's own install.
+- [Improve] **Lists** — Long pages show the first rows, then a bar for the rest.
 - [Fix] **Template names** — Add from Source keeps the git folder and registers the Packer `vm_name`. [Templates](docs/templates.md#add-from-source).
+- [Fix] **Template delete** — Delete removes the installed template folder. The source checkout is left alone. Delete fails if the installed folder is still on disk.
 - [Fix] **Sources** — A role or collection has one installed copy. Another branch shows who owns it, and Re-sync replaces that copy.
-- [Remove] **Deploy preflight** — Range deploy is forwarded to Ludus.
+- [Fix] **Source unpublish** — Turning a shared source off removes its installed templates. A leftover install folder is a warning. The source checkout staying on disk is fine.
+- [Fix] **Shared source import** — A blueprint is not taken from a different git URL, including another fork of the same repo name.
+- [Remove] **Deploy preflight** — Range deploy is sent to Ludus. LUX does not install Ansible requirements first.
 
 **GOAD**
 
-- [Add] **Firewall rules** — Network Rules lists extension and existing range rules, and Provide sends that list to Ludus. Existing rules stay in order. New rules are added after them.
-- [Fix] **Range file** — Provide writes `.goad_range_id` as the workspace owner. A failed write leaves the instance unlinked.
-- [Fix] **Ansible check** — Dependency checks use `/opt/ludus/users/<ludus-username>/.ansible` for the signed-in user.
+- [Add] **Firewall rules** — Network Rules lists rules from the selected extensions and from the existing range. Provide sends that same list to Ludus before the deploy that installs them.
+- [Fix] **Firewall rules** — Existing range rules stay in their current order. New extension rules are added after them. Clearing the list keeps the range's other network settings, including whether VLANs can talk to each other.
+- [Fix] **Range file** — Provide writes the range id as the workspace owner, after GOAD has finished creating that workspace. If the write fails, the instance stays unlinked.
+- [Fix] **Ansible check** — Dependency checks use the signed-in Ludus user's Ansible folder, not the host SSH account.
+- [Fix] **SO inventory sync** — Sync Range IPs puts Security Onion back on its own VLAN after the address rewrite.
+- [Remove] **Sniff watcher** — LUX no longer attaches the Security Onion sniff interface during deploy. The Security Onion role does that itself.
+
+**Security**
+
+- [Security] **Next.js** 16.3.8 — closes a remote code execution bug in image generation ([GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j)).
+- [Security] **brace-expansion** 5.0.12 — closes denial-of-service bugs in a dependency ([GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr)).
+- [Security] **Releases** — The release title is passed to the job as data, not pasted into a shell command.
 
 ## [1.3.2] - 2026-09-10
 

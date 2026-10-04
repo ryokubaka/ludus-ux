@@ -15,17 +15,13 @@ Each bullet uses a single tag:
 
 ---
 
-## Unreleased
-
-- [Add] **Uninstall lux-host** — `bash scripts/uninstall.sh` removes `/usr/local/sbin/lux-host`, its sudoers rule, and the update key. `--print` writes a root-shell command and does not SSH. Containers, `./data`, `./ssh`, and `.env` stay.
-- [Fix] **In-app version switch** — After checkout, untracked files are removed before the image build so a leftover test from a newer tree cannot fail an older release. Ignored files (`.env`, `data`, `ssh`) stay.
-
 ## [1.4.0] - 2026-10-02
 
 **LUX**
 
 - [Add] **In-app releases** — Settings → About lists GitHub releases and asks before an upgrade or downgrade. The switch uses the Docker socket. If that socket is missing, SSH runs this build's upgrade script. Your data, SSH keys, and `.env` stay. A release older than v1.4.0 must be acknowledged. Set `LUX_REPO_PATH` when Docker cannot see the clone.
 - [Add] **lux-host** — Host SSH can be any account. Privileged commands go through `/usr/local/sbin/lux-host`. Sudo allows that program only. Settings installs it with one command to paste in a root shell, or with the root password when root login is allowed. The password is used once and is not saved. That install stores an update key so later helper updates do not ask again. [What it is](docs/ssh-and-auth.md#lux-host).
+- [Add] **Uninstall lux-host** — `bash scripts/uninstall.sh` removes `/usr/local/sbin/lux-host`, its sudoers rule, and the update key. `--print` writes a root-shell command and does not SSH. Containers, `./data`, `./ssh`, and `.env` stay.
 - [Add] **Dashboard** — A Ludus host box shows cluster CPU and memory. It refreshes every 10 seconds.
 - [Improve] **Quickstart** — Host SSH setup asks whether the account is root or another user. A non-root user gets lux-host after the key is authorized.
 - [Improve] **Host SSH test** — The Packer directory path is shown only when that directory is not writable.
@@ -44,8 +40,6 @@ Each bullet uses a single tag:
 - [Fix] **Firewall rules** — Existing range rules stay in their current order. New extension rules are added after them. Clearing the list keeps the range's other network settings, including whether VLANs can talk to each other.
 - [Fix] **Range file** — Provide writes the range id as the workspace owner, after GOAD has finished creating that workspace. If the write fails, the instance stays unlinked.
 - [Fix] **Ansible check** — Dependency checks use the signed-in Ludus user's Ansible folder, not the host SSH account.
-- [Fix] **SO inventory sync** — Sync Range IPs puts Security Onion back on its own VLAN after the address rewrite.
-- [Remove] **Sniff watcher** — LUX no longer attaches the Security Onion sniff interface during deploy. The Security Onion role does that itself.
 
 **Security**
 
@@ -102,7 +96,7 @@ Each bullet uses a single tag:
 
 - [Add] **VM Management** — Ranges Overview tab listing all range VMs across users with template/range/owner/power filters; power on/off, noVNC console, .vv download, and bulk destroy. Range row opens that range’s dashboard (with impersonation when needed). Template-delete linked-clone errors deep-link via `?tab=vms&template=`.
 - [Add] **Add VM wizard** — Configuration page dialog to append one or more VMs from built templates (hostname, VLAN, IP, CPU/RAM) without hand-editing YAML.
-- [Fix] **Network rules YAML coerce** — Range config PUT normalizes `ip_last_octet_*` quoted strings and `ports` arrays to Ludus schema forms (integer octets / comma-separated port strings).
+- [Fix] **Network rules YAML coerce** — Range config PUT normalizes `ip_last_octet_`* quoted strings and `ports` arrays to Ludus schema forms (integer octets / comma-separated port strings).
 - [Fix] **SO sniff timing** — Security Onion labs only. While range is `DEPLOYING`, only hub-mode (`bridge-ageing 0`); do **not** attach sniff `net1` yet (same-VLAN tag breaks Ludus MAC→iface lookup). Role / post-deploy backstop adds `net1` after IP config.
 - [Fix] **SO sniff SSH scripts** — Security Onion labs only. Pipe enable/cleanup bash via base64 so `sshExec`/`bash -c "..."` no longer strips `$vars` (empty `MARKER`/`VMID`, broken `qm`/`sed`). Cleanup restores bridge ageing in centiseconds.
 - [Fix] **Deploy log SSE auto-reconnect** — Transient EventSource blips no longer kill the stream; backoff reconnect with `snapshotStart=false`, preserve lines, skip reconnect after intentional stop / `[DONE]` / `[ERROR]`.
@@ -110,7 +104,7 @@ Each bullet uses a single tag:
 **GOAD**
 
 - [Add] **Install Extension** — `POST /api/goad/instances/{id}/enable-extension` + provide→provision chain when extension VMs are missing; skip provide when VMs already exist. History labels show `Install extension: <name>`.
-- [Add] **Proxmox env for GOAD ansible** — Inject `PROXMOX_*` from Ludus host config/`token.cfg` so extension roles can attach NICs outside `ludus range deploy`.
+- [Add] **Proxmox env for GOAD ansible** — Inject `PROXMOX_`* from Ludus host config/`token.cfg` so extension roles can attach NICs outside `ludus range deploy`.
 - [Fix] **SO inventory sync-ips** — After prefix rewrite, correct Security Onion vlan-20 hosts (`10.R.10.20` → `10.R.20.20`) in `securityonion*_inventory`.
 - [Fix] **Deploy↔GOAD history correlation** — Prefer closest start times over max overlap so a stale open Ludus deploy does not steal every live GOAD task.
 
@@ -149,7 +143,7 @@ Each bullet uses a single tag:
 - [Improve] **Router template gate** — Block GOAD/`deployRange` until `debian-11-x64-server-template` is Packer-built (Ludus range router). Enforced in proxy, Dashboard Deploy, range wizards, and `executeGoad`; included in GOAD `templateAudit`.
 - [Improve] **Sources** — Source ID always shown (Ludus 2.3.0+ may auto-prefix with userID); register dialog documents that behavior.
 - [Improve] **Settings** — Ansible verbose + force quirk warning only when connected Ludus is ≤2.2.3 (or version unknown).
-- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/**` and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
+- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/`** and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
 - [Fix] **GOAD venv / exit code** — Recreate broken `~/.goad/.venv` (missing activate) and pip-install when `rich` missing; preserve `goad.sh` exit status so failures are not reported as EXIT 0.
 - [Docs] Features / environment notes for `ludus_extensions` preservation and version-gated verbose warning.
 
@@ -273,8 +267,8 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Fix] **Testing Mode** — Start/stop no longer stuck on "Starting…" when ansible finished but Ludus/PocketBase lagged: SSH-first op-scoped log slice (2 MB), capped-length slicing before tail-anchor (avoids false matches on repeated ansible output), POST completion retries after PUT returns, and awaited PocketBase `testingEnabled` sync with backoff before the op is marked complete.
-- [Fix] **Templates** — Official add-from-source catalog now pulls from GitHub [`badsectorlabs/ludus-source-bsl`](https://github.com/badsectorlabs/ludus-source-bsl) (replacing the retired GitLab `badsectorlabs/ludus` repo); shared `template-repo-client` handles GitLab and GitHub tree/raw APIs for list and add flows.
-- [Add] **Blueprints** — Add from Source installs from [`badsectorlabs/ludus-source-bsl/blueprints`](https://github.com/badsectorlabs/ludus-source-bsl/tree/main/blueprints) via Ludus Sources when available, else `POST /blueprints` / from-range config upload from fetched YAML.
+- [Fix] **Templates** — Official add-from-source catalog now pulls from GitHub `[badsectorlabs/ludus-source-bsl](https://github.com/badsectorlabs/ludus-source-bsl)` (replacing the retired GitLab `badsectorlabs/ludus` repo); shared `template-repo-client` handles GitLab and GitHub tree/raw APIs for list and add flows.
+- [Add] **Blueprints** — Add from Source installs from `[badsectorlabs/ludus-source-bsl/blueprints](https://github.com/badsectorlabs/ludus-source-bsl/tree/main/blueprints)` via Ludus Sources when available, else `POST /blueprints` / from-range config upload from fetched YAML.
 - [Add] **Deploy New Range** — Config method **From Blueprint** applies an installed or source blueprint then deploys.
 - [Add] **Blueprints** — Apply dialog and range wizard **From Blueprint** check Ansible roles/collections against `GET /ansible`, list missing deps, and offer **Install dependencies** (`POST /blueprints/{id}/install` with per-item fallback).
 
@@ -290,7 +284,7 @@ Each bullet uses a single tag:
 - [Add] **LogViewer compound API** — `LogViewerCompound.Root|Toolbar|Search|Body` for composable log panes; adopted on Dashboard, Range Logs, Admin → Application Logs, Templates, Testing, and Range Config.
 - [Add] **E2E** — GOAD task ACL unauthenticated (`e2e/goad-task-acl.spec.ts`); deploy tab smoke (`e2e/goad-instance-deploy.spec.ts`); Extensions/History tabs with auth (`e2e/goad-instance-tabs.spec.ts`).
 - [Add] **Tests** — Unit coverage for bashrc API-key parsing, selected-range cookie resolution, Ludus group list parsing, snapshots view grouping, and Ludus proxy cache invalidation (112 tests).
-- [Improve] **GOAD instance page** — Six typed tab modules (`goad-instance-tabs/*`), shell components (header, action bar, reassign dialog, tab triggers), and action hooks (`use-goad-run-action`, `use-goad-instance-action-handlers`); orchestrator ~1.2k lines (down from ~2.8k).
+- [Improve] **GOAD instance page** — Six typed tab modules (`goad-instance-tabs/`*), shell components (header, action bar, reassign dialog, tab triggers), and action hooks (`use-goad-run-action`, `use-goad-instance-action-handlers`); orchestrator ~1.2k lines (down from ~2.8k).
 - [Improve] **Next 16 proxy** — Renamed `middleware.ts` → `proxy.ts` and `middleware()` → `proxy()` per Next 16 network-boundary convention (auth gate + security headers unchanged).
 - [Improve] **Cache Components hygiene** — `markRouteDynamic()` in `getLayoutSession` and `requireAdminPage` before cookie reads under `cacheComponents`; `cached-lux-version` uses stable `cacheLife` import.
 - [Improve] **Shared parsers** — `parseLudusGroupList`, `buildSnapshotsViewData`, and `NetworkSnapshot` type for Ludus list/YAML/network handling.
@@ -398,7 +392,7 @@ Each bullet uses a single tag:
 - [Improve] **Quickstart** — Publishes your `SSH_KEY_PATH`/`id_rsa` public half to the Ludus server to address SSH key only based authentication 
 - [Fix] **Range creation** `userID` — Client `ludusApi.createRange` resolves the caller’s Ludus `userID` instead of incorrect `name`
 - [Fix] **Admin impersonation** — “Manage as” stores `userID`, `name`, and **SSH login** separately so Ludus range APIs see the real `userID`, SSH/GOAD still use `proxmoxUsername` (`name` fallback), instead of collapsing everything into `name` and breaking impersonated workflows
-- [Fix] **Settings merge** — Empty `proxmoxSshPassword` / `proxmoxSshUser` values stored in SQLite no longer override `PROXMOX_SSH_*` from the environment (same idea as the root API key), so `.env` Proxmox SSH credentials are not masked after a Settings save with blank fields.
+- [Fix] **Settings merge** — Empty `proxmoxSshPassword` / `proxmoxSshUser` values stored in SQLite no longer override `PROXMOX_SSH_`* from the environment (same idea as the root API key), so `.env` Proxmox SSH credentials are not masked after a Settings save with blank fields.
 - [Fix] **Ranges Overview → shared services (ADMIN pool)** — `/api/admin/shared-vms` and `/api/admin/vm` now authenticate to Proxmox only with configured root SSH: `PROXMOX_SSH_USER`, `PROXMOX_SSH_PASSWORD`, and/or the mounted private key. They no longer reuse the browser session’s Ludus SSH password.
 - [Fix] **Shared VM start/stop** — `PUT /api/admin/vm` accepts key-only Proxmox auth (previously required a non-empty password even when a root key was mounted).
 
@@ -430,7 +424,7 @@ Each bullet uses a single tag:
 - [Security] **Impersonation API key** removed from `sessionStorage` — key lives only in the encrypted `httpOnly` session cookie; all server routes derive it via `resolveAdminImpersonationFromRequest`
 - [Security] **Task stream IDOR** — non-admin access to `/api/goad/tasks/:id/stream` for an unknown task now returns 404
 - [Security] **Proxy error sanitisation** — internal exception details logged server-side only; client receives generic `"Internal proxy error"`
-- [Security] **Impersonation header merge** — both `X-Impersonate-*` headers required together; a single header falls back to the session cookie
+- [Security] **Impersonation header merge** — both `X-Impersonate-`* headers required together; a single header falls back to the session cookie
 - [Perf] **GOAD wizard redirect** — instant redirect to instance page on first `[TASKID]` SSE event; 30-minute poll removed
 - [Perf] **TanStack** `staleTime` **audit** — admin ranges, GOAD instance lists, and task lists promoted to `STALE.medium`
 

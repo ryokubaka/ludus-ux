@@ -17,6 +17,9 @@ Each bullet uses a single tag:
 
 ## Unreleased
 
+- [Add] **Uninstall lux-host** — `bash scripts/uninstall.sh` removes `/usr/local/sbin/lux-host`, its sudoers rule, and the update key. `--print` writes a root-shell command and does not SSH. Containers, `./data`, `./ssh`, and `.env` stay.
+- [Fix] **In-app version switch** — After checkout, untracked files are removed before the image build so a leftover test from a newer tree cannot fail an older release. Ignored files (`.env`, `data`, `ssh`) stay.
+
 ## [1.4.0] - 2026-10-02
 
 **LUX**

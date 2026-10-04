@@ -65,14 +65,12 @@ export function shellSingleQuote(value: string): string {
 }
 
 /**
- * Run `ludus templates add` over root SSH with the caller's Ludus API key.
- * No sudo/runuser/su — LUX already SSHs as root; user-switching breaks on
- * hosts without sudo and is unnecessary for registration.
+ * Run `ludus templates add` over host SSH with the caller's Ludus API key.
+ * The command itself does not switch users. When PROXMOX_SSH_USER is not root,
+ * the SSH helper runs it with `sudo -n /usr/local/sbin/lux-host`.
  */
-export function buildLudusTemplateAddCmd(destDir: string, ludusApiKey: string): string {
-  const safeDir = shellSingleQuote(destDir)
-  const safeKey = ludusApiKey.replace(/'/g, "'\\''")
-  return `env LUDUS_VERSION=2 LUDUS_API_KEY='${safeKey}' ludus templates add -d ${safeDir}`
+export function buildLudusTemplateAddCmd(destDir: string, ludusApiKey: string): readonly string[] {
+  return ["ludus-template-add", destDir, ludusApiKey]
 }
 
 /** Ludus DELETE /template/{name} returns HTTP 200 but refuses to remove shared packer dirs. */
@@ -106,42 +104,18 @@ export function templateDirNameAliases(templateName: string): string[] {
 }
 
 /** Unregister template via Ludus CLI (needed when API soft-refuses shared packer). */
-export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: string): string {
-  const safeName = templateName.replace(/'/g, "'\\''")
-  const safeKey = ludusApiKey.replace(/'/g, "'\\''")
-  return `env LUDUS_VERSION=2 LUDUS_API_KEY='${safeKey}' ludus templates rm -n '${safeName}' 2>&1 || true`
+export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: string): readonly string[] {
+  return ["ludus-template-rm", templateName, ludusApiKey]
 }
 
 /**
- * Root SSH: remove template dirs under shared packer, per-user packer, and source mirrors.
- * Matches list name and catalog-dir aliases; also finds dirs via Packer `vm_name`.
+ * Root SSH: remove alias dirs under packer, packer/templates, per-user packer, and source mirrors.
+ * The first name is the Ludus list name. lux-host matches Packer `vm_name` to that name only,
+ * and only on those install trees.
  * `templateName` must already match a safe charset (letters, digits, ._-).
  */
-export function buildLudusTemplateDeleteCmd(ludusRoot: string, templateName: string): string {
-  const root = ludusRoot.replace(/\/$/, "")
-  const aliases = templateDirNameAliases(templateName)
-  // NAME_RE already restricts charset; strip quotes anyway for NAMES=...
-  const namesList = aliases.map((a) => a.replace(/["'\\$`]/g, "")).filter(Boolean).join(" ")
-  // sh: rm by dir name aliases, then find any remaining pkr whose vm_name matches.
-  const script = [
-    `ROOT=${shellSingleQuote(root)}`,
-    `NAMES=${shellSingleQuote(namesList)}`,
-    `for name in $NAMES; do`,
-    `  rm -rf "$ROOT/packer/$name" "$ROOT/packer/templates/$name"`,
-    `  for d in "$ROOT/users"/*/packer; do [ -d "$d" ] && rm -rf "$d/$name"; done`,
-    `  for d in "$ROOT/sources"/*/templates; do [ -d "$d/$name" ] && rm -rf "$d/$name"; done`,
-    `done`,
-    `for base in "$ROOT/packer" "$ROOT/packer/templates" "$ROOT/users"/*/packer "$ROOT/sources"/*/templates; do`,
-    `  [ -d "$base" ] || continue`,
-    `  find "$base" -mindepth 1 -maxdepth 4 -type f \\( -name '*.pkr.hcl' -o -name '*.pkr.json' \\) 2>/dev/null | while read -r f; do`,
-    `    for name in $NAMES; do`,
-    `      if grep -qE "vm_name[[:space:]]*=[[:space:]]*\\"$name\\"|\\"vm_name\\"[[:space:]]*:[[:space:]]*\\"$name\\"" "$f" 2>/dev/null; then`,
-    `        rm -rf "$(dirname "$f")"; break`,
-    `      fi`,
-    `    done`,
-    `  done`,
-    `done`,
-    `echo ok`,
-  ].join("\n")
-  return `bash -lc ${shellSingleQuote(script)}`
+export function buildLudusTemplateDeleteCmd(_ludusRoot: string, templateName: string): readonly string[] {
+  const listName = templateName.trim()
+  const aliases = templateDirNameAliases(listName).filter((name) => name !== listName)
+  return ["template-purge", ...(listName ? [listName, ...aliases] : [])]
 }

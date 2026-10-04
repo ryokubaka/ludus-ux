@@ -24,7 +24,7 @@ services:
       - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
       # ROOT API key for Ludus v2 admin operations (user management)
       - LUDUS_ROOT_API_KEY=${LUDUS_ROOT_API_KEY:-}
-      # Proxmox root SSH for pvesh / admin tunnel / privileged ops (key preferred on hardened PVE)
+      # Host SSH for pvesh / admin tunnel / privileged ops (root, or sudo -n lux-host; key preferred)
       - PROXMOX_SSH_USER=${PROXMOX_SSH_USER:-root}
       - PROXMOX_SSH_PASSWORD=${PROXMOX_SSH_PASSWORD:-}
       - PROXMOX_SSH_KEY_PATH=${PROXMOX_SSH_KEY_PATH:-/app/ssh/id_rsa}
@@ -50,9 +50,14 @@ services:
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - NODE_ENV=production
       - TZ=${TZ:-America/New_York}
+      # Host path of this git clone on the Docker host. Empty: discover via `docker inspect`.
+      - LUX_REPO_PATH=${LUX_REPO_PATH:-}
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh
       - ${DATA_DIR:-./data}:/app/data
+      # Lets Settings → About run scripts/upgrade.sh on this Docker host.
+      # The socket is root-equivalent for the daemon: the app can start and stop containers here.
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
@@ -62,6 +63,7 @@ export function AddVmWizardDialog({
   const scopeTag = useEffectiveScopeTag()
   const [vms, setVms] = useState<VMEntry[]>([])
   const [rangeVlan, setRangeVlan] = useState(10)
+  const [showAllTemplates, setShowAllTemplates] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -134,13 +136,11 @@ export function AddVmWizardDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto overscroll-y-contain">
         <DialogHeader>
           <DialogTitle>Add VMs to range</DialogTitle>
           <DialogDescription>
-            Pick built templates and tune hostname, VLAN, and resources. New entries append to{" "}
-            <code className="font-mono text-primary">{rangeId}</code>&apos;s{" "}
-            <code className="font-mono">ludus:</code> list — review YAML, then Save Config.
+            Add built templates to {rangeId}. Review the YAML, then save.
           </DialogDescription>
         </DialogHeader>
 
@@ -163,8 +163,9 @@ export function AddVmWizardDialog({
                   first.
                 </p>
               ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-                  {templates.map((t) => {
+                <div className="rounded-lg border border-border">
+                <div className="grid grid-cols-2 gap-2 p-2">
+                  {previewSlice(templates, showAllTemplates).map((t) => {
                     const { isLinux, isWindows } = inferOS(t.name)
                     return (
                       <button
@@ -183,6 +184,8 @@ export function AddVmWizardDialog({
                       </button>
                     )
                   })}
+                </div>
+                <ShowAllBar expanded={showAllTemplates} count={templates.length} onToggle={() => setShowAllTemplates((v) => !v)} />
                 </div>
               )}
             </CardContent>
@@ -211,7 +214,7 @@ export function AddVmWizardDialog({
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-3 max-h-72 overflow-y-auto">
+              <CardContent className="space-y-3">
                 {vms.map((vm) => (
                   <div key={vm.id} className="border rounded-lg p-3 space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">

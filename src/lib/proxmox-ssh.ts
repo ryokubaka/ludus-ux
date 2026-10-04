@@ -6,7 +6,13 @@
  * as GOAD / admin tunnel: PROXMOX_SSH_KEY_PATH, GOAD_SSH_KEY_PATH, /app/ssh/*).
  */
 import { Client as SSHClient, type ConnectConfig } from "ssh2"
+import { shellSingleQuote } from "@/lib/template-packer-paths"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
+import { asPrivilegedShell, formatLuxHost } from "./root-ssh-preflight"
+
+export function sshLoginCommand(remote: string): string {
+  return `bash -l -c ${shellSingleQuote(remote)}`
+}
 
 function buildSshConnectConfig(
   host: string,
@@ -29,12 +35,17 @@ function buildSshConnectConfig(
   return { ...base, privateKey: key, ...(ph ? { passphrase: ph } : {}) }
 }
 
+function isLuxHostArgv(command: string | readonly string[]): command is readonly string[] {
+  return Array.isArray(command)
+}
+
 export function sshExec(
   host: string,
   port: number,
   username: string,
   password: string,
-  command: string,
+  command: string | readonly string[],
+  options?: { elevate?: boolean; stdin?: string },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let cfg: ConnectConfig
@@ -47,11 +58,20 @@ export function sshExec(
     conn.on("ready", () => {
       // Use bash -l (login shell) so /etc/profile is sourced and Proxmox tools
       // like pvesh are on PATH regardless of their exact install location.
-      conn.exec(`bash -l -c ${JSON.stringify(command)}`, (err, stream) => {
+      let remote: string
+      if (isLuxHostArgv(command)) {
+        remote = formatLuxHost(username, command)
+      } else if (options?.elevate === false) {
+        remote = command
+      } else {
+        remote = asPrivilegedShell(username, command)
+      }
+      conn.exec(sshLoginCommand(remote), (err, stream) => {
         if (err) { conn.end(); return reject(err) }
         let out = "", errOut = ""
         stream.on("data", (d: Buffer) => { out += d.toString() })
         stream.stderr.on("data", (d: Buffer) => { errOut += d.toString() })
+        if (options?.stdin != null) stream.end(options.stdin)
         stream.on("close", (code: number) => {
           conn.end()
           if (code !== 0) reject(new Error(errOut.trim() || `Exit code ${code}`))

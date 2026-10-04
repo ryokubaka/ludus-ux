@@ -17,6 +17,7 @@ import {
   enrichBlueprintCatalogEntries,
   resolveBadslCatalogMeta,
 } from "@/lib/ludus-source-catalog"
+import { catalogReadApiKey } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
@@ -115,13 +116,13 @@ export async function GET(request: NextRequest) {
   // Registered sources: resolve against that source only — never fall back to BSL GitHub.
   if (source === "registered" && sourceId) {
     try {
-      const { apiKey } = await requireSourcesSession(request)
-      if (!apiKey) {
+      const { session, apiKey } = await requireSourcesSession(request)
+      if (!session || !apiKey) {
         return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
       }
       // Resolves Ludus API + that source's own git URL (not BSL).
       const ludusBlueprints = await fetchLudusBlueprintCatalogBySourceId(
-        apiKey,
+        catalogReadApiKey(session, apiKey, sourceId),
         sourceId,
         searchParams.get("ref") || BADSL_REF,
         BADSL_BASE,

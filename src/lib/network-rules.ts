@@ -145,16 +145,20 @@ function rawToRule(r: Record<string, unknown>): NetworkRule {
  * Parse a range-config YAML string and return the network rules array.
  * Returns [] if there are none or the YAML is unparseable.
  */
-export function extractNetworkRules(yamlText: string): NetworkRule[] {
+export function extractNetworkRules(
+  yamlText: string,
+  options?: { fileOrder?: boolean },
+): NetworkRule[] {
   try {
     const doc = yaml.load(yamlText) as Record<string, unknown> | null
     if (!doc || typeof doc !== "object") return []
     const network = doc.network as Record<string, unknown> | undefined
     if (!network || !Array.isArray(network.rules)) return []
-    // Reverse on read: YAML is stored reversed (Ludus -I insert semantics), so
-    // reversing here restores the order the user expects (= iptables eval order).
-    return [...network.rules]
-      .reverse()
+    // Range config stores rules reversed (Ludus iptables -I). Reversing on read
+    // restores evaluation order. GOAD extension templates are already written
+    // in evaluation order, so those callers pass fileOrder.
+    const rules = options?.fileOrder ? network.rules : [...network.rules].reverse()
+    return rules
       .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
       .map(rawToRule)
   } catch {
@@ -189,7 +193,8 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
  * Inject (or remove) network rules into a range-config YAML string.
  *
  * - If `rules` is non-empty: parse the YAML, set `network.rules`, re-dump.
- * - If `rules` is empty: remove the `network:` key entirely.
+ * - If `rules` is empty: remove the `network:` key entirely, unless
+ *   `emptyRules` is `keep` (write `rules: []` and leave other network fields).
  *
  * Rules are written in REVERSED order because Ludus applies each rule via
  * `iptables -I` (insert at position 1), which reverses YAML order in the
@@ -259,7 +264,11 @@ export function sanitizeNetworkRulesYaml(yamlText: string): string {
   return sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText))
 }
 
-export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): string {
+export function injectNetworkRules(
+  yamlText: string,
+  rules: NetworkRule[],
+  options?: { emptyRules?: "remove-network" | "keep" },
+): string {
   let doc: Record<string, unknown>
   try {
     const parsed = yaml.load(yamlText)
@@ -268,7 +277,7 @@ export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): stri
     doc = {}
   }
 
-  if (rules.length === 0) {
+  if (rules.length === 0 && options?.emptyRules !== "keep") {
     delete doc.network
   } else {
     const existing = (doc.network ?? {}) as Record<string, unknown>
@@ -312,6 +321,48 @@ export function applyNetworkSection(yamlText: string, network: NetworkSnapshot |
     doc = {}
   }
   doc.network = structuredClone(network) as Record<string, unknown>
+  return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
+function ruleName(rule: unknown): string {
+  if (!rule || typeof rule !== "object") return ""
+  const name = (rule as { name?: unknown }).name
+  return typeof name === "string" ? name : ""
+}
+
+/**
+ * Ludus inserts each YAML rule with iptables `-I`, so the last stored rule is
+ * evaluated first. Names already in the snapshot stay in that storage order
+ * (and keep the snapshot body). Rules that exist only in `yamlText` are stored
+ * first, in the order they appear there, so they evaluate after the snapshot.
+ * Snapshot defaults such as `inter_vlan_default` win over the current file.
+ */
+export function mergeNetworkSection(yamlText: string, snapshot: NetworkSnapshot): string {
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    doc = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>
+  } catch {
+    doc = {}
+  }
+  const current = doc.network
+  const currentNet =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? (current as Record<string, unknown>)
+      : {}
+  const currentRules = Array.isArray(currentNet.rules) ? currentNet.rules : []
+  const snapshotRules = Array.isArray(snapshot.rules) ? [...snapshot.rules] : []
+  const seen = new Set(snapshotRules.map(ruleName).filter(Boolean))
+  const added: unknown[] = []
+  for (const rule of currentRules) {
+    const name = ruleName(rule)
+    if (name && seen.has(name)) continue
+    added.push(rule)
+    if (name) seen.add(name)
+  }
+  const kept = [...added, ...snapshotRules]
+  const { rules: _snapshotRules, ...snapshotRest } = snapshot
+  doc.network = { ...currentNet, ...snapshotRest, rules: kept }
   return yaml.dump(doc, YAML_DUMP_OPTS)
 }
 

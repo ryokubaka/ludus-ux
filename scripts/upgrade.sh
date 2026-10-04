@@ -9,12 +9,18 @@
 #   bash scripts/upgrade.sh main          # non-interactive
 #   bash scripts/upgrade.sh v0.9.8        # checkout tag (detached HEAD)
 #
+# LUX_UPGRADE_YES=1 skips the dirty-tree confirmation (used by the in-app switch).
+#
 # Run from the repository root:
 #   bash scripts/upgrade.sh
 
 set -e
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${LUX_UPGRADE_YES:-}" == "1" && -n "${REPO:-}" && -d "${REPO}" ]]; then
+  ROOT="$(cd "$REPO" && pwd)"
+else
+  ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$ROOT"
 
 if [[ ! -f docker-compose.yml ]]; then
@@ -27,10 +33,28 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
-if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-  echo "Error: not a git repository." >&2
+SAFE_ROOT="$(cd "$ROOT" && pwd -P)"
+lux_git_n=${GIT_CONFIG_COUNT:-0}
+case "$lux_git_n" in
+  ''|*[!0-9]*) lux_git_n=0 ;;
+esac
+printf -v "GIT_CONFIG_KEY_${lux_git_n}" '%s' safe.directory
+printf -v "GIT_CONFIG_VALUE_${lux_git_n}" '%s' "$SAFE_ROOT"
+export "GIT_CONFIG_KEY_${lux_git_n}"
+export "GIT_CONFIG_VALUE_${lux_git_n}"
+GIT_CONFIG_COUNT=$((lux_git_n + 1))
+export GIT_CONFIG_COUNT
+
+git_err=""
+if ! git_err="$(git rev-parse --is-inside-work-tree 2>&1)"; then
+  if [[ "$git_err" == *"dubious ownership"* ]]; then
+    echo "Error: git refused this repository because another user owns it. Not switching versions." >&2
+  else
+    echo "Error: not a git repository." >&2
+  fi
   exit 1
 fi
+unset git_err
 
 lux_compose() {
   if docker compose version &>/dev/null 2>&1; then
@@ -75,15 +99,52 @@ echo ""
 echo "Using remote: $REMOTE ($REMOTE_URL)"
 echo ""
 
-# Quiet: no "[deleted] …" spam; still prune stale remote-tracking refs and sync tags.
-echo "Fetching from $REMOTE (quiet) ..."
-git fetch "$REMOTE" --prune --tags --quiet 2>/dev/null \
-  || git fetch "$REMOTE" --prune --quiet 2>/dev/null \
-  || git fetch "$REMOTE" --prune --tags
+# In-app switches have no terminal. A passphrase prompt or a stuck SSH
+# connection would sit forever and look like a freeze.
+lux_git() {
+  if [[ "${LUX_UPGRADE_YES:-}" != "1" ]]; then
+    "$@"
+    return
+  fi
+  export GIT_TERMINAL_PROMPT=0
+  if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
+    export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
+  fi
+  local runner=("$@")
+  # systemd starts this as root. GitHub SSH for this clone belongs to the
+  # directory owner (their key and known_hosts), not root.
+  if [[ "$(id -u)" -eq 0 ]]; then
+    local uid home user
+    uid="$(stat -c %u "$ROOT" 2>/dev/null || echo 0)"
+    if [[ "$uid" != "0" ]] && command -v runuser >/dev/null 2>&1; then
+      home="$(getent passwd "$uid" | awk -F: '{print $6}')"
+      user="$(getent passwd "$uid" | awk -F: '{print $1}')"
+      if [[ -n "$home" && -n "$user" ]]; then
+        runner=(runuser -u "$user" -- env HOME="$home" GIT_SSH_COMMAND="$GIT_SSH_COMMAND" GIT_TERMINAL_PROMPT=0 "$@")
+      fi
+    fi
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 180 "${runner[@]}"
+    return
+  fi
+  "${runner[@]}"
+}
+
+echo "Fetching from $REMOTE ..."
+if ! lux_git git fetch "$REMOTE" --prune --tags; then
+  code=$?
+  if [[ "$code" -eq 124 ]]; then
+    echo "Error: git fetch from $REMOTE timed out." >&2
+  else
+    echo "Error: git fetch from $REMOTE failed. An in-app switch needs a Git remote that works without a password prompt." >&2
+  fi
+  exit 1
+fi
 
 # Only refs that exist on the server right now (not stale local remote-tracking branches).
 list_remote_heads() {
-  git ls-remote --heads "$REMOTE" 2>/dev/null \
+  lux_git git ls-remote --heads "$REMOTE" 2>/dev/null \
     | awk '{print $2}' \
     | sed 's|^refs/heads/||' \
     | grep -vxF '' \
@@ -91,7 +152,7 @@ list_remote_heads() {
 }
 
 list_remote_tags() {
-  git ls-remote --tags "$REMOTE" 2>/dev/null \
+  lux_git git ls-remote --tags "$REMOTE" 2>/dev/null \
     | awk '{print $2}' \
     | sed 's|^refs/tags/||' \
     | grep -v '\^{}' \
@@ -197,12 +258,17 @@ fi
 DIRTY="$(git status --porcelain 2>/dev/null || true)"
 if [[ -n "$DIRTY" ]]; then
   echo "Warning: working tree has uncommitted changes."
-  echo "          Checkout may discard tracked changes (especially when switching branch/tag)."
+  echo "          Checkout discards tracked edits and removes untracked files."
+  echo "          Ignored files (.env, data, ssh) stay."
   echo ""
-  read -r -p "Continue? [y/N] " cont
-  if [[ ! "$cont" =~ ^[Yy] ]]; then
-    echo "Aborted."
-    exit 0
+  if [[ "${LUX_UPGRADE_YES:-}" == "1" ]]; then
+    echo "LUX_UPGRADE_YES=1: continuing without prompt."
+  else
+    read -r -p "Continue? [y/N] " cont
+    if [[ ! "$cont" =~ ^[Yy] ]]; then
+      echo "Aborted."
+      exit 0
+    fi
   fi
 fi
 
@@ -211,7 +277,7 @@ echo ""
 if [[ "$KIND" == "branch" ]]; then
   REMOTE_REF="${REMOTE}/${TARGET}"
   if ! git rev-parse --verify "$REMOTE_REF" >/dev/null 2>&1; then
-    git fetch "$REMOTE" --quiet 2>/dev/null || git fetch "$REMOTE"
+    lux_git git fetch "$REMOTE" || true
   fi
   if ! git rev-parse --verify "$REMOTE_REF" >/dev/null 2>&1; then
     echo "Error: missing ref $REMOTE_REF after fetch." >&2
@@ -219,20 +285,24 @@ if [[ "$KIND" == "branch" ]]; then
   fi
   echo "Checking out branch $TARGET (tracking $REMOTE_REF) ..."
   if git show-ref --verify --quiet "refs/heads/$TARGET"; then
-    git checkout -f "$TARGET"
+    lux_git git checkout -f "$TARGET"
   else
-    git checkout -B "$TARGET" "$REMOTE_REF"
+    lux_git git checkout -B "$TARGET" "$REMOTE_REF"
   fi
-  git reset --hard "$REMOTE_REF"
+  lux_git git reset --hard "$REMOTE_REF"
 else
   echo "Checking out tag $TARGET (detached HEAD) ..."
-  git fetch "$REMOTE" "refs/tags/$TARGET:refs/tags/$TARGET" --quiet 2>/dev/null || true
+  lux_git git fetch "$REMOTE" "refs/tags/$TARGET:refs/tags/$TARGET" || true
   if ! git rev-parse --verify "$TARGET^{commit}" >/dev/null 2>&1; then
     echo "Error: tag '$TARGET' not found after fetch." >&2
     exit 1
   fi
-  git checkout -f "$TARGET"
+  lux_git git checkout -f "$TARGET"
 fi
+
+echo ""
+echo "Removing untracked files so this build matches $TARGET ..."
+git clean -fd
 
 echo ""
 echo "Rebuilding and restarting stack ..."

@@ -7,7 +7,7 @@ import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
 import {
   extractNetworkSection,
-  applyNetworkSection,
+  mergeNetworkSection,
   networkSnapshotNeedsRedeploy,
   networkSectionEqual,
   type NetworkSnapshot,
@@ -42,6 +42,7 @@ export type GoadRunActionOptions = {
    * failed/quick provide cannot kick off firewall redeploy and block the next deploy.
    */
   skipNetworkFollowup?: boolean
+  rangeId?: string
 }
 
 export interface UseGoadRunActionParams {
@@ -98,7 +99,8 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
       setCurrentAction(action)
       clear()
       clearRangeLogs()
-      const rangeIdForRestore = instance?.ludusRangeId
+      const commandRangeId = options?.rangeId?.trim() || instance?.ludusRangeId || undefined
+      const rangeIdForRestore = commandRangeId
       let networkSnapshot: NetworkSnapshot | null = null
       let extensionsSnapshot: LudusExtensionsSnapshot | null = null
       if (RANGE_YAML_TOUCHING_ACTIONS.has(action) && rangeIdForRestore) {
@@ -134,8 +136,8 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
       }
       if (DEPLOY_TAB_ACTIONS.has(action)) {
         setActiveTab("deploy")
-        if (instance?.ludusRangeId) {
-          startRangeStreaming(instance.ludusRangeId, { snapshotStart: true })
+        if (commandRangeId) {
+          startRangeStreaming(commandRangeId, { snapshotStart: true })
         }
       } else if (TERMINAL_TAB_ACTIONS.has(action)) {
         setActiveTab("terminal")
@@ -147,7 +149,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
 
       goadChainDebug("goad_action_start", {
         action,
-        rangeId: instance?.ludusRangeId ?? null,
+        rangeId: commandRangeId ?? null,
         instanceId,
         goadArgsHead: goadArgs.slice(0, 240),
       })
@@ -155,7 +157,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
         goadArgs,
         instanceId,
         impersonation ?? undefined,
-        instance?.ludusRangeId ?? undefined,
+        commandRangeId,
       )
       goadChainDebug("goad_action_exit", { action, exitCode: code, instanceId })
       setCurrentAction(null)
@@ -169,7 +171,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
             const networkAlreadyCorrect =
               !networkSnapshot || networkSectionEqual(workingYaml, networkSnapshot)
             if (networkSnapshot && !networkAlreadyCorrect) {
-              workingYaml = applyNetworkSection(workingYaml, networkSnapshot)
+              workingYaml = mergeNetworkSection(workingYaml, networkSnapshot)
             }
             const extensionsAlreadyCorrect =
               extensionsSnapshot == null ||
@@ -243,7 +245,7 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
                   const yamlNow = fresh.data?.result
                   if (yamlNow != null) {
                     let mergedNow = yamlNow
-                    if (networkSnapshot) mergedNow = applyNetworkSection(mergedNow, networkSnapshot)
+                    if (networkSnapshot) mergedNow = mergeNetworkSection(mergedNow, networkSnapshot)
                     if (extensionsSnapshot != null) {
                       mergedNow = applyLudusExtensions(mergedNow, extensionsSnapshot)
                     }
@@ -334,8 +336,8 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
         }
         setPostProcessingStep("idle")
       }
-      if (code === 0 && instance?.ludusRangeId) {
-        clearSessionEfiStopPreview(instance.ludusRangeId)
+      if (code === 0 && commandRangeId) {
+        clearSessionEfiStopPreview(commandRangeId)
       }
       fetchInstances()
       return code

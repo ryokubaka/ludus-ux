@@ -14,7 +14,7 @@ import {
 import { reconcilePbAfterFollowOnLudusDeploy } from "@/lib/goad-ludus-reconcile"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
-import { applyNetworkSection, networkSectionEqual } from "@/lib/network-rules"
+import { mergeNetworkSection, networkSectionEqual } from "@/lib/network-rules"
 import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/range-log-markers-store"
 import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-correlate"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
@@ -119,7 +119,7 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
     )
     const yaml = cfg.data?.result
     if (yaml && !networkSectionEqual(yaml, snapshot)) {
-      const merged = applyNetworkSection(yaml, snapshot)
+      const merged = mergeNetworkSection(yaml, snapshot)
       const put = await putRangeConfigYaml(key, merged, rangeId)
       if (!put.ok) {
         console.warn("[pending-network-workflow] setRangeConfig failed:", put.error)

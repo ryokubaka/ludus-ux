@@ -4,6 +4,8 @@ import {
   ludusSourceGitRef,
   normalizeGitSourceUrl,
   normalizeLudusSourceRef,
+  ludusSourceRegistrant,
+  sourceOwnerLabel,
   suggestedLudusSourceId,
 } from "@/lib/ludus-source-ref"
 
@@ -24,6 +26,57 @@ describe("suggestedLudusSourceId", () => {
     expect(suggestedLudusSourceId("https://github.com/ryokubaka/ludus-source-meow", "feature/so")).toBe(
       "ryokubaka-ludus-source-meow-feature-so",
     )
+  })
+
+  it("turns dots in a versioned branch into hyphens", () => {
+    expect(
+      suggestedLudusSourceId(
+        "https://github.com/ryokubaka/ludus-source-meow",
+        "feat/securityonion-3.3.0",
+      ),
+    ).toBe("ryokubaka-ludus-source-meow-feat-securityonion-3-3-0")
+  })
+})
+
+describe("ludusSourceRegistrant", () => {
+  it("reads the Ludus user prefix ahead of the repo slug", () => {
+    expect(
+      ludusSourceRegistrant(
+        "catshadowstep-badsectorlabs-ludus-source-bsl",
+        "https://github.com/badsectorlabs/ludus-source-bsl",
+      ),
+    ).toBe("catshadowstep")
+  })
+
+  it("returns null when the id is only the repo slug", () => {
+    expect(
+      ludusSourceRegistrant(
+        "ryokubaka-ludus-source-meow",
+        "https://github.com/ryokubaka/ludus-source-meow",
+        "main",
+      ),
+    ).toBeNull()
+  })
+})
+
+describe("sourceOwnerLabel", () => {
+  it("prefers ownerUserID over the id prefix", () => {
+    expect(
+      sourceOwnerLabel({
+        sourceID: "JD-badsectorlabs-ludus-source-bsl",
+        url: "https://github.com/badsectorlabs/ludus-source-bsl",
+        ownerUserID: "JD",
+      }),
+    ).toBe("JD")
+  })
+
+  it("falls back to the user prefix Ludus adds", () => {
+    expect(
+      sourceOwnerLabel({
+        sourceID: "catshadowstep-badsectorlabs-ludus-source-bsl",
+        url: "https://github.com/badsectorlabs/ludus-source-bsl",
+      }),
+    ).toBe("catshadowstep")
   })
 })
 

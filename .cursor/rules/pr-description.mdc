@@ -1,0 +1,17 @@
+---
+description: LUX pull request description shape
+alwaysApply: true
+---
+
+# Pull request descriptions
+
+LUX pull requests use only these sections, in this order:
+
+1. **Intent** — one short paragraph stating the goal. Do not add a "Decisions the user made" list, a decision log, or a recap of review rounds.
+2. **What Changed** — a few bullets of concrete behavior.
+3. **Risk Assessment** — one line.
+4. **Pipeline** — the no-mistakes attestation and step summary. Leave the attestation comment in place.
+
+Do not add a **Testing** section, evidence screenshots, or command logs.
+
+When no-mistakes publishes a body, remove a "Decisions the user made" block and the entire Testing section before the description is left for review. Do not delete the Pipeline section or its attestation comment.

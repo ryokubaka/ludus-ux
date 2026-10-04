@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     collectionTarballPath: probe.collectionTarballPath,
     error: probe.error,
     message: !probe.repoPresent
-      ? `LudusHound not found at ${probe.ludushoundPath}. Use “Clone repo” below (needs root SSH + git on the Ludus host), or clone manually.`
+      ? `LudusHound not found at ${probe.ludushoundPath}. Use “Clone repo” below (needs host SSH for PROXMOX_SSH_USER and git on the Ludus host), or clone manually.`
       : undefined,
   }
   return NextResponse.json(body)

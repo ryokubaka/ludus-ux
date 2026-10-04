@@ -162,6 +162,19 @@ export function Sidebar() {
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
 
+  const { data: luxReleaseCheck } = useQuery({
+    queryKey: ["lux", "releases", "update"],
+    queryFn: async () => {
+      const res = await fetch("/api/lux/releases")
+      if (!res.ok) return { updateAvailable: false }
+      const body = (await res.json()) as { updateAvailable?: boolean }
+      return { updateAvailable: !!body.updateAvailable }
+    },
+    staleTime: STALE.long,
+    retry: false,
+  })
+  const luxUpdateAvailable = !!luxReleaseCheck?.updateAvailable
+
   const { data: versionData } = useQuery({
     queryKey: queryKeys.version(scopeTag),
     queryFn: async () => {
@@ -382,7 +395,7 @@ export function Sidebar() {
         )}
 
         {/* Navigation */}
-        <nav className={cn("flex-1 overflow-y-auto py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
+        <nav className={cn("flex-1 overflow-y-auto overscroll-y-contain py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((item) => navItemVisible(item, navCtx))
             if (visibleItems.length === 0) return null
@@ -504,6 +517,9 @@ export function Sidebar() {
                 {APP_VERSION_LABEL ? (
                   <span className="font-normal text-muted-foreground/60"> {APP_VERSION_LABEL}</span>
                 ) : null}
+                {luxUpdateAvailable ? (
+                  <span className="ml-1.5 font-medium text-status-warning">update</span>
+                ) : null}
               </p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
             </Link>
@@ -511,11 +527,15 @@ export function Sidebar() {
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
+                <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">
+                  v{APP_VERSION}
+                  {luxUpdateAvailable ? <span className="text-status-warning"> •</span> : null}
+                </Link>
               </TooltipTrigger>
               <TooltipContent side="right">
                 v{APP_VERSION}
-                {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""} — Open Source · Apache 2.0
+                {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""}
+                {luxUpdateAvailable ? " — update available" : ""} — Open Source · Apache 2.0
               </TooltipContent>
             </Tooltip>
           )}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isHttp404Error, listSources } from "@/lib/ludus-source-client"
+import { catalogReadApiKey } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { listRepoRefs } from "@/lib/template-repo-client"
@@ -24,7 +25,7 @@ export async function GET(
   const includeTags = request.nextUrl.searchParams.get("tags") === "1"
 
   try {
-    const sources = await listSources(apiKey)
+    const sources = await listSources(catalogReadApiKey(session, apiKey, sourceId))
     const row = sources.find((s) => (s.sourceID || s.id) === sourceId)
     if (!row) {
       return NextResponse.json({ error: "Source not found" }, { status: 404 })

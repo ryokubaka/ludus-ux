@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
@@ -108,6 +109,8 @@ export function NewRangePageClient() {
     staleTime: STALE.long,
   })
   const [step, setStep] = useState(0)
+  const [showAllBlueprints, setShowAllBlueprints] = useState(false)
+  const [showAllTemplates, setShowAllTemplates] = useState(false)
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
   // null = not yet chosen; "wizard" or "yaml" after step 1 is committed.
@@ -926,17 +929,8 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">Wizard</p>
-                  <p className="text-[10px] text-muted-foreground">Guided step-by-step</p>
+                  <p className="text-xs text-muted-foreground">Build a range step by step</p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Pick VM templates, configure networking, optionally set up an Active Directory domain,
-                then review config and deploy options on the final step. Best for building ranges from scratch.
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {["Configure VMs", "Domain Setup", "Network Rules", "Review & deploy"].map((s) => (
-                  <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
-                ))}
               </div>
             </button>
 
@@ -951,25 +945,10 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">YAML Config</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {mode === "existing" && selectedExistingRange ? "Config pre-loaded" : "Paste raw YAML"}
+                  <p className="text-xs text-muted-foreground">
+                    {mode === "existing" && selectedExistingRange ? "Current config is loaded" : "Paste YAML"}
                   </p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {mode === "existing" && selectedExistingRange
-                  ? `Your current ${selectedExistingRange} config is already loaded and ready to edit. Skip straight to Review & Deploy.`
-                  : "Paste or type raw Ludus YAML directly. Skips the wizard steps — best for experienced users or reusing an existing config."}
-              </p>
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary" className="text-[10px] border-cyan-500/30 text-primary bg-cyan-500/10">
-                  Skips wizard steps
-                </Badge>
-                {mode === "existing" && selectedExistingRange && (
-                  <Badge variant="secondary" className="text-[10px] border-status-success/30 text-status-success bg-status-success/10">
-                    Auto-loaded ✓
-                  </Badge>
-                )}
               </div>
             </button>
 
@@ -984,17 +963,8 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">From Blueprint</p>
-                  <p className="text-[10px] text-muted-foreground">Community or installed</p>
+                  <p className="text-xs text-muted-foreground">Apply a saved config, then deploy</p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Pick a Ludus blueprint (including source blueprints like GOAD). Applies the saved range
-                config, then deploys — install blueprints from the Blueprints page first if needed.
-              </p>
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary" className="text-[10px] border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10">
-                  Apply + deploy
-                </Badge>
               </div>
             </button>
           </div>
@@ -1027,8 +997,9 @@ export function NewRangePageClient() {
                   </p>
                 </div>
               ) : (
-                <div className="grid gap-2 max-h-96 overflow-y-auto">
-                  {consolidatedBlueprints.map((entry) => {
+                <div className="rounded-lg border border-border">
+                <div className="grid gap-2 p-2">
+                  {previewSlice(consolidatedBlueprints, showAllBlueprints).map((entry) => {
                     const bpId = entry.primaryId
                     const selected =
                       selectedBlueprintId === bpId || entry.aliasIds.includes(selectedBlueprintId)
@@ -1063,6 +1034,8 @@ export function NewRangePageClient() {
                     )
                   })}
                 </div>
+                <ShowAllBar expanded={showAllBlueprints} count={consolidatedBlueprints.length} onToggle={() => setShowAllBlueprints((v) => !v)} />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -1090,8 +1063,9 @@ export function NewRangePageClient() {
               ) : templates.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No built templates found</p>
               ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
-                  {templates.map((t) => {
+                <div className="rounded-lg border border-border">
+                <div className="grid grid-cols-2 gap-2 p-2">
+                  {previewSlice(templates, showAllTemplates).map((t) => {
                     const { isLinux, isWindows } = inferOS(t.name)
                     return (
                       <button key={t.name} onClick={() => addVM(t.name)}
@@ -1104,6 +1078,8 @@ export function NewRangePageClient() {
                       </button>
                     )
                   })}
+                </div>
+                <ShowAllBar expanded={showAllTemplates} count={templates.length} onToggle={() => setShowAllTemplates((v) => !v)} />
                 </div>
               )}
             </CardContent>

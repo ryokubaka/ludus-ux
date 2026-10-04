@@ -9,6 +9,8 @@ import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-de
 import { resolveDeployOnlyRoles } from "@/lib/ludus-deploy-only-roles"
 import { cn } from "@/lib/utils"
 import { ChevronDown, ChevronUp, ListChecks, Tag } from "lucide-react"
+import { useState } from "react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 
 export interface DeployAdvancedOptionsPanelProps {
   selectedTags: string[]
@@ -46,54 +48,10 @@ export function DeployAdvancedOptionsPanel({
   const hasTagSelection = tagBadges.length > 0
   const hasOnlyRoles = !!onlyRolesResolved?.length
 
-  const collapsedHelper =
-    helperContext === "goad"
-      ? (
-          <>
-            Full Ludus Ansible (no <code className="text-primary">--tags</code> or{" "}
-            <code className="text-primary">--only-roles</code> filter). Expand to limit deploy steps or Ansible roles.
-          </>
-        )
-      : (
-          <>
-            Full Ludus Ansible deploy. Expand to limit Ansible <strong>steps</strong> (tags) or{" "}
-            <strong>roles</strong> (<code className="text-primary">--only-roles</code>) before deploying.
-          </>
-        )
-
-  const tagsBoxHelper =
-    helperContext === "goad"
-      ? (
-          <>
-            Pass <code className="text-primary">--tags</code> to every{" "}
-            <code className="text-primary">ludus range deploy</code> in this GOAD session. Limits which Ansible{" "}
-            <strong>steps</strong> run — leave empty for all steps. Tight sets can break domain or extension plays.
-          </>
-        )
-      : (
-          <>
-            Limits which Ansible <strong>steps</strong> run (Ludus CLI{" "}
-            <code className="text-primary">--tags</code>). Leave empty for a full step set — recommended for first-time deploys.
-          </>
-        )
-
-  const onlyRolesBoxHelper =
-    helperContext === "goad"
-      ? (
-          <>
-            Pass <code className="text-primary">--only-roles</code> on each deploy in this GOAD session.{" "}
-            <strong>Only the selected roles run</strong> — all other roles in the config are skipped. Leave empty to run every role. The{" "}
-            <code className="text-primary">user-defined-roles</code> tag is added automatically.
-          </>
-        )
-      : (
-          <>
-            Limits which Ansible <strong>roles</strong> run (Ludus CLI{" "}
-            <code className="text-primary">--only-roles</code>).{" "}
-            <strong>Only selected roles execute</strong> — other roles in range-config are skipped. Leave empty to run all roles. The{" "}
-            <code className="text-primary">user-defined-roles</code> tag is added automatically.
-          </>
-        )
+  const [showAllTags, setShowAllTags] = useState(false)
+  const collapsedHelper = "Full deploy. Expand to limit steps or roles."
+  const tagsBoxHelper = "Empty runs every step."
+  const onlyRolesBoxHelper = "Empty runs every role."
 
   return (
     <>
@@ -136,7 +94,7 @@ export function DeployAdvancedOptionsPanel({
           </Button>
         </div>
         {!expanded && !hasTagSelection && !hasOnlyRoles && (
-          <p className="text-[10px] text-muted-foreground pl-5">{collapsedHelper}</p>
+          <p className="text-xs text-muted-foreground pl-5">{collapsedHelper}</p>
         )}
         {expanded && (
           <div className="space-y-3">
@@ -146,10 +104,11 @@ export function DeployAdvancedOptionsPanel({
                   <Tag className="h-3.5 w-3.5 text-primary" />
                   Deploy tags
                 </h4>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{tagsBoxHelper}</p>
+                <p className="text-xs text-muted-foreground mt-1">{tagsBoxHelper}</p>
               </div>
-              <div className="grid grid-cols-2 gap-1.5 max-h-[22rem] overflow-y-auto pr-1">
-                {LUDUS_DEPLOY_TAGS.map((tag) => (
+              <div className="rounded-md border border-border">
+              <div className="grid grid-cols-2 gap-1.5 p-2">
+                {previewSlice([...LUDUS_DEPLOY_TAGS], showAllTags).map((tag) => (
                   <label
                     key={tag}
                     className={cn(
@@ -166,12 +125,14 @@ export function DeployAdvancedOptionsPanel({
                     />
                     <div className="min-w-0">
                       <code className="text-xs font-mono text-primary">{tag}</code>
-                      <p className="text-[10px] text-muted-foreground truncate">
+                      <p className="text-xs text-muted-foreground truncate">
                         {LUDUS_DEPLOY_TAG_DESCRIPTIONS[tag] || ""}
                       </p>
                     </div>
                   </label>
                 ))}
+              </div>
+              <ShowAllBar expanded={showAllTags} count={LUDUS_DEPLOY_TAGS.length} onToggle={() => setShowAllTags((v) => !v)} />
               </div>
               {selectedTags.length > 0 && (
                 <div className="flex items-center justify-between pt-1 border-t border-border">
@@ -191,7 +152,7 @@ export function DeployAdvancedOptionsPanel({
                   <ListChecks className="h-3.5 w-3.5 text-primary" />
                   Only roles
                 </h4>
-                <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{onlyRolesBoxHelper}</p>
+                <p className="text-xs text-muted-foreground mt-1">{onlyRolesBoxHelper}</p>
               </div>
               <DeployOnlyRolesSelector
                 configYaml={configYaml}

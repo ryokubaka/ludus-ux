@@ -10,7 +10,6 @@ export function buildInstalledBlueprintIds(blueprints: BlueprintListItem[]): Set
     if (!id) continue
     installedIds.add(id)
     const parts = id.split("/").filter(Boolean)
-    if (parts.length > 0) installedIds.add(parts[parts.length - 1]!)
     if (parts.length >= 2) {
       installedIds.add(`${parts[parts.length - 2]}/${parts[parts.length - 1]}`)
     }
@@ -30,7 +29,6 @@ export function buildInstalledBlueprintVersions(
     if (!id) continue
     const keys = [id]
     const parts = id.split("/").filter(Boolean)
-    if (parts.length > 0) keys.push(parts[parts.length - 1]!)
     if (parts.length >= 2) {
       keys.push(`${parts[parts.length - 2]}/${parts[parts.length - 1]}`)
     }
@@ -188,6 +186,131 @@ export function catalogVersionsDiffer(
   const installed = normalizeCatalogVersion(installedVersion)
   if (!catalog || !installed) return false
   return catalog !== installed
+}
+
+/**
+ * Dotted numeric compare (`1.1.0` vs `1.0.3`).
+ * Negative when `left` is older. Null when either side is not a dotted number.
+ */
+export function compareDottedVersions(
+  left?: string | null,
+  right?: string | null,
+): -1 | 0 | 1 | null {
+  const a = normalizeCatalogVersion(left)
+  const b = normalizeCatalogVersion(right)
+  if (!a || !b) return null
+  const pa = a.split(".")
+  const pb = b.split(".")
+  const width = Math.max(pa.length, pb.length)
+  let sawNumber = false
+  for (let i = 0; i < width; i++) {
+    const as = pa[i] ?? "0"
+    const bs = pb[i] ?? "0"
+    if (!/^\d+$/.test(as) || !/^\d+$/.test(bs)) return null
+    sawNumber = true
+    const an = Number(as)
+    const bn = Number(bs)
+    if (an < bn) return -1
+    if (an > bn) return 1
+  }
+  return sawNumber ? 0 : null
+}
+
+/**
+ * Ludus keeps one copy of a role or collection name.
+ * A second source or branch does not get its own install.
+ * `installedHere` is true only when this catalog is that copy.
+ * A newer catalog on the owning registration is an update.
+ * A different version is the other registration's copy.
+ */
+export function resolveAnsibleBranchView(opts: {
+  catalogVersion?: string | null
+  hostVersion?: string | null
+  pinVersion?: string | null
+  otherRef?: string
+  namePresent: boolean
+}): {
+  installedVersion?: string
+  otherRef?: string
+  installedHere: boolean
+  catalogAhead: boolean
+  showResync: boolean
+} {
+  const catalog = normalizeCatalogVersion(opts.catalogVersion)
+  const host = normalizeCatalogVersion(opts.hostVersion)
+  const pin = normalizeCatalogVersion(opts.pinVersion)
+  // A pin is this registration's memory of an install. It is not a second copy.
+  // Ignore it when Ludus already reports a different version on disk.
+  const pinAgrees = Boolean(pin) && (!host || !catalogVersionsDiffer(pin, host))
+  const installedVersion = host || (opts.otherRef ? undefined : pinAgrees ? pin : undefined) || undefined
+
+  if (!opts.namePresent && !installedVersion) {
+    return { installedHere: false, catalogAhead: false, showResync: false }
+  }
+
+  const otherOwns =
+    Boolean(opts.otherRef) && catalogVersionsDiffer(catalog, installedVersion)
+  const catalogMatches =
+    Boolean(installedVersion) && !catalogVersionsDiffer(catalog, installedVersion)
+  const ownsCopy =
+    opts.namePresent &&
+    !otherOwns &&
+    (catalogMatches || (pinAgrees && Boolean(installedVersion)) || (!installedVersion && !catalog))
+
+  const catalogAhead = Boolean(
+    ownsCopy && installedVersion && branchResyncNeeded(installedVersion, catalog),
+  )
+
+  const differs = Boolean(installedVersion) && catalogVersionsDiffer(catalog, installedVersion)
+  return {
+    installedVersion,
+    otherRef: otherOwns ? opts.otherRef : undefined,
+    installedHere: ownsCopy && !catalogAhead,
+    catalogAhead,
+    showResync: opts.namePresent && (ownsCopy || otherOwns || differs),
+  }
+}
+
+/** Branch label of another registration whose catalog version equals the installed copy. */
+export function siblingRefForInstalledVersion(
+  names: string[],
+  installedVersion: string | undefined,
+  siblings: Array<{
+    ref?: string
+    label: string
+    items: Array<{ name?: string; fqcn?: string; version?: string }>
+  }>,
+): string | undefined {
+  const want = normalizeCatalogVersion(installedVersion)
+  if (!want) return undefined
+  const keys = new Set(names.flatMap((name) => ansibleCatalogNameKeys(name)))
+  if (keys.size === 0) return undefined
+  for (const sibling of siblings) {
+    for (const item of sibling.items) {
+      const itemKeys = [item.fqcn, item.name]
+        .filter((name): name is string => Boolean(name?.trim()))
+        .flatMap((name) => ansibleCatalogNameKeys(name))
+      if (!itemKeys.some((key) => keys.has(key))) continue
+      if (normalizeCatalogVersion(item.version) !== want) continue
+      return sibling.ref?.trim() || sibling.label
+    }
+  }
+  return undefined
+}
+
+/**
+ * Bulk re-sync only when this registration's own install is older than its catalog.
+ * A newer copy from another branch is not an update of this one, and a missing
+ * version is not a reason to overwrite it.
+ */
+export function branchResyncNeeded(
+  ownedVersion?: string | null,
+  catalogVersion?: string | null,
+): boolean {
+  if (isMissingOrUnknownVersion(ownedVersion) || isMissingOrUnknownVersion(catalogVersion)) {
+    return false
+  }
+  return compareDottedVersions(ownedVersion, catalogVersion) === -1
 }
 
 /** True when Ludus/list has no usable version (empty, "unknown", placeholder). */

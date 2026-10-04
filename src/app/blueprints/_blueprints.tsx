@@ -1,6 +1,8 @@
 "use client"
 
-import { useState, useMemo, useLayoutEffect, useCallback, useEffect, useRef } from "react"
+import { useState, useMemo, useLayoutEffect, useCallback, useEffect } from "react"
+import Link from "next/link"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { useRouter } from "next/navigation"
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
@@ -39,13 +41,10 @@ import {
   Eye,
   Loader2,
   Copy,
-  Crown,
-  Users,
   FileCode,
   ChevronDown,
   ChevronRight,
   GitBranch,
-  ExternalLink,
   AlertTriangle,
   Check,
   XCircle,
@@ -72,12 +71,12 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { applyBlueprintToRange } from "@/lib/blueprint-apply"
-import { SourceCatalogBanner } from "@/components/sources/source-catalog-banner"
 import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
+import { ludusSourceRegistrant } from "@/lib/ludus-source-ref"
 import {
   mapRegisteredSources,
   pickDefaultRegisteredSource,
-  registeredSourceLabel,
+  registeredSourceOptionLabel,
   type RegisteredLudusSource,
 } from "@/lib/registered-ludus-sources"
 import {
@@ -143,13 +142,27 @@ function filterBlueprintAccessUsers(
   })
 }
 
+function viewerOwnsBlueprint(
+  bp: BlueprintListItem,
+  gate: BlueprintListGate | undefined,
+): boolean {
+  if (bp.access === "owner") return true
+  const owner = (bp.ownerID || "").trim().toLowerCase()
+  if (!owner || !gate) return false
+  const ids = [gate.ludusUserId, gate.sessionUsername]
+    .map((value) => (value || "").trim().toLowerCase())
+    .filter(Boolean)
+  return ids.includes(owner)
+}
+
 function canManageBlueprintSharing(
   bp: BlueprintListItem,
   entryIsSourceCatalog: boolean,
   gate: BlueprintListGate | undefined,
 ): boolean {
+  if (viewerOwnsBlueprint(bp, gate)) return true
   if (entryIsSourceCatalog) return false
-  return !bp.access || bp.access === "owner" || bp.access === "admin"
+  return !bp.access || bp.access === "admin"
 }
 
 function canEditBlueprint(
@@ -164,8 +177,9 @@ function canDeleteBlueprint(
   entryIsSourceCatalog: boolean,
   gate: BlueprintListGate | undefined,
 ): boolean {
+  if (viewerOwnsBlueprint(bp, gate)) return true
   if (entryIsSourceCatalog) return gate?.isAdmin === true
-  return !bp.access || bp.access === "owner" || bp.access === "admin"
+  return !bp.access || bp.access === "admin"
 }
 
 function parseBlueprintConfigYaml(data: unknown): string {
@@ -240,15 +254,8 @@ interface SourceBlueprint {
   title?: string
   description?: string
   version?: string
-  min_ludus_version?: string
   sourceBlueprintID?: string
   catalogSource?: "ludus" | "github"
-}
-
-const BUILTIN_BLUEPRINT_SOURCE = {
-  label: "badsectorlabs/ludus-source-bsl (official)",
-  url: "https://github.com/badsectorlabs/ludus-source-bsl/tree/main/blueprints",
-  value: "badsectorlabs",
 }
 
 function AddBlueprintsFromSource({ installedIds, onAdded }: {
@@ -258,21 +265,17 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
   const { toast } = useToast()
   const scopeTag = useEffectiveScopeTag()
   const [open, setOpen] = useState(false)
-  const [sourceValue, setSourceValue] = useState("badsectorlabs")
   const [registeredSourceId, setRegisteredSourceId] = useState("")
-  const autoFetchedRef = useRef(false)
-  const [customRepoUrl, setCustomRepoUrl] = useState("")
-  const [customPath, setCustomPath] = useState("blueprints")
-  const [customRef, setCustomRef] = useState("main")
   const [sourceBlueprints, setSourceBlueprints] = useState<SourceBlueprint[]>([])
-  const [catalogSource, setCatalogSource] = useState<"ludus" | "github" | null>(null)
+  const [showAllAvailable, setShowAllAvailable] = useState(false)
   const [loadingSource, setLoadingSource] = useState(false)
+  const [catalogReady, setCatalogReady] = useState(false)
   const [sourceError, setSourceError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [adding, setAdding] = useState(false)
   const [addResults, setAddResults] = useState<{ name: string; success: boolean; message: string }[]>([])
 
-  const { data: ludusSourcesMeta } = useQuery({
+  const { data: ludusSourcesMeta, isFetched: sourcesFetched } = useQuery({
     queryKey: queryKeys.sources(scopeTag),
     queryFn: async () => {
       const res = await fetch("/api/sources")
@@ -291,71 +294,44 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
     [ludusSourcesMeta],
   )
 
-  const registeredSourceIdForBanner = useMemo(() => {
-    if (sourceValue === "registered" && registeredSourceId) return registeredSourceId
-    if (sourceValue !== "badsectorlabs" || !ludusSourcesMeta?.sources?.length) return null
-    const hit = ludusSourcesMeta.sources.find((s) =>
-      (s.url ?? "").toLowerCase().includes("ludus-source-bsl"),
-    )
-    return hit?.sourceID || hit?.id || null
-  }, [ludusSourcesMeta, sourceValue, registeredSourceId])
-
   const fetchSource = useCallback(async () => {
+    if (!registeredSourceId) return
     setLoadingSource(true)
+    setCatalogReady(false)
     setSourceError(null)
     setSourceBlueprints([])
-    setCatalogSource(null)
     setSelected(new Set())
     setAddResults([])
     try {
-      const params = new URLSearchParams()
-      if (sourceValue === "registered" && registeredSourceId) {
-        params.set("source", "registered")
-        params.set("sourceId", registeredSourceId)
-      } else {
-        params.set("source", sourceValue)
-      }
-      if (sourceValue === "custom" && customRepoUrl) {
-        let apiBase = customRepoUrl
-        const glMatch = customRepoUrl.match(/^https:\/\/gitlab\.com\/([^/]+\/[^/]+?)(?:\/|$)/)
-        if (glMatch) {
-          apiBase = `https://gitlab.com/api/v4/projects/${encodeURIComponent(glMatch[1])}/repository`
-        }
-        params.set("source", "custom")
-        params.set("repoUrl", apiBase)
-        params.set("path", customPath)
-        params.set("ref", customRef)
-      }
+      const params = new URLSearchParams({
+        source: "registered",
+        sourceId: registeredSourceId,
+      })
       const res = await fetch(`/api/blueprints/sources?${params}`)
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setSourceBlueprints(data.blueprints ?? [])
-      setCatalogSource(data.catalogSource === "ludus" ? "ludus" : "github")
     } catch (err) {
       setSourceError((err as Error).message)
     } finally {
       setLoadingSource(false)
+      setCatalogReady(true)
     }
-  }, [sourceValue, registeredSourceId, customRepoUrl, customPath, customRef])
+  }, [registeredSourceId])
 
   useEffect(() => {
     if (!open || registeredSources.length === 0) return
     const def = pickDefaultRegisteredSource(registeredSources)
     if (!def) return
-    setSourceValue("registered")
-    setRegisteredSourceId((prev) => prev || def.id)
+    setRegisteredSourceId((prev) =>
+      prev && registeredSources.some((s) => s.id === prev) ? prev : def.id,
+    )
   }, [open, registeredSources])
 
   useEffect(() => {
-    if (!open) {
-      autoFetchedRef.current = false
-      return
-    }
-    if (autoFetchedRef.current) return
-    if (sourceValue === "registered" && !registeredSourceId) return
-    autoFetchedRef.current = true
+    if (!open || !registeredSourceId) return
     void fetchSource()
-  }, [open, sourceValue, registeredSourceId, fetchSource])
+  }, [open, registeredSourceId, fetchSource])
 
   const toggleSelect = (name: string) => {
     setSelected((prev) => {
@@ -366,10 +342,7 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
     })
   }
 
-  const activeSourceId = useMemo(() => {
-    if (sourceValue === "registered" && registeredSourceId) return registeredSourceId
-    return registeredSourceIdForBanner
-  }, [sourceValue, registeredSourceId, registeredSourceIdForBanner])
+  const activeSourceId = registeredSourceId || undefined
 
   const isCatalogBlueprintInstalled = useCallback(
     (b: SourceBlueprint) =>
@@ -387,17 +360,7 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
     setAddResults([])
     try {
       const registeredSource = registeredSources.find((s) => s.id === registeredSourceId)
-      const gitUrl =
-        sourceValue === "registered"
-          ? registeredSource?.url?.replace(/\.git$/, "")
-          : sourceValue === "badsectorlabs"
-            ? "https://github.com/badsectorlabs/ludus-source-bsl"
-            : (() => {
-                if (!customRepoUrl) return undefined
-                const glMatch = customRepoUrl.match(/^https:\/\/gitlab\.com\/([^/]+\/[^/]+?)(?:\/|$)/)
-                if (glMatch) return `https://gitlab.com/${glMatch[1]}`
-                return customRepoUrl.replace(/\/$/, "")
-              })()
+      const gitUrl = registeredSource?.url?.replace(/\.git$/, "")
 
       const toAdd = sourceBlueprints
         .filter((b) => selected.has(b.name))
@@ -405,9 +368,9 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
           name,
           path: path.includes("/") ? path : `blueprints/${name}`,
           apiBase,
-          ref: ref || customRef,
+          ref: ref || "main",
           gitUrl,
-          sourceId: sourceValue === "registered" ? registeredSourceId : undefined,
+          sourceId: registeredSourceId,
         }))
 
       const res = await fetch("/api/blueprints/import-from-source", {
@@ -445,8 +408,8 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
     }
   }
 
-  const available = sourceBlueprints.filter((b) => !isCatalogBlueprintInstalled(b))
   const alreadyIn = sourceBlueprints.filter((b) => isCatalogBlueprintInstalled(b))
+  const sharedCatalog = registeredSources.find((s) => s.id === registeredSourceId)?.sharedCatalog === true
 
   return (
     <Card>
@@ -455,139 +418,75 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
         onToggle={() => setOpen((o) => !o)}
         icon={GitBranch}
         title="Add Blueprints from Source"
-        subtitle="— import community blueprints from registered Ludus sources or GitHub"
+        subtitle="— pick a source registered on the Sources page"
       />
 
       {open && (
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[220px]">
-              <label className="text-xs text-muted-foreground mb-1 block">Source</label>
-              <div className="flex gap-2 flex-wrap">
-                {registeredSources.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setSourceValue("registered")
-                      setSourceBlueprints([])
-                      setAddResults([])
-                      autoFetchedRef.current = false
-                    }}
-                    className={cn(
-                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
-                      sourceValue === "registered"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50",
-                    )}
-                  >
-                    Registered sources
-                  </button>
-                )}
-                {["badsectorlabs", "custom"].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => {
-                      setSourceValue(v)
-                      setSourceBlueprints([])
-                      setAddResults([])
-                      autoFetchedRef.current = false
-                    }}
-                    className={cn(
-                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
-                      sourceValue === v
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50",
-                    )}
-                  >
-                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom git repo"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {sourceValue === "registered" && registeredSources.length > 0 && (
-              <div className="flex-1 min-w-[220px]">
-                <label className="text-xs text-muted-foreground mb-1 block">Registered source</label>
+          {sourcesFetched && registeredSources.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No sources yet.{" "}
+              <Link href="/sources" className="text-primary hover:underline">
+                Add one on Sources
+              </Link>
+              , then install its blueprints here.
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[240px] flex-1">
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="blueprint-source">
+                  Source
+                </label>
                 <select
+                  id="blueprint-source"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
                   value={registeredSourceId}
                   onChange={(e) => {
                     setRegisteredSourceId(e.target.value)
                     setSourceBlueprints([])
+                    setCatalogReady(false)
                     setAddResults([])
-                    autoFetchedRef.current = false
+                    setSourceError(null)
+                    setShowAllAvailable(false)
                   }}
                 >
+                  {registeredSources.length === 0 && <option value="">Loading sources…</option>}
                   {registeredSources.map((s: RegisteredLudusSource) => (
                     <option key={s.id} value={s.id}>
-                      {registeredSourceLabel(s)}
+                      {registeredSourceOptionLabel(s)}
                     </option>
                   ))}
                 </select>
               </div>
-            )}
-
-            {sourceValue === "badsectorlabs" && (
-              <a
-                href={BUILTIN_BLUEPRINT_SOURCE.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void fetchSource()}
+                disabled={loadingSource || !registeredSourceId}
               >
-                <ExternalLink className="h-3 w-3" />
-                View on GitHub
-              </a>
-            )}
-          </div>
-
-          {sourceValue === "custom" && (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-3">
-                <label className="text-xs text-muted-foreground mb-1 block">GitLab repo URL</label>
-                <Input
-                  placeholder="https://gitlab.com/owner/repo"
-                  value={customRepoUrl}
-                  onChange={(e) => setCustomRepoUrl(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Blueprints path</label>
-                <Input
-                  placeholder="blueprints"
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Branch / ref</label>
-                <Input
-                  placeholder="main"
-                  value={customRef}
-                  onChange={(e) => setCustomRef(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
+                {loadingSource
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <RefreshCw className="h-3.5 w-3.5" />}
+                Reload
+              </Button>
+              {sourceBlueprints.length > 0 && (
+                <Button size="sm" onClick={() => void handleAdd()} disabled={selected.size === 0 || adding}>
+                  {adding
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Download className="h-3.5 w-3.5" />}
+                  {adding ? "Importing…" : `Import Selected (${selected.size})`}
+                </Button>
+              )}
+              <Link href="/sources" className="pb-2 text-xs text-muted-foreground hover:text-primary">
+                Manage sources
+              </Link>
             </div>
           )}
-
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => void fetchSource()} disabled={loadingSource}>
-              {loadingSource
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <RefreshCw className="h-3.5 w-3.5" />}
-              {loadingSource ? "Loading…" : "Fetch Available Blueprints"}
-            </Button>
-
-            {sourceBlueprints.length > 0 && (
-              <Button size="sm" onClick={() => void handleAdd()} disabled={selected.size === 0 || adding}>
-                {adding
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Download className="h-3.5 w-3.5" />}
-                {adding ? "Importing…" : `Import Selected (${selected.size})`}
-              </Button>
-            )}
-          </div>
+          {sharedCatalog && (
+            <p className="text-xs text-muted-foreground">
+              Shared by an admin. Select a blueprint and import it. You do not register this source yourself.
+            </p>
+          )}
 
           {sourceError && (
             <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 rounded px-3 py-2">
@@ -596,88 +495,79 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
             </div>
           )}
 
-          {(sourceBlueprints.length > 0 || catalogSource) && (
-            <SourceCatalogBanner
-              catalogSource={catalogSource}
-              registeredSourceId={registeredSourceIdForBanner}
-              sourcesAvailable={ludusSourcesMeta?.available}
-            />
-          )}
-
-          {available.length > 0 && (
+          {sourceBlueprints.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Available to Import ({available.length})
+                Catalog ({sourceBlueprints.length})
+                {alreadyIn.length > 0 && (
+                  <span className="font-normal normal-case text-muted-foreground/80">
+                    {` · ${alreadyIn.length} installed`}
+                  </span>
+                )}
               </p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {available.map((b) => {
+              <div className="rounded-lg border border-border">
+              <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3">
+                {previewSlice(sourceBlueprints, showAllAvailable).map((b) => {
+                  const installed = isCatalogBlueprintInstalled(b)
                   const result = addResults.find((r) => r.name === b.name)
                   return (
                     <button
                       key={b.name}
                       type="button"
-                      onClick={() => toggleSelect(b.name)}
+                      disabled={installed}
+                      onClick={() => !installed && toggleSelect(b.name)}
                       className={cn(
                         "text-left rounded-lg border p-3 text-xs transition-colors",
-                        selected.has(b.name)
-                          ? "border-primary bg-primary/10"
-                          : "border-border hover:border-primary/50",
+                        installed
+                          ? "border-border/60 bg-muted/30 opacity-80 cursor-default"
+                          : selected.has(b.name)
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-primary/50",
                       )}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <input
-                          type="checkbox"
-                          className="rounded shrink-0"
-                          checked={selected.has(b.name)}
-                          onChange={() => toggleSelect(b.name)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
+                        {!installed && (
+                          <input
+                            type="checkbox"
+                            className="rounded shrink-0"
+                            checked={selected.has(b.name)}
+                            onChange={() => toggleSelect(b.name)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        )}
+                        {installed && (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-status-success" />
+                        )}
                         <code className="font-mono font-medium text-primary truncate">{b.name}</code>
-                        {result && (
+                        {installed && (
+                          <Badge variant="success" className="text-[10px] ml-auto shrink-0">Installed</Badge>
+                        )}
+                        {!installed && result && (
                           result.success
                             ? <Check className="h-3 w-3 text-status-success ml-auto shrink-0" />
                             : <XCircle className="h-3 w-3 text-destructive ml-auto shrink-0" />
                         )}
                       </div>
                       {(b.title || b.description) && (
-                        <p className="font-medium text-foreground/90 truncate pl-5">
+                        <p className={cn("font-medium text-foreground/90 truncate", !installed && "pl-5")}>
                           {b.title || b.description}
                         </p>
                       )}
                       {b.title && b.description && (
-                        <p className="text-muted-foreground/70 truncate pl-5 text-[10px]">
+                        <p className={cn("text-xs text-muted-foreground truncate", !installed && "pl-5")}>
                           {b.description}
                         </p>
                       )}
                       {!b.title && !b.description && (
-                        <p className="text-muted-foreground/70 truncate pl-5 text-[10px]">
+                        <p className={cn("text-muted-foreground/70 truncate text-[10px]", !installed && "pl-5")}>
                           {b.files.find((f) => f === "blueprint.yml") || b.files[0] || ""}
                         </p>
-                      )}
-                      {b.min_ludus_version && (
-                        <Badge variant="outline" className="text-[10px] mt-1 ml-5">
-                          Ludus {b.min_ludus_version}+
-                        </Badge>
                       )}
                     </button>
                   )
                 })}
               </div>
-            </div>
-          )}
-
-          {alreadyIn.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Already in Ludus ({alreadyIn.length})
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {alreadyIn.map((b) => (
-                  <Badge key={b.name} variant="secondary" className="text-xs font-mono gap-1">
-                    <CheckCircle2 className="h-2.5 w-2.5 text-status-success" />
-                    {b.name}
-                  </Badge>
-                ))}
+              <ShowAllBar expanded={showAllAvailable} count={sourceBlueprints.length} onToggle={() => setShowAllAvailable((v) => !v)} />
               </div>
             </div>
           )}
@@ -704,9 +594,15 @@ function AddBlueprintsFromSource({ installedIds, onAdded }: {
             </div>
           )}
 
-          {sourceBlueprints.length === 0 && !loadingSource && !sourceError && (
-            <p className="text-xs text-muted-foreground/60 text-center py-4">
-              Click &quot;Fetch Available Blueprints&quot; to browse blueprints from the selected source.
+          {loadingSource && sourceBlueprints.length === 0 && (
+            <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading blueprints…
+            </div>
+          )}
+          {catalogReady && !loadingSource && !sourceError && sourceBlueprints.length === 0 && registeredSourceId && (
+            <p className="py-4 text-center text-xs text-muted-foreground">
+              This source has no blueprints.
             </p>
           )}
         </CardContent>
@@ -1367,16 +1263,6 @@ export function BlueprintsPageClient() {
     }
   }
 
-  const accessBadge = (access: string) => {
-    switch (access) {
-      case "owner": return <Badge variant="cyan" className="text-xs gap-1"><Crown className="h-2.5 w-2.5" />Owner</Badge>
-      case "admin": return <Badge variant="destructive" className="text-xs">Admin</Badge>
-      case "direct": return <Badge variant="success" className="text-xs">Shared</Badge>
-      case "group": return <Badge variant="secondary" className="text-xs gap-1"><Users className="h-2.5 w-2.5" />Group</Badge>
-      default: return <Badge variant="secondary" className="text-xs">{access}</Badge>
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex gap-2 flex-wrap">
@@ -1428,7 +1314,7 @@ export function BlueprintsPageClient() {
             const canEdit = canEditBlueprint(bp, entry.isSourceCatalog)
             const canDelete = canDeleteBlueprint(bp, entry.isSourceCatalog, blueprintGate)
             return (
-              <Card key={entry.typeKey} className="hover:border-border/80 transition-colors">
+              <Card key={entry.primaryId} className="hover:border-border/80 transition-colors">
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1 min-w-0">
@@ -1440,13 +1326,12 @@ export function BlueprintsPageClient() {
                             +{entry.aliasCount} duplicate install{entry.aliasCount === 1 ? "" : "s"}
                           </Badge>
                         )}
-                        {entry.isSourceCatalog && (
-                          <Badge variant="secondary" className="text-[10px]">
-                            Global source
-                          </Badge>
-                        )}
-                        {bp.access && accessBadge(bp.access)}
                       </div>
+                      {bpId.includes("/") && (
+                        <p className="text-[10px] font-mono text-muted-foreground truncate mt-0.5">
+                          {bpId.slice(0, bpId.lastIndexOf("/"))}
+                        </p>
+                      )}
                       {(() => {
                         const src = sourceProvenance.blueprint(bpId)
                         const installedVer =
@@ -1484,30 +1369,33 @@ export function BlueprintsPageClient() {
                           </>
                         )
                       })()}
-                      {entry.primaryId !== entry.typeKey && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">
-                          {entry.primaryId}
-                        </p>
-                      )}
                       {entry.description && (
-                        <p className="text-xs text-muted-foreground mt-1">{entry.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{entry.description}</p>
                       )}
                       <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                        {!entry.isSourceCatalog && bp.ownerID && (
-                          <span>Owner: <code className="font-mono">{bp.ownerID}</code></span>
-                        )}
-                        {entry.isSourceCatalog ? (
-                          <span>Available to all Ludus users</span>
-                        ) : (
+                        {(() => {
+                          const src = sourceProvenance.blueprint(bpId)
+                          const registrant = src
+                            ? ludusSourceRegistrant(src.sourceId, src.sourceUrl, src.sourceRef)
+                            : null
+                          const ownerLabel = registrant || bp.ownerID
+                          if (!ownerLabel) return null
+                          return (
+                            <span>Owner: <code className="font-mono">{ownerLabel}</code></span>
+                          )
+                        })()}
+                        {viewerOwnsBlueprint(bp, blueprintGate) ? (
                           <>
                             {blueprintSharedUserCount(bp) > 0 && (
-                              <span>{blueprintSharedUserCount(bp)} user(s)</span>
+                              <span>Shared with {blueprintSharedUserCount(bp)} user(s)</span>
                             )}
                             {blueprintSharedGroupCount(bp) > 0 && (
                               <span>{blueprintSharedGroupCount(bp)} group(s)</span>
                             )}
                           </>
-                        )}
+                        ) : entry.isSourceCatalog ? (
+                          <span>Shared with you</span>
+                        ) : null}
                         {(bp.updatedAt || bp.updated) && <span>Updated {formatDate((bp.updatedAt || bp.updated)!)}</span>}
                       </div>
                       {shareLoading && (
@@ -1516,7 +1404,7 @@ export function BlueprintsPageClient() {
                           Loading share list…
                         </div>
                       )}
-                      {!shareLoading && !entry.isSourceCatalog && shareRow && (sharedUsers.length > 0 || shareRow.groups.length > 0) && (
+                      {!shareLoading && viewerOwnsBlueprint(bp, blueprintGate) && shareRow && (sharedUsers.length > 0 || shareRow.groups.length > 0) && (
                         <div className="mt-2 space-y-1.5 text-xs border-t border-border/50 pt-2">
                           {sharedUsers.length > 0 && (
                             <p>

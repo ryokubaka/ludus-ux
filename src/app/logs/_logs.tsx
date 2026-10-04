@@ -21,7 +21,8 @@ import {
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
-import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { augmentLudusDeployHistoryLines, isBlankDeployLogLine, omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { splitLogText } from "@/lib/strip-ansi"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
 import type { LogHistoryEntry } from "@/lib/types"
@@ -133,7 +134,7 @@ export function LogsPageClient() {
       const result = await ludusApi.getRangeLogHistoryById(id, selectedRangeId ?? undefined)
       if (result.data?.result) {
         if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
-        const raw = result.data.result.split("\n").filter((l) => l.trim())
+        const raw = omitBlankLogLines(splitLogText(result.data.result))
         lines.push(
           ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
         )
@@ -225,7 +226,7 @@ export function LogsPageClient() {
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
           const displayLines = newLines.filter(
-            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ")
+            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ") && !isBlankDeployLogLine(l)
           )
           if (displayLines.length) setLines((prev) => appendStreamLines(prev, displayLines))
           const doneLine = newLines.find((l) => l.startsWith("[DONE] "))
@@ -270,8 +271,14 @@ export function LogsPageClient() {
   const isDeploying = rangeState === "DEPLOYING" || rangeState === "WAITING"
 
   return (
-    <div className="space-y-5">
-      {/* Live / current deploy logs */}
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col gap-4",
+        selectedLogId ? "overflow-hidden" : "overflow-y-auto",
+      )}
+    >
+      {/* Live / current deploy logs — hidden while a history entry fills the page */}
+      {!selectedLogId && (
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between flex-wrap gap-3">
@@ -321,9 +328,10 @@ export function LogsPageClient() {
           </LogViewerCompound.Root>
         </CardContent>
       </Card>
+      )}
 
       {/* Deploy History */}
-      <Card>
+      <Card className={cn(selectedLogId && "flex min-h-0 flex-1 flex-col overflow-hidden")}>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <History className="h-4 w-4 text-primary" />
@@ -333,9 +341,9 @@ export function LogsPageClient() {
             )}
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className={cn(selectedLogId && "flex min-h-0 flex-1 flex-col overflow-hidden")}>
           {selectedLogId ? (
-            <div className="space-y-3">
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="ghost" onClick={clearHistorySelection} className="gap-1.5">
                   <ArrowLeft className="h-3.5 w-3.5" />
@@ -370,7 +378,12 @@ export function LogsPageClient() {
                   <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : (
-                <LogViewer lines={historyLines} autoScroll={false} maxHeight="400px" />
+                <LogViewer
+                  lines={historyLines}
+                  autoScroll={false}
+                  fillHeight
+                  className="min-h-0 w-full flex-1"
+                />
               )}
             </div>
           ) : (
@@ -405,6 +418,7 @@ export function LogsPageClient() {
           extension removals (writes happen from Dashboard / GOAD pages; this is
           read-only). Scoped to the currently selected range; non-admins only
           see their own rows. */}
+      {!selectedLogId && (
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -437,6 +451,7 @@ export function LogsPageClient() {
           />
         </CardContent>
       </Card>
+      )}
     </div>
   )
 }

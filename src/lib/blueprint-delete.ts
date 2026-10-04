@@ -87,12 +87,10 @@ export async function deleteBlueprintsOnLudus(
   const fallbackKeys =
     session.isAdmin && isSource && serviceKey
       ? uniqueIds([serviceKey, session.apiKey])
-      : serviceKey && serviceKey !== viewerKey
-        ? [serviceKey]
-        : []
+      : []
 
   let targetIds = uniqueIds([blueprintId, ...aliasIds])
-  if (isSource) {
+  if (session.isAdmin && isSource) {
     const slug = blueprintTypeKey({ id: blueprintId, blueprintID: blueprintId })
     if (slug && serviceKey) {
       const discovered = await listBlueprintIdsForSlug(serviceKey, slug)

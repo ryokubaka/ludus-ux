@@ -186,6 +186,21 @@ fi # end DISABLE_HTTPS check
 chown -R nextjs:nodejs /app/data 2>/dev/null || true
 mkdir -p /app/data/tasks && chown nextjs:nodejs /app/data/tasks
 
+# The Docker socket is typically root:docker mode 660. Put nextjs in that group
+# so Settings → About can ask the local daemon to run the host upgrade script.
+if [ -S /var/run/docker.sock ]; then
+    sock_gid=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)
+    if [ -n "$sock_gid" ]; then
+        sock_group=$(awk -F: -v gid="$sock_gid" '$3 == gid { print $1; exit }' /etc/group)
+        if [ -z "$sock_group" ]; then
+            sock_group=luxdocker
+            addgroup -g "$sock_gid" -S "$sock_group"
+        fi
+        addgroup nextjs "$sock_group" || true
+        echo "[entrypoint] nextjs can use the Docker socket (group $sock_group, gid $sock_gid)"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # SSH private keys under /app/ssh (bind-mounted from the host).
 # Docker Desktop on Windows often shows them as mode 777 inside the container

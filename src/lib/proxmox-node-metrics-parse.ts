@@ -46,11 +46,26 @@ export function fractionToPct(value: unknown): number | null {
   return Math.round(Math.min(1, Math.max(0, ratio)) * 1000) / 10
 }
 
+export type NodeResourceSample = {
+  cpuPct: number | null
+  memPct: number | null
+  memBytes: number | null
+  maxMemBytes: number | null
+  /** Proxmox `maxcpu` (core count). Used to weight a cluster CPU total. */
+  maxCpu: number | null
+}
+
+export type ClusterResourceSample = {
+  cpuPct: number | null
+  memPct: number | null
+  memBytes: number | null
+  maxMemBytes: number | null
+  nodeCount: number
+}
+
 /** CPU/mem from pvestatd via cluster/resources — reliable unlike /nodes/{node}/status cpu. */
-export function parseClusterResourceNodes(
-  raw: string,
-): Map<string, { cpuPct: number | null; memPct: number | null }> {
-  const out = new Map<string, { cpuPct: number | null; memPct: number | null }>()
+export function parseClusterResourceNodes(raw: string): Map<string, NodeResourceSample> {
+  const out = new Map<string, NodeResourceSample>()
   let inner: unknown
   try {
     inner = unwrapPveshJson(raw)
@@ -66,15 +81,70 @@ export function parseClusterResourceNodes(
     if (!name || !SAFE_NODE.test(name)) continue
 
     let memPct: number | null = null
+    let memBytes: number | null = null
+    let maxMemBytes: number | null = null
+    let maxCpu: number | null = null
     const maxmem = o.maxmem
     const mem = o.mem
-    if (typeof maxmem === "number" && maxmem > 0 && typeof mem === "number") {
-      memPct = Math.round(Math.min(1, Math.max(0, mem / maxmem)) * 1000) / 10
+    const maxcpu = o.maxcpu
+    if (typeof mem === "number" && Number.isFinite(mem) && mem >= 0) memBytes = mem
+    if (typeof maxmem === "number" && Number.isFinite(maxmem) && maxmem > 0) maxMemBytes = maxmem
+    if (typeof maxcpu === "number" && Number.isFinite(maxcpu) && maxcpu > 0) maxCpu = maxcpu
+    if (memBytes != null && maxMemBytes != null && maxMemBytes > 0) {
+      memPct = Math.round(Math.min(1, Math.max(0, memBytes / maxMemBytes)) * 1000) / 10
     }
 
-    out.set(name, { cpuPct: fractionToPct(o.cpu), memPct })
+    out.set(name, { cpuPct: fractionToPct(o.cpu), memPct, memBytes, maxMemBytes, maxCpu })
   }
   return out
+}
+
+function roundTenth(n: number): number {
+  return Math.round(n * 10) / 10
+}
+
+/** One cluster total. CPU is weighted by core count. Memory is the sum of used and installed RAM. */
+export function consolidateNodeResources(nodes: readonly NodeResourceSample[]): ClusterResourceSample {
+  let memBytes = 0
+  let maxMemBytes = 0
+  let memNodes = 0
+  let cpuWeighted = 0
+  let cores = 0
+  let cpuSum = 0
+  let cpuNodes = 0
+  let cpuNodesWithCores = 0
+
+  for (const node of nodes) {
+    if (node.memBytes != null && node.maxMemBytes != null && node.maxMemBytes > 0) {
+      memBytes += node.memBytes
+      maxMemBytes += node.maxMemBytes
+      memNodes += 1
+    }
+    if (node.cpuPct == null) continue
+    cpuSum += node.cpuPct
+    cpuNodes += 1
+    if (node.maxCpu != null && node.maxCpu > 0) {
+      cpuWeighted += (node.cpuPct / 100) * node.maxCpu
+      cores += node.maxCpu
+      cpuNodesWithCores += 1
+    }
+  }
+
+  const cpuPct =
+    cpuNodes > 0 && cpuNodesWithCores === cpuNodes && cores > 0
+      ? roundTenth((cpuWeighted / cores) * 100)
+      : cpuNodes > 0
+        ? roundTenth(cpuSum / cpuNodes)
+        : null
+  const memPct = memNodes > 0 && maxMemBytes > 0 ? roundTenth((memBytes / maxMemBytes) * 100) : null
+
+  return {
+    cpuPct,
+    memPct,
+    memBytes: memNodes > 0 ? memBytes : null,
+    maxMemBytes: memNodes > 0 ? maxMemBytes : null,
+    nodeCount: nodes.length,
+  }
 }
 
 export function parseNodeStatusLoad(raw: string): number | null {

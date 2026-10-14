@@ -26,6 +26,27 @@ describe("consolidateBlueprintList", () => {
     expect(goad?.isSourceCatalog).toBe(true)
   })
 
+  it("keeps the same slug from main and a feature branch as two blueprints", () => {
+    const rows: BlueprintListItem[] = [
+      {
+        id: "ryokubaka-ludus-source-meow/securityonion3-lab",
+        name: "Security Onion 3 Lab",
+        version: "1.1.0",
+      },
+      {
+        id: "ryokubaka-ludus-source-meow-feat-securityonion-3-3-0/securityonion3-lab",
+        name: "Security Onion 3 Lab",
+        version: "1.2.0",
+      },
+    ]
+    const consolidated = consolidateBlueprintList(rows)
+    expect(consolidated).toHaveLength(2)
+    expect(consolidated.map((b) => b.primaryId).sort()).toEqual([
+      "ryokubaka-ludus-source-meow-feat-securityonion-3-3-0/securityonion3-lab",
+      "ryokubaka-ludus-source-meow/securityonion3-lab",
+    ])
+  })
+
   it("keeps custom blueprints without source prefix separate", () => {
     const rows: BlueprintListItem[] = [
       { id: "my-custom-lab", name: "Custom Lab" },

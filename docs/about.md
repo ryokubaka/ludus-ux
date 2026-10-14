@@ -22,11 +22,15 @@ When you deploy a GOAD lab in LUX:
 1. LUX uses SSH to run GOAD commands on the Ludus server
 2. GOAD calls `ludus range deploy` internally to build VMs
 3. GOAD then runs its own Ansible playbooks to configure Active Directory
-4. LUX re-applies any firewall rules you configured after GOAD finishes (since GOAD's Ansible step overwrites the range config)
+4. LUX keeps the range network block and applies the wizard network rules after GOAD finishes ([Workflows](workflows.md))
 
 The result: you get a fully configured AD lab in an isolated network without manually coordinating two separate tools. LUX handles the handoff so you do not need to understand the internal protocol between GOAD and Ludus.
 
 See [Workflows](workflows.md) for a plain-English walkthrough of the deploy process.
+
+## LudusHound and Ludus
+
+**[LudusHound](https://github.com/bagelByt3s/LudusHound)** (bagelByt3s) generates Ludus range YAML from BloodHound data (full replica or Attack Path). LUX runs the CLI over SSH, then uploads the YAML and deploys via the Ludus API. Credits and licenses: [NOTICE](../NOTICE).
 
 ## Future enhancements
 

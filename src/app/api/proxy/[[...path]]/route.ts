@@ -9,8 +9,21 @@ import {
   ludusProxyEvent,
 } from "@/lib/lux-api-audit"
 import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
+import {
+  ensureAnsibleHomeLayoutAsRoot,
+  resolveSessionLinuxUser,
+} from "@/lib/ansible-home-repair"
+import { formatAnsibleHomeRepairLogLine } from "@/lib/ludus-ansible-preflight"
+import { shouldRepairAnsibleHomeAfterProxyMutation } from "@/lib/ludus-proxy-ansible-repair"
 import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
 import { getSettings } from "@/lib/settings-store"
+import {
+  assertRouterTemplateReady,
+} from "@/lib/ludus-router-template-assert"
+import {
+  routerTemplateBlockMessage,
+} from "@/lib/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -83,6 +96,32 @@ async function handler(
     const rawBody = await parseRequestBody(request)
     const body = applyLudusDeployVerbose(path, request.method, rawBody)
 
+    const linuxUser = resolveSessionLinuxUser(session, request)
+    const basePath = path.split("?")[0]
+    if (request.method === "POST" && basePath === "/range/deploy") {
+      const router = await assertRouterTemplateReady(effectiveApiKey, {
+        userOverride,
+      })
+      if (!router.ok) {
+        return NextResponse.json(
+          {
+            error: routerTemplateBlockMessage(router),
+            code: "router_template_required",
+            template: router.template,
+            reason: router.reason,
+          },
+          { status: 409 },
+        )
+      }
+      const patches = await ensureRangeDeployHostPatches(body)
+      if (!patches.ok) {
+        return NextResponse.json(
+          { error: patches.error, code: "deploy_host_patch" },
+          { status: 503 },
+        )
+      }
+    }
+
     const result = await ludusRequest(fullPath, {
       method: request.method,
       body,
@@ -98,7 +137,7 @@ async function handler(
       const isConnectionError = result.status === 0
       const errorMessage =
         useAdmin && isConnectionError
-          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix root SSH so the optional tunnel to 127.0.0.1:18081 can work.`
+          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix host SSH so the optional tunnel to 127.0.0.1:18081 can work.`
           : result.error
       if (MUTATING_METHODS.has(request.method)) {
         const username = effectiveUsernameFromRequest(request, session)
@@ -130,6 +169,10 @@ async function handler(
         "success",
       )
       revalidateAfterLudusProxyMutation(request.method, path, session)
+      if (linuxUser && shouldRepairAnsibleHomeAfterProxyMutation(request.method, basePath, body)) {
+        await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
+        console.info(formatAnsibleHomeRepairLogLine(linuxUser))
+      }
     }
 
     return NextResponse.json(result.data, { status: result.status || 200 })

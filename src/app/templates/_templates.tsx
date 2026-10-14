@@ -1,6 +1,9 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, Fragment, useRef } from "react"
+import Link from "next/link"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
+import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
@@ -8,7 +11,6 @@ import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
 import { LogViewerCompound } from "@/components/range/log-viewer"
 import { splitLogText } from "@/lib/strip-ansi"
 import {
@@ -25,7 +27,6 @@ import {
   Download,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
   GitBranch,
   AlertTriangle,
   Check,
@@ -35,25 +36,32 @@ import {
   History,
   ArrowLeft,
 } from "lucide-react"
-import { ludusApi, del } from "@/lib/api"
+import { ludusApi } from "@/lib/api"
 import { LogHistoryList } from "@/components/range/log-history-list"
 import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
 import { cn, extractArray } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
+import { ToastAction } from "@/components/ui/toast"
+import type { TemplateDeleteErrorCode } from "@/lib/template-delete-errors"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
   buildCatalogTemplatePresenceMap,
   getCatalogTemplatePresence,
+  resolveInstalledTemplateName,
   type CatalogTemplatePresence,
 } from "@/lib/template-install-match"
-import { SourceCatalogBanner } from "@/components/sources/source-catalog-banner"
+import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
+import {
+  SourceRepoLink,
+  SourceSyncControls,
+} from "@/components/sources/source-installed-controls"
 import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
 import {
   mapRegisteredSources,
   pickDefaultRegisteredSource,
-  registeredSourceLabel,
+  registeredSourceOptionLabel,
   type RegisteredLudusSource,
 } from "@/lib/registered-ludus-sources"
 
@@ -66,39 +74,35 @@ interface SourceTemplate {
   apiBase: string
   ref:     string
   version?: string
+  state?: string
   catalogSource?: "ludus" | "github"
-}
-
-const BUILTIN_SOURCE = {
-  label: "badsectorlabs/ludus-source-bsl (official)",
-  url:   "https://github.com/badsectorlabs/ludus-source-bsl/tree/main/templates",
-  value: "badsectorlabs",
 }
 
 // ── Add from Source panel ─────────────────────────────────────────────────────
 
-function AddFromSource({ templatePresence, onAdded }: {
+function AddFromSource({
+  templatePresence,
+  ludusTemplates,
+  onAdded,
+}: {
   templatePresence: Map<string, CatalogTemplatePresence>
+  ludusTemplates: Array<{ name: string; built: boolean; version?: string }>
   onAdded: () => void
 }) {
   const { toast } = useToast()
   const scopeTag = useEffectiveScopeTag()
-  const [open,              setOpen]              = useState(false)
-  const [sourceValue,       setSourceValue]       = useState("badsectorlabs")
+  const [open, setOpen] = useState(false)
   const [registeredSourceId, setRegisteredSourceId] = useState("")
-  const autoFetchedRef = useRef(false)
-  const [customRepoUrl,     setCustomRepoUrl]     = useState("")
-  const [customPath,        setCustomPath]        = useState("templates")
-  const [customRef,         setCustomRef]         = useState("main")
-  const [sourceTemplates,   setSourceTemplates]   = useState<SourceTemplate[]>([])
-  const [catalogSource,     setCatalogSource]     = useState<"ludus" | "github" | null>(null)
-  const [loadingSource,     setLoadingSource]     = useState(false)
-  const [sourceError,       setSourceError]       = useState<string | null>(null)
-  const [selected,          setSelected]          = useState<Set<string>>(new Set())
-  const [adding,            setAdding]            = useState(false)
-  const [addResults,        setAddResults]        = useState<{name:string;success:boolean;message:string}[]>([])
+  const [sourceTemplates, setSourceTemplates] = useState<SourceTemplate[]>([])
+  const [loadingSource, setLoadingSource] = useState(false)
+  const [catalogReady, setCatalogReady] = useState(false)
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [adding, setAdding] = useState(false)
+  const [addResults, setAddResults] = useState<{name:string;success:boolean;message:string}[]>([])
+  const [showAllCatalog, setShowAllCatalog] = useState(false)
 
-  const { data: ludusSourcesMeta } = useQuery({
+  const { data: ludusSourcesMeta, isFetched: sourcesFetched } = useQuery({
     queryKey: queryKeys.sources(scopeTag),
     queryFn: async () => {
       const res = await fetch("/api/sources")
@@ -117,74 +121,44 @@ function AddFromSource({ templatePresence, onAdded }: {
     [ludusSourcesMeta],
   )
 
-  const registeredSourceIdForBanner = useMemo(() => {
-    if (sourceValue === "registered" && registeredSourceId) return registeredSourceId
-    if (sourceValue !== "badsectorlabs" || !ludusSourcesMeta?.sources?.length) return null
-    const hit = ludusSourcesMeta.sources.find((s) =>
-      (s.url ?? "").toLowerCase().includes("ludus-source-bsl"),
-    )
-    return hit?.sourceID || hit?.id || null
-  }, [ludusSourcesMeta, sourceValue, registeredSourceId])
-
   const fetchSource = useCallback(async () => {
+    if (!registeredSourceId) return
     setLoadingSource(true)
+    setCatalogReady(false)
     setSourceError(null)
     setSourceTemplates([])
-    setCatalogSource(null)
     setSelected(new Set())
     setAddResults([])
     try {
-      const params = new URLSearchParams()
-      if (sourceValue === "registered" && registeredSourceId) {
-        params.set("source", "registered")
-        params.set("sourceId", registeredSourceId)
-      } else {
-        params.set("source", sourceValue)
-      }
-      if (sourceValue === "custom" && customRepoUrl) {
-        // Derive GitLab API base from a repo browse URL like:
-        // https://gitlab.com/owner/repo/-/tree/ref/path
-        // → https://gitlab.com/api/v4/projects/owner%2Frepo/repository
-        let apiBase = customRepoUrl
-        const glMatch = customRepoUrl.match(/^https:\/\/gitlab\.com\/([^/]+\/[^/]+?)(?:\/|$)/)
-        if (glMatch) {
-          apiBase = `https://gitlab.com/api/v4/projects/${encodeURIComponent(glMatch[1])}/repository`
-        }
-        params.set("source",  "custom")
-        params.set("repoUrl", apiBase)
-        params.set("path",    customPath)
-        params.set("ref",     customRef)
-      }
-      const res  = await fetch(`/api/templates/sources?${params}`)
+      const params = new URLSearchParams({
+        source: "registered",
+        sourceId: registeredSourceId,
+      })
+      const res = await fetch(`/api/templates/sources?${params}`)
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setSourceTemplates(data.templates ?? [])
-      setCatalogSource(data.catalogSource === "ludus" ? "ludus" : "github")
     } catch (err) {
       setSourceError((err as Error).message)
     } finally {
       setLoadingSource(false)
+      setCatalogReady(true)
     }
-  }, [sourceValue, registeredSourceId, customRepoUrl, customPath, customRef])
+  }, [registeredSourceId])
 
   useEffect(() => {
     if (!open || registeredSources.length === 0) return
     const def = pickDefaultRegisteredSource(registeredSources)
     if (!def) return
-    setSourceValue("registered")
-    setRegisteredSourceId((prev) => prev || def.id)
+    setRegisteredSourceId((prev) =>
+      prev && registeredSources.some((s) => s.id === prev) ? prev : def.id,
+    )
   }, [open, registeredSources])
 
   useEffect(() => {
-    if (!open) {
-      autoFetchedRef.current = false
-      return
-    }
-    if (autoFetchedRef.current) return
-    if (sourceValue === "registered" && !registeredSourceId) return
-    autoFetchedRef.current = true
+    if (!open || !registeredSourceId) return
     void fetchSource()
-  }, [open, sourceValue, registeredSourceId, fetchSource])
+  }, [open, registeredSourceId, fetchSource])
 
   const toggleSelect = (name: string) => {
     setSelected((prev) => {
@@ -229,9 +203,8 @@ function AddFromSource({ templatePresence, onAdded }: {
   }
 
   const presenceOf = (name: string) => getCatalogTemplatePresence(name, templatePresence)
-  const inLudus = (name: string) => presenceOf(name) !== "none"
 
-  const available = sourceTemplates.filter((t) => !inLudus(t.name))
+  const sharedCatalog = registeredSources.find((s) => s.id === registeredSourceId)?.sharedCatalog === true
   const alreadyAdded = sourceTemplates.filter((t) => presenceOf(t.name) === "added")
   const alreadyBuilt = sourceTemplates.filter((t) => presenceOf(t.name) === "built")
 
@@ -242,160 +215,85 @@ function AddFromSource({ templatePresence, onAdded }: {
         onToggle={() => setOpen((o) => !o)}
         icon={GitBranch}
         title="Add Templates from Source"
-        subtitle="— install community or official templates not bundled with Ludus"
+        subtitle="— pick a source registered on the Sources page"
       />
 
       {open && (
         <CardContent className="space-y-4">
-          {/* Source selector */}
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[220px]">
-              <label className="text-xs text-muted-foreground mb-1 block">Source</label>
-              <div className="flex gap-2 flex-wrap">
-                {registeredSources.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setSourceValue("registered")
-                      setSourceTemplates([])
-                      setAddResults([])
-                      autoFetchedRef.current = false
-                    }}
-                    className={cn(
-                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
-                      sourceValue === "registered"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50",
-                    )}
-                  >
-                    Registered sources
-                  </button>
-                )}
-                {["badsectorlabs", "custom"].map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => {
-                      setSourceValue(v)
-                      setSourceTemplates([])
-                      setAddResults([])
-                      autoFetchedRef.current = false
-                    }}
-                    className={cn(
-                      "px-3 py-1.5 rounded-md text-xs border transition-colors",
-                      sourceValue === v
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-transparent text-muted-foreground hover:border-primary/50"
-                    )}
-                  >
-                    {v === "badsectorlabs" ? "badsectorlabs/ludus-source-bsl (official)" : "Custom git repo"}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {sourceValue === "registered" && registeredSources.length > 0 && (
-              <div className="flex-1 min-w-[220px]">
-                <label className="text-xs text-muted-foreground mb-1 block">Registered source</label>
+          {sourcesFetched && registeredSources.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No sources yet.{" "}
+              <Link href="/sources" className="text-primary hover:underline">
+                Add one on Sources
+              </Link>
+              , then install its templates here.
+            </p>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[240px] flex-1">
+                <label className="mb-1 block text-xs text-muted-foreground" htmlFor="template-source">
+                  Source
+                </label>
                 <select
+                  id="template-source"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs"
                   value={registeredSourceId}
                   onChange={(e) => {
                     setRegisteredSourceId(e.target.value)
                     setSourceTemplates([])
+                    setCatalogReady(false)
                     setAddResults([])
-                    autoFetchedRef.current = false
+                    setSourceError(null)
+                    setShowAllCatalog(false)
                   }}
                 >
+                  {registeredSources.length === 0 && <option value="">Loading sources…</option>}
                   {registeredSources.map((s: RegisteredLudusSource) => (
                     <option key={s.id} value={s.id}>
-                      {registeredSourceLabel(s)}
+                      {registeredSourceOptionLabel(s)}
                     </option>
                   ))}
                 </select>
               </div>
-            )}
-
-            {sourceValue === "badsectorlabs" && (
-              <a
-                href={BUILTIN_SOURCE.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
-              >
-                <ExternalLink className="h-3 w-3" />
-                View on GitHub
-              </a>
-            )}
-          </div>
-
-          {/* Custom repo fields */}
-          {sourceValue === "custom" && (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-3">
-                <label className="text-xs text-muted-foreground mb-1 block">GitLab repo URL</label>
-                <Input
-                  placeholder="https://gitlab.com/owner/repo"
-                  value={customRepoUrl}
-                  onChange={(e) => setCustomRepoUrl(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Templates path</label>
-                <Input
-                  placeholder="templates"
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Branch / ref</label>
-                <Input
-                  placeholder="main"
-                  value={customRef}
-                  onChange={(e) => setCustomRef(e.target.value)}
-                  className="text-xs font-mono"
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Fetch button */}
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={fetchSource} disabled={loadingSource}>
-              {loadingSource
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <RefreshCw className="h-3.5 w-3.5" />}
-              {loadingSource ? "Loading…" : "Fetch Available Templates"}
-            </Button>
-
-            {sourceTemplates.length > 0 && (
               <Button
                 size="sm"
-                onClick={handleAdd}
-                disabled={selected.size === 0 || adding}
+                variant="outline"
+                onClick={() => void fetchSource()}
+                disabled={loadingSource || !registeredSourceId}
               >
-                {adding
+                {loadingSource
                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <Download className="h-3.5 w-3.5" />}
-                {adding ? "Adding…" : `Add Selected (${selected.size})`}
+                  : <RefreshCw className="h-3.5 w-3.5" />}
+                Reload
               </Button>
-            )}
-          </div>
+              {sourceTemplates.length > 0 && !sharedCatalog && (
+                <Button
+                  size="sm"
+                  onClick={handleAdd}
+                  disabled={selected.size === 0 || adding}
+                >
+                  {adding
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Download className="h-3.5 w-3.5" />}
+                  {adding ? "Adding…" : `Add Selected (${selected.size})`}
+                </Button>
+              )}
+              <Link href="/sources" className="pb-2 text-xs text-muted-foreground hover:text-primary">
+                Manage sources
+              </Link>
+            </div>
+          )}
+          {sharedCatalog && (
+            <p className="text-xs text-muted-foreground">
+              Shared by an admin. Built templates are already usable in ranges. An admin installs new template definitions from this source.
+            </p>
+          )}
 
           {sourceError && (
             <div className="flex items-center gap-2 text-xs text-destructive bg-destructive/10 rounded px-3 py-2">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               {sourceError}
             </div>
-          )}
-
-          {(sourceTemplates.length > 0 || catalogSource) && (
-            <SourceCatalogBanner
-              catalogSource={catalogSource}
-              registeredSourceId={registeredSourceIdForBanner}
-              sourcesAvailable={ludusSourcesMeta?.available}
-            />
           )}
 
           {/* Fetched templates grid — installed items shown but not selectable */}
@@ -410,11 +308,16 @@ function AddFromSource({ templatePresence, onAdded }: {
                   </span>
                 )}
               </p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {sourceTemplates.map((t) => {
+              <div className="rounded-lg border border-border">
+              <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3">
+                {previewSlice(sourceTemplates, showAllCatalog).map((t) => {
                   const presence = presenceOf(t.name)
                   const onLudus = presence !== "none"
+                  const ludusName = onLudus
+                    ? resolveInstalledTemplateName(t.name, ludusTemplates)
+                    : null
                   const result = addResults.find((r) => r.name === t.name)
+                  const folder = t.path.replace(/\/+$/, "").split("/").filter(Boolean).pop()
                   return (
                     <button
                       key={t.name}
@@ -460,13 +363,19 @@ function AddFromSource({ templatePresence, onAdded }: {
                         )}
                       </div>
                       <p className="text-muted-foreground/70 truncate pl-5">
-                        {t.version
-                          ? `v${t.version}`
-                          : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
+                        {ludusName && ludusName !== t.name
+                          ? `as ${ludusName}`
+                          : folder && folder !== t.name
+                            ? `folder ${folder}`
+                            : t.version
+                              ? `v${t.version}`
+                              : t.files.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json")) ?? t.files[0] ?? ""}
                       </p>
                     </button>
                   )
                 })}
+              </div>
+              <ShowAllBar expanded={showAllCatalog} count={sourceTemplates.length} onToggle={() => setShowAllCatalog((v) => !v)} />
               </div>
             </div>
           )}
@@ -492,9 +401,15 @@ function AddFromSource({ templatePresence, onAdded }: {
             </div>
           )}
 
-          {sourceTemplates.length === 0 && !loadingSource && !sourceError && (
-            <p className="text-xs text-muted-foreground/60 text-center py-4">
-              Click &quot;Fetch Available Templates&quot; to browse templates from the selected source.
+          {loadingSource && sourceTemplates.length === 0 && (
+            <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading templates…
+            </div>
+          )}
+          {catalogReady && !loadingSource && !sourceError && sourceTemplates.length === 0 && registeredSourceId && (
+            <p className="py-4 text-center text-xs text-muted-foreground">
+              This source has no templates.
             </p>
           )}
         </CardContent>
@@ -526,6 +441,7 @@ function OsBadge({ os }: { os?: LudusOS }) {
 
 export function TemplatesPageClient() {
   const { toast } = useToast()
+  const router = useRouter()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
@@ -575,7 +491,7 @@ export function TemplatesPageClient() {
     setBuildHistoryLines([])
   }, [])
 
-  // Template list — cached for fast subsequent loads
+  // Template list — refetch when a Packer build finishes (invalidate below).
   const { data: templates = [], isLoading: loading } = useQuery({
     queryKey: queryKeys.templates(scopeTag),
     queryFn: async () => {
@@ -584,6 +500,15 @@ export function TemplatesPageClient() {
     },
     staleTime: STALE.long,
   })
+
+  const templateInstalled = useMemo(
+    () => templates.map((t) => ({ name: t.name, version: t.version })),
+    [templates],
+  )
+  const sourceProvenance = useSourceInstalledProvenance({ templates: templateInstalled })
+  const invalidateTemplates = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+  }, [queryClient, scopeTag])
 
   // Names of every template currently known to Ludus. Used to decide which
   // rows in /templates/logs/history are actual packer builds vs range deploys.
@@ -613,58 +538,51 @@ export function TemplatesPageClient() {
     }
   }, [])
 
-  // Template build status — polls every 3 s while building, otherwise only checks on mount
-  useQuery({
+  // Always poll Packer status while this page is open so builds started from
+  // the assistant (or another tab) still flip Built status without a manual refresh.
+  const wasBuildingRef = useRef(false)
+  const { data: statusActive } = useQuery({
     queryKey: queryKeys.templateStatus(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getTemplateStatus()
-      return result.data ?? null
+      const data = result.data ?? null
+      if (result.error && data == null) return false
+      return Array.isArray(data) ? data.length > 0 : data != null
     },
-    refetchInterval: building ? 3000 : false,
+    refetchInterval: 3000,
     staleTime: 0,
-    select: (data) => {
-      const isActive = Array.isArray(data) ? data.length > 0 : data != null
-      return isActive
-    },
   })
 
-  // Detect and resume an in-progress build on mount / page navigation
   useEffect(() => {
-    const checkBuildStatus = async () => {
-      const statusResult = await ludusApi.getTemplateStatus()
-      const isActive = Array.isArray(statusResult.data)
-        ? statusResult.data.length > 0
-        : statusResult.data != null && !statusResult.error
-      if (isActive) {
-        setBuilding(true)
-        setShowLogs(true)
-        fetchLogs()
-      }
+    if (statusActive === undefined) return
+    if (statusActive) {
+      wasBuildingRef.current = true
+      setBuilding(true)
+      setShowLogs(true)
+      return
     }
-    checkBuildStatus()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    setBuilding(false)
+    if (!wasBuildingRef.current) return
+    wasBuildingRef.current = false
+    void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    void queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
+    // Ludus can lag a beat after /templates/status clears — second pass.
+    const t = window.setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
+    }, 2500)
+    return () => window.clearTimeout(t)
+  }, [statusActive, queryClient, scopeTag])
 
-  // Poll logs + check completion while building
+  // Poll live Packer logs while a build is active
   useEffect(() => {
     if (!building) return
-
-    const interval = setInterval(async () => {
-      fetchLogs()
-
-      const statusResult = await ludusApi.getTemplateStatus()
-      const stillBuilding = Array.isArray(statusResult.data)
-        ? statusResult.data.length > 0
-        : statusResult.data != null && !statusResult.error
-      if (!stillBuilding) {
-        setBuilding(false)
-        queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
-        queryClient.invalidateQueries({ queryKey: queryKeys.templateLogHistory(scopeTag) })
-      }
+    void fetchLogs()
+    const interval = setInterval(() => {
+      void fetchLogs()
     }, 3000)
-
     return () => clearInterval(interval)
-  }, [building, fetchLogs, queryClient])
+  }, [building, fetchLogs])
 
   const toggleSelect = (name: string) => {
     setSelectedTemplates((prev) => {
@@ -728,12 +646,47 @@ export function TemplatesPageClient() {
   const handleAbort = () => confirm("Abort the running template build?", doAbort)
 
   const doDelete = async (name: string) => {
-    const result = await del(`/template/${encodeURIComponent(name)}`)
-    if (result.error) {
-      toast({ variant: "destructive", title: "Error", description: result.error })
-    } else {
-      toast({ title: "Template deleted" })
-      queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    try {
+      const res = await fetch("/api/templates/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        message?: string
+        code?: TemplateDeleteErrorCode
+        actionUrl?: string
+      }
+      if (!res.ok) {
+        toast({
+          variant: "destructive",
+          title:
+            data.code === "TEMPLATE_IN_USE_BY_VMS"
+              ? "Template in use"
+              : data.code === "TEMPLATE_INCLUDED"
+                ? "Cannot delete built-in template"
+                : "Delete failed",
+          description: data.error || `HTTP ${res.status}`,
+          action: data.actionUrl ? (
+            <ToastAction
+              altText="View blocking VMs"
+              onClick={() => router.push(data.actionUrl!)}
+            >
+              View blocking VMs
+            </ToastAction>
+          ) : undefined,
+        })
+        return
+      }
+      toast({ title: "Template deleted", description: data.message || name })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Delete failed",
+        description: (err as Error).message,
+      })
     }
   }
   const handleDelete = (name: string) =>
@@ -847,7 +800,11 @@ export function TemplatesPageClient() {
       )}
 
       {/* Add from Source */}
-      <AddFromSource templatePresence={templatePresence} onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })} />
+      <AddFromSource
+        templatePresence={templatePresence}
+        ludusTemplates={templates}
+        onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })}
+      />
 
       {/* Build History */}
       <Card>
@@ -988,6 +945,8 @@ export function TemplatesPageClient() {
                     </th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Template Name</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">OS</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Source</th>
+                    <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Sync</th>
                     <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Status</th>
                     <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
                   </tr>
@@ -995,7 +954,7 @@ export function TemplatesPageClient() {
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-muted-foreground">
+                      <td colSpan={7} className="p-8 text-center text-muted-foreground">
                         <BookTemplate className="h-8 w-8 mx-auto mb-2 opacity-40" />
                         <p>No templates found</p>
                       </td>
@@ -1006,6 +965,7 @@ export function TemplatesPageClient() {
                       const scopeDelete = `tpl-delete:${template.name}`
                       const rowHasPending =
                         pendingAction?.key === scopeBuild || pendingAction?.key === scopeDelete
+                      const src = sourceProvenance.template(template.name)
                       return (
                         <Fragment key={template.name}>
                           <tr
@@ -1028,6 +988,23 @@ export function TemplatesPageClient() {
                             </td>
                             <td className="p-3">
                               <OsBadge os={template.os} />
+                            </td>
+                            <td className="p-3">
+                              {src ? (
+                                <SourceRepoLink match={src} />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {src ? (
+                                <SourceSyncControls
+                                  match={src}
+                                  onResynced={invalidateTemplates}
+                                />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
                             </td>
                             <td className="p-3">
                               {template.built ? (
@@ -1065,7 +1042,7 @@ export function TemplatesPageClient() {
                           </tr>
                           {rowHasPending && (
                             <tr className="border-b border-border/50 last:border-0">
-                              <td colSpan={5} className="p-2">
+                              <td colSpan={7} className="p-2">
                                 <ConfirmBar
                                   pending={pendingAction}
                                   scope={scopeBuild}

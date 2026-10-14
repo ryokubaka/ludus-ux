@@ -15,7 +15,6 @@ const SKIP_LOG_PATH_PREFIXES = [
   "/api/auth/session",
   "/api/auth/login",
   "/api/auth/logout",
-  "/api/debug-agent-log",
 ]
 
 type SessionLike = {

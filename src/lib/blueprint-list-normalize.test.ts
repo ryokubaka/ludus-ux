@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  blueprintInstalledFromSource,
   isGlobalSourceCatalogBlueprint,
   isLikelyUserBlueprintCopy,
   isSourceCatalogBlueprintId,
@@ -89,5 +90,28 @@ describe("isGlobalSourceCatalogBlueprint", () => {
         ownerID: "despacito",
       }),
     ).toBe(true)
+  })
+})
+
+describe("blueprintInstalledFromSource", () => {
+  it("keeps user copies and drops the source install", () => {
+    expect(
+      blueprintInstalledFromSource("meow", {
+        id: "meow/goad",
+        name: "GOAD",
+      }),
+    ).toBe(true)
+    expect(
+      blueprintInstalledFromSource("meow", {
+        id: "meow/goad-copy",
+        name: "GOAD (Copy)",
+      }),
+    ).toBe(false)
+    expect(
+      blueprintInstalledFromSource("meow", {
+        id: "scratch-pad",
+        name: "GOAD (Copy)",
+      }),
+    ).toBe(false)
   })
 })

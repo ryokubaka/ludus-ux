@@ -7,7 +7,7 @@ import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
 /**
  * GET /api/admin/fetch-user-apikey?username=xxx
  *
- * Reads the LUDUS_API_KEY for a user from their ~/.bashrc over root SSH,
+ * Reads the LUDUS_API_KEY for a user from their ~/.bashrc over host SSH,
  * so admins do not need to manually enter it when impersonating.
  *
  * Admin-only endpoint.

@@ -66,6 +66,14 @@ describe("goadTaskShortKind", () => {
     expect(goadTaskShortKind('--repl "use GOAD; install_extension elk"')).toBe("Install extension")
   })
 
+  it("returns 'Install extension' for LUX --lux-install-extension provide phase", () => {
+    expect(
+      goadTaskShortKind(
+        '--repl "use abd;update_instance_files;provide" --lux-install-extension=securityonion',
+      ),
+    ).toBe("Install extension")
+  })
+
   it("returns 'Install extensions' for multiple install_extension", () => {
     const cmd = '--repl "use GOAD; install_extension elk; install_extension sccm"'
     expect(goadTaskShortKind(cmd)).toBe("Install extensions")
@@ -80,6 +88,12 @@ describe("goadHistoryTitle", () => {
   it("returns extension name for single install_extension", () => {
     const cmd = '--repl "use GOAD; install_extension elk"'
     expect(goadHistoryTitle(cmd)).toBe("Install extension: elk")
+  })
+
+  it("returns Install extension title for LUX lux-install-extension marker", () => {
+    const cmd =
+      '--repl "use abd6f1;update_instance_files;provide" --lux-install-extension=securityonion'
+    expect(goadHistoryTitle(cmd)).toBe("Install extension: securityonion")
   })
 
   it("returns comma-separated names for multiple install_extension", () => {
@@ -279,5 +293,36 @@ describe("correlateHistoryEntries", () => {
     const d2 = makeLogEntry({ id: "d2", start: new Date(5000).toISOString() })
     const result = correlateHistoryEntries([d1, d2], [])
     expect(result[0].sortTime).toBeGreaterThanOrEqual(result[1].sortTime)
+  })
+
+  it("does not let a stale Running deploy steal a newer GOAD provide task", () => {
+    const now = 1_000_000
+    const stale = makeLogEntry({
+      id: "stale",
+      start: new Date(now - 600_000).toISOString(),
+      end: "", // open — treated as now → huge overlap with live task
+      status: "running",
+    })
+    const fresh = makeLogEntry({
+      id: "fresh",
+      start: new Date(now - 12_000).toISOString(),
+      end: "",
+      status: "running",
+    })
+    const task = makeTask({
+      id: "t-install",
+      command:
+        '--repl "use abd;update_instance_files;provide" --lux-install-extension=securityonion',
+      status: "running",
+      startedAt: now - 20_000,
+      endedAt: undefined,
+    })
+    const result = correlateHistoryEntries([stale, fresh], [task])
+    const integrated = result.find((e) => e.kind === "goad_integrated")
+    expect(integrated?.deployEntry?.id).toBe("fresh")
+    expect(goadIntegratedRowTitle(integrated!)).toBe("Install extension: securityonion")
+    expect(result.some((e) => e.kind === "ludus_only" && e.deployEntry?.id === "stale")).toBe(
+      true,
+    )
   })
 })

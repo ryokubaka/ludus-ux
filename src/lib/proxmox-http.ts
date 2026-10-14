@@ -89,6 +89,39 @@ export interface VncProxyInfo {
   port: string
   ticket: string
   wsPath: string
+  password?: string
+}
+
+export interface SpiceProxyInfo {
+  password?: string
+  host?: string
+  proxy?: string
+}
+
+export async function proxmoxCreateSpiceProxy(
+  host: string,
+  auth: ProxmoxAuth,
+  node: string,
+  vmid: string,
+): Promise<SpiceProxyInfo> {
+  const res = await fetch(
+    `https://${host}:8006/api2/json/nodes/${node}/qemu/${vmid}/spiceproxy`,
+    {
+      method: "POST",
+      headers: {
+        Cookie: `PVEAuthCookie=${auth.cookie}`,
+        CSRFPreventionToken: auth.csrf,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: `proxy=${host}`,
+    },
+  )
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`Failed to create SPICE proxy (HTTP ${res.status}): ${text.slice(0, 200)}`)
+  }
+  const json = (await res.json()) as { data?: SpiceProxyInfo }
+  return json.data ?? {}
 }
 
 export async function proxmoxCreateVncProxy(
@@ -96,7 +129,9 @@ export async function proxmoxCreateVncProxy(
   auth: ProxmoxAuth,
   node: string,
   vmid: string,
+  options?: { websocket?: boolean },
 ): Promise<VncProxyInfo> {
+  const websocket = options?.websocket !== false
   const res = await fetch(
     `https://${host}:8006/api2/json/nodes/${node}/qemu/${vmid}/vncproxy`,
     {
@@ -106,20 +141,21 @@ export async function proxmoxCreateVncProxy(
         CSRFPreventionToken: auth.csrf,
         "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: "websocket=1",
+      body: websocket ? "websocket=1" : "",
     },
   )
   if (!res.ok) {
     const text = await res.text().catch(() => "")
     throw new Error(`Failed to create VNC proxy (HTTP ${res.status}): ${text.slice(0, 200)}`)
   }
-  const json = (await res.json()) as { data?: { ticket?: string; port?: number } }
+  const json = (await res.json()) as { data?: { ticket?: string; port?: number | string; password?: string } }
   const ticket = json.data?.ticket
   const port = json.data?.port
   if (!ticket) throw new Error("VNC ticket missing — is the VM powered on?")
   return {
     port: String(port),
     ticket,
+    password: json.data?.password,
     wsPath: `/api2/json/nodes/${node}/qemu/${vmid}/vncwebsocket`,
   }
 }

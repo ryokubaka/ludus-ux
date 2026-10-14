@@ -148,4 +148,25 @@ describe("resolveVmListForRangeQuery", () => {
     })
     expect(result).toEqual([])
   })
+
+  it("keeps prev VMs on first empty SUCCESS poll, clears on second", () => {
+    const prev = [makeVM({ proxmoxID: 1 }), makeVM({ proxmoxID: 2 })]
+    const base = {
+      data: {
+        rangeID: "r1",
+        name: "test",
+        rangeNumber: 1,
+        rangeState: "SUCCESS" as const,
+        VMs: [] as VMObject[],
+        numberOfVMs: 2,
+      },
+      newVMs: [] as VMObject[],
+      prevVMs: prev,
+      stateUpper: "SUCCESS",
+      scopeTag: "user|self",
+      rangeId: "r1",
+    }
+    expect(resolveVmListForRangeQuery(base)).toEqual(prev)
+    expect(resolveVmListForRangeQuery(base)).toEqual([])
+  })
 })

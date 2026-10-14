@@ -21,11 +21,26 @@ Browser
   │                      │                              │
   │                      │                              ├─ /api/proxy/* ──► Ludus API (8080/8081)
   │                      │                              ├─ /api/goad/*  ──► SSH → Ludus server (GOAD)
+  │                      │                              ├─ /api/ludushound/* ──► SSH → LudusHound CLI + Ludus API
   │                      │                              ├─ /api/admin/* ──► SSH → Proxmox (pvesh)
   │                      │                              └─ /api/console/* ► SSH → Proxmox (pvesh) + user PAM HTTP for noVNC tickets
   │
   └─ WSS (same origin :443) ──► nginx ──► ws-server.ts ──► Proxmox VNC WebSocket
 ```
+
+## LudusHound flow
+
+LudusHound is YAML-out (not a long GOAD-style provisioner):
+
+```mermaid
+flowchart LR
+  A["/ludushound/new wizard"] --> B["POST /api/ludushound/generate\nSSH LudusHound CLI"]
+  B --> C["Review YAML +\ntemplate audit"]
+  C --> D["POST /api/ludushound/deploy\nPUT config + POST deploy"]
+  D --> E["Ludus Ansible\nbagelByt3s.ludushound roles"]
+```
+
+Preflight: `GET /api/ludushound/status`, `POST …/install-collection` (local tarball; installs Go when missing).
 
 ## GOAD task flow
 

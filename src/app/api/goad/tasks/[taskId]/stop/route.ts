@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
-import { abortTask } from "@/lib/goad-task-store"
+import { abortTask, completeTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -24,6 +24,14 @@ export async function POST(
 
   const { taskId } = await params
 
+  let asError = false
+  try {
+    const body = await request.json()
+    asError = body?.asError === true
+  } catch {
+    asError = false
+  }
+
   // Enforce ownership: only the task owner (or an admin) may stop it.
   const { getTask } = await import("@/lib/goad-task-store")
   const task = getTask(taskId)
@@ -37,9 +45,10 @@ export async function POST(
   // Send SIGINT to the remote process via the SSH PTY cleanup function
   const killed = invokeCleanup(taskId)
 
-  // Mark task as aborted in the store regardless (handles the case where
-  // cleanup is not registered but the task status is still "running")
-  abortTask(taskId)
+  // Mark the task aborted, or failed when the range itself errored.
+  // A user Stop leaves the task aborted. A range ERROR is not an abort.
+  if (asError) completeTask(taskId, 1, "error")
+  else abortTask(taskId)
 
   logLuxRouteAction(request, session, { detail: `taskId=${taskId} killed=${killed}` })
   return NextResponse.json({ success: true, killed })

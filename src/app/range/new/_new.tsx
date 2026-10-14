@@ -1,8 +1,9 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { useRouter } from "next/navigation"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -37,12 +38,17 @@ import {
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
 import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
 import { applyBlueprintToRange } from "@/lib/blueprint-apply"
 import { substituteRangeIdInConfig } from "@/lib/range-config-templates"
 import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
@@ -52,7 +58,14 @@ import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
 import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
 import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, extractNetworkRules, buildNetworkYaml } from "@/lib/network-rules"
+import { type NetworkRule, extractNetworkRules } from "@/lib/network-rules"
+import {
+  type VMEntry,
+  defaultsForTemplate,
+  generateYaml,
+  inferOS,
+  parseConfigYaml,
+} from "@/lib/range-vm-wizard"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
@@ -80,130 +93,24 @@ const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "R
 // step 2 : YAML Config
 // step 3 : Review & Deploy
 
-interface VMEntry {
-  id: string
-  template: string
-  vmName: string
-  hostname: string
-  vlan: number
-  ipLastOctet: number
-  ramGb: number
-  cpus: number
-  isLinux: boolean
-  isWindows: boolean
-  isServer: boolean
-  domainRole: "none" | "primary-dc" | "alt-dc" | "member"
-  testingSnapshot: boolean
-  testingBlockInternet: boolean
-  showAdvanced: boolean
-}
-
-function inferOS(templateName: string): { isLinux: boolean; isWindows: boolean; isServer: boolean } {
-  const lower = templateName.toLowerCase()
-  const isWindows = lower.includes("win")
-  const isLinux = !isWindows
-  const isServer = isWindows && (lower.includes("server") || lower.includes("dc"))
-  return { isLinux, isWindows, isServer }
-}
-
-function defaultsForTemplate(template: string): VMEntry {
-  const { isLinux, isWindows, isServer } = inferOS(template)
-  const shortName = template.replace(/-template$/, "").replace(/-x64|-x86/g, "")
-  const windowsShort = isWindows
-    ? shortName.replace(/-?workstation$/i, "-ws").replace(/-?server$/i, "-srv")
-    : shortName
-  const hostnameSuffix = windowsShort.slice(0, isWindows ? 15 : 50)
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-    template,
-    vmName: `{{ range_id }}-${hostnameSuffix}`,
-    hostname: hostnameSuffix,
-    vlan: 10,
-    ipLastOctet: 10,
-    ramGb: isServer ? 8 : isLinux ? 4 : 8,
-    cpus: isServer ? 4 : 2,
-    isLinux,
-    isWindows,
-    isServer,
-    domainRole: "none",
-    testingSnapshot: true,
-    testingBlockInternet: true,
-    showAdvanced: true,
-  }
-}
-
-function generateYaml(vms: VMEntry[], domainFqdn: string | null, networkRules: NetworkRule[]): string {
-  const lines: string[] = ["ludus:"]
-  for (const vm of vms) {
-    const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
-    const hostname = `{{ range_id }}-${vm.hostname}`
-    lines.push(`  - vm_name: "${vmName}"`)
-    lines.push(`    hostname: "${hostname}"`)
-    lines.push(`    template: ${vm.template}`)
-    lines.push(`    vlan: ${vm.vlan}`)
-    lines.push(`    ip_last_octet: ${vm.ipLastOctet}`)
-    lines.push(`    ram_gb: ${vm.ramGb}`)
-    lines.push(`    cpus: ${vm.cpus}`)
-    if (vm.isLinux) lines.push(`    linux: true`)
-    if (vm.isWindows) {
-      lines.push(`    windows:`)
-      lines.push(`      sysprep: false`)
-    }
-    if (domainFqdn && vm.domainRole !== "none") {
-      lines.push(`    domain:`)
-      lines.push(`      fqdn: ${domainFqdn}`)
-      lines.push(`      role: ${vm.domainRole}`)
-    }
-    lines.push(`    testing:`)
-    lines.push(`      snapshot: ${vm.testingSnapshot}`)
-    lines.push(`      block_internet: ${vm.testingBlockInternet}`)
-    lines.push("")
-  }
-  return lines.join("\n") + buildNetworkYaml(networkRules)
-}
-
-function parseConfigYaml(yamlText: string): VMEntry[] {
-  const entries: VMEntry[] = []
-  const blocks = yamlText.split(/(?=^\s*- vm_name:)/m)
-  for (const block of blocks) {
-    const get = (key: string): string => {
-      const m = block.match(new RegExp(`^\\s*${key}:\\s*(.+)$`, "m"))
-      return m ? m[1].trim().replace(/^["']|["']$/g, "") : ""
-    }
-    const vmName = get("vm_name")
-    if (!vmName) continue
-    const template = get("template")
-    const { isLinux, isWindows, isServer } = inferOS(template || vmName)
-    const rawHostname = get("hostname") || vmName
-    const hostnameSuffix = rawHostname.replace(/^\{\{\s*range_id\s*\}\}-/, "")
-    entries.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      template: template || vmName,
-      vmName,
-      hostname: hostnameSuffix.slice(0, isWindows ? 10 : 50),
-      vlan: parseInt(get("vlan")) || 10,
-      ipLastOctet: parseInt(get("ip_last_octet")) || 10,
-      ramGb: parseInt(get("ram_gb")) || 4,
-      cpus: parseInt(get("cpus")) || 2,
-      isLinux,
-      isWindows,
-      isServer,
-      domainRole: (get("role") as VMEntry["domainRole"]) || "none",
-      testingSnapshot: get("snapshot") === "true",
-      testingBlockInternet: get("block_internet") === "true",
-      showAdvanced: false,
-    })
-  }
-  return entries
-}
-
 export function NewRangePageClient() {
   const router = useRouter()
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const { ranges: accessibleRanges, selectedRangeId, refreshRanges, selectRange } = useRange()
   const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const [step, setStep] = useState(0)
+  const [showAllBlueprints, setShowAllBlueprints] = useState(false)
+  const [showAllTemplates, setShowAllTemplates] = useState(false)
 
   // ── Config method (chosen on step 1) ────────────────────────────────────────
   // null = not yet chosen; "wizard" or "yaml" after step 1 is committed.
@@ -594,6 +501,34 @@ export function NewRangePageClient() {
       }
     }
 
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = extractArray<TemplateObject>(tplRes.data as unknown)
+      const builtNames = new Set(rows.filter((t) => t.built).map((t) => t.name))
+      const allNames = new Set(rows.map((t) => t.name))
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion,
+        configYaml: configToUpload,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion,
+          configYaml: configToUpload,
+          registeredTemplates: allNames,
+        })
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+        })
+        setDeploying(false)
+        setDeployStatus("")
+        return
+      }
+    }
+
     try {
       if (mode === "existing" && existingDeployedVMs.length > 0) {
         setDeletingVMs(true)
@@ -645,8 +580,8 @@ export function NewRangePageClient() {
             const depCheck = await checkBlueprintDependencies(selectedBlueprintId)
             if (!depCheck.ready) {
               toast({
-                title: "Missing Ansible dependencies",
-                description: "Install required roles and collections before deploying.",
+                title: "Missing dependencies",
+                description: "Install required Ansible items and build Packer templates before deploying.",
                 variant: "destructive",
               })
               setDeploying(false)
@@ -994,17 +929,8 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">Wizard</p>
-                  <p className="text-[10px] text-muted-foreground">Guided step-by-step</p>
+                  <p className="text-xs text-muted-foreground">Build a range step by step</p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Pick VM templates, configure networking, optionally set up an Active Directory domain,
-                then review config and deploy options on the final step. Best for building ranges from scratch.
-              </p>
-              <div className="flex flex-wrap gap-1">
-                {["Configure VMs", "Domain Setup", "Network Rules", "Review & deploy"].map((s) => (
-                  <Badge key={s} variant="secondary" className="text-[10px]">{s}</Badge>
-                ))}
               </div>
             </button>
 
@@ -1019,25 +945,10 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">YAML Config</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {mode === "existing" && selectedExistingRange ? "Config pre-loaded" : "Paste raw YAML"}
+                  <p className="text-xs text-muted-foreground">
+                    {mode === "existing" && selectedExistingRange ? "Current config is loaded" : "Paste YAML"}
                   </p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {mode === "existing" && selectedExistingRange
-                  ? `Your current ${selectedExistingRange} config is already loaded and ready to edit. Skip straight to Review & Deploy.`
-                  : "Paste or type raw Ludus YAML directly. Skips the wizard steps — best for experienced users or reusing an existing config."}
-              </p>
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary" className="text-[10px] border-cyan-500/30 text-primary bg-cyan-500/10">
-                  Skips wizard steps
-                </Badge>
-                {mode === "existing" && selectedExistingRange && (
-                  <Badge variant="secondary" className="text-[10px] border-status-success/30 text-status-success bg-status-success/10">
-                    Auto-loaded ✓
-                  </Badge>
-                )}
               </div>
             </button>
 
@@ -1052,17 +963,8 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">From Blueprint</p>
-                  <p className="text-[10px] text-muted-foreground">Community or installed</p>
+                  <p className="text-xs text-muted-foreground">Apply a saved config, then deploy</p>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Pick a Ludus blueprint (including source blueprints like GOAD). Applies the saved range
-                config, then deploys — install blueprints from the Blueprints page first if needed.
-              </p>
-              <div className="flex flex-wrap gap-1">
-                <Badge variant="secondary" className="text-[10px] border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10">
-                  Apply + deploy
-                </Badge>
               </div>
             </button>
           </div>
@@ -1095,8 +997,9 @@ export function NewRangePageClient() {
                   </p>
                 </div>
               ) : (
-                <div className="grid gap-2 max-h-96 overflow-y-auto">
-                  {consolidatedBlueprints.map((entry) => {
+                <div className="rounded-lg border border-border">
+                <div className="grid gap-2 p-2">
+                  {previewSlice(consolidatedBlueprints, showAllBlueprints).map((entry) => {
                     const bpId = entry.primaryId
                     const selected =
                       selectedBlueprintId === bpId || entry.aliasIds.includes(selectedBlueprintId)
@@ -1131,6 +1034,8 @@ export function NewRangePageClient() {
                     )
                   })}
                 </div>
+                <ShowAllBar expanded={showAllBlueprints} count={consolidatedBlueprints.length} onToggle={() => setShowAllBlueprints((v) => !v)} />
+                </div>
               )}
             </CardContent>
           </Card>
@@ -1158,8 +1063,9 @@ export function NewRangePageClient() {
               ) : templates.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No built templates found</p>
               ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
-                  {templates.map((t) => {
+                <div className="rounded-lg border border-border">
+                <div className="grid grid-cols-2 gap-2 p-2">
+                  {previewSlice(templates, showAllTemplates).map((t) => {
                     const { isLinux, isWindows } = inferOS(t.name)
                     return (
                       <button key={t.name} onClick={() => addVM(t.name)}
@@ -1172,6 +1078,8 @@ export function NewRangePageClient() {
                       </button>
                     )
                   })}
+                </div>
+                <ShowAllBar expanded={showAllTemplates} count={templates.length} onToggle={() => setShowAllTemplates((v) => !v)} />
                 </div>
               )}
             </CardContent>

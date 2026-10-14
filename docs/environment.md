@@ -16,8 +16,10 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 
 | Variable | Description | Default |
 |---|---|---|
-| `SSH_KEY_PATH` | **Host** directory where you put the root private key **copied from the Ludus server**. Mounted at **`/app/ssh`** in the container. | `./ssh` |
+| `SSH_KEY_PATH` | **Host** directory for the `PROXMOX_SSH_USER` private key copied from the Ludus server. Mounted at **`/app/ssh`** in the container. Who that account is: [SSH and authentication](ssh-and-auth.md). | `./ssh` |
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
+| `LUX_REPO_PATH` | Optional override for the host git clone used by Settings → About. LUX auto-detects the Compose project directory and the host path of the `./data` → `/app/data` bind mount when the Docker socket is mounted. | unset |
+| `GITHUB_TOKEN` / `LUX_GITHUB_TOKEN` | Optional GitHub PAT. Used only when this clone's remote is GitHub, to attach release notes. The version list itself comes from `git ls-remote` on that remote. | unset |
 
 ## Admin / user management
 
@@ -25,8 +27,8 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 |---|---|
 | `LUDUS_ADMIN_URL` | Admin API base URL (port **8081**). Compose default uses `LUDUS_SSH_HOST` with `:8081` (override in `.env` if needed). Prefer `https://<ludus-host>:8081` when reachable from the container. SSH tunnel to `127.0.0.1:18081` is optional when 8081 is loopback-only; remote URLs are not overwritten by the tunnel. |
 | `LUDUS_ROOT_API_KEY` | Root API key (from `<LUDUS_INSTALL_PATH>/install/root-api-key` on the server) |
-| `PROXMOX_SSH_USER` | Root (or privileged) SSH user for server-side Proxmox/Ludus operations |
-| `PROXMOX_SSH_PASSWORD` | Optional for server-side root SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not the root key. |
+| `PROXMOX_SSH_USER` | SSH account for server-side host commands. Root, or any other user who can run `sudo -n /usr/local/sbin/lux-host`. That helper is the only passwordless sudo command. Quickstart or Settings → SSH & GOAD can install it. Not the LUX login user unless that account can elevate. See [lux-host](ssh-and-auth.md#lux-host). |
+| `PROXMOX_SSH_PASSWORD` | Optional for server-side host SSH if using key auth. In-browser noVNC uses the logged-in user's PAM password from the LUX session, not this key. |
 | `PROXMOX_SSH_KEY_PATH` | Private key path **inside** the container; must match the file under `SSH_KEY_PATH` on the host (default `/app/ssh/id_rsa`) |
 | `PROXMOX_SSH_KEY_PASSPHRASE` | Optional passphrase for the key |
 
@@ -37,8 +39,19 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `ENABLE_GOAD` | Show GOAD in the UI (`false` to hide) | `true` |
 | `GOAD_PATH` | Path to the GOAD installation on the Ludus server | `/opt/GOAD` |
 | `LUDUS_INSTALL_PATH` | Ludus install root on the Ludus server (ranges, packer, user Ansible collections) | `/opt/ludus` |
-| `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). | `true` |
+| `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). Settings UI hides that warning when the connected server reports ≥2.2.4. | `true` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
+
+## LudusHound
+
+| Variable | Description | Default |
+|---|---|---|
+| `ENABLE_LUDUSHOUND` | Show LudusHound in the UI (`false` to hide) | `true` |
+| `SOURCE_AUTO_SYNC_ENABLED` | Periodically re-pull registered git Ludus sources (`false` to disable). Also syncs a source when its catalog is opened and last sync is older than the interval. | `true` |
+| `SOURCE_AUTO_SYNC_INTERVAL_MS` | Auto-sync interval / staleness threshold in milliseconds (minimum `60000`) | `300000` (5 min) |
+| `LUDUSHOUND_PATH` | Path to the cloned [LudusHound](https://github.com/bagelByt3s/LudusHound) repo on the Ludus server | `/opt/LudusHound` |
+
+Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go when missing, builds the binary, and installs the local Ansible collection tarball. SSH uses the same `LUDUS_SSH_*` settings as GOAD.
 
 ## TLS / HTTPS
 

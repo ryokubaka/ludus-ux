@@ -32,7 +32,7 @@ Use the **all / built / unbuilt** filter and row checkboxes to select what to bu
 
 ### Build
 
-**Build Selected** or the per-row play button calls Ludus `POST /templates/build` with the chosen template name(s).
+**Build Selected** or the per-row play button calls Ludus `POST /templates` with body `{ "templates": ["<name>", ...] }`.
 
 What happens on the Ludus server:
 
@@ -58,14 +58,22 @@ Logs are written under `/opt/ludus/users/<username>/packer/` on the Ludus host.
 
 The collapsible **Add Templates from Source** panel installs template directories that are not bundled with Ludus:
 
-1. **Fetch Available Templates** — LUX calls `GET /api/templates/sources`, which lists directories under [badsectorlabs/ludus `templates/`](https://gitlab.com/badsectorlabs/ludus/-/tree/main/templates) (or a custom git repo you configure).
-2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files under the server templates directory, runs `ludus templates add -d …`, and registers the template in Ludus.
+1. Pick a source that is already registered on the **Sources** page. LUX loads its templates with `GET /api/templates/sources`. Add a custom git repo on Sources, not on this panel. The name in the list is the Packer `vm_name` when that file sets one. The git folder can differ: `templates/debian13` is registered as `debian-13-x64-server-template`, and the panel shows `folder debian13`.
+2. **Add Selected** — LUX calls `POST /api/templates/add`, which SSHs to the Ludus host, downloads the repo tree, places files in that git folder under the server templates directory (not under the `vm_name`), runs `ludus templates add -d …`, and registers the Packer `vm_name` in Ludus.
 
 After a successful add, the template appears as **Not Built** until you run **Build**.
 
 ### Delete
 
-The trash icon removes a user-owned template via Ludus `DELETE /template/{name}`. Built-in templates under `/opt/ludus/packer/` are not deleted this way.
+The trash icon removes a template via LUX `DELETE /api/templates/delete`:
+
+1. Ludus API `DELETE /template/{name}` (clears built Proxmox VM when possible)
+2. `ludus templates rm -n …` over host SSH (unregisters when API soft-refuses)
+3. Disk cleanup of install trees `/opt/ludus/packer/<aliases>`, `/opt/ludus/packer/templates/<aliases>`, and `/opt/ludus/users/*/packer/<aliases>`, plus the same alias directory names under `/opt/ludus/sources/*/templates/`
+
+Dir aliases include list name, name without `-template`, and without `-x64`/`-amd64` (e.g. `securityonion-2.4-x64-template` → also `securityonion-2.4`). On the install trees, cleanup also removes a directory whose Packer `vm_name` equals that list name, such as `debian13` for `debian-13-x64-server-template`. It does not remove a source git checkout by `vm_name`. Delete fails when an install-tree directory is still present. A template that remains only in the source checkout does not fail the delete. Ludus alone often returns HTTP 200 for shared-packer installs but refuses the folder (“included template”) — LUX treats that as needing CLI + disk cleanup, not success.
+
+Turning a shared source off (Sources) runs that same CLI remove and disk cleanup for each template installed from the source. A leftover install directory is a warning on the toast. The source checkout staying on disk does not fail unpublish.
 
 ---
 
@@ -181,6 +189,79 @@ chown -R ludus:ludus /opt/ludus/users/<username>/packer
 ```
 
 If you copied template directories in as root, `chown -R ludus:ludus` the template folder as well.
+
+### GOAD / range deploy fails: `Cannot write to ControlPath …/.ansible/cp`
+
+Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Linux user (`ANSIBLE_HOME` and `ANSIBLE_SSH_CONTROL_PATH_DIR` point at `/opt/ludus/users/<username>/.ansible` — see [Ludus roles docs](https://docs.ludus.cloud/docs/roles) and [GET/POST `/ansible`](https://api-docs.ludus.cloud/retrieve-available-ansible-roles-and-collections-24251967e0)). SSH ControlPath lives at `…/.ansible/cp`, which must be writable by **`ludus`**, not the range owner.
+
+### Sources Sync fails: `insufficient permission for adding an object` under `.git/objects`
+
+Ludus sync runs `git fetch` as the **`ludus`** Linux user inside `/opt/ludus/sources/<id>/`. If any files there were created as **root** (manual `git` as root, older LUX writing into `sources/…/templates/`, etc.), fetch dies with `insufficient permission for adding an object to repository database .git/objects`.
+
+**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over host SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
+
+**Manual repair** (if host SSH is unavailable to LUX):
+
+```bash
+chown -R ludus:ludus /opt/ludus/sources
+```
+
+**Right after a Galaxy install via the Ludus API, `ludus:ludus` ownership is normal (transient).** Ludus runs `ansible-galaxy` as the service user, then may attempt a recursive chown to the range owner — that can fail or leave a mixed tree. LUX normalizes to the **split layout** below on every install and before GOAD / range deploy.
+
+| Path | Steady-state owner | Mode |
+|------|-------------------|------|
+| `cp/`, `tmp/` | **`ludus:ludus`** | `700` |
+| `roles/`, `collections/`, `galaxy_cache/` | **`<username>:ludus`** | `770` |
+| `.ansible/` directory | **`<username>:ludus`** | `770` |
+
+GOAD **user-context** ansible uses **`~/.goad/ansible-cp`** instead (not `~/.ansible/cp`).
+
+Adding the range owner to the Linux **`ludus` group does not fix ControlPath** — the server process runs as user **`ludus`**, not as the range owner. Do **not** run `chown -R <username>:<username> .ansible` — that breaks deploy.
+
+**Diagnose** (on the Ludus host):
+
+```bash
+getent passwd <username>
+ls -la /opt/ludus/users/<username>/.ansible/cp
+# Should be: drwx------ ludus ludus
+sudo -u ludus test -w /opt/ludus/users/<username>/.ansible/cp && echo OK || echo FAIL
+```
+
+**Fix manually:**
+
+```bash
+sudo mkdir -p /opt/ludus/users/<username>/.ansible/{cp,tmp}
+sudo chown ludus:ludus /opt/ludus/users/<username>/.ansible/cp /opt/ludus/users/<username>/.ansible/tmp
+sudo chmod 700 /opt/ludus/users/<username>/.ansible/cp /opt/ludus/users/<username>/.ansible/tmp
+sudo chown -R <username>:ludus /opt/ludus/users/<username>/.ansible/{roles,collections,galaxy_cache} 2>/dev/null || true
+```
+
+When LUX has host SSH configured, it runs this repair after Ludus API ansible installs (roles, collections, blueprints, subscription roles), on user provisioning, and before GOAD / range deploy. Who that account is: [SSH and authentication](ssh-and-auth.md).
+
+### Add from Source succeeds but template missing from the build list
+
+**Symptoms:** Toast says the template was added; **Add from Source** shows it as installed, but the main template table never lists it (and `ludus templates list` on the Ludus host does not either).
+
+**Common causes:**
+
+1. **List filter** — New templates are **Not Built**. Use the **all** or **added** filter on the Templates page (not **built** only).
+2. **False success (fixed in LUX 1.1.11+)** — Older LUX wrote files under `/opt/ludus/sources/.../templates/` (sync mirror) and ran `ludus templates add` as **root**. The Ludus CLI prints `[ERROR] The ROOT key can only be used for user actions` but exits **0**, so LUX reported success without registering the template. Current LUX copies the git folder to `/opt/ludus/packer/<folder>/` (`debian13` stays `debian13`) and registers the Packer `vm_name` with the logged-in Ludus user's API key. The add command does not switch Linux users. When `PROXMOX_SSH_USER` is not root, host SSH runs it through `sudo -n /usr/local/sbin/lux-host` ([SSH and authentication](ssh-and-auth.md)).
+
+3. **Stale UI** — Click the refresh icon on Templates after add; LUX invalidates cache on success but a long `staleTime` can lag briefly.
+
+**Diagnose on the Ludus host** (as a normal Ludus user, not root):
+
+```bash
+ludus templates list
+ls -la /opt/ludus/packer/ubuntu-24.04-x64-server   # example
+```
+
+If files exist under `packer/` but `ludus templates list` omits the name, re-add from LUX (1.1.11+) or run manually:
+
+```bash
+export LUDUS_API_KEY=<your-user-key>
+ludus templates add -d /opt/ludus/packer/<template-dir-name>
+```
 
 ### Template added but build uses wrong definition
 

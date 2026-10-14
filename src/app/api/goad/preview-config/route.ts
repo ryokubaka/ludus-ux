@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
 
   if (!creds) {
     return NextResponse.json(
-      { error: "No SSH credentials available (set root SSH password or log in with SSH password)." },
+      { error: "No SSH credentials available (set PROXMOX_SSH_PASSWORD or log in with your SSH password)." },
       { status: 503 },
     )
   }

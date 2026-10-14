@@ -68,6 +68,8 @@ export interface TemplateObject {
   built: boolean
   status?: string
   lastBuilt?: string
+  /** Template / packer version when Ludus exposes it. */
+  version?: string
   /** OS category returned by the Ludus API since v2.0.6 */
   os?: "linux" | "windows" | "macos" | "other"
 }
@@ -207,6 +209,8 @@ export interface BlueprintListItem {
   blueprintID?: string
   name?: string
   description?: string
+  /** Catalog / blueprint.yml version when Ludus exposes it on list. */
+  version?: string
   ownerID?: string
   access?: "admin" | "owner" | "direct" | "group" | string
   /** Count of directly shared users (derived from Ludus list or access API). */
@@ -395,4 +399,30 @@ export interface GoadCommand {
   command: string
   args?: string[]
   instanceId?: string
+}
+
+// ── LudusHound ────────────────────────────────────────────────────────────────
+
+export type LudushoundMode = "full" | "attackpath"
+export type LudushoundBloodhoundSource = "external" | "filesmap" | "none"
+
+export interface LudushoundWorkspace {
+  id: string
+  rangeId?: string
+  mtime?: string
+  mode?: LudushoundMode
+}
+
+export interface LudushoundStatus {
+  configured: boolean
+  enabled: boolean
+  ludushoundPath: string
+  repoPresent: boolean
+  binaryPresent: boolean
+  goAvailable: boolean
+  collectionInstalled: boolean
+  collectionTarballPresent: boolean
+  collectionTarballPath: string
+  message?: string
+  error?: string
 }

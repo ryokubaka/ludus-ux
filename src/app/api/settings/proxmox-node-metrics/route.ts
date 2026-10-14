@@ -34,13 +34,13 @@ export async function GET(req: NextRequest) {
 
   try {
     const [nodeJson, resourcesJson] = await Promise.all([
-      sshExec(sshHost, sshPort, sshUser, sshPass, "pvesh get /nodes --output-format json"),
+      sshExec(sshHost, sshPort, sshUser, sshPass, ["pvesh", "get", "/nodes", "--output-format", "json"]),
       sshExec(
         sshHost,
         sshPort,
         sshUser,
         sshPass,
-        "pvesh get /cluster/resources --type node --output-format json",
+        ["pvesh", "get", "/cluster/resources", "--output-format", "json"],
       ),
     ])
     const nodeNames = parseNodeList(nodeJson)
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
             sshPort,
             sshUser,
             sshPass,
-            `pvesh get /nodes/${name}/status --output-format json`,
+            ["pvesh", "get", `/nodes/${name}/status`, "--output-format", "json"],
           )
           const load1 = parseNodeStatusLoad(statusJson)
           return {

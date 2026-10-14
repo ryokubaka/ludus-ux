@@ -13,10 +13,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import {
   fetchLudusTemplateCatalog,
-  fetchLudusTemplateCatalogBySourceId,
+  fetchRegisteredTemplateCatalog,
   resolveBadslCatalogMeta,
 } from "@/lib/ludus-source-catalog"
+import { catalogReadApiKey } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
 import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
 
 
@@ -116,15 +118,39 @@ export async function GET(request: NextRequest) {
   const sourceId = searchParams.get("sourceId") || ""
   const repoUrl  = searchParams.get("repoUrl")  || ""
 
+  // Registered Ludus sources: same catalog resolution as Sources page.
+  // Never fall through to the official BSL GitHub tree (that bug showed BSL
+  // templates when switching to a custom registered source).
+  if (source === "registered" && sourceId) {
+    try {
+      const { session, apiKey } = await requireSourcesSession(request)
+      if (!session || !apiKey) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+      }
+      const { templates, catalogSource } = await fetchRegisteredTemplateCatalog(
+        catalogReadApiKey(session, apiKey, sourceId),
+        sourceId,
+        searchParams.get("ref") || BADSL_REF,
+      )
+      return NextResponse.json({
+        templates,
+        catalogSource,
+        registeredSourceId: sourceId,
+      })
+    } catch (err) {
+      const msg = (err as Error).message
+      return NextResponse.json(
+        { error: `Failed to fetch template source: ${msg}` },
+        { status: 502 },
+      )
+    }
+  }
+
   let apiBase: string
   let templatesPath: string
   let ref: string
 
-  if (source === "registered" && sourceId) {
-    apiBase = BADSL_BASE
-    templatesPath = "templates"
-    ref = searchParams.get("ref") || BADSL_REF
-  } else if (source === "badsectorlabs") {
+  if (source === "badsectorlabs") {
     apiBase        = BADSL_BASE
     templatesPath  = "templates"
     ref            = BADSL_REF
@@ -143,30 +169,14 @@ export async function GET(request: NextRequest) {
   try {
     const { apiKey } = await requireSourcesSession(request)
     if (apiKey) {
-      if (source === "registered" && sourceId) {
-        const ludusTemplates = await fetchLudusTemplateCatalogBySourceId(
-          apiKey,
-          sourceId,
-          ref,
-          apiBase,
-        )
+      const gitUrl =
+        source === "badsectorlabs"
+          ? resolveBadslCatalogMeta().gitUrl
+          : apiBaseToGitUrl(apiBase)
+      if (gitUrl) {
+        const ludusTemplates = await fetchLudusTemplateCatalog(apiKey, gitUrl, ref, apiBase)
         if (ludusTemplates && ludusTemplates.length > 0) {
-          return NextResponse.json({
-            templates: ludusTemplates,
-            catalogSource: "ludus",
-            registeredSourceId: sourceId,
-          })
-        }
-      } else {
-        const gitUrl =
-          source === "badsectorlabs"
-            ? resolveBadslCatalogMeta().gitUrl
-            : apiBaseToGitUrl(apiBase)
-        if (gitUrl) {
-          const ludusTemplates = await fetchLudusTemplateCatalog(apiKey, gitUrl, ref, apiBase)
-          if (ludusTemplates && ludusTemplates.length > 0) {
-            return NextResponse.json({ templates: ludusTemplates, catalogSource: "ludus" })
-          }
+          return NextResponse.json({ templates: ludusTemplates, catalogSource: "ludus" })
         }
       }
     }
@@ -192,7 +202,9 @@ export async function GET(request: NextRequest) {
           apiLabel,
         )
         const files = fileTree.filter((i) => i.type === "blob").map((i) => i.name)
-        return { name: dir.name, path: dir.path, files, ref, apiBase }
+        // Folder stays `debian13`; Ludus install/build id is the Packer vm_name.
+        const name = await resolveGitTemplateInstallName(apiBase, ref, dir.name, files, dir.path)
+        return { name, path: dir.path, files, ref, apiBase }
       }),
       5,
     )

@@ -127,6 +127,22 @@ export function getDb(): BetterSqlite3.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_range_ops_lookup
       ON range_ops(rangeId, username, status, startedAt);
+    CREATE TABLE IF NOT EXISTS source_content_pins (
+      source_id    TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      name         TEXT NOT NULL,
+      version      TEXT NOT NULL,
+      catalog_ref  TEXT,
+      updated_at   INTEGER NOT NULL,
+      PRIMARY KEY (source_id, kind, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_source_content_pins_source
+      ON source_content_pins(source_id);
+    CREATE TABLE IF NOT EXISTS source_publication (
+      source_id   TEXT    PRIMARY KEY,
+      published   INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
   `)
   return _db
 }
@@ -475,6 +491,34 @@ function runMigrations(db: BetterSqlite3.Database): void {
         );
         CREATE INDEX IF NOT EXISTS idx_lux_login_continuations_expires
           ON lux_login_continuations(expires_at);
+      `)
+    },
+
+    // v17 — Last successful source-install versions (Ludus often omits installed versions).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS source_content_pins (
+          source_id    TEXT NOT NULL,
+          kind         TEXT NOT NULL,
+          name         TEXT NOT NULL,
+          version      TEXT NOT NULL,
+          catalog_ref  TEXT,
+          updated_at   INTEGER NOT NULL,
+          PRIMARY KEY (source_id, kind, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_source_content_pins_source
+          ON source_content_pins(source_id);
+      `)
+    },
+
+    // v18 — Admin-published sources are listed for every user (Ludus source list is per-user).
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS source_publication (
+          source_id   TEXT    PRIMARY KEY,
+          published   INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        );
       `)
     },
   ]

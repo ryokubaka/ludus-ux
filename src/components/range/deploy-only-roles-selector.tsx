@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { parseSelectableDeployOnlyRoles } from "@/lib/ludus-deploy-only-roles"
 import { cn } from "@/lib/utils"
 import { ListChecks } from "lucide-react"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 
 export interface DeployOnlyRolesSelectorProps {
   configYaml: string
@@ -35,6 +36,7 @@ export function DeployOnlyRolesSelector({
 }: DeployOnlyRolesSelectorProps) {
   const [search, setSearch] = useState("")
   const [showCustom, setShowCustom] = useState(false)
+  const [showAll, setShowAll] = useState(false)
 
   const availableRoles = useMemo(
     () => parseSelectableDeployOnlyRoles(configYaml),
@@ -98,13 +100,9 @@ export function DeployOnlyRolesSelector({
       ) : filteredRoles.length === 0 ? (
         <p className="text-xs text-muted-foreground py-2">No roles match your search.</p>
       ) : (
-        <div
-          className={cn(
-            "grid grid-cols-1 md:grid-cols-2 gap-2 overflow-y-auto pr-1",
-            compact ? "max-h-48" : "max-h-64",
-          )}
-        >
-          {filteredRoles.map((role) => (
+        <div className="rounded-md border border-border">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+          {previewSlice(filteredRoles, showAll).map((role) => (
             <label
               key={role}
               className={cn(
@@ -125,6 +123,8 @@ export function DeployOnlyRolesSelector({
               </code>
             </label>
           ))}
+          </div>
+          <ShowAllBar expanded={showAll} count={filteredRoles.length} onToggle={() => setShowAll((v) => !v)} />
         </div>
       )}
 
@@ -152,17 +152,16 @@ export function DeployOnlyRolesSelector({
               className="h-8 font-mono text-xs"
               disabled={disabled}
             />
-            <p className="text-[11px] text-muted-foreground">
-              When set, overrides checkbox selection.
+            <p className="text-xs text-muted-foreground">
+              Overrides the checkboxes.
             </p>
           </>
         )}
       </div>
 
       {!hideAutoTagNote && (
-        <p className="text-[11px] text-muted-foreground">
-          <code className="text-[11px] text-primary/90">user-defined-roles</code> tag added automatically
-          when roles are selected.
+        <p className="text-xs text-muted-foreground">
+          Selecting roles adds the user-defined-roles tag.
         </p>
       )}
     </div>
@@ -178,16 +177,7 @@ export function DeployOnlyRolesSelector({
         <CardTitle className="text-sm flex items-center gap-2">
           <ListChecks className="h-4 w-4" />
           Deploy Only Roles
-          <span className="text-xs text-muted-foreground font-normal">
-            (leave empty for all roles — Ludus CLI{" "}
-            <code className="text-[11px] text-primary/90">--only-roles</code>)
-          </span>
         </CardTitle>
-        <p className="text-xs text-muted-foreground mt-1 leading-snug">
-          Limits which Ansible roles run during deploy. Combinable with deploy tags and host limit.
-          Requires the <code className="text-[11px] text-primary/90">user-defined-roles</code> tag
-          (added automatically).
-        </p>
       </CardHeader>
       <CardContent>{body}</CardContent>
     </Card>

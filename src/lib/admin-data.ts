@@ -21,9 +21,10 @@
  */
 
 import { ludusRequest } from "@/lib/ludus-client"
+import { dedupeVMs, mergeVmUnionPreferNext } from "@/lib/dashboard-vm-merge"
 import { getAllOwnership } from "@/lib/range-ownership-store"
 import { fetchPbAdminData } from "@/lib/pocketbase-client"
-import type { RangeObject, UserObject } from "@/lib/types"
+import type { RangeObject, UserObject, VMObject } from "@/lib/types"
 import { extractArray } from "@/lib/utils"
 
 export interface AdminData {
@@ -38,9 +39,46 @@ import { revalidateLudusAdminMutation } from "@/lib/ludus-cache-revalidate"
 
 const _swrCache = new SWRCache<AdminData>(30_000)
 
-export function bustAdminCache(): void {
-  _swrCache.invalidate()
+function adminCacheKey(apiKey: string): string {
+  return `admin:${apiKey.trim()}`
+}
+
+export function bustAdminCache(apiKey?: string): void {
+  if (apiKey?.trim()) {
+    _swrCache.invalidate(adminCacheKey(apiKey))
+  } else {
+    _swrCache.invalidate()
+  }
   revalidateLudusAdminMutation()
+}
+
+/** Prefer PocketBase VMs when Ludus returns an empty or short /range/all slice. */
+function mergeAdminRangeVms(pbRange: RangeObject, ludusVms: VMObject[] | undefined): VMObject[] {
+  const prev = dedupeVMs(pbRange.VMs || [])
+  if (ludusVms === undefined) return prev
+
+  const next = dedupeVMs(ludusVms)
+  const expected =
+    typeof pbRange.numberOfVMs === "number" &&
+    Number.isFinite(pbRange.numberOfVMs) &&
+    pbRange.numberOfVMs >= 0
+      ? pbRange.numberOfVMs
+      : undefined
+
+  if (next.length === 0) {
+    if (prev.length > 0 && (expected === undefined || expected > 0)) return prev
+    return []
+  }
+
+  if (expected !== undefined && next.length < expected) {
+    return mergeVmUnionPreferNext(prev, next, true)
+  }
+
+  if (prev.length > 0 && next.length < prev.length) {
+    return mergeVmUnionPreferNext(prev, next, true)
+  }
+
+  return next
 }
 
 // ── Ownership resolution (shared by both paths) ───────────────────────────────
@@ -120,14 +158,14 @@ async function buildAdminDataFromPb(apiKey: string): Promise<AdminData | null> {
   const ludusRanges: RangeObject[] = ludusRangesRes.data
     ? extractArray<RangeObject>(ludusRangesRes.data)
     : []
-  const vmsByRangeId = new Map<string, RangeObject["VMs"]>(
-    ludusRanges.map((r) => [r.rangeID, r.VMs || []])
+  const vmsByRangeId = new Map<string, VMObject[]>(
+    ludusRanges.map((r) => [r.rangeID, dedupeVMs(r.VMs || [])])
   )
 
   // Merge live VM data into the PB range records
   const ranges = pbRanges.map((r) => ({
     ...r,
-    VMs: vmsByRangeId.get(r.rangeID) ?? r.VMs,
+    VMs: mergeAdminRangeVms(r, vmsByRangeId.get(r.rangeID)),
   }))
 
   const ownership = resolveOwnership(ranges, users)
@@ -142,7 +180,12 @@ async function buildAdminDataFromApi(apiKey: string): Promise<AdminData> {
     ludusRequest<unknown>("/user/all", { apiKey }),
   ])
 
-  let ranges: RangeObject[] = rangesRes.data ? extractArray<RangeObject>(rangesRes.data) : []
+  let ranges: RangeObject[] = rangesRes.data
+    ? extractArray<RangeObject>(rangesRes.data).map((r) => ({
+        ...r,
+        VMs: dedupeVMs(r.VMs || []),
+      }))
+    : []
   const users: UserObject[] = usersRes.data ? extractArray<UserObject>(usersRes.data) : []
 
   // For ranges still missing an owner, fetch individual range details (up to 30)
@@ -195,8 +238,12 @@ export async function buildAdminData(apiKey: string): Promise<AdminData> {
  * Blocking-on-cold-start read (for API routes that must return a body).
  * Returns stale data immediately with background revalidation when cache is warm.
  */
-export async function getAdminData(apiKey: string): Promise<AdminData> {
-  return _swrCache.get("admin", () => buildAdminData(apiKey))
+export async function getAdminData(apiKey: string, options?: { bypassCache?: boolean }): Promise<AdminData> {
+  const key = adminCacheKey(apiKey)
+  if (options?.bypassCache) {
+    _swrCache.invalidate(key)
+  }
+  return _swrCache.get(key, () => buildAdminData(apiKey))
 }
 
 /**

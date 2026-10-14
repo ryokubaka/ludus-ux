@@ -57,6 +57,10 @@ import {
 } from "lucide-react"
 import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
 import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
+import {
   goadTaskShortKind,
   correlateHistoryEntries,
   aggregateDeployStatuses,
@@ -74,7 +78,8 @@ import { queryKeys } from "@/lib/query-keys"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
-import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { augmentLudusDeployHistoryLines, omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { splitLogText } from "@/lib/strip-ansi"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import {
@@ -94,6 +99,7 @@ import {
   vmIsRunning,
 } from "@/lib/dashboard-vm-merge"
 import { waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
+import { LudusHostResources } from "@/components/dashboard/ludus-host-resources"
 
 /** Re-open inventory for the same range without waiting on Ludus again. */
 const INVENTORY_CACHE_MS = 3 * 60 * 1000
@@ -119,7 +125,10 @@ export function DashboardPageClient() {
 
   const { abortRange } = useAbortRange(scopeTag)
 
-  const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0 && !selectedRangeId
+  const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0
+  /** Sidebar still restoring sessionStorage/cookie selection — avoid "No ranges available yet". */
+  const waitingForRangeSelection =
+    rangeCtxLoading || (accessibleRanges.length > 0 && !selectedRangeId?.trim())
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [wireguardDownloading, setWireguardDownloading] = useState(false)
@@ -282,6 +291,7 @@ export function DashboardPageClient() {
       },
     enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId,
     staleTime: STALE.short,
+    refetchInterval: 15_000,
   })
 
   /** True when Ludus or deploy history suggests work in flight — keep polling GOAD tasks even if the last /tasks fetch had no "running" row yet (race / gap between installs). */
@@ -411,7 +421,7 @@ export function DashboardPageClient() {
         const result = await ludusApi.getRangeLogHistoryById(id, selectedRangeId ?? undefined)
         if (result.data?.result) {
           if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
-          const raw = result.data.result.split("\n").filter((l) => l.trim())
+          const raw = omitBlankLogLines(splitLogText(result.data.result))
           lines.push(
             ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
           )
@@ -471,10 +481,14 @@ export function DashboardPageClient() {
   // show READY; when Ludus flips to DEPLOYING the id is unchanged — without this dep the
   // effect never re-runs and logs/stream never start until a full remount/refresh.
   const rangeStateForStream = !isPlaceholderData ? (rangeData?.rangeState ?? null) : null
+  const historyDeployInFlight = deployHistoryEntries.some((e) => isDeployHistoryRunning(e.status || ""))
+  const deployLive =
+    rangeStateForStream === "DEPLOYING" ||
+    rangeStateForStream === "WAITING" ||
+    historyDeployInFlight
   useEffect(() => {
     if (!rangeData || isPlaceholderData || rangeCtxLoading || hasNoRanges) return
-    const deployingLike =
-      rangeData.rangeState === "DEPLOYING" || rangeData.rangeState === "WAITING"
+    const deployingLike = deployLive
     // Suppress auto-restart of "Deploying…" + deploy-log stream during the
     // post-abort grace window. Ludus takes several seconds (sometimes longer)
     // to flip rangeState out of DEPLOYING after accepting an abort; without
@@ -506,7 +520,7 @@ export function DashboardPageClient() {
       setDeploying(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRangeId, rangeCtxLoading, rangeDataId, rangeStateForStream])
+  }, [selectedRangeId, rangeCtxLoading, rangeDataId, rangeStateForStream, deployLive, isStreaming])
 
   // Once Ludus actually transitions out of DEPLOYING (or the range changes),
   // clear the optimistic aborting marker so a future legitimate deploy isn't
@@ -532,7 +546,7 @@ export function DashboardPageClient() {
 
   // ── Stream completion → refresh data and hide logs ─────────────────────────
   useEffect(() => {
-    if (isStreaming) return
+    if (isStreaming || deployLive) return
     // streamRangeState is set when the SSE server sends [DONE] with the final
     // state. If the stream ended via [ERROR] line or a network onerror it stays
     // null — fall back to what Ludus's GET already told us.
@@ -545,7 +559,7 @@ export function DashboardPageClient() {
       setTimeout(() => setShowLogs(false), 5000)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming, streamRangeState])
+  }, [isStreaming, streamRangeState, deployLive])
 
   const invalidateRangeStatus = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
@@ -567,6 +581,40 @@ export function DashboardPageClient() {
 
   // ── Deploy actions ──────────────────────────────────────────────────────────
   const doDeploy = async () => {
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = Array.isArray(tplRes.data)
+        ? tplRes.data
+        : tplRes.data &&
+            typeof tplRes.data === "object" &&
+            Array.isArray((tplRes.data as { templates?: unknown }).templates)
+          ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
+          : []
+      const builtNames = new Set(
+        rows.filter((t) => t && typeof t === "object" && t.built === true).map((t) => t.name ?? ""),
+      )
+      const allNames = new Set(
+        rows.filter((t) => t && typeof t === "object").map((t) => t.name ?? ""),
+      )
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion: version,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion: version,
+          registeredTemplates: allNames,
+        })
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${required} must be Packer-built before any Ludus range deploy. Open Templates to add/build it.`,
+        })
+        return
+      }
+    }
+
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
@@ -980,7 +1028,12 @@ export function DashboardPageClient() {
     }
   }
   const runningVMs = allVMs.filter(vmIsRunning).length
-  const rangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
+  const rawRangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
+  const rangeState =
+    historyDeployInFlight &&
+    !["DEPLOYING", "WAITING"].includes(rawRangeState.toUpperCase())
+      ? "DEPLOYING"
+      : rawRangeState
   const error = rangeError ? (rangeError as Error).message : null
 
   // Single range card from the selected range's status query (range picker lives in the sidebar).
@@ -1086,6 +1139,8 @@ export function DashboardPageClient() {
         />
       </div>
 
+      <LudusHostResources />
+
       {/* ── WireGuard — account-wide VPN (same profile for all accessible ranges) ── */}
       <Card className="border-status-info/25 bg-blue-500/[0.06]">
         <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -1094,19 +1149,11 @@ export function DashboardPageClient() {
               <Wifi className="h-4 w-4 text-status-info shrink-0" />
               WireGuard VPN
             </h3>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Download the client configuration for your current Ludus account (including impersonation). One tunnel covers
-              lab access; ranges you can use in this app
-              {accessibleRanges.length > 0 ? (
-                <>
-                  :{" "}
-                  <span className="font-mono text-foreground/85 break-all">
-                    {accessibleRanges.map((r) => r.rangeID).join(", ")}
-                  </span>
-                </>
-              ) : (
-                <> are listed here once you have access — deploy or get shared access if you see none.</>
-              )}
+            <p className="text-xs text-muted-foreground">
+              One tunnel for this account
+              {accessibleRanges.length > 0
+                ? `: ${accessibleRanges.map((r) => r.rangeID).join(", ")}`
+                : "."}
             </p>
           </div>
           <Button
@@ -1125,7 +1172,7 @@ export function DashboardPageClient() {
       </Card>
 
       {/* ── Selected range (single card; range switcher is in the sidebar) ─── */}
-      {isLoading ? (
+      {waitingForRangeSelection || isLoading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
@@ -1146,7 +1193,12 @@ export function DashboardPageClient() {
           const rangeKey = range.rangeID || range.name || `range-${idx}`
           const vms = range.VMs || (range as RangeObject & { vms?: VMObject[] }).vms || []
           const running = vms.filter(vmIsRunning).length
-          const state = range.rangeState || "NEVER DEPLOYED"
+          const rawState = range.rangeState || "NEVER DEPLOYED"
+          const state =
+            historyDeployInFlight &&
+            !["DEPLOYING", "WAITING"].includes(rawState.toUpperCase())
+              ? "DEPLOYING"
+              : rawState
 
           return (
             <Card key={rangeKey} className="overflow-hidden">
@@ -1425,7 +1477,7 @@ export function DashboardPageClient() {
                   )}
 
                   {/* ── Deploy logs ─────────────────────────────────────── */}
-                  {showLogs && (
+                  {(showLogs || deployLive) && (
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">

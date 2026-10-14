@@ -52,6 +52,14 @@ describe("strip-ansi", () => {
     expect(stripAnsi("\x1b]8;;https://example.com\x1b\\link")).toBe("link")
   })
 
+  it("drops Ansible wait_for NUL progress so it is not a log line", () => {
+    const raw = "TASK [Wait for VM to acquire an IP address] ***\n" + "\u0000".repeat(40) + "\nfatal: [localhost]: FAILED!"
+    expect(splitLogText(raw)).toEqual([
+      "TASK [Wait for VM to acquire an IP address] ***",
+      "fatal: [localhost]: FAILED!",
+    ])
+  })
+
   it("keeps intentional interior blank lines but trims trailing blanks", () => {
     expect(splitLogText("phase one\n\nphase two\n")).toEqual([
       "phase one",

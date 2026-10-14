@@ -15,7 +15,7 @@ import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
 import {
   mapRegisteredSources,
   pickDefaultRegisteredSource,
-  registeredSourceLabel,
+  registeredSourceOptionLabel,
 } from "@/lib/registered-ludus-sources"
 import {
   fetchSourceCatalog,
@@ -27,14 +27,17 @@ import {
   buildInstalledAnsibleNames,
   sourceCatalogAnsibleInstallState,
 } from "@/lib/source-catalog-presence"
+import { postSourceInstall } from "@/lib/source-install-client"
 import { Download, GitBranch, ChevronDown, ChevronRight, Loader2, Package, Search, Zap } from "lucide-react"
 import { groupGalaxySearchHits } from "@/lib/ansible-galaxy-search"
+import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 
 interface SourceRole {
   name?: string
   scope?: string
   state?: string
   fqcn?: string
+  version?: string
 }
 
 interface SourceCollection {
@@ -42,6 +45,7 @@ interface SourceCollection {
   scope?: string
   state?: string
   fqcn?: string
+  version?: string
 }
 
 interface GalaxyHit {
@@ -67,6 +71,9 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
   const [addingGalaxy, setAddingGalaxy] = useState<string | null>(null)
   const [galaxySearched, setGalaxySearched] = useState(false)
   const [expandedGalaxyGroups, setExpandedGalaxyGroups] = useState<Set<string>>(new Set())
+  const [showAllRoles, setShowAllRoles] = useState(false)
+  const [showAllCollections, setShowAllCollections] = useState(false)
+  const [showAllGalaxy, setShowAllGalaxy] = useState(false)
 
   const { data: ludusSourcesMeta } = useQuery({
     queryKey: queryKeys.sources(scopeTag),
@@ -94,16 +101,19 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
   }, [open, registeredSources])
 
   const sid = registeredSourceId
+  const sharedCatalog = registeredSources.find((s) => s.id === sid)?.sharedCatalog === true
+  const selectedSourceRef =
+    registeredSources.find((s) => s.id === sid)?.ref?.trim() || undefined
 
   const { data: rolePayload, isLoading: rolesLoading } = useQuery({
-    queryKey: queryKeys.sourceRoles(scopeTag, sid),
+    queryKey: queryKeys.sourceRoles(scopeTag, sid, selectedSourceRef),
     queryFn: () => fetchSourceCatalog<SourceRole>(sid, "roles"),
     enabled: open && tab === "source" && !!sid,
     staleTime: STALE.long,
   })
 
   const { data: collPayload, isLoading: collsLoading } = useQuery({
-    queryKey: queryKeys.sourceCollections(scopeTag, sid),
+    queryKey: queryKeys.sourceCollections(scopeTag, sid, selectedSourceRef),
     queryFn: () => fetchSourceCatalog<SourceCollection>(sid, "collections"),
     enabled: open && tab === "source" && !!sid,
     staleTime: STALE.long,
@@ -134,9 +144,9 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
   )
 
   const roleInstalled = (role: SourceRole) =>
-    sourceCatalogAnsibleInstallState(role, installedAnsibleNames) === "installed"
+    sourceCatalogAnsibleInstallState(role, installedAnsibleNames) !== "not_installed"
   const collectionInstalled = (coll: SourceCollection) =>
-    sourceCatalogAnsibleInstallState(coll, installedAnsibleNames) === "installed"
+    sourceCatalogAnsibleInstallState(coll, installedAnsibleNames) !== "not_installed"
 
   const handleInstallFromSource = async () => {
     if (!sid || (selectedRoles.size === 0 && selectedCollections.size === 0)) return
@@ -156,15 +166,7 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
       )
 
       if (localRoles.length > 0 || localCollections.length > 0) {
-        const res = await fetch(`/api/sources/${encodeURIComponent(sid)}/install`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            selection: { localRoles, localCollections },
-          }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+        await postSourceInstall(sid, { localRoles, localCollections })
       }
 
       for (const name of subRoles) {
@@ -290,15 +292,13 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                     >
                       {registeredSources.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {registeredSourceLabel(s)}
+                          {registeredSourceOptionLabel(s)}
                         </option>
                       ))}
                     </select>
                   </div>
                   {catalogFromGit && (
-                    <p className="text-xs text-muted-foreground rounded border border-border bg-muted/30 px-3 py-2">
-                      Catalog listed from the Git repository tree (Ludus sync cache empty). Install uses the Sources API.
-                    </p>
+                    <p className="text-xs text-muted-foreground">Listed from the git tree.</p>
                   )}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
@@ -311,8 +311,8 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                       ) : sourceRoles.length === 0 ? (
                         <p className="text-xs text-muted-foreground">No roles found for this source.</p>
                       ) : (
-                        <div className="space-y-1 max-h-40 overflow-y-auto">
-                          {sourceRoles.map((role) => {
+                        <div className="rounded-md border border-border">
+                          {previewSlice(sourceRoles, showAllRoles).map((role) => {
                             const installed = roleInstalled(role)
                             return (
                             <label
@@ -338,15 +338,13 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                                   {role.scope}
                                 </Badge>
                               )}
-                              <Badge
-                                variant={installed ? "success" : "outline"}
-                                className="text-[10px] ml-auto shrink-0"
-                              >
-                                {installed ? "Installed" : "Not installed"}
-                              </Badge>
+                              {installed ? (
+                                <Badge variant="success" className="text-xs ml-auto shrink-0">Installed</Badge>
+                              ) : null}
                             </label>
                             )
                           })}
+                          <ShowAllBar expanded={showAllRoles} count={sourceRoles.length} onToggle={() => setShowAllRoles((v) => !v)} />
                         </div>
                       )}
                     </div>
@@ -360,8 +358,8 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                       ) : sourceCollections.length === 0 ? (
                         <p className="text-xs text-muted-foreground">No collections found for this source.</p>
                       ) : (
-                        <div className="space-y-1 max-h-40 overflow-y-auto">
-                          {sourceCollections.map((coll) => {
+                        <div className="rounded-md border border-border">
+                          {previewSlice(sourceCollections, showAllCollections).map((coll) => {
                             const installed = collectionInstalled(coll)
                             return (
                             <label
@@ -387,20 +385,23 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                                   {coll.scope}
                                 </Badge>
                               )}
-                              <Badge
-                                variant={installed ? "success" : "outline"}
-                                className="text-[10px] ml-auto shrink-0"
-                              >
-                                {installed ? "Installed" : "Not installed"}
-                              </Badge>
+                              {installed ? (
+                                <Badge variant="success" className="text-xs ml-auto shrink-0">Installed</Badge>
+                              ) : null}
                             </label>
                             )
                           })}
+                          <ShowAllBar expanded={showAllCollections} count={sourceCollections.length} onToggle={() => setShowAllCollections((v) => !v)} />
                         </div>
                       )}
                     </div>
                   </div>
-                  {(selectedRoles.size > 0 || selectedCollections.size > 0) && (
+                  {sharedCatalog && (
+                    <p className="text-xs text-muted-foreground">
+                      Shared by an admin. Roles and collections from this source are installed for every user when the admin shares it.
+                    </p>
+                  )}
+                  {!sharedCatalog && (selectedRoles.size > 0 || selectedCollections.size > 0) && (
                     <Button size="sm" onClick={handleInstallFromSource} disabled={installing} className="gap-1.5">
                       {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                       Install selected ({selectedRoles.size + selectedCollections.size})
@@ -449,8 +450,8 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                 <p className="text-xs text-muted-foreground">No Galaxy {galaxyType}s matched that search.</p>
               )}
               {groupedGalaxyHits.length > 0 && (
-                <div className="space-y-0 max-h-64 overflow-y-auto rounded border border-border">
-                  {groupedGalaxyHits.map((group) => {
+                <div className="rounded border border-border">
+                  {previewSlice(groupedGalaxyHits, showAllGalaxy).map((group) => {
                     const latest = group.versions[0]
                     const multi = group.versions.length > 1
                     const expanded = expandedGalaxyGroups.has(group.name)
@@ -543,6 +544,7 @@ export function AnsibleAddFromSourcePanel({ onChanged }: { onChanged: () => void
                       </div>
                     )
                   })}
+                  <ShowAllBar expanded={showAllGalaxy} count={groupedGalaxyHits.length} onToggle={() => setShowAllGalaxy((v) => !v)} />
                 </div>
               )}
             </TabsContent>

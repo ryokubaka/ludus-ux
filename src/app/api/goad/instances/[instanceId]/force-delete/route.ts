@@ -22,9 +22,7 @@ import {
   resolveAdminImpersonationFromRequest,
 } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
-import { sshExec, readGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
-import { getSettings } from "@/lib/settings-store"
+import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
 import { getDb } from "@/lib/db"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -67,14 +65,18 @@ export async function POST(
     errors: [],
   }
 
-  const settings = getSettings()
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
 
   // Resolve rangeID: prefer explicit body value, fall back to workspace file
   let ludusRangeId = bodyRangeId || null
   if (!ludusRangeId) {
     try {
-      ludusRangeId = await readGoadRangeId(instanceId, rootCreds)
+      ludusRangeId = await readGoadRangeId(instanceId, undefined, runAsOwner)
     } catch {
       if (!skipRangeDeletion) {
         results.errors.push("Could not read .goad_range_id from workspace — range deletion skipped")
@@ -109,7 +111,7 @@ export async function POST(
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const workspacePath = `${goadPath}/workspace/${safeId}`
 
-    const { code } = await sshExec(`rm -rf '${workspacePath}'`, rootCreds)
+    const { code } = await runAsOwner(`rm -rf '${workspacePath}'`)
     results.workspaceRemoved = code === 0
     if (!results.workspaceRemoved) {
       results.errors.push(`Workspace removal exited with code ${code}`)

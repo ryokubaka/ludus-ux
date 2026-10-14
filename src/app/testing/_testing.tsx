@@ -42,7 +42,6 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { useRange } from "@/lib/range-context"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import {
-  fetchAndStoreEfiPreflight,
   prefetchTestingStopEfiForSelectedRange,
   sessionPreviewToNotice,
 } from "@/lib/prefetch-testing-stop-efi"
@@ -375,15 +374,12 @@ export function TestingPageClient() {
 
   /** EFI enroll notice for Start confirm / toast (set in handleToggle). */
   const efiStartNoticeRef = useRef<{ notice: string; count: number } | null>(null)
-  const [efiChecking, setEfiChecking] = useState(false)
 
-  // Warm EFI preview for selected range: fill session if empty; validate fingerprint if present.
+  // Fill the UEFI preview once per range. A saved session skips the network so
+  // opening this page does not SSH-probe every VM again.
   useEffect(() => {
     if (rangesLoading || !selectedRangeId) return
-    const existing = readSessionEfiStopPreview(selectedRangeId)
-    prefetchTestingStopEfiForSelectedRange(selectedRangeId, {
-      forceValidate: Boolean(existing),
-    })
+    prefetchTestingStopEfiForSelectedRange(selectedRangeId)
   }, [rangesLoading, selectedRangeId])
 
   // ── Per-range status (from dot queries — single source of truth) ────────
@@ -590,7 +586,7 @@ export function TestingPageClient() {
       !!activeOp &&
       (activeOp.opType === "testing_start" || activeOp.opType === "testing_stop"))
   // True while we should lock the button and show progress UI
-  const isInProgress = toggling || opInProgress || isDeploying || opInitialising || efiChecking
+  const isInProgress = toggling || opInProgress || isDeploying || opInitialising
 
   useEffect(() => {
     setRangeSelectionLocked(testingToggleInProgress)
@@ -799,18 +795,6 @@ export function TestingPageClient() {
 
   // ── Toggle testing mode ───────────────────────────────────────────────────
 
-  const loadEfiStartPreview = async (
-    rangeId: string,
-  ): Promise<{ notice: string | null; count: number }> => {
-    const cached = readSessionEfiStopPreview(rangeId)
-    if (cached) {
-      return sessionPreviewToNotice(cached)
-    }
-    const result = await fetchAndStoreEfiPreflight(rangeId)
-    if (result) return sessionPreviewToNotice(result)
-    return { notice: null, count: 0 }
-  }
-
   const doToggle = async () => {
     if (!selectedRangeId) return
     setToggling(true)
@@ -884,7 +868,6 @@ export function TestingPageClient() {
   }
 
   const handleToggle = () => {
-    if (efiChecking) return
     if (isEnabled) {
       efiStartNoticeRef.current = null
       confirm(
@@ -895,27 +878,21 @@ export function TestingPageClient() {
     }
     const rangeId = selectedRangeId
     if (!rangeId) return
-    void (async () => {
-      const cached = readSessionEfiStopPreview(rangeId)
-      const needsFetch = !cached
-      if (needsFetch) setEfiChecking(true)
-      try {
-        const preview = await loadEfiStartPreview(rangeId)
-        if (preview.notice && preview.count > 0) {
-          efiStartNoticeRef.current = { notice: preview.notice, count: preview.count }
-        } else {
-          efiStartNoticeRef.current = null
-        }
-        const base =
-          "Start Testing Mode? All VMs will be snapshotted and internet access will be blocked."
-        confirm(
-          preview.notice ? `${base}\n\n${preview.notice}` : base,
-          doToggle,
-        )
-      } finally {
-        if (needsFetch) setEfiChecking(false)
-      }
-    })()
+    const cached = readSessionEfiStopPreview(rangeId)
+    const preview = cached ? sessionPreviewToNotice(cached) : null
+    if (preview?.notice && preview.count > 0) {
+      efiStartNoticeRef.current = { notice: preview.notice, count: preview.count }
+    } else {
+      efiStartNoticeRef.current = null
+    }
+    const base =
+      "Start Testing Mode? All VMs will be snapshotted and internet access will be blocked."
+    const body = preview?.notice
+      ? `${base}\n\n${preview.notice}`
+      : preview
+        ? base
+        : `${base}\n\nVMs missing the 2023 UEFI certificate power off briefly before the snapshot.`
+    confirm(body, doToggle)
   }
 
   const handleDismissStuckTestingOp = () => {
@@ -1156,15 +1133,13 @@ export function TestingPageClient() {
 
   // PocketBase testingEnabled is authoritative for start vs stop UI (not DB opType).
   const progressLabel =
-    efiChecking ? "Checking UEFI…"
-    : opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
+    opInitialising && !opInProgress && !isDeploying && !toggling ? "Checking…"
     : isDeploying   ? "Processing…"
     : isInProgress  ? (isEnabled ? "Stopping…" : "Starting…")
     : ""
 
   const statusBadgeExtra: { label: string; variant: "info" | "secondary" } | null =
-    efiChecking           ? { label: "CHECKING UEFI", variant: "secondary" }
-    : isDeploying          ? { label: "PROCESSING", variant: "info" }
+    isDeploying          ? { label: "PROCESSING", variant: "info" }
     : opInitialising     ? { label: "CHECKING",   variant: "secondary" }
     : opInProgress       ? { label: "QUEUED",     variant: "secondary" }
     : null
@@ -1301,7 +1276,6 @@ export function TestingPageClient() {
                   onClick={handleToggle}
                   disabled={
                     isInProgress ||
-                    efiChecking ||
                     statusLoading ||
                     !!pendingAction ||
                     hasPendingOps ||
@@ -1311,16 +1285,14 @@ export function TestingPageClient() {
                   variant={isEnabled ? "destructive" : "default"}
                   className="min-w-52"
                 >
-                  {isInProgress || efiChecking ? (
+                  {isInProgress ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : isEnabled ? (
                     <ShieldOff className="h-4 w-4" />
                   ) : (
                     <Camera className="h-4 w-4" />
                   )}
-                  {efiChecking
-                    ? "Checking UEFI…"
-                    : isInProgress
+                  {isInProgress
                     ? progressLabel
                     : isEnabled
                     ? "Stop Testing (Revert VMs)"
@@ -1549,10 +1521,7 @@ export function TestingPageClient() {
 
               {isEnabled && !isInProgress && !hasPendingOps && (
                 <p className="text-xs text-muted-foreground">
-                  Enter a domain name (e.g. <code>example.com</code>) or an exact IP address (e.g.{" "}
-                  <code>8.8.8.8</code>). Wildcards and CIDR ranges are not supported by Ludus.
-                  Domain entries also allow the associated CRL certificate domains automatically.
-                  Adding a domain may take a moment while Ludus resolves its IP.
+                  A domain or one IP. No wildcards or CIDR.
                 </p>
               )}
 

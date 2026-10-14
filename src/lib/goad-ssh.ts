@@ -17,21 +17,33 @@ import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-requ
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
+import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
 import { buildEnsureGoadVenvShell } from "./goad-ansible-env"
+import {
+  buildAnsibleCpPreamble,
+  resolveGoadLinuxUser,
+} from "./ludus-ansible-preflight"
+import { ensureAnsibleHomeLayoutAsRoot } from "./ansible-home-repair"
 import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
+import { stripLuxGoadArgsMeta } from "./lux-goad-args-meta"
+import { goadLogShowsFailure, goadLogShowsInterrupt } from "./goad-task-outcome"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
 // REAL_LUDUS_PATH is replaced by sed at deploy time with the actual binary path.
 // Two responsibilities:
 //  1. Inject --range $LUDUS_RANGE_ID into every ludus call (range scoping).
-//  2. For `range config set -f <file>`: re-inject the user's network: block from
-//     a sidecar JSON written by sync-network, so GOAD's template regeneration
-//     (which wipes the block) doesn't cause iptables to be flushed during deploy.
-const LUDUS_WRAPPER_SH = [
+//  2. For `range config set -f <file>`: combine network rules before Ludus
+//     stores the config that `range deploy` applies. A wizard review file
+//     already contains that combination and is copied over as-is. Otherwise
+//     the sidecar keeps the range's existing rules in their storage order and
+//     places rules that exist only on the rendered file so iptables -I
+//     evaluates them after those rules. ludus_extensions still come from
+//     their sidecar.
+export const LUDUS_WRAPPER_SH = [
   '#!/bin/sh',
   '_R="REAL_LUDUS_PATH"',
   '',
@@ -42,8 +54,9 @@ const LUDUS_WRAPPER_SH = [
   '  exec "$_R" "$@"',
   'fi',
   '',
-  '# Firewall preservation: detect `range config set` anywhere in argv (GOAD',
-  '# prepends `--user <id>` when impersonating — see goad/command/linux.py).',
+  '# Firewall + ludus_extensions preservation: detect `range config set`',
+  '# anywhere in argv (GOAD prepends `--user <id>` when impersonating —',
+  '# see goad/command/linux.py).',
   '_has_rcs=0',
   '_p2=""',
   '_p1=""',
@@ -64,22 +77,64 @@ const LUDUS_WRAPPER_SH = [
   '    _P="$_a"',
   '  done',
   '  if [ -n "$_CF" ]; then',
+  '    _WIZ=0',
   '    if [ -n "${LUX_WIZARD_CONFIG_YML:-}" ] && [ -f "$LUX_WIZARD_CONFIG_YML" ]; then',
   '      cp "$LUX_WIZARD_CONFIG_YML" "$_CF" 2>/dev/null || true',
+  '      _WIZ=1',
   '    fi',
   '    _SD="$(dirname "$_CF")/.lux-network-snapshot.json"',
-  '    if [ -f "$_SD" ]; then',
+  '    _SE="$(dirname "$_CF")/.lux-extensions-snapshot.json"',
+  '    if [ -f "$_SD" ] || [ -f "$_SE" ]; then',
   "      _LUX_ERR=$(mktemp 2>/dev/null || echo /tmp/lux-net-err.$$)",
   // python3 -c: double-quoted strings only inside single-quoted -c body.
+  // argv: config.yml, network sidecar, extensions sidecar, wizard-yaml flag
   "      if ! python3 -c '",
-  'import json,yaml,sys',
-  'with open(sys.argv[2]) as f: n=json.load(f)',
-  'with open(sys.argv[1]) as f: d=yaml.safe_load(f) or {}',
+  'import json,yaml,sys,os',
+  'cfg,ns,es=sys.argv[1],sys.argv[2],sys.argv[3]',
+  'wiz=len(sys.argv)>4 and sys.argv[4]=="1"',
+  'with open(cfg) as f: d=yaml.safe_load(f) or {}',
   'if isinstance(d,dict):',
-  ' d["network"]=n',
-  ' with open(sys.argv[1],"w") as f: yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False)',
-  "' \"$_CF\" \"$_SD\" 2>\"$_LUX_ERR\"; then",
-  '        echo "[LUX] network snapshot merge failed (config + .lux-network-snapshot.json). First lines of stderr:" >&2',
+  ' changed=False',
+  ' if (not wiz) and ns and os.path.isfile(ns):',
+  '  with open(ns) as f: snap=json.load(f)',
+  '  if snap is None:',
+  '   if "network" in d:',
+  '    del d["network"]; changed=True',
+  '  elif isinstance(snap, dict):',
+  '   cur=d.get("network") if isinstance(d.get("network"), dict) else {}',
+  '   cur_rules=cur.get("rules") if isinstance(cur.get("rules"), list) else []',
+  '   snap_rules=snap.get("rules") if isinstance(snap.get("rules"), list) else []',
+  '   seen=set(); snap_kept=[]',
+  '   for r in snap_rules:',
+  '    if not isinstance(r, dict):',
+  '     continue',
+  '    snap_kept.append(r)',
+  '    name=r.get("name")',
+  '    if name: seen.add(name)',
+  '   added=[]',
+  '   for r in cur_rules:',
+  '    if not isinstance(r, dict):',
+  '     continue',
+  '    name=r.get("name")',
+  '    if name and name in seen:',
+  '     continue',
+  '    added.append(r)',
+  '    if name: seen.add(name)',
+  '   kept=added+snap_kept',
+  '   merged=dict(cur)',
+  '   for k,v in snap.items():',
+  '    if k!="rules": merged[k]=v',
+  '   merged["rules"]=kept',
+  '   if d.get("network")!=merged:',
+  '    d["network"]=merged; changed=True',
+  ' if es and os.path.isfile(es):',
+  '  with open(es) as f: ext=json.load(f)',
+  '  if d.get("ludus_extensions")!=ext:',
+  '   d["ludus_extensions"]=ext; changed=True',
+  ' if changed:',
+  '  with open(cfg,"w") as f: yaml.safe_dump(d,f,default_flow_style=False,sort_keys=False)',
+  "' \"$_CF\" \"${_SD:-}\" \"${_SE:-}\" \"$_WIZ\" 2>\"$_LUX_ERR\"; then",
+  '        echo "[LUX] range-config snapshot merge failed (network / ludus_extensions sidecars). First lines of stderr:" >&2',
   '        head -n 8 "$_LUX_ERR" >&2',
   '      fi',
   '      rm -f "$_LUX_ERR" 2>/dev/null',
@@ -297,16 +352,28 @@ function buildConnectConfig(creds?: SSHCreds): ConnectConfig {
  * Pass `creds` to run as the logged-in user; omit to run as root/admin.
  */
 export async function sshExec(
-  command: string,
-  creds?: SSHCreds
+  command: string | readonly string[],
+  creds?: SSHCreds,
+  opts?: { stdin?: string },
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
     const conn = new SSHClient();
     let stdout = "";
     let stderr = "";
+    const cfg = buildConnectConfig(creds)
+    // User creds stay as that user. The settings account elevates with sudo when it is not root.
+    const remote = creds
+      ? (typeof command === "string"
+          ? command
+          : (() => {
+              throw new Error("A logged-in SSH session cannot take a lux-host argument list")
+            })())
+      : Array.isArray(command)
+        ? formatLuxHost(cfg.username || "root", command)
+        : asPrivilegedShell(cfg.username || "root", command as string)
 
     conn.on("ready", () => {
-      conn.exec(command, (err, stream) => {
+      conn.exec(remote, (err, stream) => {
         if (err) {
           conn.end();
           return reject(err);
@@ -319,6 +386,7 @@ export async function sshExec(
 
         stream.on("data", (data: Buffer) => { stdout += data.toString(); });
         stream.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
+        if (opts?.stdin != null) stream.end(opts.stdin)
       });
     });
 
@@ -326,17 +394,191 @@ export async function sshExec(
       reject(new Error(`SSH connection error: ${err.message}`));
     });
 
-    conn.connect(buildConnectConfig(creds));
+    conn.connect(cfg);
   });
+}
+
+/** Run a shell command as the privileged SSH account, without lux-host. */
+export async function sshExecAccount(
+  command: string,
+  opts?: { stdin?: string },
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve, reject) => {
+    const conn = new SSHClient()
+    let stdout = ""
+    let stderr = ""
+    const cfg = buildConnectConfig()
+    conn.on("ready", () => {
+      conn.exec(command, (err, stream) => {
+        if (err) {
+          conn.end()
+          return reject(err)
+        }
+        stream.on("close", (code: number) => {
+          conn.end()
+          resolve({ stdout, stderr, code: code ?? 0 })
+        })
+        stream.on("data", (data: Buffer) => { stdout += data.toString() })
+        stream.stderr.on("data", (data: Buffer) => { stderr += data.toString() })
+        if (opts?.stdin != null) stream.end(opts.stdin)
+      })
+    })
+    conn.on("error", (err) => {
+      reject(new Error(`SSH connection error: ${err.message}`))
+    })
+    conn.connect(cfg)
+  })
+}
+
+function sshExecAccountOrUser(
+  command: string,
+  creds?: SSHCreds,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (creds) return sshExec(command, creds)
+  return sshExecAccount(command)
+}
+
+export type WorkspaceSshPlan =
+  | { ok: true; command: string | readonly string[]; creds: SSHCreds | undefined; stdin?: string }
+  | { ok: false; status: number; error: string }
+
+const RUN_AS_USER_NAME = /^[a-z_][a-z0-9_-]{0,31}$/
+
+/**
+ * Impersonated GOAD command for the host SSH account.
+ * Root keeps `sudo -H -u`. Any other account uses lux-host `run-as-user`
+ * with the script on stdin. The script is not a command argument.
+ */
+export function wrapImpersonatedGoadCommand(inner: string, username: string, hostUser: string): string {
+  const host = hostUser.trim() || "root"
+  if (host === "root") {
+    const safe = username.replace(/'/g, "")
+    return `sudo -H -u '${safe}' bash -c '${inner.replace(/'/g, "'\\''")}'`
+  }
+  const user = username.trim()
+  if (!RUN_AS_USER_NAME.test(user) || user === "root") {
+    return `echo "Linux user cannot be switched to through lux-host." >&2; exit 1`
+  }
+  const delim = `LUX_RUN_AS_${randomUUID().replace(/-/g, "")}`
+  const remote = formatLuxHost(host, ["run-as-user", user])
+  return `${remote} <<'${delim}'\n${inner}\n${delim}`
+}
+
+/**
+ * Linux account that owns `workspace/<instance>/`. Impersonation wins.
+ * The host SSH account (PROXMOX_SSH_USER) is not this user after the move off root.
+ */
+export function workspaceOwnerLinuxUser(
+  session: Pick<
+    SessionData,
+    "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+  > & { impersonationApiKey?: string },
+  request: NextRequest,
+): string | null {
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  if (session.isAdmin && imp.apiKey) {
+    const asUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
+    if (asUser) return asUser
+  }
+  const self = session.username?.trim()
+  return self || null
+}
+
+/**
+ * Run a workspace mutation as `owner`.
+ * Their own SSH login runs the command directly. A LUX admin may switch to
+ * that user: root uses `sudo -H -u`, and any other host account uses lux-host
+ * `run-as-user` with the script on stdin. A non-admin never switches.
+ */
+export function buildWorkspaceSshExecPlan(opts: {
+  owner: string
+  innerCommand: string
+  ownerSshCreds?: SSHCreds
+  privilegedSshConfigured: boolean
+  callerIsAdmin: boolean
+  hostSshUser: string
+  /** When set, refuse before the mutation if this user cannot write instance.json. */
+  workspaceDir?: string
+}): WorkspaceSshPlan {
+  const owner = opts.owner.trim()
+  if (!owner || /[^a-zA-Z0-9._-]/.test(owner)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "No Linux user for this GOAD workspace. Log in as that user, or impersonate them.",
+    }
+  }
+
+  const credUser = opts.ownerSshCreds?.username?.trim() ?? ""
+  const direct =
+    !!opts.ownerSshCreds?.password && credUser.toLowerCase() === owner.toLowerCase()
+
+  const safeUser = owner.replace(/'/g, "")
+  const guard = opts.workspaceDir
+    ? [
+        `f='${opts.workspaceDir.replace(/'/g, "")}/instance.json'`,
+        `if [ -e "$f" ] && [ ! -w "$f" ]; then`,
+        `echo "GOAD workspace is not writable by $(id -un). $f is owned by $(stat -c '%U:%G' "$f" 2>/dev/null || echo unknown). Impersonate that user if you are an admin." >&2`,
+        `exit 13`,
+        `fi`,
+      ].join("; ") + "; "
+    : ""
+  const inner = `${guard}${opts.innerCommand}`
+
+  if (direct) {
+    return { ok: true, command: inner, creds: opts.ownerSshCreds }
+  }
+
+  if (!opts.callerIsAdmin) {
+    return {
+      ok: false,
+      status: 403,
+      error: `GOAD workspace commands run as Linux user ${owner}. Log in with that user's SSH credentials.`,
+    }
+  }
+
+  if (!opts.privilegedSshConfigured) {
+    return {
+      ok: false,
+      status: 503,
+      error:
+        `GOAD workspace files are owned by Linux user ${owner}. Log in with that user's SSH password, or set PROXMOX_SSH_USER to root or an account that can run sudo -n /usr/local/sbin/lux-host so LUX can switch to ${owner}.`,
+    }
+  }
+
+  const host = opts.hostSshUser.trim() || "root"
+  if (host !== "root") {
+    if (!RUN_AS_USER_NAME.test(owner) || owner === "root") {
+      return {
+        ok: false,
+        status: 400,
+        error: `Linux user ${owner} cannot be switched to through lux-host.`,
+      }
+    }
+    const script = [
+      `if ! id -u '${owner}' >/dev/null 2>&1; then`,
+      `echo "Linux user '${owner}' does not exist on the GOAD host." >&2`,
+      `exit 1`,
+      `fi`,
+      inner,
+    ].join("\n")
+    return { ok: true, command: ["run-as-user", owner], creds: undefined, stdin: script }
+  }
+
+  const safeInner = inner.replace(/'/g, "'\\''")
+  const command = [
+    `if ! id -u '${safeUser}' >/dev/null 2>&1; then`,
+    `echo "Linux user '${safeUser}' does not exist on the GOAD host." >&2; exit 1; fi;`,
+    `sudo -H -u '${safeUser}' bash -c '${safeInner}'`,
+  ].join(" ")
+  return { ok: true, command, creds: undefined }
 }
 
 /**
  * Plan a one-shot `sshExec` for workspace mutations (`workspace/<instanceId>/…`).
  *
- * Files there are owned by the Ludus/GOAD Linux user. When an admin impersonates
- * another user, we must SSH as **root** (from settings) and run the script as that
- * user via `sudo -H -u …` — matching {@link streamGoadCommand}. Using the admin's
- * own SSH user hits permission denied on the target workspace.
+ * Files there are owned by the current Ludus user, or the impersonated user.
+ * Do not run the script as PROXMOX_SSH_USER.
  */
 export function workspaceSshExecPlan(
   request: NextRequest,
@@ -348,51 +590,63 @@ export function workspaceSshExecPlan(
     impersonationApiKey?: string
   },
   innerCommand: string,
-  rootCreds: SSHCreds | undefined,
   userCreds: SSHCreds | undefined,
-):
-  | { ok: true; command: string; creds: SSHCreds | undefined }
-  | { ok: false; status: number; error: string } {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
-  const sudoUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
-  const impersonateAs =
-    session.isAdmin && sudoUser && imp.apiKey ? { username: sudoUser } : null
-
-  if (impersonateAs) {
-    const settings = getSettings()
-    if (!isRootProxmoxSshConfigured(settings)) {
-      return {
-        ok: false,
-        status: 503,
-        error:
-          "Admin impersonation requires root SSH to the GOAD host: set PROXMOX_SSH_PASSWORD, GOAD_SSH_PASSWORD, or mount a readable root private key (same as Settings → Root SSH test).",
-      }
-    }
-    const safeUser = impersonateAs.username.replace(/'/g, "")
-    const safeInner = innerCommand.replace(/'/g, "'\\''")
-    // Omit creds so sshExec uses buildConnectConfig(undefined) — root via settings/env
-    // password OR mounted key (rootPasswordCredsIfSet is password-only and would falsely
-    // fail key-only setups).
-    return {
-      ok: true,
-      command: `sudo -H -u '${safeUser}' bash -c '${safeInner}'`,
-      creds: undefined,
-    }
-  }
-
-  const creds = rootCreds ?? userCreds
-  if (!creds) {
+  workspaceDir?: string,
+): WorkspaceSshPlan {
+  const owner = workspaceOwnerLinuxUser(session, request)
+  if (!owner) {
     return {
       ok: false,
-      status: 503,
-      error: "No SSH credentials available (set root SSH password or log in with SSH password).",
+      status: 400,
+      error: "No Linux user for this GOAD workspace. Log in as that user, or impersonate them.",
     }
   }
-  return { ok: true, command: innerCommand, creds }
+  const settings = getSettings()
+  const ownerSshCreds =
+    userCreds?.username &&
+    userCreds.username.toLowerCase() === owner.toLowerCase()
+      ? userCreds
+      : undefined
+  return buildWorkspaceSshExecPlan({
+    owner,
+    innerCommand,
+    ownerSshCreds,
+    privilegedSshConfigured: isRootProxmoxSshConfigured(settings),
+    callerIsAdmin: session.isAdmin === true,
+    hostSshUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
+    workspaceDir,
+  })
+}
+
+export async function runWorkspaceSshPlan(
+  plan: Extract<WorkspaceSshPlan, { ok: true }>,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return sshExec(plan.command, plan.creds, plan.stdin !== undefined ? { stdin: plan.stdin } : undefined)
+}
+
+/** Run one remote command as the workspace owner. */
+export async function sshExecAsWorkspaceUser(
+  request: NextRequest,
+  session: Parameters<typeof workspaceSshExecPlan>[1],
+  command: string,
+  userCreds: SSHCreds | undefined,
+  workspaceDir?: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const plan = workspaceSshExecPlan(request, session, command, userCreds, workspaceDir)
+  if (!plan.ok) {
+    throw new Error(plan.error)
+  }
+  return runWorkspaceSshPlan(plan)
 }
 
 /** GOAD prints this after create_empty / load_instance. */
 const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
+
+type ReplExtensionSplit = {
+  phase1Parts: string[]
+  extensionLines: string[]
+  allParts: string[]
+}
 
 /**
  * When a piped REPL runs `provision_lab` then `provision_extension …`, ansible-playbook
@@ -400,11 +654,7 @@ const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
  * lab playbooks run). Split: phase1 through `provision_lab`, then a fresh goad.sh
  * with `unload`, `use <id>`, then extension lines (each phase gets its own stdin pipe).
  */
-function trySplitReplAfterProvisionLab(rawCmds: string): {
-  phase1Parts: string[]
-  extensionLines: string[]
-  allParts: string[]
-} | null {
+function trySplitReplAfterProvisionLab(rawCmds: string): ReplExtensionSplit | null {
   const allParts = rawCmds
     .split(";")
     .map((s) => s.trim())
@@ -422,6 +672,38 @@ function trySplitReplAfterProvisionLab(rawCmds: string): {
   const extensionLines = afterLab.filter((p) => p.startsWith("provision_extension "))
   if (extensionLines.length === 0) return null
   return { phase1Parts: allParts.slice(0, labIdx + 1), extensionLines, allParts }
+}
+
+/**
+ * Install Extension: `…;provide;provision_extension X`. GOAD keeps reading stdin after
+ * a failed provide, so we split and only run the extension phase when provide exits 0
+ * (same SSH session — one LUX task / history row).
+ */
+function trySplitReplAfterProvide(rawCmds: string): ReplExtensionSplit | null {
+  const allParts = rawCmds
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean)
+  let provideIdx = -1
+  for (let i = 0; i < allParts.length; i++) {
+    const p = allParts[i] ?? ""
+    if (p === "provide" || p.startsWith("provide ")) {
+      provideIdx = i
+      break
+    }
+  }
+  if (provideIdx < 0) return null
+  const after = allParts.slice(provideIdx + 1)
+  const extensionLines = after.filter((p) => p.startsWith("provision_extension "))
+  if (extensionLines.length === 0) return null
+  // Refuse if non-extension cmds remain after provide (unexpected chain).
+  if (after.some((p) => !p.startsWith("provision_extension "))) return null
+  return { phase1Parts: allParts.slice(0, provideIdx + 1), extensionLines, allParts }
+}
+
+/** Prefer lab→extension split; else provide→extension (Install Extension). */
+function trySplitReplForExtensionProvision(rawCmds: string): ReplExtensionSplit | null {
+  return trySplitReplAfterProvisionLab(rawCmds) ?? trySplitReplAfterProvide(rawCmds)
 }
 
 function extractUseInstanceIdFromReplParts(parts: string[]): string | null {
@@ -462,10 +744,12 @@ export async function streamGoadCommand(
   onClose: (code: number) => void,
   onError: (err: Error) => void,
   creds?: SSHCreds,
-  /** When set, the command is wrapped with `sudo -H -u {username}` and the
-   *  impersonated user's API key replaces the caller's key.  The SSH connection
-   *  itself uses root credentials (creds is ignored and falls back to root/key). */
+  /** When set, a LUX admin runs as this user. Root uses `sudo -H -u`. Any other
+   *  host account uses lux-host `run-as-user`. The SSH connection uses the host
+   *  account (creds is ignored). */
   impersonateAs?: { username: string; apiKey: string },
+  /** Ludus session username for ~/.ansible ownership repair when SSH is root-only. */
+  ludusLinuxUser?: string,
   /** Dedicated Ludus rangeID for this GOAD instance. When set, LUDUS_RANGE_ID
    *  is injected into the GOAD environment so Ludus operations target only
    *  this range — leaving other ranges completely untouched. */
@@ -478,22 +762,51 @@ export async function streamGoadCommand(
   /** When non-empty, Ludus wrapper appends `--only-roles` to every `ludus range deploy`
    *  in this session (comma-joined list). */
   ludusOnlyRoles?: string[],
+  /** Required when `impersonateAs` is set. A non-admin never switches users. */
+  callerIsAdmin = false,
 ): Promise<() => void> {
+  // Keep full args (incl. --lux-install-extension=…) on the task row for history
+  // titles; never pass LUX meta flags into goad.sh.
+  goadArgs = stripLuxGoadArgsMeta(goadArgs)
+  if (impersonateAs && !callerIsAdmin) {
+    onError(new Error("Admin session required to run GOAD as another Linux user."))
+    return () => {}
+  }
   const conn = new SSHClient();
   // Impersonation: use the target user's API key; connect as root (creds ignored).
   const effectiveCreds = impersonateAs ? undefined : creds;
   const ludusApiKey = impersonateAs?.apiKey || apiKey || process.env.LUDUS_API_KEY || "";
   const goadPath = resolveGoadPath();
+  const ansibleLinuxUser = resolveGoadLinuxUser({
+    impersonateAs,
+    creds: effectiveCreds,
+    sessionUsername: ludusLinuxUser,
+  })
 
   if (ludusApiKey.trim()) {
     try {
+      const { ensureLudusPlatformAnsibleRequirements } = await import(
+        "./ludus-platform-ansible-requirements"
+      )
+      const platformResult = await ensureLudusPlatformAnsibleRequirements(
+        ludusApiKey,
+        effectiveCreds,
+        onData,
+        undefined,
+        ansibleLinuxUser ?? undefined,
+      )
+      if (!platformResult.ok) {
+        onError(new Error(platformResult.error ?? "Ludus platform Ansible dependency install failed"))
+        return () => {}
+      }
+
       const { ensureGoadAnsibleRequirements } = await import("./goad-ansible-requirements")
       const depResult = await ensureGoadAnsibleRequirements(
         ludusApiKey,
         effectiveCreds,
         onData,
         goadPath,
-        impersonateAs?.username,
+        ansibleLinuxUser ?? undefined,
       )
       if (!depResult.ok) {
         onError(new Error(depResult.error ?? "GOAD Ansible dependency install failed"))
@@ -503,6 +816,11 @@ export async function streamGoadCommand(
       onError(err instanceof Error ? err : new Error(String(err)))
       return () => {}
     }
+  }
+
+  const linuxUser = ansibleLinuxUser
+  if (linuxUser) {
+    await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
   }
 
   // --repl "cmd1;cmd2" → pipe semicolon-separated commands to goad.py via stdin
@@ -526,27 +844,32 @@ export async function streamGoadCommand(
   let luxWizardConfigPath = ""
   const trimmedWizardYaml = workspaceConfigYaml?.trim()
   if (trimmedWizardYaml) {
-    luxWizardConfigPath = `/tmp/lux-wizard-config-${randomUUID()}.yml`
-    const yamlB64 = Buffer.from(trimmedWizardYaml, "utf-8").toString("base64")
-    const safePath = luxWizardConfigPath.replace(/'/g, "")
-    // Reap any wizard temp files left over from earlier interrupted deploys so
-    // /tmp does not accumulate them, then write the current one.
-    const reapStale =
-      `find /tmp -maxdepth 1 -type f -name 'lux-wizard-config-*.yml' -mmin +720 -delete 2>/dev/null || true`
-    const writeCmd = `${reapStale}; echo '${yamlB64}' | base64 -d > '${safePath}' && chmod 644 '${safePath}'`
+    const wizardId = randomUUID()
+    luxWizardConfigPath = `/tmp/lux-wizard-config-${wizardId}.yml`
     try {
-      if (impersonateAs) {
-        const safeUser = impersonateAs.username.replace(/'/g, "")
-        const safeInner = writeCmd.replace(/'/g, "'\\''")
-        await sshExec(`sudo -H -u '${safeUser}' bash -c '${safeInner}'`)
-      } else if (creds) {
-        await sshExec(writeCmd, creds)
-      } else {
-        await sshExec(writeCmd)
-      }
+      await sshExec(["wizard-reap"])
+      await sshExec(["wizard-yaml", wizardId], undefined, { stdin: trimmedWizardYaml })
     } catch {
       luxWizardConfigPath = ""
     }
+  }
+
+  // GOAD provision does not get the PROXMOX_* vars Ludus injects for range
+  // deploy. Load those creds from the Ludus host when host SSH works.
+  let proxmoxEnvExports: string[] = []
+  try {
+    const { readLudusProxmoxDeployEnv, proxmoxDeployEnvExports } = await import(
+      "./ludus-proxmox-deploy-env"
+    )
+    const pve = await readLudusProxmoxDeployEnv()
+    if (pve) {
+      proxmoxEnvExports = proxmoxDeployEnvExports(pve)
+      onData(
+        "[+] Injecting Proxmox API env for GOAD ansible (PROXMOX_URL / TOKEN)…\n",
+      )
+    }
+  } catch {
+    // non-fatal — roles that need Proxmox will fail with a clear message
   }
 
   const pyEnvParts = [
@@ -564,6 +887,7 @@ export async function streamGoadCommand(
     ...(luxWizardConfigPath
       ? [`LUX_WIZARD_CONFIG_YML='${luxWizardConfigPath.replace(/'/g, "")}'`]
       : []),
+    ...proxmoxEnvExports,
   ]
   const pyEnv = pyEnvParts.join(" ")
 
@@ -573,18 +897,52 @@ export async function streamGoadCommand(
   // Non-root SSH users cannot create instance sub-directories in it, which
   // causes goad.py to crash with "Instance dir creation error".
   //
-  // We open a *separate* root SSH connection (reusing the root credentials in
-  // the settings store) and create+chmod the directory before the user's command
-  // starts.  This runs as actual root — no sudo required.
+  // We open a separate SSH connection as PROXMOX_SSH_USER and create+chmod the
+  // directory before the user's command starts. Root runs it directly; any other
+  // account runs it with passwordless sudo.
   //
   // The await adds ~1-2 s of setup latency, which is negligible for a GOAD deployment.
   // GOAD deployment.  Failure is silenced here; the preamble below still checks
   // writability and prints a clear actionable error if it isn't writable.
   const GOAD_WORKSPACE = `${goadPath}/workspace`;
   try {
-    await sshExec(`mkdir -p '${GOAD_WORKSPACE}' && chmod 777 '${GOAD_WORKSPACE}'`);
+    await sshExec(["mkdir-goad-workspace", goadPath]);
   } catch {
     // Root SSH may not be configured; writability check in preamble below handles it
+  }
+
+  // Checkout Security Onion roles as root, then give the GOAD user the
+  // submodule gitdir. Otherwise provision_extension's `git submodule update`
+  // cannot lock .git/modules/.../config (Permission denied) and LUX records
+  // that failure as a user abort.
+  if (ansibleLinuxUser && /^[a-z_][a-z0-9_-]{0,31}$/.test(ansibleLinuxUser)) {
+    try {
+      await import("./lux-host-sync").then((m) => m.ensureLuxHostCurrent())
+      const prep = await sshExec(["prepare-goad-submodule", goadPath, ansibleLinuxUser])
+      if (prep.code !== 0) {
+        const detail = (prep.stderr || prep.stdout || "").trim()
+        onData(`[!] LUX: could not prepare GOAD submodules (${detail || "exit " + prep.code})\n`)
+      }
+    } catch {
+      // Privileged SSH missing; GOAD will report a missing role if it cannot update.
+    }
+  }
+
+  // debian11-security-archive imports sshExec from this module, so the import
+  // stays inside the function. `provide` / `install` call `ludus range deploy`
+  // on the host; the playbook edit has to be on disk before that session starts.
+  // Other GOAD commands do not run that play.
+  if (/(?:^|[;\s"])(provide|install|install_extension)\b/.test(goadArgs)) {
+    const { ensureRangeDeployHostPatches } = await import("./debian11-security-archive")
+    const patches = await ensureRangeDeployHostPatches(undefined)
+    if (!patches.ok) {
+      onData(`[!] LUX: ${patches.error}\n`)
+      onError(new Error(patches.error))
+      return () => {}
+    }
+    if (patches.changed) {
+      onData("[+] LUX: deploy playbooks were updated for this Ludus host\n")
+    }
   }
 
   // ── ludus CLI wrapper ────────────────────────────────────────────────────────
@@ -605,13 +963,16 @@ export async function streamGoadCommand(
   // 1. **Range scoping** — rewrites `ludus …` to `ludus --range $LUDUS_RANGE_ID …`
   //    unless --range/-r was already supplied.
   //
-  // 2. **Firewall preservation** — when GOAD calls `ludus range config set -f
-  //    <file>`, the wrapper checks for a `.lux-network-snapshot.json` sidecar
-  //    (written by sync-network before the GOAD session) and injects the user's
-  //    `network:` block into the config file *right before* pushing it to Ludus.
-  //    This closes the window where GOAD's template regeneration wipes firewall
-  //    rules: the deploy runs against a config that already contains them, so
-  //    iptables on the router is never flushed.
+  // 2. **Firewall + ludus_extensions preservation** — when GOAD calls
+  //    `ludus range config set -f <file>`, which is the first Ludus command of
+  //    provide and the config `range deploy` then applies:
+  //    - Wizard review YAML is copied over the file. That YAML already has the
+  //      existing range rules plus extension rules, so the network sidecar is
+  //      not applied on top of it.
+  //    - Otherwise `.lux-network-snapshot.json` (written by sync-network before
+  //      the session) keeps the range's rules in their storage order and places
+  //      rules that exist only on the rendered file so they evaluate after
+  //      those rules. `.lux-extensions-snapshot.json` is still written through.
   //
   // The wrapper is base64-encoded and decoded on the remote to avoid shell
   // quoting nightmares (nested single/double quotes, Python inside sh, etc.).
@@ -649,14 +1010,19 @@ export async function streamGoadCommand(
   //    use_impersonation=no; runs again after goad.sh for edge cases.
   // 7. ludus wrapper — prepends a range-scoping shim to $PATH (only when
   //    a dedicated rangeId is known for this operation).
-  const ensureGoadVenv = buildEnsureGoadVenvShell(goadPath, resolveLudusInstallPath())
+  const ensureGoadVenv = buildEnsureGoadVenvShell(
+    goadPath,
+    resolveLudusInstallPath(),
+    ansibleLinuxUser ?? undefined,
+  )
   const pythonEnvSetup =
-    `if [ -f "$HOME/.goad/.venv/bin/activate" ]; then . "$HOME/.goad/.venv/bin/activate"; fi`
+    `if [ ! -f "$HOME/.goad/.venv/bin/activate" ]; then echo "[-] GOAD venv missing ($HOME/.goad/.venv/bin/activate)."; exit 1; fi; . "$HOME/.goad/.venv/bin/activate"`
 
   const setupPreamble = [
     `grep -qxF 'export LUDUS_VERSION=2' ~/.bashrc 2>/dev/null || echo 'export LUDUS_VERSION=2' >> ~/.bashrc 2>/dev/null || true`,
-    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a root SSH key (./ssh) for workspace setup."; exit 1; fi`,
+    `if [ ! -d '${GOAD_WORKSPACE}' ] || [ ! -w '${GOAD_WORKSPACE}' ]; then echo "[-] GOAD workspace '${GOAD_WORKSPACE}' is not writable by $(whoami). Set PROXMOX_SSH_PASSWORD or mount a private key for PROXMOX_SSH_USER (./ssh) for workspace setup."; exit 1; fi`,
     ensureGoadVenv,
+    buildAnsibleCpPreamble(),
     pythonEnvSetup,
     goadIniSeedCmd,
     ...(goadIniPatchCmd ? [goadIniPatchCmd] : []),
@@ -681,16 +1047,25 @@ export async function streamGoadCommand(
   // right-hand side of pipes.
   const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
 
-  // Best-effort removal of this run's wizard temp file once the final session
-  // finishes (same identity that wrote it). Appended to the last command of each
-  // run path; error/abort paths are covered by the stale-file reaper above.
-  const wizardCleanup = luxWizardConfigPath
-    ? `; rm -f '${luxWizardConfigPath.replace(/'/g, "")}' 2>/dev/null || true`
+  // Preserve goad.sh exit status — cleanup/`|| true` must not wipe failures (EXIT 0 bug).
+  const wizardCleanupCmd = luxWizardConfigPath
+    ? `rm -f '${luxWizardConfigPath.replace(/'/g, "")}' 2>/dev/null || true`
     : ""
+  const afterGoad = (goadCmd: string, opts?: { cleanup?: boolean }) => {
+    const parts = [goadCmd, "_LUX_GOAD_EC=$?"]
+    if (goadIniPatchCmd) parts.push(goadIniPatchCmd)
+    if (opts?.cleanup !== false && wizardCleanupCmd) parts.push(wizardCleanupCmd)
+    parts.push("exit $_LUX_GOAD_EC")
+    return parts.join("; ")
+  }
 
   const wrapInnerForSudo = (inner: string) =>
     impersonateAs
-      ? `sudo -H -u '${impersonateAs.username}' bash -c '${inner.replace(/'/g, "'\\''")}'`
+      ? wrapImpersonatedGoadCommand(
+          inner,
+          impersonateAs.username,
+          effectivePrivilegedSshUser(getSettings().proxmoxSshUser),
+        )
       : inner
 
   // Build the inner goad command.
@@ -707,20 +1082,23 @@ export async function streamGoadCommand(
   // the piped input.  goad.py reads from stdin when no args are given, entering
   // interactive REPL mode where our commands are executed.
   //
-  // When the REPL runs `provision_lab` followed by `provision_extension` lines,
-  // ansible-playbook may read the same stdin pipe and swallow the extension
-  // commands.  We split into two piped goad.sh invocations on one SSH connection
-  // (see trySplitReplAfterProvisionLab).
+  // When the REPL runs `provision_lab`/`provide` followed by `provision_extension`
+  // lines, split into two piped goad.sh invocations on one SSH connection.
+  // Phase 2 runs only when phase 1 exits 0 (gates Install Extension Ansible on
+  // successful provide without a second LUX task).
   let replSplitTail: { extensionLines: string[]; allParts: string[] } | null = null
   let innerCommand: string
   if (goadArgs.startsWith("--repl ")) {
     const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "")
-    const split = trySplitReplAfterProvisionLab(rawCmds)
+    const split = trySplitReplForExtensionProvision(rawCmds)
     if (split) {
       const esc1 = [...split.phase1Parts, "exit"].join("\n").replace(/'/g, "'\\''")
-      innerCommand =
-        [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc1}\n' | bash '${goadPath}/goad.sh'`].join("; ") +
-        goadIniPatchPostfix
+      innerCommand = [
+        setupPreamble,
+        pyEnvExports,
+        `cd ${goadPath}`,
+        afterGoad(`printf '${esc1}\n' | bash '${goadPath}/goad.sh'`, { cleanup: false }),
+      ].join("; ")
       replSplitTail = { extensionLines: split.extensionLines, allParts: split.allParts }
     } else {
       const stdinCmds = rawCmds.split(";").join("\n")
@@ -729,11 +1107,14 @@ export async function streamGoadCommand(
         setupPreamble,
         pyEnvExports,
         `cd ${goadPath}`,
-        `printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`,
-      ].join("; ") + goadIniPatchPostfix + wizardCleanup
+        afterGoad(`printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`),
+      ].join("; ")
     }
   } else {
-    innerCommand = `${setupPreamble}; cd ${goadPath} && ${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}${goadIniPatchPostfix}${wizardCleanup}`
+    const goadInvoke = pyEnv
+      ? `${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`
+      : `bash '${goadPath}/goad.sh' ${goadArgs}`
+    innerCommand = [setupPreamble, `cd ${goadPath}`, afterGoad(goadInvoke)].join("; ")
   }
 
   const command = wrapInnerForSudo(innerCommand)
@@ -799,9 +1180,12 @@ export async function streamGoadCommand(
     if (replSplitTail) {
       const captured: string[] = []
       runPtySession(command, { captureStrippedLines: captured }, (code1) => {
-        if (code1 !== 0) {
+        const phase1Text = captured.join("\n")
+        // A PTY close often reports exit 0 after Ctrl+C. Do not start the
+        // extension phase on a killed or failed provide.
+        if (code1 !== 0 || goadLogShowsInterrupt(phase1Text) || goadLogShowsFailure(phase1Text)) {
           conn.end()
-          onClose(code1)
+          onClose(code1 > 0 ? code1 : 1)
           return
         }
         const id =
@@ -809,7 +1193,7 @@ export async function streamGoadCommand(
           extractInstanceIdFromGoadOutput(captured.join("\n"))
         if (!id) {
           onData(
-            "[ERROR] LUX: could not resolve GOAD instance id after provision_lab; extension phase skipped.",
+            "[ERROR] LUX: could not resolve GOAD instance id after provide/provision_lab; extension phase skipped.",
           )
           conn.end()
           onClose(1)
@@ -818,14 +1202,18 @@ export async function streamGoadCommand(
         const esc2 = ["unload", "use " + id, ...replSplitTail.extensionLines, "exit"]
           .join("\n")
           .replace(/'/g, "'\\''")
-        const inner2 =
-          [setupPreamble, pyEnvExports, `cd ${goadPath}`, `printf '${esc2}\n' | bash '${goadPath}/goad.sh'`].join(
-            "; ",
-          ) + goadIniPatchPostfix + wizardCleanup
+        const inner2 = [
+            setupPreamble,
+            pyEnvExports,
+            `cd ${goadPath}`,
+            afterGoad(`printf '${esc2}\n' | bash '${goadPath}/goad.sh'`),
+          ].join("; ")
         const cmd2 = wrapInnerForSudo(inner2)
-        runPtySession(cmd2, {}, (code2) => {
+        const captured2: string[] = []
+        runPtySession(cmd2, { captureStrippedLines: captured2 }, (code2) => {
+          const failed = goadLogShowsFailure(captured2.join("\n"))
           conn.end()
-          onClose(code2)
+          onClose(failed && code2 === 0 ? 1 : code2)
         })
       })
     } else {
@@ -865,30 +1253,37 @@ export async function streamGoadCommand(
 // as a plain string. GOAD is invoked with LUDUS_RANGE_ID=<rangeId> so it
 // targets the correct range for all Ludus API calls.
 
-/** Write the dedicated Ludus rangeID for a GOAD instance workspace. */
+/** Write the dedicated Ludus rangeID for a GOAD instance workspace as its owner. */
 export async function writeGoadRangeId(
   instanceId: string,
   rangeId: string,
-  creds?: SSHCreds
+  exec: (command: string) => Promise<{ stdout: string; stderr: string; code: number }>,
 ): Promise<void> {
   const goadPath = resolveGoadPath()
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
   const dir = `${goadPath}/workspace/${safeId}`
   const filePath = `${dir}/.goad_range_id`
   const safeRangeId = rangeId.replace(/'/g, "")
-  await sshExec(`mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`, creds)
+  const { code, stderr } = await exec(
+    `mkdir -p '${dir}' && printf '%s' '${safeRangeId}' > '${filePath}'`,
+  )
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `Failed to write .goad_range_id (exit ${code})`)
+  }
 }
 
 /** Read the dedicated Ludus rangeID for a GOAD instance. Returns null if not set. */
 export async function readGoadRangeId(
   instanceId: string,
-  creds?: SSHCreds
+  creds?: SSHCreds,
+  exec?: (command: string) => Promise<{ stdout: string; stderr: string; code: number }>,
 ): Promise<string | null> {
   try {
     const goadPath = resolveGoadPath()
     const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
     const filePath = `${goadPath}/workspace/${safeId}/.goad_range_id`
-    const { stdout, code } = await sshExec(`cat '${filePath}' 2>/dev/null`, creds)
+    const run = exec ?? ((command: string) => sshExecAccountOrUser(command, creds))
+    const { stdout, code } = await run(`cat '${filePath}' 2>/dev/null`)
     if (code !== 0 || !stdout.trim()) return null
     return stdout.trim()
   } catch {
@@ -972,7 +1367,7 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
-    const { stdout, code } = await sshExec(cmd, creds);
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
 
     if (code !== 0 || !stdout.trim()) {
       return [];
@@ -1375,7 +1770,7 @@ export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog
   const encoded = Buffer.from(DISCOVER_PY).toString("base64");
   const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}'`;
 
-  const { stdout, code } = await sshExec(cmd, creds);
+  const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
   if (code !== 0 || !stdout.trim()) {
     return { configured: true, goadPath, labs: [], extensions: [] };
   }
@@ -1413,7 +1808,7 @@ export async function getGoadLabConfig(
   try {
     const goadPath = resolveGoadPath();
     const configPath = `${goadPath}/ad/${labName}/data/config.json`;
-    const { stdout, code } = await sshExec(`cat "${configPath}" 2>/dev/null`, creds);
+    const { stdout, code } = await sshExecAccountOrUser(`cat "${configPath}" 2>/dev/null`, creds);
     if (code !== 0 || !stdout.trim()) return null;
     return JSON.parse(stdout);
   } catch {
@@ -1469,7 +1864,7 @@ export async function getInstanceInventories(
     const goadPath = resolveGoadPath();
     const encoded = Buffer.from(LIST_INVENTORIES_PY).toString("base64");
     const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath}' '${instanceId.replace(/'/g, "'\\''")}'`;
-    const { stdout, code } = await sshExec(cmd, creds);
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
     if (code !== 0 || !stdout.trim()) return [];
     const parsed = JSON.parse(stdout.trim());
     return Array.isArray(parsed) ? parsed : [];
@@ -1486,13 +1881,10 @@ export async function getInstanceInventories(
 export async function chownGoadInstance(
   instanceId: string,
   targetUser: string,
-  creds?: SSHCreds,
+  _creds?: SSHCreds,
 ): Promise<void> {
   const goadPath = resolveGoadPath();
-  const safePath = `${goadPath}/workspace/${instanceId.replace(/'/g, "'\\''")}`
-  const safeUser = targetUser.replace(/'/g, "'\\''")
-  const cmd = `chown -R '${safeUser}':'${safeUser}' '${safePath}'`
-  const { code, stderr } = await sshExec(cmd, creds)
+  const { code, stderr } = await sshExec(["chown-goad", targetUser, goadPath, instanceId])
   if (code !== 0) {
     throw new Error(`chown failed (exit ${code}): ${stderr.trim() || "unknown error"}`)
   }

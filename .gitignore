@@ -36,6 +36,9 @@ docker/nginx/certificates/*.p12
 # Persistent data (SQLite DB — volume-mounted at runtime, not committed to git)
 data/
 
+# Live validation harness (keys, databases, local binaries)
+.lux-live/
+
 # Playwright
 /test-results/
 /playwright-report/

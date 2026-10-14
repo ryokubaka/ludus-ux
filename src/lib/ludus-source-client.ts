@@ -5,6 +5,26 @@ import {
   gitUrlToGithubApiBase,
 } from "@/lib/source-git-catalog"
 import { getSettings } from "@/lib/settings-store"
+import {
+  ludusSourceGitRef,
+  normalizeGitSourceUrl,
+  normalizeLudusSourceRef,
+  suggestedLudusSourceId,
+  toLudusSourceId,
+} from "@/lib/ludus-source-ref"
+import {
+  rewriteSourceInstallWarning,
+  rewriteSourceInstallWarnings,
+  sanitizeSourceSyncPresentation,
+} from "@/lib/source-install-warnings"
+import {
+  isLudusSourceGitPermissionError,
+  repairLudusSourcesOwnershipAsRoot,
+} from "@/lib/ludus-source-ownership"
+import {
+  blueprintSourcePrefix,
+  installedBlueprintMatchesSource,
+} from "@/lib/registered-ludus-sources"
 import { extractLudusList } from "@/lib/utils"
 
 const BADSL_GIT_URL = "https://github.com/badsectorlabs/ludus-source-bsl"
@@ -14,10 +34,6 @@ export function buildLudusApiUrl(path: string): string {
   const cleanBase = settings.ludusUrl.replace(/\/$/, "")
   const apiPath = path.startsWith("/api/v2") ? path : `/api/v2${path}`
   return `${cleanBase}${apiPath}`
-}
-
-function normalizeGitUrl(url: string): string {
-  return url.trim().replace(/\/$/, "").replace(/\.git$/, "").toLowerCase()
 }
 
 export interface LudusSourceRow {
@@ -52,6 +68,8 @@ export interface SourceBlueprintRow {
 export interface SourceTemplateRow {
   name?: string
   version?: string
+  /** Repo directory, e.g. `templates/debian13`, when the install name is the Packer `vm_name`. */
+  path?: string
 }
 
 export type SourceCatalogInstallState = "not_installed" | "installed" | "upgrade_available" | string
@@ -186,19 +204,26 @@ export async function listSources(apiKey: string): Promise<LudusSourceRow[]> {
       `Failed to list sources (HTTP ${res.status})`
     throw new Error(msg)
   }
-  return ludusRows<LudusSourceRow>(res.data)
+  return ludusRows<LudusSourceRow>(res.data).map((row) => {
+    const normalized = normalizeLudusSourceRef(row)
+    return { ...normalized, ...sanitizeSourceSyncPresentation(normalized) }
+  })
 }
 
-/** Register a new git source explicitly (does not dedupe). */
+/** Register a new git source. Pass `id` to avoid Ludus colliding same-URL different refs. */
 export async function createGitSource(
   apiKey: string,
   gitUrl: string,
   ref: string,
+  opts?: { id?: string },
 ): Promise<string> {
+  const resolvedRef = ludusSourceGitRef({ ref })
   const form = new FormData()
   form.append("type", "git")
   form.append("url", gitUrl.replace(/\/$/, ""))
-  form.append("ref", ref || "main")
+  form.append("ref", resolvedRef)
+  const id = toLudusSourceId(opts?.id || suggestedLudusSourceId(gitUrl, resolvedRef))
+  if (id) form.append("id", id)
 
   const created = await ludusJson<{ sourceID?: string; error?: string }>("/sources", apiKey, {
     method: "POST",
@@ -213,26 +238,95 @@ export async function createGitSource(
       `Failed to register source (HTTP ${created.status})`
     throw new Error(msg)
   }
+  // Clone runs as ludus; heal in case a prior root-touched tree was reused.
+  await repairLudusSourcesOwnershipAsRoot()
   return created.data.sourceID
 }
 
-/** Resolve an existing git source or register a new one. */
+/** Resolve an existing git source (url + ref) or register a new one. */
 export async function ensureGitSource(
   apiKey: string,
   gitUrl: string,
   ref: string,
 ): Promise<string> {
-  const target = normalizeGitUrl(gitUrl)
+  const target = normalizeGitSourceUrl(gitUrl)
+  const wantRef = ludusSourceGitRef({ ref })
   const listed = await ludusJson<unknown>("/sources", apiKey, { method: "GET" })
   if (listed.ok) {
     const rows = ludusRows<LudusSourceRow>(listed.data)
-    const hit = rows.find((s) => s.url && normalizeGitUrl(s.url) === target)
+    const hit = rows.find(
+      (s) =>
+        !!s.url &&
+        normalizeGitSourceUrl(s.url) === target &&
+        ludusSourceGitRef(s) === wantRef,
+    )
     if (hit) return hit.sourceID || hit.id || ""
   }
 
-  return createGitSource(apiKey, gitUrl, ref)
+  return createGitSource(apiKey, gitUrl, wantRef)
 }
 
+/** PATCH git source metadata (e.g. change branch/tag). */
+export async function updateGitSource(
+  apiKey: string,
+  sourceID: string,
+  patch: { ref?: string; url?: string },
+): Promise<void> {
+  const form = new FormData()
+  if (patch.ref != null && String(patch.ref).trim()) {
+    form.append("ref", ludusSourceGitRef({ ref: String(patch.ref) }))
+  }
+  if (patch.url != null && String(patch.url).trim()) {
+    form.append("url", String(patch.url).trim().replace(/\/$/, ""))
+  }
+  const res = await ludusJson<{ error?: string }>(
+    `/sources/${encodeURIComponent(sourceID)}`,
+    apiKey,
+    { method: "PATCH", body: form },
+  )
+  if (!res.ok) {
+    const msg = res.data?.error || `Failed to update source (HTTP ${res.status})`
+    throw new Error(msg)
+  }
+}
+
+/**
+ * Change a git source's tracked ref.
+ *
+ * Ludus often clones with `--single-branch` (fetch = only the original ref).
+ * PATCH + sync then fails: `pathspec '<newref>' did not match`. Delete without
+ * purge and re-register so Ludus clones the target ref cleanly.
+ */
+export async function changeGitSourceRef(
+  apiKey: string,
+  sourceID: string,
+  newRef: string,
+): Promise<{ sourceID: string; recreated: boolean; ref: string }> {
+  const wantRef = ludusSourceGitRef({ ref: newRef })
+  const sources = await listSources(apiKey)
+  const row = sources.find((s) => (s.sourceID || s.id) === sourceID)
+  if (!row?.url) {
+    throw new Error("Source not found or missing URL")
+  }
+  if (ludusSourceGitRef(row) === wantRef) {
+    return { sourceID, recreated: false, ref: wantRef }
+  }
+
+  await deleteSource(apiKey, sourceID, false)
+  const created = await createGitSource(apiKey, row.url, wantRef, {
+    id: suggestedLudusSourceId(row.url, wantRef),
+  })
+  try {
+    await syncSource(apiKey, created, { force: true })
+  } catch (err) {
+    // Registration succeeded; caller can retry Sync. Surface original error.
+    console.warn(
+      `[changeGitSourceRef] recreated ${created} but sync failed:`,
+      err instanceof Error ? err.message : err,
+    )
+  }
+  return { sourceID: created, recreated: true, ref: wantRef }
+}
 export async function deleteSource(
   apiKey: string,
   sourceID: string,
@@ -253,7 +347,7 @@ export async function deleteSource(
   }
 }
 
-export async function syncSource(
+async function syncSourceOnce(
   apiKey: string,
   sourceID: string,
   options?: { globalRoles?: boolean; force?: boolean; dryRun?: boolean },
@@ -268,12 +362,42 @@ export async function syncSource(
     },
   )
   if (!res.ok) {
-    const msg =
+    let msg =
       (res.data as { error?: string } | null)?.error ||
       `Source sync failed (HTTP ${res.status})`
+    if (/pathspec .+ did not match/i.test(msg)) {
+      msg = `${msg} — Ludus clone is single-branch; change ref via Sources (re-registers) or delete + register with the new branch.`
+    }
     throw new Error(msg)
   }
   return res.data
+}
+
+/**
+ * Refresh a git source working tree via Ludus API.
+ *
+ * Before sync (and again on git permission errors), LUX chowns
+ * `/opt/ludus/sources` to `ludus:ludus` over root SSH so a prior root-owned
+ * `.git/objects` tree cannot brick every user's Sync button.
+ */
+export async function syncSource(
+  apiKey: string,
+  sourceID: string,
+  options?: { globalRoles?: boolean; force?: boolean; dryRun?: boolean },
+): Promise<unknown> {
+  await repairLudusSourcesOwnershipAsRoot()
+  try {
+    return await syncSourceOnce(apiKey, sourceID, options)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (!isLudusSourceGitPermissionError(msg)) throw err
+    console.warn(
+      `[LUX] source sync permission error for ${sourceID}; repairing ownership and retrying once`,
+    )
+    const healed = await repairLudusSourcesOwnershipAsRoot()
+    if (!healed) throw err
+    return await syncSourceOnce(apiKey, sourceID, options)
+  }
 }
 
 export async function listSourceBlueprints(
@@ -415,7 +539,7 @@ async function normalizeInstallSelection(
   if (needsGit) {
     const src = await findRegisteredSourceRow(apiKey, sourceID)
     if (src?.url && gitUrlToGithubApiBase(src.url)) {
-      mapped = await enrichCollectionInstallNames(src.url, src.ref || "main", mapped)
+      mapped = await enrichCollectionInstallNames(src.url, ludusSourceGitRef(src), mapped)
     }
   }
 
@@ -434,21 +558,45 @@ function collectInstallWarnings(data: InstallResponse | null): string[] {
       warnings.push(`Role ${r.name ?? "?"}: ${r.error ?? "failed"}`)
     }
   }
-  return warnings
+  return rewriteSourceInstallWarnings(warnings)
+}
+
+export type SourceInstallOptions = {
+  force?: boolean
+  /**
+   * Skip blueprint ansible deps (Ludus `noDeps`).
+   * Default true when `force` — targeted Re-sync must not overwrite roles/collections
+   * that were not in the selection.
+   */
+  noDeps?: boolean
+  global?: boolean
 }
 
 async function installSourceSelection(
   apiKey: string,
   sourceID: string,
   selection: SourceInstallSelection,
+  options?: SourceInstallOptions,
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
+  const body: {
+    selection: SourceInstallSelection
+    force?: boolean
+    noDeps?: boolean
+    global?: boolean
+  } = { selection }
+  if (options?.force) body.force = true
+  // Re-sync (force) of a blueprint otherwise reinstalls its requirements.yml /
+  // local role closure — looks like "everything" got re-synced.
+  const noDeps = options?.noDeps ?? Boolean(options?.force)
+  if (noDeps) body.noDeps = true
+  if (options?.global) body.global = true
   const res = await ludusJson<InstallResponse>(
     `/sources/${encodeURIComponent(sourceID)}/install`,
     apiKey,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selection }),
+      body: JSON.stringify(body),
     },
   )
   if (!res.ok) {
@@ -458,7 +606,7 @@ async function installSourceSelection(
         ? String((res.data as { result?: string }).result)
         : null) ||
       `Source install failed (HTTP ${res.status})`
-    throw new Error(msg)
+    throw new Error(rewriteSourceInstallWarning(msg))
   }
   return { warnings: collectInstallWarnings(res.data), data: res.data }
 }
@@ -468,8 +616,9 @@ export async function installSourceBlueprints(
   apiKey: string,
   sourceID: string,
   blueprintIds: string[],
+  options?: SourceInstallOptions,
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
-  return installSourceSelection(apiKey, sourceID, { blueprints: blueprintIds })
+  return installSourceSelection(apiKey, sourceID, { blueprints: blueprintIds }, options)
 }
 
 /** Install selected templates from a registered Ludus source. */
@@ -477,8 +626,9 @@ export async function installSourceTemplates(
   apiKey: string,
   sourceID: string,
   templateNames: string[],
+  options?: SourceInstallOptions,
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
-  return installSourceSelection(apiKey, sourceID, { templates: templateNames })
+  return installSourceSelection(apiKey, sourceID, { templates: templateNames }, options)
 }
 
 /** Install arbitrary selection from a registered Ludus source. */
@@ -486,9 +636,10 @@ export async function installFromSource(
   apiKey: string,
   sourceID: string,
   selection: SourceInstallSelection,
+  options?: SourceInstallOptions,
 ): Promise<{ warnings: string[]; data: InstallResponse | null }> {
   const normalized = await normalizeInstallSelection(apiKey, sourceID, selection)
-  return installSourceSelection(apiKey, sourceID, normalized)
+  return installSourceSelection(apiKey, sourceID, normalized, options)
 }
 
 export function blueprintPublicId(sourceKey: string, blueprintName: string): string {
@@ -512,6 +663,65 @@ export async function resolveSourcePublicKey(apiKey: string, sourceID: string): 
   return sourceID
 }
 
+export function sourceGitUrlById(sources: LudusSourceRow[], sourceId: string): string | null {
+  const want = sourceId.trim().toLowerCase()
+  if (!want) return null
+  const hit = sources.find((row) => (row.sourceID || row.id || "").trim().toLowerCase() === want)
+  return hit?.url?.trim() || null
+}
+
+export function selectInstalledBlueprintId(
+  rows: Array<{ id?: string; blueprintID?: string }>,
+  shortName: string,
+  sourceIDs: string[] = [],
+  remote?: {
+    requestedSourceId: string
+    requestedUrl: string | null
+    urlBySourceId: ReadonlyMap<string, string>
+  },
+): string | null {
+  const sources = sourceIDs.map((s) => s.trim()).filter(Boolean)
+  for (const row of rows) {
+    const id = (row.id || row.blueprintID || "").trim()
+    if (!id) continue
+    if (sources.length === 0) {
+      if (id === shortName || id.endsWith(`/${shortName}`)) return id
+      continue
+    }
+    const matches = sources.some((sourceID) =>
+      installedBlueprintMatchesSource(
+        id,
+        shortName,
+        sourceID,
+        remote
+          ? {
+              installedUrl: remote.urlBySourceId.get(blueprintSourcePrefix(id).toLowerCase()) ?? null,
+              requestedUrl: remote.requestedUrl,
+              requestedSourceId: remote.requestedSourceId,
+            }
+          : undefined,
+      ),
+    )
+    if (matches) return id
+  }
+  return null
+}
+
+function publicKeyFromListedSources(sources: LudusSourceRow[], sourceID: string): string {
+  const want = sourceID.trim().toLowerCase()
+  const hit = sources.find((row) => (row.sourceID || row.id || "").trim().toLowerCase() === want)
+  if (hit?.name?.trim()) return hit.name.trim()
+  if (hit?.url?.trim()) {
+    try {
+      const parts = new URL(hit.url.replace(/\.git$/, "")).pathname.split("/").filter(Boolean)
+      if (parts.length > 0) return parts[parts.length - 1]!
+    } catch {
+      /* ignore */
+    }
+  }
+  return sourceID
+}
+
 export async function findInstalledBlueprintId(
   apiKey: string,
   shortName: string,
@@ -520,19 +730,33 @@ export async function findInstalledBlueprintId(
   const res = await ludusJson<unknown>("/blueprints", apiKey, { method: "GET" })
   if (!res.ok) return null
   const rows = ludusRows<{ id?: string; blueprintID?: string }>(res.data)
-  const candidates = new Set<string>([shortName])
-  if (sourceID) {
-    const publicKey = await resolveSourcePublicKey(apiKey, sourceID)
-    candidates.add(`${publicKey}/${shortName}`)
-    candidates.add(`${sourceID}/${shortName}`)
+  const sourceIDs: string[] = []
+  let remote:
+    | {
+        requestedSourceId: string
+        requestedUrl: string | null
+        urlBySourceId: ReadonlyMap<string, string>
+      }
+    | undefined
+  if (sourceID?.trim()) {
+    const requestedId = sourceID.trim()
+    sourceIDs.push(requestedId)
+    const listed = await listSources(apiKey)
+    const publicKey = publicKeyFromListedSources(listed, requestedId)
+    if (publicKey && publicKey !== requestedId) sourceIDs.push(publicKey)
+    const urlBySourceId = new Map<string, string>()
+    for (const row of listed) {
+      const id = (row.sourceID || row.id || "").trim().toLowerCase()
+      const url = row.url?.trim()
+      if (id && url) urlBySourceId.set(id, url)
+    }
+    remote = {
+      requestedSourceId: requestedId,
+      requestedUrl: sourceGitUrlById(listed, requestedId),
+      urlBySourceId,
+    }
   }
-  for (const row of rows) {
-    const id = (row.id || row.blueprintID || "").trim()
-    if (!id) continue
-    if (candidates.has(id)) return id
-    if (id.endsWith(`/${shortName}`)) return id
-  }
-  return null
+  return selectInstalledBlueprintId(rows, shortName, sourceIDs, remote)
 }
 
 export function gitUrlForBadsectorlabs(): string {

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
+import { useQuery } from "@tanstack/react-query"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -44,7 +45,7 @@ import { useRange } from "@/lib/range-context"
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, injectNetworkRules, extractNetworkSection } from "@/lib/network-rules"
+import { type NetworkRule, injectNetworkRules, extractNetworkSection, extractNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import {
   ensureUserDefinedRolesTag,
@@ -56,23 +57,44 @@ import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { GoadAnsibleDependenciesPanel } from "@/components/goad/goad-ansible-dependencies-panel"
 import {
+  combineWizardNetworkRules,
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
 } from "@/lib/goad-preview-config"
+import { buildGoadWizardInstallArgs } from "@/lib/goad-wizard-args"
 import {
   extensionAnsibleDepsReady,
   extensionMissingAnsibleRoles,
   parseAnsibleInstalledSets,
 } from "@/lib/goad-dependency-service"
+import {
+  type ResolveRouterTemplateOptions,
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+  withRouterTemplateRequired,
+} from "@/lib/ludus-router-template"
+import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
 /** Returns { present, missing } template lists for a given set of required names */
-function checkTemplates(required: string[], builtNames: Set<string>, allNames: Set<string>) {
+function checkTemplates(
+  required: string[],
+  builtNames: Set<string>,
+  allNames: Set<string>,
+  routerOpts?: Pick<ResolveRouterTemplateOptions, "ludusVersion" | "configYaml">,
+) {
+  const req = withRouterTemplateRequired(required, {
+    ludusVersion: routerOpts?.ludusVersion,
+    configYaml: routerOpts?.configYaml,
+    registeredTemplates: allNames,
+  })
   const present: string[] = []
   const missingUnbuilt: string[] = [] // installed but not yet built
   const missingAbsent: string[] = []  // not installed at all
-  for (const t of required) {
+  for (const t of req) {
     if (builtNames.has(t)) present.push(t)
     else if (allNames.has(t)) missingUnbuilt.push(t)
     else missingAbsent.push(t)
@@ -85,16 +107,23 @@ function TemplateChips({
   required,
   builtNames,
   allNames,
+  routerOpts,
 }: {
   required: string[]
   builtNames: Set<string>
   allNames: Set<string>
+  routerOpts?: Pick<ResolveRouterTemplateOptions, "ludusVersion" | "configYaml">
 }) {
-  if (required.length === 0) return null
+  const req = withRouterTemplateRequired(required, {
+    ludusVersion: routerOpts?.ludusVersion,
+    configYaml: routerOpts?.configYaml,
+    registeredTemplates: allNames,
+  })
+  if (req.length === 0) return null
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex flex-wrap gap-1 mt-1.5">
-        {required.map((t) => {
+        {req.map((t) => {
           const built = builtNames.has(t)
           const installed = allNames.has(t)
 
@@ -151,10 +180,6 @@ function TemplateChips({
 
 const STEPS = ["Select Lab Type", "Select Extensions", "Select Range", "Network Rules", "Review & Deploy"]
 
-function shellQuote(arg: string): string {
-  return `'${arg.replace(/'/g, "'\\''")}'`
-}
-
 /** True when GOAD instance.json extensions match wizard selection (order-insensitive). */
 function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: string[]): boolean {
   if (!instanceExtensions || instanceExtensions.length !== wizard.length) return false
@@ -163,57 +188,19 @@ function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: st
   return a.every((v, i) => v === b[i])
 }
 
-/**
- * Single stdin `--repl` session: after `set_extensions` + workspace (`create_empty` or `use`),
- * with extensions we run `provide` → `prepare_jumpbox` → `provision_lab` → one
- * `provision_extension` per ext (one Ludus deploy). We avoid REPL `install`, which
- * would call `install_extension` per ext and re-run `ludus range deploy` each time.
- *
- * Re-use path: same decomposed tail only if instance.json extensions already match
- * the wizard (otherwise `install` so GOAD can `enable_extension` + deploy for new ext).
- */
-function ludusWizardInstallArgs(
-  selectedLab: string,
-  exts: string[],
-  mode:
-    | { kind: "fresh" }
-    | { kind: "existing"; instanceId: string; useDecomposedExtensionProvisioning: boolean },
-): string {
-  if (exts.length === 0) {
-    return mode.kind === "existing"
-      ? `--repl "use ${shellQuote(mode.instanceId)};update_instance_files;install"`
-      : `-l ${shellQuote(selectedLab)} -p ludus -m local -t install`
-  }
-  const extList = exts.join(" ")
-  const postWorkspaceInstall = [
-    "provide",
-    "prepare_jumpbox",
-    "provision_lab",
-    ...exts.map((e) => `provision_extension ${e}`),
-  ].join(";")
-
-  if (mode.kind === "existing") {
-    // instance.json is synced via refresh-workspace API before GOAD runs; REPL then
-    // reloads the instance and update_instance_files regenerates config.yml + inventories.
-    const head = `unload;use ${mode.instanceId};set_extensions ${extList};update_instance_files`
-    const tail = mode.useDecomposedExtensionProvisioning ? postWorkspaceInstall : "install"
-    return `--repl "${head};${tail}"`
-  }
-
-  const setup = [
-    "unload",
-    `set_lab ${selectedLab}`,
-    "set_provider ludus",
-    "set_provisioning_method local",
-    `set_extensions ${extList}`,
-    "create_empty",
-  ].join(";")
-  return `--repl "${setup};${postWorkspaceInstall}"`
-}
-
 export function NewGoadInstancePageClient() {
   const router = useRouter()
   const { toast } = useToast()
+  const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
   const { impersonation, impersonationHeaders } = useImpersonation()
   const shell = useShellSession()
@@ -225,8 +212,17 @@ export function NewGoadInstancePageClient() {
   const [dedicatedRangeId, setDedicatedRangeId] = useState<string | null>(null)
   const [currentUsername, setCurrentUsername] = useState<string>("")
 
-  // Step 3: Network Rules
+  // Step 3: Network Rules. Extension and existing-range rules are filled in
+  // when this step loads; rules the user adds stay in the same list.
   const [networkRules, setNetworkRules] = useState<NetworkRule[]>([])
+  const [networkRulesLoading, setNetworkRulesLoading] = useState(false)
+  const [wizardVlans, setWizardVlans] = useState<number[]>([])
+  const networkRulesRef = useRef(networkRules)
+  networkRulesRef.current = networkRules
+  const importedKeyRef = useRef("")
+  const importedNamesRef = useRef<Set<string>>(new Set())
+  const previewYamlRef = useRef("")
+  const existingYamlRef = useRef<string | null>(null)
 
   // Optional Ludus deploy tags — set from Review & Deploy (advanced panel); forwarded to `ludus range deploy --tags`
   const [selectedLudusDeployTags, setSelectedLudusDeployTags] = useState<string[]>([])
@@ -244,6 +240,10 @@ export function NewGoadInstancePageClient() {
   const configYamlDirty = reviewConfigYaml !== generatedConfigYaml
   configYamlDirtyRef.current = configYamlDirty
   const yamlValidation = useMemo(() => validateGoadConfigYaml(reviewConfigYaml), [reviewConfigYaml])
+  const reviewRuleCount = useMemo(
+    () => extractNetworkRules(reviewConfigYaml).length,
+    [reviewConfigYaml],
+  )
 
   // Installed Ansible roles/collections (extension step gate + review deps)
   const [ansibleInstalled, setAnsibleInstalled] = useState<ReturnType<
@@ -287,6 +287,18 @@ export function NewGoadInstancePageClient() {
   const [templates, setTemplates] = useState<TemplateObject[]>([])
   const builtNames = new Set(templates.filter((t) => t.built).map((t) => t.name))
   const allNames   = new Set(templates.map((t) => t.name))
+  const routerGateOpts = useMemo(
+    () => ({
+      ludusVersion,
+      configYaml: reviewConfigYaml,
+    }),
+    [ludusVersion, reviewConfigYaml],
+  )
+  const routerTemplateReady = isRouterTemplateReadyForDeploy({
+    builtNames,
+    allNames,
+    ...routerGateOpts,
+  })
 
   // Fetch the current effective username for range naming.
   // When impersonating, immediately use the impersonated user's ID rather than
@@ -447,9 +459,22 @@ export function NewGoadInstancePageClient() {
       .finally(() => setAnsibleInstalledLoading(false))
   }, [step])
 
+  const applyPreviewYaml = useCallback((preview: string, rules: NetworkRule[], existingRangeYaml: string | null) => {
+    previewYamlRef.current = preview
+    existingYamlRef.current = existingRangeYaml
+    const merged = mergeGoadPreviewWithNetworkRules(preview, rules, existingRangeYaml, {
+      rulesAreComplete: importedKeyRef.current !== "",
+    })
+    setGeneratedConfigYaml(merged)
+    if (!configYamlDirtyRef.current) {
+      setReviewConfigYaml(merged)
+    }
+  }, [])
+
   const loadConfigPreview = useCallback(async () => {
     if (!selectedLab) return
     setConfigPreviewLoading(true)
+    setNetworkRulesLoading(true)
     setConfigPreviewError(null)
     try {
       const res = await fetch("/api/goad/preview-config", {
@@ -463,22 +488,43 @@ export function NewGoadInstancePageClient() {
       })
       const data = (await res.json()) as { yaml?: string; error?: string }
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-      const merged = mergeGoadPreviewWithNetworkRules(data.yaml ?? "", networkRules)
-      setGeneratedConfigYaml(merged)
-      if (!configYamlDirtyRef.current) {
-        setReviewConfigYaml(merged)
+      let existingRangeYaml: string | null = null
+      if (rangeMode === "existing" && selectedExistingRange) {
+        const cfg = await ludusApi.getRangeConfig(selectedExistingRange)
+        if (cfg.error) throw new Error(cfg.error)
+        existingRangeYaml = cfg.data?.result ?? ""
       }
+      const preview = data.yaml ?? ""
+      const importKey = `${selectedLab}|${Array.from(selectedExtensions).sort().join(",")}|${rangeMode}|${selectedExistingRange}`
+      let rules = networkRulesRef.current
+      if (importedKeyRef.current !== importKey) {
+        const importedBefore = importedNamesRef.current
+        const userKept = rules.filter((rule) => !rule.name.trim() || !importedBefore.has(rule.name.trim()))
+        const imported = combineWizardNetworkRules(existingRangeYaml, preview, [])
+        rules = combineWizardNetworkRules(existingRangeYaml, preview, userKept)
+        importedNamesRef.current = new Set(imported.map((rule) => rule.name.trim()).filter(Boolean))
+        importedKeyRef.current = importKey
+        setNetworkRules(rules)
+      }
+      setWizardVlans(extractVlansFromConfig(`${existingRangeYaml ?? ""}\n${preview}`))
+      applyPreviewYaml(preview, rules, existingRangeYaml)
     } catch (err) {
       setConfigPreviewError(err instanceof Error ? err.message : String(err))
     } finally {
       setConfigPreviewLoading(false)
+      setNetworkRulesLoading(false)
     }
-  }, [selectedLab, selectedExtensions, networkRules])
+  }, [selectedLab, selectedExtensions, rangeMode, selectedExistingRange, applyPreviewYaml])
 
   useEffect(() => {
-    if (step !== 4 || !selectedLab) return
+    if ((step !== 3 && step !== 4) || !selectedLab) return
     void loadConfigPreview()
-  }, [step, selectedLab, selectedExtensions, networkRules, loadConfigPreview])
+  }, [step, selectedLab, loadConfigPreview])
+
+  useEffect(() => {
+    if (!previewYamlRef.current) return
+    applyPreviewYaml(previewYamlRef.current, networkRules, existingYamlRef.current)
+  }, [networkRules, applyPreviewYaml])
 
   // Preview of the auto-generated Ludus range ID for the "Create New Range" option.
   // e.g. "user1-GOAD-Mini-A1B2C3" — 6-char UID gives ~2 billion combinations.
@@ -571,6 +617,18 @@ export function NewGoadInstancePageClient() {
       })
       return
     }
+    if (!routerTemplateReady) {
+      const required = requiredRouterTemplateName({
+        ...routerGateOpts,
+        registeredTemplates: allNames,
+      })
+      toast({
+        variant: "destructive",
+        title: "Router template required",
+        description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+      })
+      return
+    }
 
     const deployConfigYaml = reviewConfigYaml.trim()
     const useWizardYaml = deployConfigYaml.length > 0
@@ -648,7 +706,8 @@ export function NewGoadInstancePageClient() {
       return
     }
 
-    // When wizard YAML is canonical, network is injected via LUX_WIZARD_CONFIG_YML at deploy.
+    // Review YAML already combines the existing range rules with extension rules.
+    // It is copied onto the Ludus config at `range config set`, before deploy.
     if (networkRules.length > 0 && rangeId && !useWizardYaml) {
       try {
         await ludusApi.setRangeConfig(injectNetworkRules("", networkRules), rangeId)
@@ -757,7 +816,7 @@ export function NewGoadInstancePageClient() {
       // 2. Run GOAD: one REPL session — decomposed `provide` + `provision_lab` +
       // `provision_extension` per ext when instance extensions match wizard (else `install`).
       const useDecomposed = extensionSetsEqual(existingInstance.extensions, exts)
-      const args = ludusWizardInstallArgs(selectedLab, exts, {
+      const args = buildGoadWizardInstallArgs(selectedLab, exts, {
         kind: "existing",
         instanceId: existingId,
         useDecomposedExtensionProvisioning: useDecomposed,
@@ -868,7 +927,7 @@ export function NewGoadInstancePageClient() {
         }
       }
 
-      const args = ludusWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
+      const args = buildGoadWizardInstallArgs(selectedLab, exts, { kind: "fresh" })
       goadChainDebug("goad_install_issued", {
         path: "fresh-install",
         rangeId: rangeId ?? null,
@@ -1076,8 +1135,8 @@ export function NewGoadInstancePageClient() {
             <div className="grid gap-2">
               {catalog.labs.map((lab) => {
                 const ludusOk  = lab.ludusSupported !== false  // treat missing field as true (older catalog)
-                const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames)
-                const tplOk    = tpl.ready || (lab.requiredTemplates ?? []).length === 0
+                const tpl      = checkTemplates(lab.requiredTemplates ?? [], builtNames, allNames, routerGateOpts)
+                const tplOk    = tpl.ready
                 const canSelect = ludusOk && tplOk
                 const isSelected = selectedLab === lab.name
                 return (
@@ -1118,7 +1177,7 @@ export function NewGoadInstancePageClient() {
                               <PackageX className="h-2.5 w-2.5" /> Missing templates
                             </Badge>
                           )}
-                          {canSelect && (lab.requiredTemplates ?? []).length > 0 && (
+                          {canSelect && (
                             <Badge variant="success" className="text-xs gap-1">
                               <PackageCheck className="h-2.5 w-2.5" /> Ready
                             </Badge>
@@ -1128,13 +1187,12 @@ export function NewGoadInstancePageClient() {
                           <p className="text-xs text-muted-foreground mt-1 line-clamp-1">{lab.description}</p>
                         )}
                         {!ludusOk ? (
-                          <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">
-                            No <code>providers/ludus/</code> directory — this lab cannot be deployed with Ludus
+                          <p className="text-xs text-muted-foreground mt-1.5">
+                            No Ludus provider. This lab cannot be deployed here.
                           </p>
-                        ) : (lab.requiredTemplates ?? []).length > 0
-                          ? <TemplateChips required={lab.requiredTemplates} builtNames={builtNames} allNames={allNames} />
-                          : <p className="text-[10px] text-muted-foreground/50 mt-1.5 italic">No template requirements detected — hit Refresh if this seems wrong</p>
-                        }
+                        ) : (
+                          <TemplateChips required={lab.requiredTemplates ?? []} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
+                        )}
                       </div>
                       {isSelected && (
                         <Check className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
@@ -1178,11 +1236,11 @@ export function NewGoadInstancePageClient() {
           ) : (
             <div className="grid gap-2">
               {compatExtensions.map((ext) => {
-                const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames)
+                const tpl = checkTemplates(ext.requiredTemplates ?? [], builtNames, allNames, routerGateOpts)
                 const ansibleReady = extensionAnsibleReady(ext)
                 const missingAnsible = extensionMissingAnsible(ext)
                 const canEnable =
-                  (tpl.ready || (ext.requiredTemplates ?? []).length === 0) &&
+                  tpl.ready &&
                   ansibleReady &&
                   !ansibleInstalledLoading
                 const isSelected = selectedExtensions.has(ext.name)
@@ -1233,7 +1291,7 @@ export function NewGoadInstancePageClient() {
                         <p className="text-xs text-muted-foreground/70 mt-0.5 italic">{ext.impact}</p>
                       )}
                       {(ext.requiredTemplates ?? []).length > 0 && (
-                        <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} />
+                        <TemplateChips required={ext.requiredTemplates} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
                       )}
                       {missingAnsible.length > 0 && (
                         <p className="text-[10px] text-muted-foreground mt-1 font-mono">
@@ -1359,12 +1417,26 @@ export function NewGoadInstancePageClient() {
                 <span className="text-xs text-muted-foreground font-normal">(optional)</span>
               </CardTitle>
               <p className="text-xs text-muted-foreground mt-1">
-                Define custom iptables rules for the GOAD range router. Leave empty to use Ludus
-                defaults (all inter-VLAN and external traffic accepted).
+                Rules from the selected extensions and from the existing range are listed here, and the generated configuration shows that same list. Clearing every row writes an empty list and keeps the existing range&apos;s other network settings, including inter_vlan_default. An empty list does not accept all inter-VLAN traffic.
               </p>
             </CardHeader>
             <CardContent>
-              <NetworkRulesEditor rules={networkRules} onChange={setNetworkRules} availableVlans={[]} />
+              {networkRulesLoading && networkRules.length === 0 ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-6 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading firewall rules…
+                </div>
+              ) : (
+                <NetworkRulesEditor
+                  rules={networkRules}
+                  onChange={setNetworkRules}
+                  availableVlans={wizardVlans}
+                  emptyMessage="No firewall rules in this list. An empty list keeps the existing range's other network settings, including inter_vlan_default, and does not accept all inter-VLAN traffic."
+                />
+              )}
+              {configPreviewError && (
+                <p className="text-[10px] text-status-error mt-2">{configPreviewError}</p>
+              )}
             </CardContent>
           </Card>
           <div className="flex justify-between">
@@ -1443,9 +1515,9 @@ export function NewGoadInstancePageClient() {
                 <div className="flex items-center gap-1.5">
                   <Shield className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="text-sm">
-                    {networkRules.length > 0
-                      ? `${networkRules.length} custom rule${networkRules.length !== 1 ? "s" : ""}`
-                      : "Ludus defaults"}
+                    {reviewRuleCount > 0
+                      ? `${reviewRuleCount} rule${reviewRuleCount !== 1 ? "s" : ""}`
+                      : "None"}
                   </span>
                 </div>
               </div>
@@ -1475,8 +1547,8 @@ export function NewGoadInstancePageClient() {
                     <FileCode2 className="h-3.5 w-3.5 text-primary" />
                     Generated Configuration
                   </CardTitle>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Ludus <code className="text-primary">provider/config.yml</code> preview — edit before deploy if needed
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Edit the generated config before deploy if you need to.
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -1551,15 +1623,17 @@ export function NewGoadInstancePageClient() {
 
           {/* Template readiness summary */}
           {(() => {
-            const allRequired = [
-              ...(labInfo?.requiredTemplates ?? []),
-              ...Array.from(selectedExtensions).flatMap(
-                (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
-              ),
-            ]
+            const allRequired = withRouterTemplateRequired(
+              [
+                ...(labInfo?.requiredTemplates ?? []),
+                ...Array.from(selectedExtensions).flatMap(
+                  (en) => catalog?.extensions.find((e) => e.name === en)?.requiredTemplates ?? []
+                ),
+              ],
+              { ...routerGateOpts, registeredTemplates: allNames },
+            )
             const unique = [...new Set(allRequired)]
-            if (unique.length === 0) return null
-            const summary = checkTemplates(unique, builtNames, allNames)
+            const summary = checkTemplates(unique, builtNames, allNames, routerGateOpts)
             return (
               <Card className={cn(
                 "border",
@@ -1579,7 +1653,7 @@ export function NewGoadInstancePageClient() {
                       Manage Templates →
                     </Link>
                   </div>
-                  <TemplateChips required={unique} builtNames={builtNames} allNames={allNames} />
+                  <TemplateChips required={unique} builtNames={builtNames} allNames={allNames} routerOpts={routerGateOpts} />
                 </CardContent>
               </Card>
             )
@@ -1630,7 +1704,8 @@ export function NewGoadInstancePageClient() {
                 !!configPreviewError ||
                 !yamlValidation.valid ||
                 !reviewConfigYaml.trim() ||
-                !ansibleDepsReady
+                !ansibleDepsReady ||
+                !routerTemplateReady
               }
               className="min-w-36"
             >

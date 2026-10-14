@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isHttp404Error } from "@/lib/ludus-source-client"
+import { sourceCatalogJsonResponse } from "@/lib/source-catalog-route"
 import { resolveSourceRoles } from "@/lib/source-catalog-resolver"
+import { catalogReadApiKey } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
@@ -19,8 +21,8 @@ export async function GET(
   }
 
   try {
-    const { items, catalogSource } = await resolveSourceRoles(apiKey, sourceId)
-    return NextResponse.json({ roles: items, catalogSource })
+    const result = await resolveSourceRoles(catalogReadApiKey(session, apiKey, sourceId), sourceId)
+    return sourceCatalogJsonResponse(sourceId, "role", "roles", result)
   } catch (err) {
     if (isHttp404Error(err)) {
       return NextResponse.json(

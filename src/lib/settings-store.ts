@@ -21,7 +21,7 @@ import {
   encryptSettingsValueAtRest,
   isSettingsValueAtRestEncrypted,
 } from "./settings-value-at-rest"
-import { goadPathFromEnv, ludusInstallPathFromEnv } from "./install-path-env"
+import { goadPathFromEnv, ludusInstallPathFromEnv, ludushoundPathFromEnv } from "./install-path-env"
 
 export interface RuntimeSettings {
   ludusUrl: string
@@ -29,10 +29,14 @@ export interface RuntimeSettings {
   sshHost: string
   sshPort: number
   goadPath: string
+  /** LudusHound install root on the Ludus host (cloned repo). */
+  ludushoundPath: string
   /** Ludus install root on the Ludus host (ranges, user ansible collections). */
   ludusInstallPath: string
   /** Whether the GOAD integration is shown in the UI. Defaults to true. */
   goadEnabled: boolean
+  /** Whether the LudusHound integration is shown in the UI. Defaults to true. */
+  ludushoundEnabled: boolean
   /**
    * Pass Ludus `--verbose-ansible` / API `verbose` on range deploy.
    * Default true. Stock Ludus ≤2.2.3 may ignore this and treat `force` as verbose.
@@ -44,12 +48,12 @@ export interface RuntimeSettings {
   blueprintOperatorApiKey: string
   /** Ludus userID of the admin who installed global source blueprints. */
   blueprintOperatorUserId: string
-  /** Proxmox/root SSH user — used for VM console (SPICE) access. Defaults to "root". */
+  /** Host SSH user (PROXMOX_SSH_USER) for pvesh (SPICE) and other host writes. Defaults to "root". */
   proxmoxSshUser: string
-  /** Proxmox/root SSH password — used for VM console (SPICE) access. */
+  /** Password for PROXMOX_SSH_USER. Used for pvesh (SPICE) and other host writes. */
   proxmoxSshPassword: string
   /**
-   * Optional path to root SSH private key inside the container (e.g. /app/ssh/id_rsa).
+   * Optional path to the PROXMOX_SSH_USER private key inside the container (e.g. /app/ssh/id_rsa).
    * When set, tried before PROXMOX_SSH_KEY_PATH env — survives Next/env oddities and is saved in SQLite.
    */
   proxmoxSshKeyPath: string
@@ -81,8 +85,10 @@ function defaults(): RuntimeSettings {
     sshHost: process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || "",
     sshPort: parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10),
     goadPath: goadPathFromEnv(),
+    ludushoundPath: ludushoundPathFromEnv(),
     ludusInstallPath: ludusInstallPathFromEnv(),
     goadEnabled: process.env.ENABLE_GOAD !== "false",
+    ludushoundEnabled: process.env.ENABLE_LUDUSHOUND !== "false",
     ludusAnsibleVerbose: process.env.LUDUS_ANSIBLE_VERBOSE !== "false",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
@@ -103,8 +109,10 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "sshHost",
   "sshPort",
   "goadPath",
+  "ludushoundPath",
   "ludusInstallPath",
   "goadEnabled",
+  "ludushoundEnabled",
   "ludusAnsibleVerbose",
   "rootApiKey",
   "blueprintOperatorApiKey",
@@ -152,7 +160,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled" || k === "ludusAnsibleVerbose") {
+      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)
@@ -219,4 +227,37 @@ export function getSettings(): RuntimeSettings {
 export function updateSettings(patch: Partial<RuntimeSettings>): RuntimeSettings {
   saveOverridesToDb(patch)
   return getSettings()
+}
+
+const LUX_HOST_UPDATE_KEY_SETTING = "luxHostUpdateKey"
+
+/** HMAC key for lux-host self-update. Empty when Settings has not installed the helper. */
+export function getLuxHostUpdateKey(): string {
+  try {
+    const db = getDb()
+    const row = db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(LUX_HOST_UPDATE_KEY_SETTING) as { value: string } | undefined
+    const stored = row?.value ?? ""
+    if (!stored || !isSettingsValueAtRestEncrypted(stored)) return ""
+    const key = decryptSettingsValueAtRest(stored, appSecretForSettingsAtRest()).trim()
+    return /^[0-9a-f]{64}$/.test(key) ? key : ""
+  } catch {
+    return ""
+  }
+}
+
+export function setLuxHostUpdateKey(key: string): void {
+  const trimmed = key.trim()
+  if (!/^[0-9a-f]{64}$/.test(trimmed)) {
+    throw new Error("lux-host update key is invalid")
+  }
+  const db = getDb()
+  db.prepare(
+    "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  ).run(
+    LUX_HOST_UPDATE_KEY_SETTING,
+    encryptSettingsValueAtRest(trimmed, appSecretForSettingsAtRest()),
+    Date.now(),
+  )
 }

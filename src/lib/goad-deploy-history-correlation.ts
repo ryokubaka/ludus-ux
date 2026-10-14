@@ -1,4 +1,5 @@
 import type { LogHistoryEntry } from "@/lib/types"
+import { parseLuxInstallExtension } from "@/lib/lux-goad-args-meta"
 
 /** GOAD task row shape used for Ludus deploy log correlation (dashboard, logs page, instance history). */
 export interface GoadTaskForCorrelation {
@@ -42,6 +43,7 @@ export function taskMatchesIntegrationRepl(command: string): boolean {
  * Falls back to `"Running"` when we can't recognise the REPL shape.
  */
 export function goadTaskShortKind(command: string): string {
+  if (parseLuxInstallExtension(command)) return "Install extension"
   if (/;\s*provide\b[\s\S]*;\s*provision_lab\b/.test(command)) return "Install"
   if (/;\s*install\b/.test(command)) return "Install"
   const m = command.match(
@@ -72,6 +74,10 @@ export function goadTaskShortKind(command: string): string {
  * Mirrors `goadTaskShortKind` but is intended for prominent row titles.
  */
 export function goadHistoryTitle(command: string): string {
+  // LUX Install Extension (provide / provision split) — marker on stored args.
+  const luxExt = parseLuxInstallExtension(command)
+  if (luxExt) return `Install extension: ${luxExt}`
+
   const installNames: string[] = []
   const installRe = /install_extension\s+([^\s;"]+)/g
   let im: RegExpExecArray | null
@@ -276,6 +282,11 @@ function absorbNetworkFollowupDeploys(entries: CorrelatedHistoryEntry[]): Correl
  * Find the GOAD task that best correlates with a single Ludus deploy log entry.
  * `tasks` should already be filtered to the workspace instance.
  */
+/**
+ * Pick the GOAD task that best matches a Ludus deploy.
+ * Prefer **closest start times** over max overlap — a stale "Running" deploy
+ * with `end` open (treated as now) otherwise steals every live GOAD task.
+ */
 export function findCorrelatedGoadTask(
   deploy: LogHistoryEntry,
   tasks: GoadTaskForCorrelation[],
@@ -284,7 +295,7 @@ export function findCorrelatedGoadTask(
   const dEnd = new Date(deploy.end).getTime() || Date.now()
 
   let bestOverlapTask: GoadTaskForCorrelation | undefined
-  let bestOverlap = 0
+  let bestOverlapStartDist = Infinity
   let bestProxTask: GoadTaskForCorrelation | undefined
   let bestProxDist = Infinity
 
@@ -293,17 +304,15 @@ export function findCorrelatedGoadTask(
     const overlapStart = Math.max(dStart, task.startedAt)
     const overlapEnd = Math.min(dEnd, tEnd)
     const overlap = Math.max(0, overlapEnd - overlapStart)
-    if (overlap > bestOverlap) {
-      bestOverlap = overlap
+    const startDist = Math.abs(dStart - task.startedAt)
+    if (overlap > 0 && startDist < bestOverlapStartDist) {
+      bestOverlapStartDist = startDist
       bestOverlapTask = task
     }
     if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
       // Network-tag follow-up deploys never ran GOAD — do not steal the install task via proximity.
       if (isNetworkOnlyTagDeploy(deploy)) continue
-      const dist = Math.min(
-        Math.abs(dStart - task.startedAt),
-        Math.abs(dEnd - task.startedAt),
-      )
+      const dist = Math.min(startDist, Math.abs(dEnd - task.startedAt))
       if (dist < PROXIMITY_LINK_MS && dist < bestProxDist) {
         bestProxDist = dist
         bestProxTask = task
@@ -311,7 +320,7 @@ export function findCorrelatedGoadTask(
     }
   }
 
-  return bestOverlap > 0 ? bestOverlapTask : bestProxTask
+  return bestOverlapTask ?? bestProxTask
 }
 
 export function correlateHistoryEntries(
@@ -321,22 +330,32 @@ export function correlateHistoryEntries(
   const usedTaskIds = new Set<string>()
   const correlated: CorrelatedHistoryEntry[] = []
 
-  // Ludus /range/logs/history is often newest-first. Process oldest deploy first so
-  // the primary GOAD-driven full deploy claims the GOAD task by overlap before a
-  // later network-tag row can match the same task via zero-overlap proximity.
-  const deploysChrono = [...deployHistory].sort((a, b) => {
+  // Newest full deploy first: a stuck older "Running" row (open end → now) must
+  // not claim the current GOAD provide/install task via huge overlap. Network-tag
+  // rows stay unassigned here and fold in via absorbNetworkFollowupDeploys.
+  const deploysClaimOrder = [...deployHistory].sort((a, b) => {
     const ta = new Date(a.start).getTime()
     const tb = new Date(b.start).getTime()
-    if (ta !== tb) return ta - tb
-    return (a.id || "").localeCompare(b.id || "")
+    if (ta !== tb) return tb - ta
+    return (b.id || "").localeCompare(a.id || "")
   })
 
-  for (const deploy of deploysChrono) {
+  for (const deploy of deploysClaimOrder) {
     const dStart = new Date(deploy.start).getTime()
     const dEnd = new Date(deploy.end).getTime() || Date.now()
 
+    // Leave network-only tag deploys for absorbNetworkFollowupDeploys.
+    if (isNetworkOnlyTagDeploy(deploy)) {
+      correlated.push({
+        deployEntry: deploy,
+        sortTime: dStart,
+        kind: "ludus_only",
+      })
+      continue
+    }
+
     let bestOverlapTask: GoadTaskForCorrelation | undefined
-    let bestOverlap = 0
+    let bestOverlapStartDist = Infinity
     let bestProxTask: GoadTaskForCorrelation | undefined
     let bestProxDist = Infinity
 
@@ -346,16 +365,13 @@ export function correlateHistoryEntries(
       const overlapStart = Math.max(dStart, task.startedAt)
       const overlapEnd = Math.min(dEnd, tEnd)
       const overlap = Math.max(0, overlapEnd - overlapStart)
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap
+      const startDist = Math.abs(dStart - task.startedAt)
+      if (overlap > 0 && startDist < bestOverlapStartDist) {
+        bestOverlapStartDist = startDist
         bestOverlapTask = task
       }
       if (overlap === 0 && taskMatchesIntegrationRepl(task.command)) {
-        if (isNetworkOnlyTagDeploy(deploy)) continue
-        const dist = Math.min(
-          Math.abs(dStart - task.startedAt),
-          Math.abs(dEnd - task.startedAt),
-        )
+        const dist = Math.min(startDist, Math.abs(dEnd - task.startedAt))
         if (dist < PROXIMITY_LINK_MS && dist < bestProxDist) {
           bestProxDist = dist
           bestProxTask = task
@@ -363,7 +379,7 @@ export function correlateHistoryEntries(
       }
     }
 
-    const bestTask = bestOverlap > 0 ? bestOverlapTask : bestProxTask
+    const bestTask = bestOverlapTask ?? bestProxTask
     if (bestTask) usedTaskIds.add(bestTask.id)
 
     correlated.push({

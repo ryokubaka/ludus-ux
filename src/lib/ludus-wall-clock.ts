@@ -23,6 +23,7 @@ export async function refreshLudusWallClockFromSsh(): Promise<void> {
       settings.proxmoxSshUser || "root",
       settings.proxmoxSshPassword || "",
       "date +%s 2>/dev/null",
+      { elevate: false },
     )
     noteLudusWallClockEpoch(out)
   } catch {

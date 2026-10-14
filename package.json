@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.1.10",
+  "version": "1.4.1",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -38,10 +38,10 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.2",
     "lucide-react": "^0.400.0",
     "monaco-editor": "^0.46.0",
-    "next": "^16.2.7",
+    "next": "^16.3.8",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-resizable-panels": "^2.1.7",
@@ -49,7 +49,7 @@
     "ssh2": "^1.15.0",
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
-    "tar": "^7.5.11",
+    "tar": "^7.5.22",
     "ws": "^8.21.0"
   },
   "overrides": {
@@ -57,13 +57,40 @@
     "dompurify": ">=3.3.2",
     "cross-spawn": ">=7.0.5",
     "glob": ">=10.5.0",
+    "postcss": "^8.5.26",
+    "js-yaml": "^4.3.2",
+    "nanoid": "3.3.18",
+    "sharp": "^0.35.5",
+    "source-map-js": ">=1.2.2",
+    "brace-expansion": "5.0.12",
+    "braces": "file:vendor/braces",
+    "browserslist": ">=4.28.7",
+    "baseline-browser-mapping": ">=2.11.0",
+    "postcss-selector-parser": ">=7.1.6",
     "@eslint/config-array": {
-      "minimatch": {
-        "brace-expansion": "1.1.13"
-      }
+      "minimatch": "10.2.5"
+    },
+    "@eslint/eslintrc": {
+      "minimatch": "10.2.5"
+    },
+    "eslint": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-import": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-jsx-a11y": {
+      "minimatch": "10.2.5"
+    },
+    "eslint-plugin-react": {
+      "minimatch": "10.2.5"
+    },
+    "minimatch@10": {
+      "brace-expansion": "5.0.12"
     },
     "next": {
-      "postcss": "8.5.10"
+      "postcss": "8.5.26",
+      "sharp": "^0.35.5"
     }
   },
   "devDependencies": {
@@ -79,10 +106,12 @@
     "@types/ws": "^8.5.13",
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",
-    "eslint-config-next": "^16.2.7",
-    "postcss": "^8.5.10",
+    "fill-range": "^7.1.1",
+    "eslint-config-next": "^16.3.4",
+    "postcss": "^8.5.26",
     "tailwindcss": "^3.3.0",
+    "tsx": "^4.19.4",
     "typescript": "^5",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.11"
   }
 }

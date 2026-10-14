@@ -37,10 +37,15 @@ export async function GET(request: NextRequest) {
 
   try {
     // 1. Get ADMIN pool members (vmid + node)
-    const poolJson = await sshExec(
-      sshHost, sshPort, sshUser, sshPass,
-      "pvesh get /pools/ADMIN --output-format json 2>/dev/null || echo '{}'",
-    )
+    let poolJson = "{}"
+    try {
+      poolJson = await sshExec(
+        sshHost, sshPort, sshUser, sshPass,
+        ["pvesh", "get", "/pools/ADMIN", "--output-format", "json"],
+      )
+    } catch {
+      poolJson = "{}"
+    }
 
     let members: Array<{ vmid: number; node?: string; type?: string }> = []
     try {
@@ -64,7 +69,7 @@ export async function GET(request: NextRequest) {
         try {
           const nodesJson = await sshExec(
             sshHost, sshPort, sshUser, sshPass,
-            "pvesh get /nodes --output-format json",
+            ["pvesh", "get", "/nodes", "--output-format", "json"],
           )
           const nodes = JSON.parse(nodesJson) as Array<{ node: string }>
           node = nodes[0]?.node ?? "pve"
@@ -80,7 +85,7 @@ export async function GET(request: NextRequest) {
       try {
         const statusJson = await sshExec(
           sshHost, sshPort, sshUser, sshPass,
-          `pvesh get /nodes/${node}/qemu/${vmid}/status/current --output-format json`,
+          ["pvesh", "get", `/nodes/${node}/qemu/${vmid}/status/current`, "--output-format", "json"],
         )
         const s = JSON.parse(statusJson) as { name?: string; status?: string }
         name = s.name ?? name
@@ -91,7 +96,7 @@ export async function GET(request: NextRequest) {
       try {
         const netJson = await sshExec(
           sshHost, sshPort, sshUser, sshPass,
-          `pvesh get /nodes/${node}/qemu/${vmid}/agent/network-get-interfaces --output-format json 2>/dev/null || echo '{}'`,
+          ["pvesh", "get", `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`, "--output-format", "json"],
         )
         const net = JSON.parse(netJson) as {
           result?: Array<{ "ip-addresses"?: Array<{ "ip-address"?: string; "ip-address-type"?: string }> }>

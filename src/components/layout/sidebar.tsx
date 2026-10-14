@@ -1,6 +1,5 @@
 "use client"
 
-import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -48,6 +47,9 @@ import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
 import { ludusApi } from "@/lib/api"
 import { ludusSupportsSources } from "@/lib/ludus-version"
+import { AppNavLink } from "@/components/layout/app-nav-link"
+import { navHrefMatches } from "@/lib/nav-href"
+import { useNavPending } from "@/lib/nav-pending-context"
 
 interface NavItem {
   href: string
@@ -55,6 +57,7 @@ interface NavItem {
   icon: React.FC<React.SVGProps<SVGSVGElement>>
   adminOnly?: boolean
   goadOnly?: boolean
+  ludushoundOnly?: boolean
   /** Ludus 2.2.0+ Sources API — hidden on older servers */
   ludusSources?: boolean
 }
@@ -100,6 +103,7 @@ const navGroups: NavGroup[] = [
     label: "Integrations",
     items: [
       { href: "/goad", label: "GOAD Management", icon: Terminal, goadOnly: true },
+      { href: "/ludushound", label: "LudusHound", icon: GitBranch, ludushoundOnly: true },
     ],
   },
   {
@@ -110,15 +114,19 @@ const navGroups: NavGroup[] = [
   },
 ]
 
-function navItemMatches(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/"
-  return pathname === href || pathname.startsWith(`${href}/`)
+function navLinkClass(isActive: boolean, extra?: string) {
+  return cn(
+    extra,
+    isActive
+      ? "bg-sidebar-accent text-sidebar-primary transition-none"
+      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors",
+  )
 }
 
 function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null {
   let best: string | null = null
   for (const item of items) {
-    if (!navItemMatches(pathname, item.href)) continue
+    if (!navHrefMatches(pathname, item.href)) continue
     if (!best || item.href.length > best.length) best = item.href
   }
   return best
@@ -126,19 +134,28 @@ function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null
 
 const ADMIN_CACHE_KEY = "ludus-sidebar-is-admin"
 const GOAD_CACHE_KEY = "ludus-sidebar-goad-enabled"
+const LUDUSHOUND_CACHE_KEY = "ludus-sidebar-ludushound-enabled"
 
 function navItemVisible(
   item: NavItem,
-  ctx: { isAdmin: boolean; goadEnabled: boolean; sourcesSupported: boolean },
+  ctx: {
+    isAdmin: boolean
+    goadEnabled: boolean
+    ludushoundEnabled: boolean
+    sourcesSupported: boolean
+  },
 ): boolean {
   if (item.adminOnly && !ctx.isAdmin) return false
   if (item.goadOnly && !ctx.goadEnabled) return false
+  if (item.ludushoundOnly && !ctx.ludushoundEnabled) return false
   if (item.ludusSources && !ctx.sourcesSupported) return false
   return true
 }
 
 export function Sidebar() {
   const pathname = usePathname()
+  const { pendingHref } = useNavPending()
+  const navPathForActive = pendingHref ?? pathname
   const scopeTag = useEffectiveScopeTag()
   const { collapsed, toggle } = useSidebar()
   const shell = useShellSession()
@@ -148,9 +165,23 @@ export function Sidebar() {
   // Prefer server shell snapshot (no /api/auth/session); fall back to fetch if absent.
   const [isAdmin, setIsAdmin] = useState(() => !!shell?.isAdmin)
   const [goadEnabled, setGoadEnabled] = useState(true)
+  const [ludushoundEnabled, setLudushoundEnabled] = useState(true)
   const [logoKey, setLogoKey] = useState(0)
   const { ranges, selectedRangeId, selectRange, loading: rangesLoading, rangeSelectionLocked } = useRange()
   const [rangeDropdownOpen, setRangeDropdownOpen] = useState(false)
+
+  const { data: luxReleaseCheck } = useQuery({
+    queryKey: ["lux", "releases", "update"],
+    queryFn: async () => {
+      const res = await fetch("/api/lux/releases")
+      if (!res.ok) return { updateAvailable: false }
+      const body = (await res.json()) as { updateAvailable?: boolean }
+      return { updateAvailable: !!body.updateAvailable }
+    },
+    staleTime: STALE.long,
+    retry: false,
+  })
+  const luxUpdateAvailable = !!luxReleaseCheck?.updateAvailable
 
   const { data: versionData } = useQuery({
     queryKey: queryKeys.version(scopeTag),
@@ -163,8 +194,8 @@ export function Sidebar() {
   const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
   const sourcesSupported = ludusVersion !== "" && ludusSupportsSources(ludusVersion)
   const navCtx = useMemo(
-    () => ({ isAdmin, goadEnabled, sourcesSupported }),
-    [isAdmin, goadEnabled, sourcesSupported],
+    () => ({ isAdmin, goadEnabled, ludushoundEnabled, sourcesSupported }),
+    [isAdmin, goadEnabled, ludushoundEnabled, sourcesSupported],
   )
 
   useEffect(() => {
@@ -190,16 +221,32 @@ export function Sidebar() {
   useEffect(() => {
     const cachedGoad = sessionStorage.getItem(GOAD_CACHE_KEY)
     if (cachedGoad !== null) setGoadEnabled(cachedGoad !== "false")
+    const cachedLh = sessionStorage.getItem(LUDUSHOUND_CACHE_KEY)
+    if (cachedLh !== null) setLudushoundEnabled(cachedLh !== "false")
 
-    fetch("/api/settings")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data && typeof data.goadEnabled === "boolean") {
-          setGoadEnabled(data.goadEnabled)
-          sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
-        }
-      })
-      .catch(() => {})
+    const refreshNavFlags = () => {
+      fetch("/api/settings")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && typeof data.goadEnabled === "boolean") {
+            setGoadEnabled(data.goadEnabled)
+            sessionStorage.setItem(GOAD_CACHE_KEY, String(data.goadEnabled))
+          }
+          if (data && typeof data.ludushoundEnabled === "boolean") {
+            setLudushoundEnabled(data.ludushoundEnabled)
+            sessionStorage.setItem(LUDUSHOUND_CACHE_KEY, String(data.ludushoundEnabled))
+          }
+        })
+        .catch(() => {})
+    }
+
+    refreshNavFlags()
+    window.addEventListener("lux-settings-updated", refreshNavFlags)
+    window.addEventListener("focus", refreshNavFlags)
+    return () => {
+      window.removeEventListener("lux-settings-updated", refreshNavFlags)
+      window.removeEventListener("focus", refreshNavFlags)
+    }
   }, [])
 
   useEffect(() => {
@@ -217,8 +264,8 @@ export function Sidebar() {
     const visible = navGroups.flatMap((group) =>
       group.items.filter((item) => navItemVisible(item, navCtx)),
     )
-    return resolveActiveNavHref(pathname, visible)
-  }, [pathname, navCtx])
+    return resolveActiveNavHref(navPathForActive, visible)
+  }, [navPathForActive, navCtx])
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -232,8 +279,7 @@ export function Sidebar() {
         {/* Logo */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Link
-              prefetch={false}
+            <AppNavLink
               href="/"
               className={cn(
                 "flex items-center gap-3 hover:opacity-80 transition-opacity flex-shrink-0",
@@ -254,7 +300,7 @@ export function Sidebar() {
                   <p className="text-xs text-muted-foreground">Cyber Range Manager</p>
                 </div>
               )}
-            </Link>
+            </AppNavLink>
           </TooltipTrigger>
           {collapsed && (
             <TooltipContent side="right">Ludus UX — Dashboard</TooltipContent>
@@ -356,7 +402,7 @@ export function Sidebar() {
         )}
 
         {/* Navigation */}
-        <nav className={cn("flex-1 overflow-y-auto py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
+        <nav className={cn("flex-1 overflow-y-auto overscroll-y-contain py-4 space-y-6", collapsed ? "px-2" : "px-3")}>
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((item) => navItemVisible(item, navCtx))
             if (visibleItems.length === 0) return null
@@ -384,18 +430,13 @@ export function Sidebar() {
                         <div key={item.href} className="relative group/collapsed">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Link
-                                prefetch={false}
+                              <AppNavLink
                                 href={item.href}
-                                className={cn(
-                                  "flex items-center justify-center rounded-md p-2 transition-colors",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-primary"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                                )}
+                                aria-current={isActive ? "page" : undefined}
+                                className={navLinkClass(isActive, "flex items-center justify-center rounded-md p-2")}
                               >
                                 <Icon className={cn("h-5 w-5 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
-                              </Link>
+                              </AppNavLink>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="flex items-center gap-2">
                               {item.label}
@@ -414,14 +455,12 @@ export function Sidebar() {
 
                     return (
                       <li key={item.href} className="flex items-center gap-0.5">
-                        <Link
-                          prefetch={false}
+                        <AppNavLink
                           href={item.href}
-                          className={cn(
-                            "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors group",
-                            isActive
-                              ? "bg-sidebar-accent text-sidebar-primary"
-                              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                          aria-current={isActive ? "page" : undefined}
+                          className={navLinkClass(
+                            isActive,
+                            "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium group",
                           )}
                         >
                           <Icon className={cn("h-4 w-4 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
@@ -432,7 +471,7 @@ export function Sidebar() {
                           {isActive && !isConsoles && (
                             <ChevronRight className="h-3 w-3 text-sidebar-primary" />
                           )}
-                        </Link>
+                        </AppNavLink>
                         {isConsoles && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -472,24 +511,31 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <Link prefetch={false} href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
+            <AppNavLink href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
               <p className="text-xs font-semibold text-muted-foreground">
                 v{APP_VERSION}
                 {APP_VERSION_LABEL ? (
                   <span className="font-normal text-muted-foreground/60"> {APP_VERSION_LABEL}</span>
                 ) : null}
+                {luxUpdateAvailable ? (
+                  <span className="ml-1.5 font-medium text-status-warning">update</span>
+                ) : null}
               </p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
-            </Link>
+            </AppNavLink>
           )}
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">v{APP_VERSION}</Link>
+                <AppNavLink href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">
+                  v{APP_VERSION}
+                  {luxUpdateAvailable ? <span className="text-status-warning"> •</span> : null}
+                </AppNavLink>
               </TooltipTrigger>
               <TooltipContent side="right">
                 v{APP_VERSION}
-                {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""} — Open Source · Apache 2.0
+                {APP_VERSION_LABEL ? ` ${APP_VERSION_LABEL}` : ""}
+                {luxUpdateAvailable ? " — update available" : ""} — Open Source · Apache 2.0
               </TooltipContent>
             </Tooltip>
           )}

@@ -29,6 +29,11 @@ export async function POST(
     // empty body ok
   }
 
+  // `--global` installs roles and collections for every user. Ludus allows that for admins only.
+  if (options.globalRoles && !session.isAdmin) {
+    options = { ...options, globalRoles: false }
+  }
+
   try {
     const result = await syncSource(apiKey, sourceId, options)
     const scopeTag = effectiveScopeTagFromSession(session)

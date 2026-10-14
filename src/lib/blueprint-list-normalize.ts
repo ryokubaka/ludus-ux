@@ -31,6 +31,7 @@ export function normalizeBlueprintListItem(raw: unknown): BlueprintListItem | nu
     blueprintID: id,
     name: row.name != null ? String(row.name) : undefined,
     description: row.description != null ? String(row.description) : undefined,
+    version: row.version != null ? String(row.version) : undefined,
     ownerID: String(row.ownerUserID ?? row.ownerID ?? "").trim() || undefined,
     access,
     sharedUsers: sharedUsers.count,
@@ -111,6 +112,18 @@ export function isGlobalSourceCatalogBlueprint(
   if (!isSourceCatalogBlueprintId(id) && !bp.sourceID?.trim()) return false
   if (isLikelyUserBlueprintCopy(bp)) return false
   return true
+}
+
+/** True for a blueprint installed from this source. User copies (`-copy` / "(Copy)") are not included. */
+export function blueprintInstalledFromSource(
+  sourceId: string,
+  bp: Pick<BlueprintListItem, "id" | "blueprintID" | "name" | "ownerID" | "sourceID">,
+): boolean {
+  const source = sourceId.trim().toLowerCase()
+  if (!source || isLikelyUserBlueprintCopy(bp)) return false
+  const id = (bp.id || bp.blueprintID || "").trim().toLowerCase()
+  if (id.startsWith(`${source}/`)) return true
+  return (bp.sourceID || "").trim().toLowerCase() === source
 }
 
 export function isSourceCatalogBlueprint(bp: Pick<BlueprintListItem, "id" | "blueprintID" | "sourceID">): boolean {

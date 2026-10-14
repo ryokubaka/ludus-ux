@@ -56,7 +56,7 @@ export function resolveGlobalSourceBlueprintInstallApiKey(
 
 /** Ludus key for server-side global blueprint lookup/share (survives non-admin sessions). */
 export function resolveGlobalBlueprintServiceApiKey(
-  session?: ResolvedSession | null,
+  session?: { isAdmin?: boolean; apiKey?: string } | null,
 ): string | null {
   if (session?.isAdmin && session.apiKey?.trim()) {
     return session.apiKey.trim()

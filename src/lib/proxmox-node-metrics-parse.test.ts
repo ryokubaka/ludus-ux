@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  consolidateNodeResources,
   fractionToPct,
   parseClusterResourceNodes,
   parseNodeStatusLoad,
@@ -23,7 +24,27 @@ describe("parseClusterResourceNodes", () => {
       { type: "qemu", node: "pve1", cpu: 0.5, vmid: 100 },
     ])
     const map = parseClusterResourceNodes(raw)
-    expect(map.get("pve1")).toEqual({ cpuPct: 15, memPct: 25 })
+    expect(map.get("pve1")).toEqual({
+      cpuPct: 15,
+      memPct: 25,
+      memBytes: 8e9,
+      maxMemBytes: 32e9,
+      maxCpu: null,
+    })
+  })
+})
+
+describe("consolidateNodeResources", () => {
+  it("weights CPU by core count and sums memory", () => {
+    const total = consolidateNodeResources([
+      { cpuPct: 50, memPct: 50, memBytes: 16e9, maxMemBytes: 32e9, maxCpu: 4 },
+      { cpuPct: 10, memPct: 25, memBytes: 32e9, maxMemBytes: 128e9, maxCpu: 16 },
+    ])
+    expect(total.nodeCount).toBe(2)
+    expect(total.cpuPct).toBe(18)
+    expect(total.memBytes).toBe(48e9)
+    expect(total.maxMemBytes).toBe(160e9)
+    expect(total.memPct).toBe(30)
   })
 })
 

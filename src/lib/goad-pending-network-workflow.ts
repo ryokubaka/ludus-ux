@@ -14,12 +14,13 @@ import {
 import { reconcilePbAfterFollowOnLudusDeploy } from "@/lib/goad-ludus-reconcile"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
-import { applyNetworkSection, networkSectionEqual } from "@/lib/network-rules"
+import { mergeNetworkSection, networkSectionEqual } from "@/lib/network-rules"
 import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/range-log-markers-store"
 import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-correlate"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { getSettings } from "@/lib/settings-store"
 import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
 import { readUnlinkPendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
 import type { RangeObject } from "@/lib/types"
@@ -119,7 +120,7 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
     )
     const yaml = cfg.data?.result
     if (yaml && !networkSectionEqual(yaml, snapshot)) {
-      const merged = applyNetworkSection(yaml, snapshot)
+      const merged = mergeNetworkSection(yaml, snapshot)
       const put = await putRangeConfigYaml(key, merged, rangeId)
       if (!put.ok) {
         console.warn("[pending-network-workflow] setRangeConfig failed:", put.error)
@@ -135,7 +136,15 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
       { pollMs: 5_000, absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS },
     )
 
+    await ensureRangeDeployHostPatches({ tags: "network" })
+
     for (let attempt = 0; attempt < 3; attempt++) {
+      const { assertRouterTemplateReady } = await import("@/lib/ludus-router-template-assert")
+      const router = await assertRouterTemplateReady(key)
+      if (!router.ok) {
+        console.warn("[pending-network-workflow] router template gate:", router.error)
+        return
+      }
       const tagRunAt = Date.now()
       const dep = await ludusRequest<unknown>(`/range/deploy?rangeID=${encodeURIComponent(rangeId)}`, {
         method: "POST",

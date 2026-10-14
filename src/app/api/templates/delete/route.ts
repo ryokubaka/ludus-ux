@@ -1,0 +1,241 @@
+/**
+ * DELETE /api/templates/delete
+ *
+ * Removes a Packer template: Ludus API delete, then `ludus templates rm` + root SSH
+ * disk cleanup. Install trees are packer, packer/templates, and per-user packer,
+ * including alias directory names and a directory whose Packer `vm_name` is the
+ * list name. Named aliases under sources are removed. A source checkout that
+ * still contains the template does not fail this route. API often soft-refuses
+ * shared/source installs ("included template").
+ *
+ * Disk dir often omits `-template` / `-x64` while Ludus lists Packer `vm_name`.
+ * Cleanup tries name aliases and verifies via GET /templates.
+ */
+
+import { NextRequest, NextResponse } from "next/server"
+import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import { ludusRequest } from "@/lib/ludus-client"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { resolveSession } from "@/lib/session"
+import { sshExec } from "@/lib/goad-ssh"
+import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import {
+  buildLudusTemplateDeleteCmd,
+  buildLudusTemplateRmCliCmd,
+  isLudusTemplateDeleteRefused,
+  templateDirNameAliases,
+} from "@/lib/template-packer-paths"
+import { logAndSafeError } from "@/lib/safe-client-error"
+import {
+  classifyTemplateDeleteFailure,
+  httpStatusForTemplateDeleteError,
+} from "@/lib/template-delete-errors"
+import type { TemplateObject } from "@/lib/types"
+
+const NAME_RE = /^[a-zA-Z0-9._-]{1,120}$/
+
+function templateStillListed(
+  templates: TemplateObject[] | null | undefined,
+  name: string,
+): boolean {
+  if (!templates?.length) return false
+  const aliases = new Set(templateDirNameAliases(name).map((a) => a.toLowerCase()))
+  return templates.some((t) => aliases.has((t.name || "").trim().toLowerCase()))
+}
+
+export async function DELETE(request: NextRequest) {
+  const session = await resolveSession(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+  if (!session.isAdmin) {
+    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
+  }
+
+  const body = (await request.json().catch(() => null)) as { name?: string } | null
+  const name = body?.name?.trim() || ""
+  if (!NAME_RE.test(name)) {
+    return NextResponse.json(
+      { error: "Invalid template name. Use only letters, numbers, hyphens, underscores, and dots." },
+      { status: 400 },
+    )
+  }
+
+  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const apiKey = (imp.apiKey || session.apiKey || "").trim()
+  if (!apiKey) {
+    return NextResponse.json({ error: "No Ludus API key in session — sign in again." }, { status: 400 })
+  }
+
+  // Best-effort Ludus API first (cleans Proxmox VM when built; may refuse packer dirs).
+  let apiMessage = ""
+  let apiRefused = false
+  const api = await ludusRequest<{ result?: string; error?: string }>(
+    `/template/${encodeURIComponent(name)}`,
+    { method: "DELETE", apiKey, timeout: 60_000 },
+  )
+  if (api.error) {
+    // 404 = already gone from Ludus view; still try disk cleanup.
+    if (api.status !== 404) {
+      apiMessage = api.error
+    }
+  } else {
+    const resultText =
+      (typeof api.data === "object" && api.data && "result" in api.data
+        ? String((api.data as { result?: string }).result || "")
+        : "") || JSON.stringify(api.data ?? "")
+    apiMessage = resultText
+    apiRefused = isLudusTemplateDeleteRefused(resultText)
+  }
+
+  const ludusRoot = resolveLudusInstallPath()
+  // CLI unregister first (API often soft-refuses shared/source packer paths).
+  let cliOut = ""
+  try {
+    const cli = await sshExec(buildLudusTemplateRmCliCmd(name, apiKey))
+    cliOut = (cli.stdout + cli.stderr).trim()
+  } catch (err) {
+    cliOut = logAndSafeError("templates/delete", err, "ludus templates rm failed")
+  }
+
+  const rmCmd = buildLudusTemplateDeleteCmd(ludusRoot, name)
+  let sshOk = false
+  let sshOut = ""
+  try {
+    const rm = await sshExec(rmCmd)
+    sshOut = (rm.stdout + rm.stderr).trim()
+    sshOk = rm.code === 0
+  } catch (err) {
+    sshOut = logAndSafeError("templates/delete", err, "SSH template delete failed")
+  }
+  if (cliOut) {
+    sshOut = [cliOut, sshOut].filter(Boolean).join("\n---\n")
+  }
+
+  if (!sshOk && apiRefused) {
+    const payload = classifyTemplateDeleteFailure({
+      templateName: name,
+      apiMessage,
+      sshOut,
+      apiRefused: true,
+    })
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: `template=${name} api-refused ssh-failed | ${apiMessage || ""} | ${sshOut || ""}`,
+    })
+    return NextResponse.json(payload, {
+      status: httpStatusForTemplateDeleteError(payload.code),
+    })
+  }
+
+  if (!sshOk && api.error && api.status !== 404) {
+    const payload = classifyTemplateDeleteFailure({
+      templateName: name,
+      apiMessage,
+      sshOut,
+      apiRefused,
+    })
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: `template=${name} api+ssh failed | ${apiMessage || ""} | ${sshOut || ""}`,
+    })
+    return NextResponse.json(
+      payload.error === `Failed to delete template "${name}".`
+        ? { ...payload, error: apiMessage || sshOut || payload.error }
+        : payload,
+      { status: api.status && api.status >= 400 ? api.status : httpStatusForTemplateDeleteError(payload.code) },
+    )
+  }
+
+  if (!sshOk) {
+    const payload = classifyTemplateDeleteFailure({
+      templateName: name,
+      apiMessage,
+      sshOut,
+      apiRefused,
+    })
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail: `template=${name} disk cleanup failed | ${sshOut || ""}`,
+    })
+    return NextResponse.json(
+      {
+        ...payload,
+        error: sshOut.includes("still present")
+          ? `Template "${name}" is still on disk after delete.`
+          : payload.error,
+      },
+      { status: httpStatusForTemplateDeleteError(payload.code) },
+    )
+  }
+
+  const root = ludusRoot.replace(/\/$/, "")
+  for (const alias of templateDirNameAliases(name)) {
+    for (const dir of [`${root}/packer/${alias}`, `${root}/packer/templates/${alias}`]) {
+      let present = false
+      try {
+        const check = await sshExec(["dir-exists", dir])
+        present = check.code === 0 && (check.stdout || "").trim() === "ok"
+      } catch {
+        present = true
+      }
+      if (!present) continue
+      const payload = classifyTemplateDeleteFailure({
+        templateName: name,
+        apiMessage,
+        sshOut,
+        apiRefused,
+      })
+      logLuxRouteAction(request, session, {
+        outcome: "failure",
+        detail: `template=${name} still on disk at ${dir}`,
+      })
+      return NextResponse.json(
+        { ...payload, error: `Template "${name}" is still on disk after delete.` },
+        { status: httpStatusForTemplateDeleteError(payload.code) },
+      )
+    }
+  }
+
+  // Ludus soft-refuse returns HTTP 200 with files still on disk — confirm list is clear.
+  const listed = await ludusRequest<TemplateObject[]>("/templates", {
+    apiKey,
+    timeout: 30_000,
+  })
+  if (!listed.error && templateStillListed(listed.data, name)) {
+    const payload = classifyTemplateDeleteFailure({
+      templateName: name,
+      apiMessage,
+      sshOut,
+      apiRefused,
+      stillListed: true,
+    })
+    logLuxRouteAction(request, session, {
+      outcome: "failure",
+      detail:
+        `template=${name} still listed after ssh cleanup | aliases=${templateDirNameAliases(name).join(",")} | ${sshOut || ""}`,
+    })
+    return NextResponse.json(payload, {
+      status: httpStatusForTemplateDeleteError(payload.code),
+    })
+  }
+
+  const scopeTag = effectiveScopeTagFromSession(session)
+  revalidateLudusResource("templates")
+  revalidateLudusScopeResource(scopeTag, "templates")
+
+  logLuxRouteAction(request, session, {
+    outcome: "success",
+    detail: `template=${name}${apiRefused ? " (ssh cleanup after packer refuse)" : ""}`,
+  })
+
+  return NextResponse.json({
+    ok: true,
+    message: apiRefused
+      ? `Template "${name}" removed from disk (Ludus soft-refused API delete for shared packer path — not a stock template)`
+      : `Template "${name}" deleted`,
+    apiMessage: apiMessage || undefined,
+  })
+}

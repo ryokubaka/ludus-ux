@@ -28,7 +28,6 @@ import {
   BookOpen,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
-import type { AnsibleItem } from "@/lib/types"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { cn } from "@/lib/utils"
@@ -39,6 +38,13 @@ import {
   ludusSupportsCollectionRemove,
 } from "@/lib/ludus-version"
 import { AnsibleAddFromSourcePanel } from "./add-from-source-panel"
+import { ansibleInventoryByKind } from "@/lib/ansible-inventory"
+import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
+import {
+  SourceRepoLink,
+  SourceSyncControls,
+  displayInstalledVersion,
+} from "@/components/sources/source-installed-controls"
 
 export function AnsiblePageClient() {
   const { toast } = useToast()
@@ -60,9 +66,37 @@ export function AnsiblePageClient() {
       return {
         roles: list.filter((i) => (i.type || i.Type) === "role"),
         collections: list.filter((i) => (i.type || i.Type) === "collection"),
+        all: list,
       }
     },
     staleTime: STALE.long,
+  })
+
+  const roles = useMemo(() => ansibleInventoryByKind(ansibleData, "role"), [ansibleData])
+  const collections = useMemo(
+    () => ansibleInventoryByKind(ansibleData, "collection"),
+    [ansibleData],
+  )
+
+  const roleInstalled = useMemo(
+    () =>
+      roles.map((r) => ({
+        name: r.name || r.Name || "",
+        version: r.version || r.Version,
+      })),
+    [roles],
+  )
+  const collectionInstalled = useMemo(
+    () =>
+      collections.map((c) => ({
+        name: c.name || c.Name || "",
+        version: c.version || c.Version,
+      })),
+    [collections],
+  )
+  const sourceProvenance = useSourceInstalledProvenance({
+    roles: roleInstalled,
+    collections: collectionInstalled,
   })
 
   const { data: versionData } = useQuery({
@@ -81,9 +115,9 @@ export function AnsiblePageClient() {
   )
   const collectionRemoveKnownUnsupported = Boolean(ludusVersion) && !ludusSupportsCollectionRemove(ludusVersion)
 
-  const roles = ansibleData?.roles ?? []
-  const collections = ansibleData?.collections ?? []
-  const invalidateAnsible = () => queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
+  const invalidateAnsible = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
+  }
 
   const handleAddRole = async () => {
     if (!newRoleName.trim()) return
@@ -280,6 +314,7 @@ export function AnsiblePageClient() {
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Role Name</th>
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Version</th>
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Source</th>
+                        <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Sync</th>
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Scope</th>
                         <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
                       </tr>
@@ -289,16 +324,32 @@ export function AnsiblePageClient() {
                         const rName = role.name || role.Name || ""
                         const rVersion = role.version || role.Version
                         const rGlobal = role.global ?? role.Global
+                        const src = sourceProvenance.role(rName)
                         return (
                         <tr key={rName} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
                           <td className="p-3">
                             <code className="font-mono text-xs text-primary">{rName}</code>
                           </td>
                           <td className="p-3">
-                            <code className="font-mono text-xs text-muted-foreground">{rVersion || "latest"}</code>
+                            <code className="font-mono text-xs text-muted-foreground">
+                              {src
+                                ? displayInstalledVersion(rVersion, src.catalogVersion)
+                                : rVersion || "latest"}
+                            </code>
                           </td>
                           <td className="p-3">
-                            <Badge variant="secondary" className="text-xs">galaxy</Badge>
+                            {src ? (
+                              <SourceRepoLink match={src} />
+                            ) : (
+                              <Badge variant="secondary" className="text-xs">galaxy</Badge>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {src ? (
+                              <SourceSyncControls match={src} onResynced={invalidateAnsible} />
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </td>
                           <td className="p-3">
                             <Badge variant={rGlobal ? "cyan" : "secondary"} className="text-xs">
@@ -358,6 +409,8 @@ export function AnsiblePageClient() {
                       <tr className="bg-muted/50 border-b border-border">
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Collection Name</th>
                         <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Version</th>
+                        <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Source</th>
+                        <th className="p-3 text-left text-xs font-semibold text-muted-foreground uppercase">Sync</th>
                         {collectionRemoveSupported && (
                           <th className="p-3 text-right text-xs font-semibold text-muted-foreground uppercase">Actions</th>
                         )}
@@ -367,13 +420,32 @@ export function AnsiblePageClient() {
                       {collections.map((coll) => {
                         const cName = coll.name || coll.Name || ""
                         const cVersion = coll.version || coll.Version
+                        const src = sourceProvenance.collection(cName)
                         return (
                         <tr key={cName} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
                           <td className="p-3">
                             <code className="font-mono text-xs text-primary">{cName}</code>
                           </td>
                           <td className="p-3">
-                            <code className="font-mono text-xs text-muted-foreground">{cVersion || "latest"}</code>
+                            <code className="font-mono text-xs text-muted-foreground">
+                              {src
+                                ? displayInstalledVersion(cVersion, src.catalogVersion)
+                                : cVersion || "latest"}
+                            </code>
+                          </td>
+                          <td className="p-3">
+                            {src ? (
+                              <SourceRepoLink match={src} />
+                            ) : (
+                              <Badge variant="secondary" className="text-xs">galaxy</Badge>
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {src ? (
+                              <SourceSyncControls match={src} onResynced={invalidateAnsible} />
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </td>
                           {collectionRemoveSupported && (
                             <td className="p-3 text-right">

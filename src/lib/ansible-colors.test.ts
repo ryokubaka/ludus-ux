@@ -26,6 +26,28 @@ describe("getAnsibleLineClass", () => {
     expect(getAnsibleLineClass("fatal: [x]: FAILED! => {}")).toBe("text-status-error font-bold")
   })
 
+  it("does not paint task names containing Fail/failed as errors", () => {
+    expect(
+      getAnsibleLineClass(
+        "[started TASK: so_elastic_agent : Fail when msiexec enroll failed on dc01]",
+      ),
+    ).toBe("text-white font-semibold")
+    expect(
+      getAnsibleLineClass(
+        "TASK [so_elastic_agent : Fail when msiexec enroll failed] ****",
+      ),
+    ).toBe("text-white font-semibold")
+    expect(
+      getAnsibleLineClass(
+        'skipping: [dc01] => {"changed": false, "false_condition": "(ludus_so_agent_msiexec.rc | default(1) | int) not in [0, 3010]", "skip_reason": "Conditional result was False"}',
+      ),
+    ).toBe("text-primary")
+  })
+
+  it("still marks structural failed: [host] results", () => {
+    expect(getAnsibleLineClass("failed: [dc01] => {\"msg\": \"boom\"}")).toBe("text-status-error")
+  })
+
   it("PLAY RECAP stats lines use dedicated parser elsewhere", () => {
     expect(getAnsibleLineClass("host : ok=1 changed=0 unreachable=0 failed=0")).toBe("text-foreground")
   })

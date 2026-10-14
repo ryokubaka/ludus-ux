@@ -24,7 +24,7 @@ services:
       - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
       # ROOT API key for Ludus v2 admin operations (user management)
       - LUDUS_ROOT_API_KEY=${LUDUS_ROOT_API_KEY:-}
-      # Proxmox root SSH for pvesh / admin tunnel / privileged ops (key preferred on hardened PVE)
+      # Host SSH for pvesh / admin tunnel / privileged ops (root, or sudo -n lux-host; key preferred)
       - PROXMOX_SSH_USER=${PROXMOX_SSH_USER:-root}
       - PROXMOX_SSH_PASSWORD=${PROXMOX_SSH_PASSWORD:-}
       - PROXMOX_SSH_KEY_PATH=${PROXMOX_SSH_KEY_PATH:-/app/ssh/id_rsa}
@@ -36,18 +36,28 @@ services:
       - GOAD_SSH_PASSWORD=${GOAD_SSH_PASSWORD:-}
       - GOAD_SSH_KEY_PATH=${GOAD_SSH_KEY_PATH:-/app/ssh/id_rsa}
       - GOAD_PATH=${GOAD_PATH:-/opt/GOAD}
+      - LUDUSHOUND_PATH=${LUDUSHOUND_PATH:-/opt/LudusHound}
       - LUDUS_INSTALL_PATH=${LUDUS_INSTALL_PATH:-/opt/ludus}
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
+      - ENABLE_LUDUSHOUND=${ENABLE_LUDUSHOUND:-true}
       - LUDUS_ANSIBLE_VERBOSE=${LUDUS_ANSIBLE_VERBOSE:-true}
+      # Re-pull git Ludus sources so catalog tip stays current (default 5m).
+      - SOURCE_AUTO_SYNC_ENABLED=${SOURCE_AUTO_SYNC_ENABLED:-true}
+      - SOURCE_AUTO_SYNC_INTERVAL_MS=${SOURCE_AUTO_SYNC_INTERVAL_MS:-300000}
       # TLS terminates at nginx; app listens on plain HTTP (see TRUST_PROXY_TLS).
       - DISABLE_HTTPS=${DISABLE_HTTPS:-true}
       - TRUST_PROXY_TLS=${TRUST_PROXY_TLS:-true}
       - TLS_HOSTNAME=${TLS_HOSTNAME:-}
       - NODE_ENV=production
       - TZ=${TZ:-America/New_York}
+      # Host path of this git clone on the Docker host. Empty: discover via `docker inspect`.
+      - LUX_REPO_PATH=${LUX_REPO_PATH:-}
     volumes:
       - ${SSH_KEY_PATH:-./ssh}:/app/ssh
       - ${DATA_DIR:-./data}:/app/data
+      # Lets Settings → About run scripts/upgrade.sh on this Docker host.
+      # The socket is root-equivalent for the daemon: the app can start and stop containers here.
+      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

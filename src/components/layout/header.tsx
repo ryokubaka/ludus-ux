@@ -20,27 +20,8 @@ import { useSidebar } from "@/lib/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { fetchSharedSession } from "@/lib/session-fetch"
 import { cn } from "@/lib/utils"
-
-const pageTitles: Record<string, { title: string; description: string }> = {
-  "/": { title: "Dashboard", description: "Overview of your Ludus range" },
-  "/range": { title: "Range", description: "Virtual machines and range status" },
-  "/range/config": { title: "Range Configuration", description: "Edit and deploy your range YAML config" },
-  "/templates": { title: "Templates", description: "Manage VM templates for your range" },
-  "/testing": { title: "Testing Mode", description: "Control testing state and firewall rules" },
-  "/snapshots": { title: "Snapshots", description: "Create and manage VM snapshots" },
-  "/blueprints": { title: "Blueprints", description: "Save, share, and reuse range configurations" },
-  "/sources": { title: "Sources", description: "Register git catalogs for blueprints, templates, and Ansible content" },
-  "/ansible": { title: "Ansible Galaxy", description: "Manage Ansible Galaxy roles and collections" },
-  "/users": { title: "Users", description: "Manage Ludus users (admin only)" },
-  "/groups": { title: "Groups", description: "Manage groups and range access" },
-  "/admin": { title: "Ranges Overview", description: "All ranges and shared services (admin only)" },
-  "/admin/performance": { title: "Ludus Performance", description: "Live Proxmox node metrics (admin only)" },
-  "/admin/app-logs": { title: "Application Logs", description: "Live auth and application event log (admin only)" },
-  "/logs": { title: "Range Logs", description: "Live and historical range deployment logs" },
-  "/goad": { title: "GOAD Management", description: "Manage Game of Active Directory lab instances" },
-  "/settings": { title: "Settings", description: "Configure Ludus connection and preferences" },
-  "/account": { title: "User Settings", description: "Profile picture and password" },
-}
+import { resolvePageInfo } from "@/lib/page-titles"
+import { useNavPending } from "@/lib/nav-pending-context"
 
 interface SessionInfo {
   username: string
@@ -49,6 +30,7 @@ interface SessionInfo {
 
 export function Header() {
   const pathname = usePathname()
+  const { pendingHref } = useNavPending()
   const shell = useShellSession()
   const [session, setSession] = useState<SessionInfo | null>(() =>
     shell ? { username: shell.username, isAdmin: shell.isAdmin } : null,
@@ -98,14 +80,7 @@ export function Header() {
     window.location.assign("/login")
   }
 
-  const matchedKey = Object.keys(pageTitles)
-    .sort((a, b) => b.length - a.length)
-    .find((key) => pathname === key || (key !== "/" && pathname.startsWith(key + "/")))
-
-  const pageInfo = (matchedKey && pageTitles[matchedKey]) || {
-    title: "Ludus UX",
-    description: "Cyber Range Manager",
-  }
+  const pageInfo = resolvePageInfo(pendingHref ?? pathname)
 
   return (
     <header

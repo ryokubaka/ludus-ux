@@ -102,13 +102,18 @@ export function parseRecapStats(line: string, theme: AnsibleLogTheme = "dark"): 
 function ansibleLineClassDark(line: string): string {
   const lower = line.toLowerCase()
 
-  // Strip leading timestamp "[HH:MM:SS] " so PLAY/TASK headers are still
-  // detected when Ansible is run with -v or GOAD injects timestamps.
-  const content = lower.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, "")
+  // Strip leading wall timestamps so PLAY/TASK headers still match when GOAD/Ludus
+  // injects "[HH:MM:SS] " or ISO "[YYYY-MM-DDTHH:mm:ss… TZ] ".
+  const content = lower
+    .replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, "")
+    .replace(/^\[\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?[^\]]*\]\s*/, "")
 
   // Ansible section headers: "PLAY [name] ****", "TASK [name] ****",
   // "PLAY RECAP ****", "RUNNING HANDLER [name] ****"
+  // Also default callback starts: "[started TASK: role : Fail when … on host]"
+  // — must not hit failure heuristics just because the task name contains "fail".
   if (/^(play|task|running handler)\s/.test(content)) return "text-white font-semibold"
+  if (/^\[started\s+(play|task|running handler):/.test(content)) return "text-white font-semibold"
 
   // Fatal / unreachable — Ansible uses "fatal:" and "UNREACHABLE!" (exclamation)
   if (lower.includes("[fatal]") || lower.includes("fatal:")) return "text-status-error font-bold"
@@ -122,14 +127,16 @@ function ansibleLineClassDark(line: string): string {
 
   if (lower.includes("[warning]") || lower.includes("warn:")) return "text-status-warning"
 
-  if (lower.includes("[error]") || lower.includes("error:")) return "text-status-error"
+  // Structural failure only — do NOT match bare "fail"/"failed" in task names
+  // (e.g. "Fail when msiexec enroll failed") or prose.
+  if (lower.includes("[error]")) return "text-status-error"
+  if (/\berror!\b/.test(lower)) return "text-status-error"
+  // "error:" as a status prefix (not mid-sentence task titles)
+  if (/^\s*error:/.test(content) || /\serror:\s*\[/.test(lower)) return "text-status-error"
   if (/"failed"\s*:\s*true/.test(lower)) return "text-status-error"
-  if (/\bfailed!/i.test(lower)) return "text-status-error"
-
-  const forFailedProbe = lower
-    .replace(/"failed"\s*:\s*false/gi, "")
-    .replace(/\bfailed_when_result\b/gi, "when_result")
-  if (/\bfailed\b/.test(forFailedProbe) && !/\bfailed=\d/.test(forFailedProbe)) return "text-status-error"
+  if (/\bfailed!/.test(lower)) return "text-status-error"
+  // Ansible result line: "failed: [hostname]" / "failed: [hostname] =>"
+  if (/\bfailed:\s*\[/.test(lower)) return "text-status-error"
 
   // GOAD / Ludus bracket-style control messages ("[INFO]", "[RECAP]", …)
   if (lower.includes("[play]") || lower.includes("[task]") || lower.includes("[recap]")) return "text-white font-semibold"

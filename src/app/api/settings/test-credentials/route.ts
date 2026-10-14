@@ -1,7 +1,7 @@
 /**
  * POST /api/settings/test-credentials
  *
- * Admin-only diagnostic: verifies root SSH (same path as admin tunnel / pvesh)
+ * Admin-only diagnostic: verifies host SSH (same path as admin tunnel / pvesh)
  * and Ludus admin API reachability with the **session** API key (GET /user/all).
  *
  * Optional JSON body fields override persisted settings for this request only
@@ -19,6 +19,12 @@ import {
   probeSshKeyMount,
 } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import {
+  buildRootSshProbeCommand,
+  parseRootSshProbe,
+  rootSshProbeProblem,
+} from "@/lib/root-ssh-preflight"
 
 
 type Body = Partial<{
@@ -73,6 +79,7 @@ export async function POST(request: NextRequest) {
       : "none"
 
   // ── Root SSH (admin tunnel uses the same auth at container boot) ─────────
+  const packerDir = `${resolveLudusInstallPath().replace(/\/$/, "")}/packer`
   const rootSsh: {
     ok: boolean
     host: string
@@ -81,6 +88,13 @@ export async function POST(request: NextRequest) {
     authAttempted: typeof authAttempted
     privateKeyPath: string | null
     detail?: string
+    uid?: number | null
+    remoteUser?: string | null
+    privileged?: boolean
+    sudo?: boolean | null
+    sudoAll?: boolean | null
+    packerDir?: string
+    packerWritable?: boolean | null
   } = {
     ok: false,
     host: effective.sshHost || "",
@@ -119,18 +133,34 @@ export async function POST(request: NextRequest) {
         effective.sshPort || 22,
         rootSsh.user,
         effective.proxmoxSshPassword || "",
-        "echo lux_root_ssh_ok",
+        buildRootSshProbeCommand(packerDir),
+        { elevate: false },
       )
-      rootSsh.ok = out.includes("lux_root_ssh_ok")
-      if (!rootSsh.ok) {
+      const probe = parseRootSshProbe(out)
+      rootSsh.uid = probe.uid
+      rootSsh.remoteUser = probe.username
+      rootSsh.sudo = probe.sudo
+      rootSsh.sudoAll = probe.sudoAll
+      rootSsh.privileged = probe.uid === 0 || probe.sudo === true
+      rootSsh.packerDir = packerDir
+      rootSsh.packerWritable = probe.packerWritable
+      const problem = rootSshProbeProblem(probe, packerDir)
+      rootSsh.ok = probe.loginOk && !problem
+      if (!probe.loginOk) {
         rootSsh.detail = `Unexpected SSH output: ${out.slice(0, 120)}`
+      } else if (problem) {
+        rootSsh.detail = problem
+      } else if (probe.uid === 0) {
+        rootSsh.detail = `uid 0 (${probe.username}).`
+      } else {
+        rootSsh.detail = `uid ${probe.uid} (${probe.username}) with passwordless sudo.`
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       rootSsh.detail = msg
       if (/All configured authentication methods failed/i.test(msg)) {
         rootSsh.detail +=
-          " Common causes: wrong key file, wrong PROXMOX_SSH_USER, host/port unreachable from the container, or — if this private key was copied from the server's /root/.ssh/id_rsa — the matching public key is not in /root/.ssh/authorized_keys on the Ludus host (see docs/ssh-and-auth.md). CRLF in the key is normalized by LUX; container shows 777 on Windows mounts — entrypoint chmod 600s the key at startup."
+          " Common causes: wrong key file, wrong PROXMOX_SSH_USER, host/port unreachable from the container, or the matching public key is missing from that account's authorized_keys (/root/.ssh/authorized_keys when PROXMOX_SSH_USER is root, otherwise that user's home, for example /home/<user>/.ssh/authorized_keys; see docs/ssh-and-auth.md). CRLF in the key is normalized by LUX; container shows 777 on Windows mounts — entrypoint chmod 600s the key at startup."
       }
     }
   }
@@ -193,10 +223,10 @@ export async function POST(request: NextRequest) {
       if (isConn) {
         if (adminBase.includes("127.0.0.1") || adminBase.includes("localhost")) {
           adminApi.hint =
-            "This URL points at the container itself. It only works when the admin SSH tunnel is up: root SSH must succeed at container start (see Root SSH test above). Restart the container after fixing SSH, or set LUDUS_ADMIN_URL to a URL the container can reach (e.g. https://<ludus-ip>:8081 if bound on all interfaces)."
+            "This URL points at the container itself. It only works when the admin SSH tunnel is up: host SSH must succeed at container start (see Test host SSH & admin API above). Restart the container after fixing SSH, or set LUDUS_ADMIN_URL to a URL the container can reach (e.g. https://<ludus-ip>:8081 if bound on all interfaces)."
         } else {
           adminApi.hint =
-            "Check firewall, TLS, and that Ludus admin API listens on this host:port. If 8081 is loopback-only on the server, use the tunnel (127.0.0.1:18081) with working root SSH."
+            "Check firewall, TLS, and that Ludus admin API listens on this host:port. If 8081 is loopback-only on the server, use the tunnel (127.0.0.1:18081) with working host SSH."
         }
       }
     }

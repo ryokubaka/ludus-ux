@@ -41,6 +41,16 @@ except ImportError:
 ip_range = _b(5) if len(sys.argv) > 5 and sys.argv[5] else "192.168.56"
 range_id = _b(6) if len(sys.argv) > 6 and sys.argv[6] else "{{ range_id }}"
 
+def primary_vlan(config_text):
+    import re
+    vlans = re.findall(r'(?m)^\\s*vlan:\\s*(\\d+)\\s*$', config_text or '')
+    if not vlans:
+        return "10"
+    counts = {}
+    for vlan in vlans:
+        counts[vlan] = counts.get(vlan, 0) + 1
+    return sorted(counts, key=lambda vlan: (-counts[vlan], int(vlan)))[0]
+
 def lab_provider_path(lab, provider):
     return os.path.join(goad_path, "ad", lab, "providers", provider)
 
@@ -71,7 +81,10 @@ try:
             sys.exit(0)
         ext_env = Environment(loader=FileSystemLoader(ext_path))
         ext_content += ext_env.get_template("config.yml").render(
-            lab_name=lab_name, range_id=range_id, ip_range=ip_range
+            lab_name=lab_name,
+            range_id=range_id,
+            ip_range=ip_range,
+            target_vlan=primary_vlan(lab_content),
         ) + "\\n"
 
     tpl_path = template_provider_path(provider_name)

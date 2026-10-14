@@ -28,8 +28,13 @@ import {
   Shield,
   Filter,
   ListChecks,
+  Plus,
 } from "lucide-react"
 import { ludusApi } from "@/lib/api"
+import {
+  isRouterTemplateReadyForDeploy,
+  requiredRouterTemplateName,
+} from "@/lib/ludus-router-template"
 import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
 import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
 import {
@@ -48,6 +53,8 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { cn } from "@/lib/utils"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
 import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
+import { ludusSupportsExtensionsKey } from "@/lib/ludus-version"
+import { AddVmWizardDialog } from "@/components/range/add-vm-wizard-dialog"
 
 const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]
 const TAG_DESCRIPTIONS = LUDUS_DEPLOY_TAG_DESCRIPTIONS
@@ -105,6 +112,7 @@ export function RangeConfigPageClient() {
   const [showNetworkRules, setShowNetworkRules] = useState(false)
   /** Ludus blocks config PUT and range deploy in testing mode unless force is set (CLI `--force`). */
   const [forceLudus, setForceLudus] = useState(false)
+  const [showAddVmWizard, setShowAddVmWizard] = useState(false)
 
   const { lines, isStreaming, startStreaming, stopStreaming, clearLogs } = useDeployLogs({
     onComplete: () => setDeploying(false),
@@ -136,6 +144,19 @@ export function RangeConfigPageClient() {
     staleTime: STALE.long,
   })
 
+  const { data: versionData } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      if (result.error) throw new Error(result.error)
+      return result.data
+    },
+    staleTime: STALE.long,
+  })
+  const ludusVersion = versionData ? (versionData.result || versionData.version || "") : ""
+  const extensionsKeySupported =
+    ludusVersion !== "" && ludusSupportsExtensionsKey(ludusVersion)
+
   // Clear editor + deploy UI when switching ranges so keepPreviousData-style stale
   // YAML from the prior range cannot briefly appear under the new range key.
   useEffect(() => {
@@ -158,7 +179,9 @@ export function RangeConfigPageClient() {
   const deployLimitPatternPreview = resolveDeployLimitPattern(
     selectedLimitHosts,
     customLimitPattern,
-    selectedRangeId ? { rangeId: selectedRangeId, configYaml: config } : undefined,
+    selectedRangeId
+      ? { rangeId: selectedRangeId, configYaml: config, ludusVersion }
+      : undefined,
   )
   const limitSelectionCount = customLimitPattern.trim()
     ? 1
@@ -234,6 +257,41 @@ export function RangeConfigPageClient() {
       const saved = await persistRangeConfig(config)
       if (!saved) return
     }
+
+    const tplRes = await ludusApi.listTemplates()
+    if (!tplRes.error) {
+      const rows = Array.isArray(tplRes.data)
+        ? tplRes.data
+        : tplRes.data && typeof tplRes.data === "object" && Array.isArray((tplRes.data as { templates?: unknown }).templates)
+          ? (tplRes.data as { templates: Array<{ name?: string; built?: boolean }> }).templates
+          : []
+      const builtNames = new Set(
+        rows.filter((t) => t && typeof t === "object" && t.built === true).map((t) => t.name ?? ""),
+      )
+      const allNames = new Set(
+        rows.filter((t) => t && typeof t === "object").map((t) => t.name ?? ""),
+      )
+      const routerReady = isRouterTemplateReadyForDeploy({
+        builtNames,
+        allNames,
+        ludusVersion,
+        configYaml: config,
+      })
+      if (!routerReady) {
+        const required = requiredRouterTemplateName({
+          ludusVersion,
+          configYaml: config,
+          registeredTemplates: allNames,
+        })
+        toast({
+          variant: "destructive",
+          title: "Router template required",
+          description: `${required} must be Packer-built before any range deploy (Ludus router). Open Templates to add/build it.`,
+        })
+        return
+      }
+    }
+
     clearLogs()
     setShowLogs(true)
     setDeploying(true)
@@ -249,7 +307,7 @@ export function RangeConfigPageClient() {
       selectedLimitHosts,
       customLimitPattern,
       selectedRangeId
-        ? { rangeId: selectedRangeId, configYaml: config, deployedVms }
+        ? { rangeId: selectedRangeId, configYaml: config, deployedVms, ludusVersion }
         : undefined,
     )
     const onlyRolesForLudus = resolveDeployOnlyRoles(selectedOnlyRoles, customOnlyRolesPattern)
@@ -355,6 +413,9 @@ export function RangeConfigPageClient() {
 
   const isDirty = config !== originalConfig
 
+  const selectedRangeMeta = ranges.find((r) => r.rangeID === selectedRangeId)
+  const selectedRangeNumber = selectedRangeMeta?.rangeNumber
+
   // No range available yet (either still hydrating or the user actually has
   // zero ranges). Bail out before rendering the editor rather than firing
   // `/range/config` against no rangeID (→ 404 on the default range lookup).
@@ -425,6 +486,15 @@ export function RangeConfigPageClient() {
             <Button onClick={handleSave} disabled={saving || !isDirty} variant={isDirty ? "default" : "outline"}>
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               {saving ? "Saving..." : "Save Config"}
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => setShowAddVmWizard(true)}
+              disabled={!selectedRangeId || !!pendingAction}
+            >
+              <Plus className="h-4 w-4" />
+              Add VM
             </Button>
 
             {saveSuccess && (
@@ -675,6 +745,27 @@ export function RangeConfigPageClient() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">range-config.yml</CardTitle>
+          {ludusVersion !== "" && (
+            <p className="text-xs text-muted-foreground font-normal pt-1 leading-snug">
+              {extensionsKeySupported ? (
+                <>
+                  Ludus 2.3.0+ — optional top-level <code className="text-primary">ludus_extensions</code>{" "}
+                  stores arbitrary YAML metadata. LUX preserves it across GOAD Provide/provision (with{" "}
+                  <code className="text-primary">network:</code>). Router{" "}
+                  <code className="text-primary">global_role_vars</code> and VM{" "}
+                  <code className="text-primary">force_ip</code> are also edited here.
+                </>
+              ) : (
+                <>
+                  Connected Ludus is below 2.3.0 — top-level{" "}
+                  <code className="text-primary">ludus_extensions</code> may be rejected or ignored.
+                  Upgrade Ludus to use that key. Router{" "}
+                  <code className="text-primary">global_role_vars</code> and VM{" "}
+                  <code className="text-primary">force_ip</code> remain editable as YAML.
+                </>
+              )}
+            </p>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
@@ -690,6 +781,23 @@ export function RangeConfigPageClient() {
           )}
         </CardContent>
       </Card>
+
+      {selectedRangeId && (
+        <AddVmWizardDialog
+          open={showAddVmWizard}
+          onOpenChange={setShowAddVmWizard}
+          configYaml={config}
+          rangeId={selectedRangeId}
+          rangeNumber={selectedRangeNumber}
+          onApply={(mergedYaml, addedCount) => {
+            setConfig(mergedYaml)
+            toast({
+              title: `${addedCount} VM${addedCount !== 1 ? "s" : ""} added to config`,
+              description: "Review the YAML below, then Save Config before deploying.",
+            })
+          }}
+        />
+      )}
 
     </div>
   )

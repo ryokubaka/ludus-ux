@@ -46,17 +46,96 @@ function normalizeAction(v: unknown): RuleAction {
   return "ACCEPT"
 }
 
+/**
+ * Ludus `ip_last_octet_*` is ONLY the last octet (or N-M range), never a full IP.
+ * UI users often paste `10.1.20.20` — coerce to `20` so schema validation passes.
+ */
+export function normalizeIpLastOctet(raw: unknown): string | undefined {
+  if (raw == null) return undefined
+  const s = String(raw).trim()
+  if (!s) return undefined
+
+  // Full IPv4 → last octet
+  const ipv4 = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const last = Number(ipv4[4])
+    if (Number.isInteger(last) && last >= 0 && last <= 255) return String(last)
+  }
+
+  // Single octet 0–255
+  if (/^\d{1,3}$/.test(s)) {
+    const n = Number(s)
+    if (Number.isInteger(n) && n >= 0 && n <= 255) return String(n)
+  }
+
+  // Range N-M (Ludus docs: ip_last_octet_src: 21-25)
+  const range = s.match(/^(\d{1,3})\s*-\s*(\d{1,3})$/)
+  if (range) {
+    const a = Number(range[1])
+    const b = Number(range[2])
+    if (
+      Number.isInteger(a) &&
+      Number.isInteger(b) &&
+      a >= 0 &&
+      a <= 255 &&
+      b >= 0 &&
+      b <= 255 &&
+      a <= b
+    ) {
+      return `${a}-${b}`
+    }
+  }
+
+  // Leave as-is for caller/schema to reject; do not invent a value
+  return s
+}
+
+/**
+ * Ludus schema anyOf: integer single octet OR string range `N-M`.
+ * JS string `"20"` dumps as YAML `"20"` and fails both branches — use number.
+ */
+export function octetForYaml(raw: unknown): number | string | undefined {
+  const n = normalizeIpLastOctet(raw)
+  if (n == null) return undefined
+  if (/^\d{1,3}$/.test(n)) return Number(n)
+  return n
+}
+
+/**
+ * Ludus `ports`: integer | "all" | "start:end" | "a,b,c" — not a YAML array.
+ * Arrays (common blueprint mistake) → comma-separated string.
+ */
+export function normalizePorts(raw: unknown): string {
+  if (raw == null) return "all"
+  if (Array.isArray(raw)) {
+    const parts = raw.map((p) => String(p).trim()).filter(Boolean)
+    return parts.length > 0 ? parts.join(",") : "all"
+  }
+  const s = String(raw).trim()
+  return s || "all"
+}
+
+/** YAML dump form: bare int for single port; string for lists / ranges / all. */
+export function portsForYaml(raw: unknown): number | string {
+  const s = normalizePorts(raw)
+  if (s === "all") return "all"
+  if (/^\d+$/.test(s)) return Number(s)
+  return s
+}
+
 function rawToRule(r: Record<string, unknown>): NetworkRule {
   const rule: NetworkRule = {
     name: String(r.name ?? ""),
     vlan_src: normalizeVlan(r.vlan_src),
     vlan_dst: normalizeVlan(r.vlan_dst),
     protocol: normalizeProtocol(r.protocol),
-    ports: r.ports != null ? String(r.ports) : "all",
+    ports: normalizePorts(r.ports),
     action: normalizeAction(r.action),
   }
-  if (r.ip_last_octet_src != null) rule.ip_last_octet_src = String(r.ip_last_octet_src)
-  if (r.ip_last_octet_dst != null) rule.ip_last_octet_dst = String(r.ip_last_octet_dst)
+  const src = normalizeIpLastOctet(r.ip_last_octet_src)
+  const dst = normalizeIpLastOctet(r.ip_last_octet_dst)
+  if (src != null) rule.ip_last_octet_src = src
+  if (dst != null) rule.ip_last_octet_dst = dst
   return rule
 }
 
@@ -66,16 +145,20 @@ function rawToRule(r: Record<string, unknown>): NetworkRule {
  * Parse a range-config YAML string and return the network rules array.
  * Returns [] if there are none or the YAML is unparseable.
  */
-export function extractNetworkRules(yamlText: string): NetworkRule[] {
+export function extractNetworkRules(
+  yamlText: string,
+  options?: { fileOrder?: boolean },
+): NetworkRule[] {
   try {
     const doc = yaml.load(yamlText) as Record<string, unknown> | null
     if (!doc || typeof doc !== "object") return []
     const network = doc.network as Record<string, unknown> | undefined
     if (!network || !Array.isArray(network.rules)) return []
-    // Reverse on read: YAML is stored reversed (Ludus -I insert semantics), so
-    // reversing here restores the order the user expects (= iptables eval order).
-    return [...network.rules]
-      .reverse()
+    // Range config stores rules reversed (Ludus iptables -I). Reversing on read
+    // restores evaluation order. GOAD extension templates are already written
+    // in evaluation order, so those callers pass fileOrder.
+    const rules = options?.fileOrder ? network.rules : [...network.rules].reverse()
+    return rules
       .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
       .map(rawToRule)
   } catch {
@@ -96,11 +179,13 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
     vlan_src: rule.vlan_src,
     vlan_dst: rule.vlan_dst,
     protocol: rule.protocol,
-    ports: rule.protocol === "all" ? "all" : rule.ports,
+    ports: rule.protocol === "all" ? "all" : portsForYaml(rule.ports),
     action: rule.action,
   }
-  if (rule.ip_last_octet_src) obj.ip_last_octet_src = rule.ip_last_octet_src
-  if (rule.ip_last_octet_dst) obj.ip_last_octet_dst = rule.ip_last_octet_dst
+  const src = octetForYaml(rule.ip_last_octet_src)
+  const dst = octetForYaml(rule.ip_last_octet_dst)
+  if (src !== undefined) obj.ip_last_octet_src = src
+  if (dst !== undefined) obj.ip_last_octet_dst = dst
   return obj
 }
 
@@ -108,7 +193,8 @@ function ruleToPlain(rule: NetworkRule): Record<string, unknown> {
  * Inject (or remove) network rules into a range-config YAML string.
  *
  * - If `rules` is non-empty: parse the YAML, set `network.rules`, re-dump.
- * - If `rules` is empty: remove the `network:` key entirely.
+ * - If `rules` is empty: remove the `network:` key entirely, unless
+ *   `emptyRules` is `keep` (write `rules: []` and leave other network fields).
  *
  * Rules are written in REVERSED order because Ludus applies each rule via
  * `iptables -I` (insert at position 1), which reverses YAML order in the
@@ -126,7 +212,63 @@ const YAML_DUMP_OPTS = {
   forceQuotes: false,
 }
 
-export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): string {
+/**
+ * Fix `ip_last_octet_*` for Ludus schema:
+ * - full IPv4 → last octet as bare integer
+ * - quoted single octet `"20"` → bare `20` (string fails integer anyOf branch)
+ * Surgical replace — preserves comments/formatting.
+ */
+export function sanitizeNetworkIpOctetsInYaml(yamlText: string): string {
+  return yamlText.replace(
+    /^(\s*ip_last_octet_(?:src|dst):\s*)(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/gm,
+    (_m, prefix: string, dq?: string, sq?: string, bare?: string) => {
+      const raw = dq ?? sq ?? bare ?? ""
+      const out = octetForYaml(raw)
+      if (out === undefined) return _m
+      return `${prefix}${out}`
+    },
+  )
+}
+
+/**
+ * Coerce YAML list / flow-array `ports` under network rules to Ludus comma-string.
+ *   ports:\n  - 8220\n  - 5055  →  ports: "8220,5055"
+ *   ports: [8220, 5055]         →  ports: "8220,5055"
+ */
+export function sanitizeNetworkPortsInYaml(yamlText: string): string {
+  let out = yamlText.replace(
+    /^([ \t]*)ports:[ \t]*\n((?:[ \t]*-[ \t]*\d+[ \t]*(?:#[^\n]*)?\n?)+)/gm,
+    (_m, indent: string, listBlock: string) => {
+      const ports = [...listBlock.matchAll(/-[ \t]*(\d+)/g)].map((x) => x[1])
+      if (ports.length === 0) return _m
+      return `${indent}ports: "${ports.join(",")}"\n`
+    },
+  )
+  out = out.replace(
+    /^([ \t]*)ports:[ \t]*\[([^\]]*)\][ \t]*$/gm,
+    (_m, indent: string, inner: string) => {
+      const ports = inner
+        .split(",")
+        .map((p) => p.trim().replace(/^["']|["']$/g, ""))
+        .filter((p) => /^\d+$/.test(p))
+      if (ports.length === 0) return _m
+      if (ports.length === 1) return `${indent}ports: ${ports[0]}`
+      return `${indent}ports: "${ports.join(",")}"`
+    },
+  )
+  return out
+}
+
+/** All surgical Ludus network.rules coercions before PUT. */
+export function sanitizeNetworkRulesYaml(yamlText: string): string {
+  return sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText))
+}
+
+export function injectNetworkRules(
+  yamlText: string,
+  rules: NetworkRule[],
+  options?: { emptyRules?: "remove-network" | "keep" },
+): string {
   let doc: Record<string, unknown>
   try {
     const parsed = yaml.load(yamlText)
@@ -135,7 +277,7 @@ export function injectNetworkRules(yamlText: string, rules: NetworkRule[]): stri
     doc = {}
   }
 
-  if (rules.length === 0) {
+  if (rules.length === 0 && options?.emptyRules !== "keep") {
     delete doc.network
   } else {
     const existing = (doc.network ?? {}) as Record<string, unknown>
@@ -179,6 +321,48 @@ export function applyNetworkSection(yamlText: string, network: NetworkSnapshot |
     doc = {}
   }
   doc.network = structuredClone(network) as Record<string, unknown>
+  return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
+function ruleName(rule: unknown): string {
+  if (!rule || typeof rule !== "object") return ""
+  const name = (rule as { name?: unknown }).name
+  return typeof name === "string" ? name : ""
+}
+
+/**
+ * Ludus inserts each YAML rule with iptables `-I`, so the last stored rule is
+ * evaluated first. Names already in the snapshot stay in that storage order
+ * (and keep the snapshot body). Rules that exist only in `yamlText` are stored
+ * first, in the order they appear there, so they evaluate after the snapshot.
+ * Snapshot defaults such as `inter_vlan_default` win over the current file.
+ */
+export function mergeNetworkSection(yamlText: string, snapshot: NetworkSnapshot): string {
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    doc = (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}) as Record<string, unknown>
+  } catch {
+    doc = {}
+  }
+  const current = doc.network
+  const currentNet =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? (current as Record<string, unknown>)
+      : {}
+  const currentRules = Array.isArray(currentNet.rules) ? currentNet.rules : []
+  const snapshotRules = Array.isArray(snapshot.rules) ? [...snapshot.rules] : []
+  const seen = new Set(snapshotRules.map(ruleName).filter(Boolean))
+  const added: unknown[] = []
+  for (const rule of currentRules) {
+    const name = ruleName(rule)
+    if (name && seen.has(name)) continue
+    added.push(rule)
+    if (name) seen.add(name)
+  }
+  const kept = [...added, ...snapshotRules]
+  const { rules: _snapshotRules, ...snapshotRest } = snapshot
+  doc.network = { ...currentNet, ...snapshotRest, rules: kept }
   return yaml.dump(doc, YAML_DUMP_OPTS)
 }
 

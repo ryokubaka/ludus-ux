@@ -1,0 +1,14 @@
+{
+  "name": "braces",
+  "version": "3.0.4",
+  "description": "braces 3.0.3 with a nesting depth limit so deeply nested patterns cannot overflow the stack.",
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "dependencies": {
+    "fill-range": "^7.1.1"
+  }
+}

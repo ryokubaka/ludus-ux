@@ -41,7 +41,10 @@ async function fetchAccessibleRanges(): Promise<RangeAccessEntry[]> {
   const res = await fetch("/api/proxy/ranges/accessible", {
     headers: readImpersonationHeadersFromSessionStorage(),
   })
-  if (!res.ok) return []
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null
+    throw new Error(body?.error || `Failed to load accessible ranges (HTTP ${res.status})`)
+  }
   const data = await res.json()
   const list = extractArray<RangeAccessEntry>(data)
   return [...list].sort((a, b) => (a.rangeNumber ?? 9999) - (b.rangeNumber ?? 9999))

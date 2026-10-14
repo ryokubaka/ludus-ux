@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { goadPathFromEnv, ludusInstallPathFromEnv } from "./install-path-env"
+import { goadPathFromEnv, ludusInstallPathFromEnv, ludushoundPathFromEnv } from "./install-path-env"
 import type { RuntimeSettings } from "./settings-store"
 
 vi.mock("./settings-store", () => ({
@@ -7,7 +7,12 @@ vi.mock("./settings-store", () => ({
 }))
 
 import { getSettings } from "./settings-store"
-import { ludusRangeAnsibleLogPath, resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
+import {
+  ludusRangeAnsibleLogPath,
+  resolveGoadPath,
+  resolveLudusInstallPath,
+  resolveLudushoundPath,
+} from "./runtime-paths"
 
 function mockSettings(overrides: Partial<RuntimeSettings>): void {
   vi.mocked(getSettings).mockReturnValue({
@@ -16,8 +21,11 @@ function mockSettings(overrides: Partial<RuntimeSettings>): void {
     sshHost: "",
     sshPort: 22,
     goadPath: goadPathFromEnv(),
+    ludushoundPath: ludushoundPathFromEnv(),
     ludusInstallPath: ludusInstallPathFromEnv(),
     goadEnabled: true,
+    ludushoundEnabled: true,
+    ludusAnsibleVerbose: true,
     rootApiKey: "",
     blueprintOperatorApiKey: "",
     blueprintOperatorUserId: "",
@@ -37,6 +45,12 @@ describe("runtime-paths", () => {
     const nested = `${goadPathFromEnv()}/nested`
     mockSettings({ goadPath: `  ${nested}  ` })
     expect(resolveGoadPath()).toBe(nested)
+  })
+
+  it("trims LUDUSHOUND_PATH from settings", () => {
+    const nested = `${ludushoundPathFromEnv()}/nested`
+    mockSettings({ ludushoundPath: `  ${nested}  ` })
+    expect(resolveLudushoundPath()).toBe(nested)
   })
 
   it("trims LUDUS_INSTALL_PATH from settings", () => {

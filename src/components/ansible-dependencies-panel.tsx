@@ -11,7 +11,7 @@ import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import type { BlueprintRequirement } from "@/lib/blueprint-dependencies"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
-import { AlertTriangle, BookOpen, Check, Download, Loader2, RefreshCw } from "lucide-react"
+import { AlertTriangle, BookOpen, Check, Download, Layers, Loader2, RefreshCw } from "lucide-react"
 
 export interface DependencyCheckResult {
   required: BlueprintRequirement[]
@@ -80,9 +80,11 @@ export function AnsibleDependenciesPanel({
 
   const handleInstall = async () => {
     if (!check || check.missing.length === 0) return
+    const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
+    if (ansibleMissing.length === 0) return
     setInstalling(true)
     try {
-      const result = await onInstall(check.missing)
+      const result = await onInstall(ansibleMissing)
       await queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
 
       const refreshed = await onRefresh()
@@ -97,6 +99,8 @@ export function AnsibleDependenciesPanel({
         return
       }
 
+      const stillMissingTemplates = refreshed.missing.some((m) => m.kind === "template")
+
       if (result.failed.length > 0) {
         toast({
           variant: "destructive",
@@ -108,8 +112,10 @@ export function AnsibleDependenciesPanel({
 
       toast({
         variant: "destructive",
-        title: "Dependencies still missing",
-        description: "Retry install or add items manually on the Ansible page.",
+        title: stillMissingTemplates ? "Templates still missing" : "Dependencies still missing",
+        description: stillMissingTemplates
+          ? "Build required Packer templates on the Templates page before applying."
+          : "Retry install or add items manually on the Ansible page.",
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -133,7 +139,7 @@ export function AnsibleDependenciesPanel({
     return (
       <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        Checking Ansible dependencies…
+        Checking dependencies…
       </div>
     )
   }
@@ -156,16 +162,20 @@ export function AnsibleDependenciesPanel({
 
   if (!check) return null
 
+  const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
+  const templateMissing = check.missing.filter((m) => m.kind === "template")
+  const hasAnsibleMissing = ansibleMissing.length > 0
+
   if (check.ready) {
     if (hideReadyWhenEmpty && check.required.length === 0) return null
     return (
       <div className={`flex items-start gap-2 rounded-md border border-status-success/30 bg-status-success/5 ${compact ? "p-2" : "p-3"}`}>
         <Check className="h-4 w-4 text-status-success shrink-0 mt-0.5" />
         <div className="space-y-0.5">
-          <p className="text-sm font-medium text-status-success">Ansible dependencies ready</p>
+          <p className="text-sm font-medium text-status-success">Dependencies ready</p>
           {!compact && check.required.length > 0 && (
             <p className="text-xs text-muted-foreground">
-              {check.required.length} required item{check.required.length !== 1 ? "s" : ""} installed on this Ludus account.
+              {check.required.length} required item{check.required.length !== 1 ? "s" : ""} satisfied on this Ludus account.
             </p>
           )}
         </div>
@@ -176,11 +186,11 @@ export function AnsibleDependenciesPanel({
   return (
     <Alert className="text-sm border-amber-500/40 bg-amber-500/5">
       <AlertTriangle className="h-4 w-4 text-amber-600" />
-      <AlertTitle>Missing Ansible dependencies</AlertTitle>
+      <AlertTitle>Missing dependencies</AlertTitle>
       <AlertDescription className="space-y-3">
         <p>
-          This {subjectLabel} references roles or collections that are not installed on your Ludus server.
-          Install them before {failureAction} or deployment will fail.
+          This {subjectLabel} references roles, collections, or Packer templates that are not ready on your Ludus server.
+          Resolve them before {failureAction} or deployment will fail.
         </p>
         <ul className="space-y-1.5">
           {check.missing.map((req) => (
@@ -190,24 +200,31 @@ export function AnsibleDependenciesPanel({
               </Badge>
               <span className="font-mono break-all">{req.name}</span>
               {req.version && <span className="text-muted-foreground shrink-0">{req.version}</span>}
+              {req.kind === "template" && req.templateStatus && (
+                <span className="text-muted-foreground shrink-0">
+                  {req.templateStatus === "unbuilt" ? "not built" : "not registered"}
+                </span>
+              )}
             </li>
           ))}
         </ul>
         <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            className="gap-1.5"
-            disabled={installing}
-            onClick={() => void handleInstall()}
-          >
-            {installing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5" />
-            )}
-            Install dependencies
-          </Button>
+          {hasAnsibleMissing && (
+            <Button
+              type="button"
+              size="sm"
+              className="gap-1.5"
+              disabled={installing}
+              onClick={() => void handleInstall()}
+            >
+              {installing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              Install Ansible dependencies
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -219,12 +236,22 @@ export function AnsibleDependenciesPanel({
             <RefreshCw className="h-3.5 w-3.5" />
             Re-check
           </Button>
-          <Button type="button" variant="ghost" size="sm" className="gap-1.5" asChild>
-            <Link href="/ansible">
-              <BookOpen className="h-3.5 w-3.5" />
-              Ansible page
-            </Link>
-          </Button>
+          {hasAnsibleMissing && (
+            <Button type="button" variant="ghost" size="sm" className="gap-1.5" asChild>
+              <Link href="/ansible">
+                <BookOpen className="h-3.5 w-3.5" />
+                Ansible page
+              </Link>
+            </Button>
+          )}
+          {templateMissing.length > 0 && (
+            <Button type="button" variant="ghost" size="sm" className="gap-1.5" asChild>
+              <Link href="/templates">
+                <Layers className="h-3.5 w-3.5" />
+                Templates page
+              </Link>
+            </Button>
+          )}
         </div>
         {extraMissingInfo}
       </AlertDescription>

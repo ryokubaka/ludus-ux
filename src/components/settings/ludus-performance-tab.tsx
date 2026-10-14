@@ -121,7 +121,7 @@ export function LudusPerformanceTab() {
       <Alert>
         <Activity className="h-4 w-4" />
         <AlertDescription className="text-xs">
-          Samples Proxmox every {POLL_MS / 1000}s via <code className="text-primary">pvesh</code> over root SSH. Same credentials as
+          Samples Proxmox every {POLL_MS / 1000}s via <code className="text-primary">pvesh</code> over host SSH. Same credentials as
           SSH &amp; GOAD. CPU and memory come from <code className="text-primary">/cluster/resources</code> (pvestatd); load averages from{" "}
           <code className="text-primary">/nodes/&lt;node&gt;/status</code>.
         </AlertDescription>
@@ -154,9 +154,9 @@ export function LudusPerformanceTab() {
 
       {anyData && (
         <div className="grid gap-4 md:grid-cols-1">
-          <ChartCard title="CPU" description="Host CPU usage (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="cpu" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
-          <ChartCard title="Memory" description="RAM used (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="mem" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
-          <ChartCard title="Load (1m)" description="One-minute load average" rows={rows} nodeNames={nodeNames} fieldPrefix="load" unit="" domain={[0, "auto"]} chartMargins={chartMargins} />
+          <ChartCard title="CPU" description="One line per Proxmox node (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="cpu" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
+          <ChartCard title="Memory" description="One line per Proxmox node (%)" rows={rows} nodeNames={nodeNames} fieldPrefix="mem" unit="%" domain={[0, 100]} chartMargins={chartMargins} />
+          <ChartCard title="Load (1m)" description="One line per Proxmox node" rows={rows} nodeNames={nodeNames} fieldPrefix="load" unit="" domain={[0, "auto"]} chartMargins={chartMargins} />
         </div>
       )}
 

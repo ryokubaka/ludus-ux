@@ -8,6 +8,9 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { deleteBlueprintsOnLudus } from "@/lib/blueprint-delete"
+import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
+import { ludusRequest } from "@/lib/ludus-client"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -35,18 +38,32 @@ export async function POST(request: NextRequest) {
     ? body.aliasIds.map((id) => String(id).trim()).filter(Boolean)
     : []
 
-  // Only admins may delete source-catalog (global) blueprints. Enforce here so a
-  // non-admin cannot delete a shared blueprint by targeting its source ID directly.
+  const viewerKey =
+    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+  const ownedIds = new Set<string>()
+  if (!session.isAdmin) {
+    const listed = await ludusRequest<unknown>("/blueprints", { apiKey: viewerKey })
+    if (!listed.error && listed.data) {
+      for (const bp of normalizeBlueprintList(listed.data)) {
+        if (bp.access !== "owner") continue
+        const id = (bp.id || bp.blueprintID || "").trim()
+        if (id) ownedIds.add(id)
+      }
+    }
+  }
+  const owns = (id: string) => session.isAdmin || ownedIds.has(id)
+
+  // Shared source blueprints stay unless the caller owns them or is an admin.
   if (
-    !canDeleteBlueprint(session, blueprintId) ||
-    aliasIds.some((id) => !canDeleteBlueprint(session, id))
+    !canDeleteBlueprint(session, blueprintId, { owns: owns(blueprintId) }) ||
+    aliasIds.some((id) => !canDeleteBlueprint(session, id, { owns: owns(id) }))
   ) {
     logLuxRouteAction(request, session, {
       outcome: "failure",
       detail: `delete-blueprint-denied=${blueprintId}`,
     })
     return NextResponse.json(
-      { error: "Admin access required to delete source blueprints" },
+      { error: "Only the blueprint owner or an admin can delete this blueprint" },
       { status: 403 },
     )
   }

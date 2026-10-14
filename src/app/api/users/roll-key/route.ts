@@ -20,6 +20,7 @@ import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
 
 export const maxDuration = 600
 
@@ -117,7 +118,8 @@ export async function POST(request: NextRequest) {
         try {
           homeDir = await sshExec(
             settings.sshHost, settings.sshPort, sshUser, sshPw,
-            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`
+            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`,
+            { elevate: false },
           )
         } catch {
           homeDir = ""
@@ -129,18 +131,20 @@ export async function POST(request: NextRequest) {
       if (homeDir?.trim()) {
         await sshExec(
           settings.sshHost, settings.sshPort, sshUser, sshPw,
-          `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
-          `sed -i '/\\(export \\)\\?LUDUS_VERSION=/d' ${homeDir}/.bashrc 2>/dev/null; ` +
-          `echo 'export LUDUS_API_KEY=${newKey}' >> ${homeDir}/.bashrc; ` +
-          `echo 'export LUDUS_VERSION=2' >> ${homeDir}/.bashrc`
+          ["bashrc-apikey-set", linuxUser],
+          { stdin: `${newKey}\n` },
         )
         const verify = await sshExec(
           settings.sshHost, settings.sshPort, sshUser, sshPw,
-          `grep -c 'LUDUS_API_KEY=' "${homeDir}/.bashrc" 2>/dev/null || printf 0`
+          ["bashrc-apikey-get", linuxUser],
         )
-        const n = parseInt(String(verify).trim(), 10)
-        if (Number.isFinite(n) && n > 0) {
+        if (verify.includes(newKey)) {
           bashrcUpdated = true
+          try {
+            await ensureAnsibleHomeLayoutAsRoot(linuxUser)
+          } catch {
+            // Non-fatal — GOAD pre-flight repairs ~/.ansible on first deploy
+          }
         } else {
           bashrcError =
             ".bashrc did not contain LUDUS_API_KEY after write (slow disk or permissions — use Roll API key once the account exists)"
@@ -154,7 +158,7 @@ export async function POST(request: NextRequest) {
     }
   } else {
     bashrcError =
-      "SSH not configured (LUDUS_SSH_HOST and root SSH password or private key required) — bashrc not updated"
+      "SSH not configured (LUDUS_SSH_HOST and a host SSH password or private key for PROXMOX_SSH_USER required) — bashrc not updated"
   }
 
   logLuxRouteAction(request, adminSession, { detail: `userId=${userId} bashrcUpdated=${bashrcUpdated}` })

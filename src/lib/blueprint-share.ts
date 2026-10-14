@@ -120,6 +120,19 @@ function shouldRetryShareWithServiceKey(outcome: BlueprintShareOutcome): boolean
   return false
 }
 
+/** Share one blueprint with specific users using an already-chosen Ludus key (the source owner or an admin). */
+export async function shareBlueprintWithUsersAs(
+  apiKey: string,
+  blueprintId: string,
+  userIDs: string[],
+): Promise<string[]> {
+  const outcome = await shareWithKey(apiKey, blueprintId, uniqueIds(userIDs), [])
+  const warnings: string[] = []
+  if (outcome.httpError) warnings.push(outcome.httpError)
+  for (const row of outcome.errors) warnings.push(`${row.item}: ${row.reason}`)
+  return warnings
+}
+
 export async function shareBlueprintOnLudus(
   session: ResolvedSession,
   request: NextRequest,

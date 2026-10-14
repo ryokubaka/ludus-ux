@@ -833,8 +833,8 @@ export function UsersPageClient() {
               <Alert>
                 <AlertDescription className="text-xs">
                   Could not auto-read the API key from <code className="font-mono">~{impersonateTarget.sshLogin}/.bashrc</code>{" "}
-                  via root SSH. Enter it manually below.
-                  Commands will run via <strong>root SSH</strong> + <code>sudo -u {impersonateTarget.sshLogin}</code>.
+                  over host SSH. Enter it manually below.
+                  Commands will run via that host SSH account (root, or <code>sudo -n /usr/local/sbin/lux-host</code>) and <code>sudo -u {impersonateTarget.sshLogin}</code>.
                 </AlertDescription>
               </Alert>
               <div className="space-y-1.5">

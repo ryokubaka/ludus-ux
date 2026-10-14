@@ -59,6 +59,7 @@ import {
 } from "@/lib/selected-range-cookie"
 
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { listVisibleLudusSources } from "@/lib/list-visible-ludus-sources"
 
 import {
 
@@ -88,7 +89,7 @@ import {
 
 } from "@/lib/cached-ludus-fetch"
 
-import { isHttp404Error, listSources } from "@/lib/ludus-source-client"
+import { isHttp404Error } from "@/lib/ludus-source-client"
 
 // ── L1 SWR caches (non-blocking peek; fetchers populate L2 via cached-ludus-fetch) ──
 
@@ -353,6 +354,7 @@ export async function prefetchAnsibleData(session: ResolvedSession | null) {
       queryClient.setQueryData(queryKeys.ansible(scopeTag), {
         roles: ansible.filter((i) => (i.type || i.Type) === "role"),
         collections: ansible.filter((i) => (i.type || i.Type) === "collection"),
+        all: ansible,
       })
     }
 
@@ -532,7 +534,10 @@ export async function prefetchSourcesData(session: ResolvedSession | null) {
 
     try {
 
-      const sources = await listSources(effectiveApiKey)
+      const sources = await listVisibleLudusSources({
+        isAdmin: session.isAdmin,
+        apiKey: effectiveApiKey,
+      })
 
       queryClient.setQueryData(queryKeys.sources(scopeTag), { sources, available: true })
 
@@ -548,6 +553,22 @@ export async function prefetchSourcesData(session: ResolvedSession | null) {
 
   return dehydrate(queryClient)
 
+}
+
+/** Clear L1 SWRCache entries after Ludus mutations (Next `"use cache"` tags are separate). */
+export function invalidatePrefetchSwrCaches(): void {
+  rangesCache.invalidate()
+  versionCache.invalidate()
+  usersCache.invalidate()
+  templatesCache.invalidate()
+  groupsCache.invalidate()
+  ansibleCache.invalidate()
+  adminDataCache.invalidate()
+  rangeStatusCache.invalidate()
+  rangeLogHistoryCache.invalidate()
+  rangeLogEnrichmentCache.invalidate()
+  snapshotsViewCache.invalidate()
+  rangeConfigCache.invalidate()
 }
 
 

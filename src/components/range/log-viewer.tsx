@@ -239,7 +239,7 @@ function LogViewerRoot({ children, ...config }: LogViewerConfig & { children: Re
         className={cn(
           "rounded-lg border overflow-hidden",
           dark ? "border-zinc-800" : "border-border",
-          fillHeight && "flex flex-col flex-1 min-h-0 h-full",
+          fillHeight && "flex flex-col flex-1 min-h-0 h-full w-full min-w-0",
           className,
         )}
       >
@@ -430,7 +430,7 @@ function LogViewerBody() {
         ref={containerRef}
         onScroll={handleScroll}
         className={cn(
-          "p-4 overflow-y-auto font-mono leading-relaxed",
+          "p-4 overflow-y-auto overscroll-y-contain font-mono leading-relaxed",
           dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
           wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",
           fillHeight && "flex-1 min-h-0",

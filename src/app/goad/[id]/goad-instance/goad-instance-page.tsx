@@ -57,7 +57,7 @@ import { GoadReassignDialog } from "@/components/goad/goad-instance-tabs/goad-re
 import { GoadInstanceTabTriggers } from "@/components/goad/goad-instance-tabs/goad-instance-tab-triggers"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import {
-  applyNetworkSection,
+  mergeNetworkSection,
   networkSectionEqual,
   type NetworkSnapshot,
 } from "@/lib/network-rules"
@@ -69,8 +69,9 @@ import {
   parseAnsibleInstalledSets,
   type AnsibleInstalledSets,
 } from "@/lib/goad-dependency-service"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/query-client"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import {
@@ -104,6 +105,15 @@ function GoadInstancePage() {
   // renders inline next to the triggering row instead of jumping to the top.
   const { pendingAction, confirm, cancelConfirm, commitConfirm } = useConfirm()
   const scopeTag = useEffectiveScopeTag()
+  const { data: ludusVersion = "" } = useQuery({
+    queryKey: queryKeys.version(scopeTag),
+    queryFn: async () => {
+      const result = await ludusApi.getVersion()
+      return result.data ?? null
+    },
+    select: (data) => (data ? data.result || data.version || "" : ""),
+    staleTime: STALE.long,
+  })
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
   const goadListQueryBucket = impersonation?.username ?? "self"
@@ -295,11 +305,15 @@ function GoadInstancePage() {
     const isTerminalError = rangeState === "ERROR" || rangeState === "ABORTED"
     if (!isTerminalError || !isRunning || !sawDeployingRef.current || autoStoppedRef.current) return
     autoStoppedRef.current = true
-    stop()
+    // ERROR is a failed deploy. ABORTED is the operator stopping the range.
+    void stop({ asError: rangeState === "ERROR" })
     toast({
       variant: "destructive",
-      title: "Range deployment failed",
-      description: "The Ludus range encountered an error. The GOAD command has been stopped automatically.",
+      title: rangeState === "ERROR" ? "Range deployment failed" : "Range deployment aborted",
+      description:
+        rangeState === "ERROR"
+          ? "The Ludus range reported an error. The GOAD command was stopped and marked failed."
+          : "The Ludus range was aborted. The GOAD command has been stopped.",
     })
   // Intentionally omits `stop` and `toast` — both are stable refs; adding them
   // would cause unnecessary re-registrations without changing behavior.
@@ -590,7 +604,7 @@ function GoadInstancePage() {
           const current = await ludusApi.getRangeConfig(rangeId)
           const yaml = current.data?.result
           if (yaml && !networkSectionEqual(yaml, snapshot)) {
-            const merged = applyNetworkSection(yaml, snapshot)
+            const merged = mergeNetworkSection(yaml, snapshot)
             await ludusApi.setRangeConfig(merged, rangeId)
           }
           // Match runAction / startNetworkTagDeploy: do not start a tag deploy while
@@ -1184,6 +1198,7 @@ function GoadInstancePage() {
           uninstalledExtensions={uninstalledExtensions}
           builtNames={builtNames}
           allNames={allNames}
+          ludusVersion={ludusVersion}
           provisionOnlyExtensionsSupported={provisionOnlyExtensionsSupported}
           isRunning={isRunning}
           pendingAction={pendingAction}

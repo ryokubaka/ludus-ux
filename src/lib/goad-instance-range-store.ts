@@ -3,15 +3,9 @@
  *
  * WHY THIS EXISTS
  * ───────────────
- * The SSH-written .goad_range_id file is the canonical on-server record, but
- * writing it requires root SSH (password or mounted private key).  When those
- * credentials are not configured the write fails silently, leaving the new
- * instance with no range association in the UI.
- *
- * This local store is the PRIMARY record written by the set-range route.
- * The SSH file write is a secondary, best-effort sync.  The instances API
- * checks this store first so range assignments always survive a page reload
- * regardless of SSH configuration.
+ * The SSH-written .goad_range_id file is the on-server record GOAD reads.
+ * set-range and deploy linkage write that file as the workspace owner, then
+ * update this store. A failed file write does not update the row.
  */
 
 import { getDb } from "./db"

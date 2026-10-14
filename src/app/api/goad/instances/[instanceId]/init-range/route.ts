@@ -17,8 +17,9 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
-import { readGoadRangeId, writeGoadRangeId } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { goadCommandRunsAsHostAccount, setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
+import { chownGoadInstance, listGoadInstances, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
+import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { bustAdminCache } from "@/lib/admin-data"
@@ -46,7 +47,12 @@ export async function POST(
   const { instanceId } = await params
   const settings = getSettings()
 
-  const rootCreds = rootPasswordCredsIfSet(settings)
+  const userCreds =
+    session.sshPassword && session.username
+      ? { username: session.username, password: session.sshPassword }
+      : undefined
+  const runAsOwner = (command: string) =>
+    sshExecAsWorkspaceUser(request, session, command, userCreds)
 
   const { apiKey: impersonateApiKey, ludusPrincipal, ludusUserId: impLudusUid, sshLogin } =
     resolveAdminImpersonationFromRequest(session, request)
@@ -54,7 +60,7 @@ export async function POST(
   const ludusHint = ((impersonateApiKey ? ludusPrincipal : null) || session.username).trim()
   const sshForSlug = (impersonateApiKey ? sshLogin || ludusPrincipal || "" : session.username).trim()
 
-  const existing = await readGoadRangeId(instanceId, rootCreds)
+  const existing = await readGoadRangeId(instanceId, undefined, runAsOwner)
   if (existing) {
     const whoHeal = await ludusRequest<unknown>("/user", { apiKey: effectiveApiKey })
     const callerHeal =
@@ -134,8 +140,51 @@ export async function POST(
     bustAdminCache()
   }
 
+  const ownerLinux = sshForSlug.trim()
+  const runsAsHost = goadCommandRunsAsHostAccount({
+    sshPassword: session.sshPassword,
+    impersonating: session.isAdmin === true && !!impersonateApiKey,
+  })
+  const taskActive = setRangeHostProcessActive(instanceId)
+  let directoryOwner = ""
+  if (runsAsHost || taskActive) {
+    try {
+      const listed = await listGoadInstances()
+      directoryOwner = listed.find((item) => item.instanceId === instanceId)?.ownerUserId?.trim() ?? ""
+    } catch {
+      directoryOwner = ""
+    }
+  }
+  if (
+    shouldDeferHostWorkspaceChown({
+      directoryOwner,
+      targetUser: ownerLinux,
+      hostUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
+      hostProcessActive: runsAsHost || taskActive,
+    })
+  ) {
+    if (!runsAsHost) {
+      return NextResponse.json(
+        { error: "GOAD is still writing this workspace" },
+        { status: 409 },
+      )
+    }
+    logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })
+    return NextResponse.json({ rangeId, created: true })
+  }
+  if (session.isAdmin && ownerLinux && ownerLinux.toLowerCase() !== "root") {
+    try {
+      await chownGoadInstance(instanceId, ownerLinux)
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Failed to give ${ownerLinux} the GOAD workspace: ${(err as Error).message}` },
+        { status: 500 },
+      )
+    }
+  }
+
   try {
-    await writeGoadRangeId(instanceId, rangeId, rootCreds)
+    await writeGoadRangeId(instanceId, rangeId, runAsOwner)
   } catch (err) {
     return NextResponse.json(
       {

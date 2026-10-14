@@ -18,7 +18,8 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 |---|---|---|
 | `SSH_KEY_PATH` | **Host** directory for the `PROXMOX_SSH_USER` private key copied from the Ludus server. Mounted at **`/app/ssh`** in the container. Who that account is: [SSH and authentication](ssh-and-auth.md). | `./ssh` |
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
-| `LUX_REPO_PATH` | Absolute path of the LUX git clone on the Docker host. Settings → About uses it when `docker inspect` cannot see the Compose project directory. | unset |
+| `LUX_REPO_PATH` | Optional override for the host git clone used by Settings → About. LUX auto-detects the Compose project directory and the host path of the `./data` → `/app/data` bind mount when the Docker socket is mounted. | unset |
+| `GITHUB_TOKEN` / `LUX_GITHUB_TOKEN` | Optional GitHub PAT for the About release list (reduces unauthenticated API 403 rate limits). | unset |
 
 ## Admin / user management
 

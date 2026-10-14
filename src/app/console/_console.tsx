@@ -4,8 +4,14 @@ import { Suspense, useEffect, useRef, useState, useCallback, useMemo } from "rea
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { ludusApi } from "@/lib/api"
+import {
+  clearVmPartialListStreak,
+  dedupeVMs,
+  resolveVmListForRangeQuery,
+} from "@/lib/dashboard-vm-merge"
+import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { useRange } from "@/lib/range-context"
-import type { VMObject } from "@/lib/types"
+import type { RangeObject, VMObject } from "@/lib/types"
 import {
   Monitor,
   ChevronDown,
@@ -37,6 +43,11 @@ export function ConsolePageClient() {
 function ConsolePageInner() {
   const searchParams = useSearchParams()
   const { ranges: accessibleRanges, selectedRangeId, selectRange } = useRange()
+  const scopeTag = useEffectiveScopeTag()
+
+  useEffect(() => {
+    clearVmPartialListStreak()
+  }, [selectedRangeId, scopeTag])
 
   // All VMs keyed by rangeID — fetched once per range on selection
   const [allVms, setAllVms] = useState<FlatVM[]>([])
@@ -84,17 +95,28 @@ function ConsolePageInner() {
       const res = await ludusApi.getRangeStatus(rangeId)
       if (res.data) {
         const ranges = Array.isArray(res.data) ? res.data : [res.data]
-        const flat: FlatVM[] = []
-        for (const range of ranges) {
-          const vmList = range.VMs || range.vms || []
-          for (const vm of vmList) {
-            flat.push({ ...vm, rangeID: range.rangeID || range.name || "range" })
-          }
-        }
-        // Merge into allVms (replace entries for this range).
-        // Use the same fallback key that was stamped onto each FlatVM so the
-        // filter correctly removes stale entries before inserting fresh ones.
+        let mergedFlat: FlatVM[] = []
         setAllVms((prev) => {
+          const flat: FlatVM[] = []
+          for (const range of ranges) {
+            const rid = range.rangeID || range.name || "range"
+            const rawVMs = range.VMs || (range as RangeObject & { vms?: VMObject[] }).vms || []
+            const newVMs = dedupeVMs(rawVMs)
+            const prevVMs = prev.filter((v) => v.rangeID === rid)
+            const stateUpper = (range.rangeState || "").toString().toUpperCase()
+            const vmList = resolveVmListForRangeQuery({
+              data: range as RangeObject,
+              newVMs,
+              prevVMs,
+              stateUpper,
+              scopeTag,
+              rangeId: rid,
+            })
+            for (const vm of vmList) {
+              flat.push({ ...vm, rangeID: rid })
+            }
+          }
+          mergedFlat = flat
           const freshKeys = new Set(ranges.map((r) => r.rangeID || r.name || "range"))
           const other = prev.filter((v) => !freshKeys.has(v.rangeID))
           return [...other, ...flat]
@@ -104,7 +126,7 @@ function ConsolePageInner() {
         const paramId = searchParams.get("vmId")
         const paramName = searchParams.get("vmName")
         if (paramId && !activeVm) {
-          const found = flat.find((v) => String(v.proxmoxID) === paramId)
+          const found = mergedFlat.find((v) => String(v.proxmoxID) === paramId)
           const vm = found || ({
             proxmoxID: parseInt(paramId),
             name: paramName || `vm-${paramId}`,
@@ -117,7 +139,7 @@ function ConsolePageInner() {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams])
+  }, [searchParams, scopeTag])
 
   // Fetch VMs whenever the selected range changes.
   // Skip the fetch until we have a real rangeId — avoids a noisy "fetch all"

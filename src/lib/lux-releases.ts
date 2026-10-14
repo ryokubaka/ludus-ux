@@ -25,11 +25,13 @@ async function fetchGithubReleases(): Promise<{ raw: GithubReleaseInput[]; error
   }
 
   try {
+    const ghToken = (process.env.GITHUB_TOKEN || process.env.LUX_GITHUB_TOKEN || "").trim()
     const res = await fetch(GITHUB_RELEASES_URL, {
       headers: {
         Accept: "application/vnd.github+json",
         "User-Agent": "ludus-ux",
         "X-GitHub-Api-Version": "2022-11-28",
+        ...(ghToken ? { Authorization: `Bearer ${ghToken}` } : {}),
       },
       signal: AbortSignal.timeout(15_000),
       cache: "no-store",

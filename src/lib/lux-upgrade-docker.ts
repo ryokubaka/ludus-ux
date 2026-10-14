@@ -1,6 +1,15 @@
 import { randomBytes } from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
+import {
+  bindMountRepoRoot,
+  filterHostShellRepoCandidates,
+  isSafeLuxRepoPath,
+  LUX_DATA_MOUNT_DEST,
+  normalizeLuxHostRepoPath,
+  resolveConfiguredLuxRepoPath,
+  type LuxHostProbeOptions,
+} from "@/lib/lux-upgrade-host"
 
 /** Host docker daemon socket. Compose mounts this into the app container. */
 export const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || "/var/run/docker.sock"
@@ -22,8 +31,10 @@ export function dockerSocketAvailable(): boolean {
 export type HostExecContainer = {
   Image: string
   Tty: true
+  WorkingDir: string
   Entrypoint: string[]
   Cmd: string[]
+  Env?: string[]
   HostConfig: { Privileged: true; PidMode: "host"; CgroupnsMode: "host" }
 }
 
@@ -35,9 +46,11 @@ export function buildHostExecContainer(script: string, image: string): HostExecC
   return {
     Image: image,
     Tty: true,
+    WorkingDir: "/",
     Entrypoint: ["/usr/bin/nsenter", "-t", "1", "-w/", "-m", "-u", "-i", "-n", "-p", "--", "/bin/sh", "-c"],
     Cmd: [script],
     HostConfig: { Privileged: true, PidMode: "host", CgroupnsMode: "host" },
+    Env: ["PWD=/", "HOME=/root"],
   }
 }
 
@@ -107,7 +120,7 @@ function pullStreamError(body: string): string | null {
   return null
 }
 
-function containerNameCandidates(): string[] {
+export function containerNameCandidates(): string[] {
   const names: string[] = []
   try {
     const host = fs.readFileSync("/etc/hostname", "utf8").trim()
@@ -144,6 +157,100 @@ async function ensureHostExecImage(image: string, allowPull: boolean): Promise<v
   if (pulled.status >= 300) throw dockerError(pulled.body, pulled.status)
   const streamError = pullStreamError(pulled.body)
   if (streamError) throw new Error(streamError)
+}
+
+type ContainerInspect = {
+  Config?: { Labels?: Record<string, string> }
+  Mounts?: Array<{ Source?: string; Destination?: string }>
+}
+
+/** Paths exactly as the Docker API reports them (may be Windows client paths). */
+export function clientRepoHintsFromInspect(spec: ContainerInspect): string[] {
+  const out: string[] = []
+  for (const m of spec.Mounts ?? []) {
+    if (m.Destination === LUX_DATA_MOUNT_DEST) {
+      const src = m.Source?.trim()
+      if (src) out.push(src)
+    }
+  }
+  const wd = spec.Config?.Labels?.["com.docker.compose.project.working_dir"]?.trim()
+  if (wd) out.push(wd)
+  return [...new Set(out)]
+}
+
+/**
+ * Resolve the host checkout path from this container's Compose label or /app/data bind mount.
+ * Used before the host probe so About → upgrade works without LUX_REPO_PATH in .env.
+ */
+/** Host checkout candidates — bind mount is most reliable (Compose labels often wrong on Desktop). */
+export function luxRepoPathCandidatesFromInspect(spec: ContainerInspect): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (raw: string | undefined) => {
+    const norm = normalizeLuxHostRepoPath(raw ?? "")
+    if (!norm || !isSafeLuxRepoPath(norm) || seen.has(norm)) return
+    seen.add(norm)
+    out.push(norm)
+  }
+  for (const m of spec.Mounts ?? []) {
+    if (m.Destination === LUX_DATA_MOUNT_DEST && m.Source?.trim()) {
+      push(bindMountRepoRoot(m.Source) ?? undefined)
+    }
+  }
+  push(spec.Config?.Labels?.["com.docker.compose.project.working_dir"])
+  return out
+}
+
+function mergeLuxRepoCandidates(fromInspect: string[], configured: string | null): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of [...fromInspect, ...(configured ? [configured] : [])]) {
+    const norm = normalizeLuxHostRepoPath(raw)
+    if (!isSafeLuxRepoPath(norm) || seen.has(norm)) continue
+    seen.add(norm)
+    out.push(norm)
+  }
+  return out
+}
+
+/** Paths and container ref for the host-side upgrade probe (Docker API only; no host OS assumptions). */
+export async function discoverLuxRepoPathContext(): Promise<LuxHostProbeOptions> {
+  const configured = resolveConfiguredLuxRepoPath()
+  const names = containerNameCandidates()
+  const fallbackRef = names[0] ?? "ludus-ux"
+
+  if (!dockerSocketAvailable()) {
+    return {
+      containerRef: fallbackRef,
+      candidates: configured ? [configured] : [],
+      clientPaths: configured ? [configured] : [],
+    }
+  }
+
+  for (const name of names) {
+    const inspected = await dockerApi("GET", `/containers/${encodeURIComponent(name)}/json`)
+    if (inspected.status !== 200) continue
+    let spec: ContainerInspect
+    try {
+      spec = JSON.parse(inspected.body) as ContainerInspect
+    } catch {
+      continue
+    }
+    const candidates = filterHostShellRepoCandidates(
+      mergeLuxRepoCandidates(luxRepoPathCandidatesFromInspect(spec), configured),
+    )
+    return {
+      containerRef: name,
+      candidates,
+      clientPaths: clientRepoHintsFromInspect(spec),
+    }
+  }
+
+  return {
+    containerRef: fallbackRef,
+    candidates: configured ? [configured] : [],
+    clientPaths: configured ? [configured] : [],
+  }
 }
 
 /** Run a shell script on the Docker host and return its stdout. */

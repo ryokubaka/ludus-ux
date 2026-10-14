@@ -17,7 +17,12 @@ vi.mock("@/lib/ludus-cache-revalidate", () => ({
 
 import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
 
-const session = { username: "alice", impersonationUserId: undefined }
+const session = {
+  username: "alice",
+  impersonationUserId: undefined,
+  apiKey: "test-key",
+  impersonationApiKey: undefined,
+}
 
 describe("revalidateAfterLudusProxyMutation", () => {
   beforeEach(() => {

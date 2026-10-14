@@ -23,6 +23,7 @@ import {
 import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -110,6 +111,13 @@ async function handler(
             reason: router.reason,
           },
           { status: 409 },
+        )
+      }
+      const patches = await ensureRangeDeployHostPatches(body)
+      if (!patches.ok) {
+        return NextResponse.json(
+          { error: patches.error, code: "deploy_host_patch" },
+          { status: 503 },
         )
       }
     }

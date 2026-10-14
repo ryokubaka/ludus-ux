@@ -48,6 +48,8 @@
 #   proxmox-token
 #   upgrade-probe [repo]             (HMAC line, then upgrade.sh, on stdin)
 #   upgrade-start <repo> <tag>       (HMAC line, then upgrade.sh, on stdin)
+#   patch-debian11-apt               (no args; rewrites one Ludus playbook task)
+#   patch-chocolatey-openssh         (no args; rewrites the Windows Chocolatey bootstrap)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
   exit 1
@@ -286,6 +288,256 @@ select_upgrade_script() {
   fi
   UPGRADE_SCRIPT="$repo/scripts/upgrade.sh"
   UPGRADE_SCRIPT_IS_TEMP=0
+}
+
+# Insert a raw task ahead of Ludus's dbus install so Debian 11 apt uses the
+# HTTPS archive. Bullseye LTS ended 2026-08-31: security.debian.org still
+# publishes the package index, and the pool objects 404. The archive serves
+# those objects on port 443. The task is replaced on every run so a newer
+# LUX build can change the script. LUX_DEBIAN11_APT_PLAYBOOK is for tests;
+# sudo env_reset drops it. Production always edits the Ludus playbook path.
+debian11_archive_guest_script() {
+  cat <<'EOF'
+set -eu
+root=${LUX_APT_ROOT:-}
+osrel="${root}/etc/os-release"
+if [ ! -r "$osrel" ]; then
+  exit 0
+fi
+# shellcheck disable=SC1090
+. "$osrel"
+if [ "${ID:-}" != "debian" ] || [ "${VERSION_ID:-}" != "11" ]; then
+  exit 0
+fi
+src="${root}/etc/apt"
+mkdir -p "${src}/apt.conf.d"
+printf '%s\n' 'Acquire::Check-Valid-Until "false";' > "${src}/apt.conf.d/99lux-debian11-archive"
+files=$(mktemp)
+find_apt_files() {
+  if [ -f "${src}/sources.list" ] && [ ! -L "${src}/sources.list" ]; then
+    printf '%s\n' "${src}/sources.list"
+  fi
+  if [ -d "${src}/sources.list.d" ]; then
+    find "${src}/sources.list.d" -maxdepth 1 -type f \( -name '*.list' -o -name '*.sources' \) -print
+  fi
+}
+find_apt_files > "$files"
+restore_hold() {
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sed -i 's|^# lux-hold ||' "$f"
+  done < "$files"
+}
+cleanup() {
+  restore_hold
+  rm -f "$files"
+}
+trap cleanup EXIT
+need_ca=1
+if dpkg-query -W -f='${Status}\n' ca-certificates 2>/dev/null | grep -q 'install ok installed'; then
+  need_ca=0
+fi
+if [ "$need_ca" -eq 1 ]; then
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    sed -i \
+      -e '/^[[:space:]]*#/b' \
+      -e 's|^\([[:space:]]*deb\(-src\)\{0,1\}[[:space:]].*security\.debian\.org.*\)|# lux-hold \1|' \
+      -e 's|^\([[:space:]]*URIs:[[:space:]].*security\.debian\.org.*\)|# lux-hold \1|' \
+      "$f"
+  done < "$files"
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold \
+    -o DPkg::Lock::Timeout=60 \
+    ca-certificates
+fi
+restore_hold
+while IFS= read -r f; do
+  [ -f "$f" ] || continue
+  sed -i \
+    -e 's|http://security.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+    -e 's|https://security.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+    -e 's|http://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+    -e 's|https://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g' \
+    -e 's|http://security.debian.org/ |https://archive.debian.org/debian-security |g' \
+    -e 's|http://security.debian.org |https://archive.debian.org/debian-security |g' \
+    -e 's|bullseye/updates|bullseye-security|g' \
+    "$f"
+done < "$files"
+apt-get update
+EOF
+}
+
+patch_debian11_security_archive() {
+  local playbook indent line dbus_re
+  if [[ -n "${LUX_DEBIAN11_APT_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_DEBIAN11_APT_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-ip-and-hostname-linux.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/proxmox/configure-ip-and-hostname-linux.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  dbus_re='^[[:space:]]*- name:[[:space:]]*"?Install dbus for systemd hostname changes"?[[:space:]]*$'
+  local stripped task out
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-DEBIAN11-SECURITY-ARCHIVE$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-DEBIAN11-SECURITY-ARCHIVE$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$dbus_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  {
+    printf '%s# BEGIN LUX-DEBIAN11-SECURITY-ARCHIVE\n' "$indent"
+    printf '%s- name: Point Debian 11 security apt at the HTTPS archive\n' "$indent"
+    printf '%s  raw: |\n' "$indent"
+    debian11_archive_guest_script | sed "s/^/${indent}    /"
+    printf '%s  changed_when: false\n' "$indent"
+    printf '%s# END LUX-DEBIAN11-SECURITY-ARCHIVE\n' "$indent"
+  } > "$task"
+  if ! awk -v taskfile="$task" -v re="$dbus_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
+# OpenSSH on Windows keeps the PATH from when sshd started. win_chocolatey
+# installs Chocolatey, then looks up choco.exe in that stale PATH and fails.
+# Install first, record the machine PATH, and reboot once so the next SSH
+# session can see choco.exe. LUX_CHOCOLATEY_PLAYBOOK is for tests only.
+chocolatey_openssh_tasks() {
+  local indent="$1"
+  cat <<'EOF' | sed "s/^/${indent}/"
+# BEGIN LUX-CHOCOLATEY-OPENSSH
+- name: LUX install Chocolatey before the module bootstrap
+  win_shell: |
+    $ErrorActionPreference = 'Stop'
+    $root = 'C:\ProgramData\chocolatey'
+    $bin = Join-Path $root 'bin'
+    $choco = Join-Path $bin 'choco.exe'
+    $onPath = $null -ne (Get-Command choco.exe -ErrorAction SilentlyContinue)
+    if (-not (Test-Path -LiteralPath $choco)) {
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      Set-ExecutionPolicy Bypass -Scope Process -Force
+      Invoke-Expression ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    }
+    if (-not (Test-Path -LiteralPath $choco)) {
+      Write-Error 'choco.exe was not installed'
+      exit 1
+    }
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($machinePath -notlike ('*' + $bin + '*')) {
+      if ([string]::IsNullOrEmpty($machinePath)) {
+        $machinePath = $bin
+      } else {
+        $machinePath = $machinePath + ';' + $bin
+      }
+      [Environment]::SetEnvironmentVariable('Path', $machinePath, 'Machine')
+    }
+    [Environment]::SetEnvironmentVariable('ChocolateyInstall', $root, 'Machine')
+    if ($onPath) { exit 0 }
+    exit 10
+  register: lux_choco_bootstrap
+  changed_when: lux_choco_bootstrap.rc == 10
+  failed_when: lux_choco_bootstrap.rc not in [0, 10]
+- name: LUX reboot so OpenSSH sessions see Chocolatey on PATH
+  win_reboot:
+    reboot_timeout: 900
+  when: lux_choco_bootstrap.rc | default(0) | int == 10
+# END LUX-CHOCOLATEY-OPENSSH
+EOF
+}
+
+patch_chocolatey_openssh() {
+  local playbook indent line task_re
+  if [[ -n "${LUX_CHOCOLATEY_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_CHOCOLATEY_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "add-additional-windows-tools.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/windows/add-additional-windows-tools.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  task_re='^[[:space:]]*- name:[[:space:]]*"?Bootstrap chocolatey by hand"?[[:space:]]*$'
+  local stripped task out
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-CHOCOLATEY-OPENSSH$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-CHOCOLATEY-OPENSSH$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$task_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  chocolatey_openssh_tasks "$indent" > "$task"
+  if ! awk -v taskfile="$task" -v re="$task_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
 }
 
 op="${1:-}"
@@ -862,6 +1114,14 @@ PY
       rm -f "$UPGRADE_SCRIPT"
     fi
     printf 'ok=yes\n'
+    ;;
+  patch-debian11-apt)
+    [[ $# -eq 0 ]] || die "patch-debian11-apt"
+    patch_debian11_security_archive
+    ;;
+  patch-chocolatey-openssh)
+    [[ $# -eq 0 ]] || die "patch-chocolatey-openssh"
+    patch_chocolatey_openssh
     ;;
   upgrade-start)
     [[ $# -eq 2 ]] || die "upgrade-start"

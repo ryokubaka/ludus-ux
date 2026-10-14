@@ -555,4 +555,20 @@ export async function prefetchSourcesData(session: ResolvedSession | null) {
 
 }
 
+/** Clear L1 SWRCache entries after Ludus mutations (Next `"use cache"` tags are separate). */
+export function invalidatePrefetchSwrCaches(): void {
+  rangesCache.invalidate()
+  versionCache.invalidate()
+  usersCache.invalidate()
+  templatesCache.invalidate()
+  groupsCache.invalidate()
+  ansibleCache.invalidate()
+  adminDataCache.invalidate()
+  rangeStatusCache.invalidate()
+  rangeLogHistoryCache.invalidate()
+  rangeLogEnrichmentCache.invalidate()
+  snapshotsViewCache.invalidate()
+  rangeConfigCache.invalidate()
+}
+
 

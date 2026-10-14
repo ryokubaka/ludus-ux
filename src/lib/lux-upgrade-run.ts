@@ -5,7 +5,11 @@ import { getLuxHostUpdateKey, getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { listKnownLuxReleaseTags } from "@/lib/lux-releases"
 import { LUX_VERSION_MANAGEMENT_SINCE, losesVersionManagement, validateLuxSwitchTag } from "@/lib/lux-version"
-import { dockerSocketAvailable, runHostScriptViaDocker } from "@/lib/lux-upgrade-docker"
+import {
+  discoverLuxRepoPathContext,
+  dockerSocketAvailable,
+  runHostScriptViaDocker,
+} from "@/lib/lux-upgrade-docker"
 import {
   buildHostProbeCmd,
   buildStartUpgradeCmd,
@@ -94,10 +98,16 @@ export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
   }
   const viaDocker = dockerSocketAvailable()
   try {
-    const repo = resolveConfiguredLuxRepoPath()
+    const probeOpts = viaDocker
+      ? await discoverLuxRepoPathContext()
+      : {
+          containerRef: "ludus-ux",
+          candidates: resolveConfiguredLuxRepoPath() ? [resolveConfiguredLuxRepoPath()!] : [],
+        }
+    const sshHint = probeOpts.candidates[0]
     const out = await execOnUpgradeHost(
-      buildHostProbeCmd(repo),
-      repo ? ["upgrade-probe", repo] : ["upgrade-probe"],
+      buildHostProbeCmd(probeOpts),
+      sshHint ? ["upgrade-probe", sshHint] : ["upgrade-probe"],
     )
     return { ...parseHostProbe(out), logTail }
   } catch (err) {
@@ -139,8 +149,12 @@ export async function startLuxUpgrade(
   }
 
   try {
+    const viaDocker = dockerSocketAvailable()
+    const startCtx = viaDocker
+      ? await discoverLuxRepoPathContext()
+      : { containerRef: "ludus-ux" as const, candidates: [] as string[] }
     const out = await execOnUpgradeHost(
-      buildStartUpgradeCmd(host.repoPath, tag),
+      buildStartUpgradeCmd(host.repoPath, tag, startCtx.containerRef),
       ["upgrade-start", host.repoPath, tag],
     )
     if (!/\bstarted\b/.test(out)) {

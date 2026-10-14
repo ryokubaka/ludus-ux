@@ -1,19 +1,37 @@
 import { execFileSync, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { luxUpgradeFailureFromLog } from "./lux-version"
 import {
+  bindMountRepoRoot,
   buildHostProbeCmd,
   buildStartUpgradeCmd,
+  filterHostShellRepoCandidates,
   isSafeLuxRepoPath,
+  normalizeLuxHostRepoPath,
   parseHostProbe,
   readLuxUpgradeLogTail,
 } from "./lux-upgrade-host"
 
 describe("lux-upgrade-host", () => {
+  it("normalizes path separators without rewriting host layout", () => {
+    expect(normalizeLuxHostRepoPath("E:\\gitlab\\ludus-ux\\data")).toBe("E:/gitlab/ludus-ux/data")
+    expect(isSafeLuxRepoPath("E:/gitlab/ludus-ux")).toBe(true)
+    expect(isSafeLuxRepoPath("/opt/ludus-ux")).toBe(true)
+  })
+
   it("accepts absolute host paths and rejects injection", () => {
     expect(isSafeLuxRepoPath("/opt/ludus-ux")).toBe(true)
     expect(isSafeLuxRepoPath("/home/user/ludus-ux")).toBe(true)
@@ -24,10 +42,34 @@ describe("lux-upgrade-host", () => {
     expect(isSafeLuxRepoPath("/opt/ludus-ux\n/tmp")).toBe(false)
   })
 
-  it("quotes the explicit repo path in the probe command", () => {
-    const cmd = buildHostProbeCmd("/opt/ludus-ux")
-    expect(cmd.startsWith("PROVIDED='/opt/ludus-ux'")).toBe(true)
-    expect(cmd).not.toContain("PROVIDED=/opt/ludus-ux;")
+  it("derives repo root from bind-mount sources with backslashes", () => {
+    expect(bindMountRepoRoot("E:\\gitlab\\ludus-ux\\data")).toBe("E:/gitlab/ludus-ux")
+    expect(filterHostShellRepoCandidates(["E:/gitlab/ludus-ux", "/opt/ludus-ux"])).toEqual([
+      "/opt/ludus-ux",
+    ])
+  })
+
+  it("builds probe with client-path translation for Docker API mount sources", () => {
+    const cmd = buildHostProbeCmd({
+      containerRef: "ludus-ux",
+      candidates: [],
+      clientPaths: ["E:\\gitlab\\ludus-ux\\data", "E:/gitlab/ludus-ux"],
+    })
+    expect(cmd).toContain("base64 -d | /bin/sh")
+  })
+
+  it("builds probe with container ref and host-validated candidates", () => {
+    const cmd = buildHostProbeCmd({
+      containerRef: "ludus-ux",
+      candidates: ["/opt/ludus-ux"],
+    })
+    expect(cmd).toContain("cd / 2>/dev/null || cd /tmp")
+    expect(cmd).toContain("base64 -d | /bin/sh")
+    const b64 = /printf '%s' '([A-Za-z0-9+/=]+)'/.exec(cmd)?.[1]
+    expect(b64).toBeTruthy()
+    const inner = Buffer.from(b64!, "base64").toString("utf8")
+    expect(inner).toContain("'/opt/ludus-ux'")
+    expect(inner).toContain('eq .Destination "/app/data"')
   })
 
   it("parses a ready host probe when the tty added carriage returns", () => {
@@ -94,7 +136,7 @@ describe("lux-upgrade-host", () => {
     const started = Date.now()
     const out = execFileSync("bash", ["-c", cmd], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, NODE_ENV: "test" },
     })
     expect(Date.now() - started).toBeGreaterThanOrEqual(250)
     expect(out.trim()).toBe("started")
@@ -121,7 +163,11 @@ describe("lux-upgrade-host", () => {
     writeFileSync(path.join(bin, "systemd-run"), systemdRunStub(repo), { mode: 0o755 })
     chmodSync(path.join(bin, "docker"), 0o755)
     chmodSync(path.join(bin, "systemd-run"), 0o755)
-    const env = { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" as const }
+    const env = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+      NODE_ENV: "test" as const,
+    }
     const logFile = path.join(data, "lux-upgrade.log")
 
     writeFileSync(
@@ -164,7 +210,7 @@ describe("lux-upgrade-host", () => {
     writeFileSync(path.join(bin, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
     const result = spawnSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+      env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, NODE_ENV: "test" },
     })
     expect(result.status).not.toBe(0)
     expect(result.stdout ?? "").not.toMatch(/\bstarted\b/)
@@ -200,7 +246,7 @@ while [ "$i" -lt "$count" ]; do
     echo "fatal: wildcard safe.directory" >&2
     exit 1
   fi
-  if [ "$key" = "safe.directory" ] && [ "$val" = ${JSON.stringify(repo)} ]; then found=1; fi
+  if [ "$key" = "safe.directory" ] && [ -f "$val/docker-compose.yml" ] && [ -f "$val/scripts/upgrade.sh" ]; then found=1; fi
   i=$((i + 1))
 done
 case "$*" in
@@ -229,13 +275,13 @@ exit 1
       { mode: 0o755 },
     )
     chmodSync(path.join(bin, "git"), 0o755)
-    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })], {
       encoding: "utf8",
       env: gitEnv(bin),
     })
     expect(parseHostProbe(out)).toMatchObject({
       canSwitch: true,
-      repoPath: repo,
+      repoPath: normalizeLuxHostRepoPath(repo),
       dirty: true,
       checkout: "main",
       reason: null,
@@ -257,14 +303,14 @@ exit 1
       { mode: 0o755 },
     )
     chmodSync(path.join(bin, "git"), 0o755)
-    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })], {
       encoding: "utf8",
       env: gitEnv(bin),
     })
     const cap = parseHostProbe(out)
     expect(cap.canSwitch).toBe(false)
     expect(cap.dirty).toBe(false)
-    expect(cap.repoPath).toBe(repo)
+    expect(cap.repoPath).toBe(normalizeLuxHostRepoPath(repo))
     expect(cap.reason).toMatch(/Git could not read this clone/)
   })
 
@@ -336,14 +382,14 @@ exit 1
     writeFileSync(path.join(repo, "scripts/upgrade.sh"), "#!/bin/sh\nexit 0\n")
     execFileSync("git", ["init", "-q"], { cwd: repo })
     writeFileSync(path.join(repo, "README"), "dirty\n")
-    const out = execFileSync("bash", ["-c", buildHostProbeCmd(repo)], {
+    const out = execFileSync("bash", ["-c", buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })], {
       encoding: "utf8",
       env: gitEnv(""),
     })
     const cap = parseHostProbe(out)
     expect(cap.canSwitch).toBe(true)
     expect(cap.dirty).toBe(true)
-    expect(cap.repoPath).toBe(repo)
+    expect(cap.repoPath).toBe(normalizeLuxHostRepoPath(repo))
     expect(cap.reason).toBeNull()
   })
 })
@@ -368,9 +414,25 @@ exec /bin/bash -c "$script"
 `
 }
 
+/** Stub docker so host probe tests do not pick up a real ludus-ux bind mount from the dev machine. */
+function writeProbeDockerStub(bin: string): void {
+  const docker = path.join(bin, "docker")
+  if (existsSync(docker)) return
+  writeFileSync(docker, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  chmodSync(docker, 0o755)
+}
+
 function gitEnv(bin: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
-  if (bin) env.PATH = `${bin}${path.delimiter}${env.PATH ?? ""}`
+  const pathParts: string[] = []
+  const binHasDocker = Boolean(bin && existsSync(path.join(bin, "docker")))
+  if (!binHasDocker) {
+    const dockerStubBin = mkdtempSync(path.join(tmpdir(), "lux-docker-stub-"))
+    writeProbeDockerStub(dockerStubBin)
+    pathParts.push(dockerStubBin)
+  }
+  if (bin) pathParts.push(bin)
+  env.PATH = `${pathParts.join(path.delimiter)}${path.delimiter}${env.PATH ?? ""}`
   delete env.GIT_CONFIG_COUNT
   for (const key of Object.keys(env)) {
     if (key.startsWith("GIT_CONFIG_KEY_") || key.startsWith("GIT_CONFIG_VALUE_")) delete env[key]
@@ -407,7 +469,7 @@ while [ "$i" -lt "$count" ]; do
     echo "fatal: wildcard safe.directory" >&2
     exit 1
   fi
-  if [ "$key" = "safe.directory" ] && [ "$val" = ${JSON.stringify(root)} ]; then found=1; fi
+  if [ "$key" = "safe.directory" ] && [ -f "$val/scripts/upgrade.sh" ]; then found=1; fi
   i=$((i + 1))
 done
 if [ "$found" != 1 ]; then
@@ -423,7 +485,13 @@ exit 0
     )
     writeFileSync(
       path.join(bin, "docker"),
-      `#!/bin/sh\nprintf '%s\\n' "docker $*" >> ${JSON.stringify(log)}\nexit 1\n`,
+      `#!/bin/sh
+printf '%s\\n' "docker $*" >> ${JSON.stringify(log)}
+case "$1" in
+  compose) exit 0 ;;
+esac
+exit 1
+`,
       { mode: 0o755 },
     )
     writeFileSync(path.join(bin, "docker-compose"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
@@ -440,7 +508,7 @@ exit 0
     expect(trustedText).not.toMatch(/not a git repository/)
     expect(trustedText).not.toMatch(/another user owns it/)
     expect(trustedLog).toContain("rev-parse --is-inside-work-tree")
-    expect(trustedLog).toContain("docker compose version")
+    expect(trustedLog).toMatch(/docker compose/)
     expect(trustedLog).not.toContain("--global")
 
     writeFileSync(log, "")

@@ -89,8 +89,23 @@ export function resolveVmListForRangeQuery(args: {
       : undefined
 
   if (newVMs.length === 0) {
+    if (prevVMs.length > 0 && transientVmGap) {
+      vmPartialListStreak.delete(streakKey)
+      return prevVMs
+    }
+    if (prevVMs.length > 0) {
+      const signature = "empty"
+      const row = vmPartialListStreak.get(streakKey)
+      if (row && row.signature === signature) row.streak += 1
+      else vmPartialListStreak.set(streakKey, { signature, streak: 1 })
+      const streak = vmPartialListStreak.get(streakKey)!.streak
+      if (streak >= 2) {
+        vmPartialListStreak.delete(streakKey)
+        return []
+      }
+      return prevVMs
+    }
     vmPartialListStreak.delete(streakKey)
-    if (prevVMs.length > 0 && transientVmGap) return prevVMs
     return []
   }
 

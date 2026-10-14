@@ -116,12 +116,11 @@ function GoadInstancePage() {
   })
   const { abortRange: abortRangeUnified, isAborting } = useAbortRange(scopeTag)
   const { impersonation, impersonationHeaders } = useImpersonation()
-  const goadListQueryBucket = impersonation?.username ?? "self"
   const { lines, isRunning, exitCode, taskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
   const [currentAction, setCurrentAction] = useState<string | null>(null)
-  const { selectedRangeId, selectRange, refreshRanges } = useRange()
+  const { selectedRangeId, selectRange, refreshRanges, forgetRange } = useRange()
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -387,8 +386,19 @@ function GoadInstancePage() {
   //     in the URL and are already handled by the URL-param effect above.
   const autoTabRef = useRef(false)
   const wasGoadRunningRef = useRef(false)
+  const suppressRangeLogsRef = useRef(false)
   useEffect(() => {
     const rid = instance?.ludusRangeId
+    const deletingRange =
+      suppressRangeLogsRef.current || currentAction === "destroy" || rangeState === "DESTROYING"
+    if (deletingRange) {
+      stopRangeStreaming()
+      if (!autoTabRef.current) {
+        autoTabRef.current = true
+        setActiveTab("deploy")
+      }
+      return
+    }
     if (!isRunning) {
       // Only clear auto-tab latching after a task actually finished — not on the
       // initial paint while resumeTask is still fetching (that would undo a
@@ -401,9 +411,11 @@ function GoadInstancePage() {
       // of the last run. runAction() clears these and restarts with
       // snapshotStart: true when a new deploy begins, so this doesn't
       // interfere with fresh deploys.
-      if (rid && rangeStreamNeedsStart(rid)) {
+      if (rid && rangeStreamNeedsStart(rid) && !suppressRangeLogsRef.current) {
         void (async () => {
+          if (suppressRangeLogsRef.current) return
           const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+          if (suppressRangeLogsRef.current) return
           startRangeStreaming(rid, {
             snapshotStart: false,
             ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
@@ -433,9 +445,11 @@ function GoadInstancePage() {
     // snapshotStart: false — after refresh/re-enter, omit skipping the first Ludus
     // snapshot; otherwise the panel stays empty until the next *new* line (History
     // still shows prior output).
-    if (isDeployAction && rid && rangeStreamNeedsStart(rid)) {
+    if (isDeployAction && rid && rangeStreamNeedsStart(rid) && !suppressRangeLogsRef.current) {
       void (async () => {
+        if (suppressRangeLogsRef.current) return
         const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
+        if (suppressRangeLogsRef.current) return
         startRangeStreaming(rid, {
           snapshotStart: false,
           ...(historyAnchor != null ? { deployElapsedAnchorMs: historyAnchor } : {}),
@@ -462,7 +476,7 @@ function GoadInstancePage() {
           const data = (await res.json()) as { rangeState?: string }
           const rs = String(data.rangeState ?? "").toUpperCase()
           if (rs !== "DEPLOYING" && rs !== "WAITING") return
-          if (cancelled || !rangeStreamNeedsStart(rid)) return
+          if (cancelled || suppressRangeLogsRef.current || !rangeStreamNeedsStart(rid)) return
           const historyAnchor = await fetchDeployElapsedAnchorMs((id) => ludusApi.getRangeLogHistory(id), rid)
           startRangeStreaming(rid, {
             snapshotStart: false,
@@ -483,7 +497,7 @@ function GoadInstancePage() {
   // Intentionally omits streaming callbacks and action-state vars — they are
   // stable refs or change in response to the same triggers. Re-registering on
   // every state change would cause double-starts of the range log stream.
-  }, [isRunning, instance?.ludusRangeId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isRunning, instance?.ludusRangeId, currentAction, rangeState]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // On page load / refresh OR when a new task starts: read the server-persisted
   // phase to restore postProcessingStep, and sync the timer from task.startedAt.
@@ -735,10 +749,10 @@ function GoadInstancePage() {
     }
   }
 
-  const fetchInstances = useCallback(async () => {
+  const fetchInstances = useCallback(async (silent = false) => {
     const isInitial = !initialInstanceLoadDone.current
     if (isInitial) setLoading(true)
-    else setRefreshing(true)
+    else if (!silent) setRefreshing(true)
     try {
       const response = await fetch("/api/goad/instances", { headers: impersonationHeaders() })
       const data = await response.json()
@@ -747,16 +761,34 @@ function GoadInstancePage() {
       } else if (Array.isArray(data.instances)) {
         const found = data.instances.find(
           (i: GoadInstance) => i.instanceId === instanceId
-        )
-        setInstance(found || null)
+        ) as GoadInstance | undefined
+        const rangeFromUrl =
+          typeof window !== "undefined"
+            ? new URLSearchParams(window.location.search).get("rangeId")?.trim() ?? ""
+            : ""
+        if (found && !found.ludusRangeId && rangeFromUrl) {
+          setInstance({ ...found, ludusRangeId: rangeFromUrl })
+        } else {
+          setInstance(found || null)
+        }
         initialInstanceLoadDone.current = true
       }
     } catch (e) {
       console.warn("GOAD instances fetch exception:", e)
     }
     if (isInitial) setLoading(false)
-    else setRefreshing(false)
+    else if (!silent) setRefreshing(false)
   }, [instanceId, impersonationHeaders])
+
+  // set-range often finishes after the first instance fetch. Keep asking until
+  // the dedicated range id is on the instance so range logs can stream live.
+  useEffect(() => {
+    if (!isRunning || instance?.ludusRangeId) return
+    const timer = window.setInterval(() => {
+      void fetchInstances(true)
+    }, 3_000)
+    return () => window.clearInterval(timer)
+  }, [isRunning, instance?.ludusRangeId, fetchInstances])
 
   const fetchInventories = useCallback(async () => {
     setInventoriesLoading(true)
@@ -1027,6 +1059,7 @@ function GoadInstancePage() {
     handleInstallExtension,
     handleReprovisionExtension,
     handleRemoveExtension,
+    deletion,
     handleDestroy,
     handleDeleteInstanceOnly,
   } = useGoadInstanceActionHandlers({
@@ -1038,7 +1071,6 @@ function GoadInstancePage() {
     toast,
     impersonationHeaders,
     scopeTag,
-    goadListQueryBucket,
     queryClient,
     router,
     taskId,
@@ -1047,11 +1079,22 @@ function GoadInstancePage() {
     setRemovingExtension,
     stop,
     stopRangeStreaming,
+    suppressRangeLogsRef,
     abortRangeUnified,
     refreshRangeStateFromServer,
     fetchInstances,
     refreshRanges,
+    forgetRange,
   })
+
+  useEffect(() => {
+    const deletingRange =
+      deletion === "range" || currentAction === "destroy" || rangeState === "DESTROYING"
+    suppressRangeLogsRef.current = deletingRange
+    if (!deletingRange) return
+    stopRangeStreaming()
+    setActiveTab("deploy")
+  }, [deletion, currentAction, rangeState, stopRangeStreaming])
   const labInfo: GoadLabDef | undefined = catalog?.labs.find((l) => l.name === instance?.lab)
   const extMap: Record<string, GoadExtensionDef> = Object.fromEntries(
     (catalog?.extensions ?? []).map((e) => [e.name, e])
@@ -1114,6 +1157,7 @@ function GoadInstancePage() {
         syncingIps={syncingIps}
         currentAction={currentAction}
         rangeState={rangeState}
+        deletion={deletion}
         pendingAction={pendingAction}
         commitConfirm={commitConfirm}
         cancelConfirm={cancelConfirm}
@@ -1136,7 +1180,7 @@ function GoadInstancePage() {
           activeTab={activeTab}
           isRunning={isRunning}
           isRangeStreaming={isRangeStreaming}
-          extensionCount={instance.extensions.length}
+          extensionCount={instance.extensions?.length ?? 0}
           inventoryCount={inventories.length}
           inventoriesLoading={inventoriesLoading}
           onInventoriesOpen={() => inventories.length === 0 && !inventoriesLoading && fetchInventories()}
@@ -1159,6 +1203,9 @@ function GoadInstancePage() {
           rangeElapsed={rangeElapsed}
           goadElapsed={goadElapsed}
           postProcessingStep={postProcessingStep}
+          deletingRange={
+            deletion === "range" || currentAction === "destroy" || rangeState === "DESTROYING"
+          }
         />
         <GoadTerminalTab
           active={activeTab === "terminal"}
@@ -1200,7 +1247,12 @@ function GoadInstancePage() {
           allNames={allNames}
           ludusVersion={ludusVersion}
           provisionOnlyExtensionsSupported={provisionOnlyExtensionsSupported}
-          isRunning={isRunning}
+          isRunning={
+            isRunning ||
+            deletion != null ||
+            currentAction === "destroy" ||
+            rangeState === "DESTROYING"
+          }
           pendingAction={pendingAction}
           commitConfirm={commitConfirm}
           cancelConfirm={cancelConfirm}

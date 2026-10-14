@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
   if (onlyRolesList.length) deployBody.only_roles = onlyRolesList.join(",")
   if (body.force) deployBody.force = true
 
-  const patches = await ensureRangeDeployHostPatches(deployBody)
+  const patches = await ensureRangeDeployHostPatches(deployBody, { configText: body.yaml })
   if (!patches.ok) {
     return NextResponse.json(
       { error: patches.error, code: "deploy_host_patch" },

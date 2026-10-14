@@ -26,6 +26,8 @@ export interface GoadDeployTabProps {
   rangeElapsed: string | null
   goadElapsed: string | null
   postProcessingStep: GoadPostProcessingStep
+  /** Hide Ludus deploy logs and show the range-delete state. */
+  deletingRange: boolean
 }
 
 export interface GoadTerminalTabProps {
@@ -112,6 +114,8 @@ export interface GoadInstanceActionBarProps {
   syncingIps: boolean
   currentAction: string | null
   rangeState: string | null
+  /** Confirmed delete still in progress after the GOAD command returns. */
+  deletion: "range" | "instance" | null
   pendingAction: ConfirmPendingAction
   /** Ordered playbooks from catalog playbooks.yml for this lab (may be empty). */
   labPlaybooks: string[]

@@ -2,6 +2,9 @@ import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
+  debian11PatchBlocksDeploy,
+  deployNeedsDebian11Archive,
+  luxHostMissingOperation,
   parseDebian11ArchivePatch,
   rangeDeployRunsHostnameSetup,
   rangeDeployRunsWindowsTools,
@@ -71,6 +74,30 @@ describe("parseDebian11ArchivePatch", () => {
     const parsed = parseDebian11ArchivePatch("", "lux-host: bad playbook path\n", 2)
     expect(parsed.ok).toBe(false)
     if (!parsed.ok) expect(parsed.error).toContain("bad playbook path")
+  })
+
+  it("treats Debian 13 configs as not needing the Bullseye archive", () => {
+    expect(deployNeedsDebian11Archive(undefined)).toBe(false)
+    expect(deployNeedsDebian11Archive("")).toBe(false)
+    expect(deployNeedsDebian11Archive("debian-13-x64-server-template")).toBe(false)
+    expect(deployNeedsDebian11Archive("vm_name: lab-router-debian13-x64")).toBe(false)
+    expect(deployNeedsDebian11Archive("debian-11-x64-server-template")).toBe(true)
+    expect(deployNeedsDebian11Archive("vm_name: lab-router-debian11-x64")).toBe(true)
+    expect(deployNeedsDebian11Archive("bullseye-security")).toBe(true)
+  })
+
+  it("recognizes a helper that does not have the playbook operation", () => {
+    expect(luxHostMissingOperation("lux-host: operation not allowed: patch-chocolatey-openssh")).toBe(true)
+    expect(luxHostMissingOperation("waiting to retry")).toBe(false)
+  })
+
+  it("blocks a hostname deploy only when the config names Debian 11", () => {
+    const failed = { ok: false as const, error: "waiting to retry" }
+    expect(debian11PatchBlocksDeploy(failed, undefined, "debian-13-x64-server-template")).toBe(false)
+    expect(debian11PatchBlocksDeploy(failed, undefined, null)).toBe(false)
+    expect(debian11PatchBlocksDeploy(failed, { tags: "network" }, "debian-11-x64-server-template")).toBe(false)
+    expect(debian11PatchBlocksDeploy(failed, undefined, "debian-11-x64-server-template")).toBe(true)
+    expect(debian11PatchBlocksDeploy({ ok: true, changed: false, skipped: "task" }, undefined, "debian-11-x64-server-template")).toBe(false)
   })
 })
 

@@ -38,6 +38,7 @@ export function GoadInstanceActionBar({
   syncingIps,
   currentAction,
   rangeState,
+  deletion,
   pendingAction,
   labPlaybooks,
   commitConfirm,
@@ -55,8 +56,15 @@ export function GoadInstanceActionBar({
   onDeleteInstanceOnly,
   onDestroy,
 }: GoadInstanceActionBarProps) {
+  const deletingRange =
+    deletion === "range" || currentAction === "destroy" || rangeState === "DESTROYING"
+  const deletingInstance = deletion === "instance"
+  const controlsLocked =
+    isRunning || initializingRange || !!pendingAction || deletingRange || deletingInstance
   const showAbort =
-    isRunning || rangeState === "DEPLOYING" || rangeState === "WAITING" || isAborting
+    !deletingRange &&
+    !deletingInstance &&
+    (isRunning || rangeState === "DEPLOYING" || rangeState === "WAITING" || isAborting)
 
   const [provisionMode, setProvisionMode] = useState<GoadProvisionMode>("entire")
   const [selectedPlaybook, setSelectedPlaybook] = useState(labPlaybooks[0] ?? "")
@@ -74,9 +82,7 @@ export function GoadInstanceActionBar({
 
   const needsPlaybook = provisionMode === "single" || provisionMode === "from"
   const provisionDisabled =
-    isRunning ||
-    !!pendingAction ||
-    (needsPlaybook && (!selectedPlaybook || labPlaybooks.length === 0))
+    controlsLocked || (needsPlaybook && (!selectedPlaybook || labPlaybooks.length === 0))
 
   const handleProvisionClick = () => {
     if (provisionMode === "entire" || labPlaybooks.length === 0) {
@@ -97,7 +103,7 @@ export function GoadInstanceActionBar({
               variant="default"
               className="bg-emerald-700 hover:bg-emerald-600 text-white"
               onClick={onInstallProvideProvision}
-              disabled={isRunning || initializingRange || !!pendingAction}
+              disabled={controlsLocked}
               title="Provide then Provision lab in one GOAD session (full install)"
             >
               {(isRunning && currentAction === "install") || initializingRange ? (
@@ -111,7 +117,7 @@ export function GoadInstanceActionBar({
               size="sm"
               variant="outline"
               onClick={onProvide}
-              disabled={isRunning || initializingRange || !!pendingAction}
+              disabled={controlsLocked}
               title="Deploy/update Ludus infrastructure (no Ansible). Creates a dedicated range if needed."
             >
               {(isRunning && currentAction === "provide") || initializingRange ? (
@@ -145,7 +151,7 @@ export function GoadInstanceActionBar({
               size="sm"
               variant="outline"
               onClick={onSyncIps}
-              disabled={isRunning || syncingIps || !!pendingAction || !instance.ludusRangeId}
+              disabled={controlsLocked || syncingIps || !instance.ludusRangeId}
               title={
                 !instance.ludusRangeId
                   ? "No dedicated range yet — run Provide first"
@@ -163,7 +169,7 @@ export function GoadInstanceActionBar({
               size="sm"
               variant="outline"
               onClick={onStart}
-              disabled={isRunning || !!pendingAction}
+              disabled={controlsLocked}
               title="Power on all VMs"
             >
               {isRunning && currentAction === "start" ? (
@@ -177,7 +183,7 @@ export function GoadInstanceActionBar({
               size="sm"
               variant="outline"
               onClick={onStop}
-              disabled={isRunning || !!pendingAction}
+              disabled={controlsLocked}
               title="Power off all VMs"
             >
               {isRunning && currentAction === "stop" ? (
@@ -187,7 +193,7 @@ export function GoadInstanceActionBar({
               )}
               Stop All
             </Button>
-            <Button size="sm" variant="outline" onClick={onStatus} disabled={isRunning || !!pendingAction}>
+            <Button size="sm" variant="outline" onClick={onStatus} disabled={controlsLocked}>
               <CheckCircle2 className="h-3.5 w-3.5" />
               Status
             </Button>
@@ -212,7 +218,7 @@ export function GoadInstanceActionBar({
               variant="outline"
               className="border-blue-500/30 text-status-info hover:bg-status-info/10"
               onClick={onOpenReassign}
-              disabled={isRunning || !!pendingAction}
+              disabled={controlsLocked}
               title="Re-assign this GOAD instance (and its range) to a different user"
             >
               <UserCog className="h-3.5 w-3.5" />
@@ -224,21 +230,29 @@ export function GoadInstanceActionBar({
             variant="outline"
             className="border-status-warning/40 text-status-warning dark:text-status-warning hover:bg-status-warning/10"
             onClick={onDeleteInstanceOnly}
-            disabled={isRunning || !!pendingAction}
+            disabled={controlsLocked}
             title="Remove GOAD workspace on the server; Ludus range and VMs are not deleted"
           >
-            <Unlink className="h-3.5 w-3.5" />
-            Delete Instance Only
+            {deletingInstance ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Unlink className="h-3.5 w-3.5" />
+            )}
+            {deletingInstance ? "Removing instance…" : "Delete Instance Only"}
           </Button>
           <Button
             size="sm"
             variant="outline"
             className="border-status-error/30 text-status-error hover:bg-status-error/10"
             onClick={onDestroy}
-            disabled={isRunning || !!pendingAction}
+            disabled={controlsLocked}
           >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete Instance + Range
+            {deletingRange ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            {deletingRange ? "Deleting range…" : "Delete Instance + Range"}
           </Button>
         </div>
 
@@ -249,7 +263,7 @@ export function GoadInstanceActionBar({
               <Select
                 value={provisionMode}
                 onValueChange={(v) => setProvisionMode(v as GoadProvisionMode)}
-                disabled={isRunning || !!pendingAction}
+                disabled={controlsLocked}
               >
                 <SelectTrigger className="h-8 text-xs w-[11rem]">
                   <SelectValue />
@@ -267,7 +281,7 @@ export function GoadInstanceActionBar({
                 <Select
                   value={selectedPlaybook}
                   onValueChange={setSelectedPlaybook}
-                  disabled={isRunning || !!pendingAction}
+                  disabled={controlsLocked}
                 >
                   <SelectTrigger className="h-8 text-xs font-mono">
                     <SelectValue placeholder="Select playbook" />

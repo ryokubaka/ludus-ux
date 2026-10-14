@@ -15,6 +15,8 @@ export type LuxRelease = {
   htmlUrl: string
   notesExcerpt: string
   prerelease: boolean
+  /** vX.Y.Z branch with no published GitHub release of the same name. */
+  unpublished: boolean
   relation: LuxVersionRelation
   losesVersionManagement: boolean
 }
@@ -109,9 +111,38 @@ export type GithubReleaseInput = {
   body?: unknown
 }
 
+/** A remote head named like a release. html_url is the branch page when known. */
+export type LuxReleaseBranchInput = {
+  name?: unknown
+  html_url?: unknown
+}
+
+/**
+ * `GET /repos/{owner}/{repo}/git/matching-refs/heads/v` returns `{ ref }` objects.
+ * An exact match is one object; a prefix match is an array. Other branch names
+ * are not releases.
+ */
+export function githubMatchingHeadNames(json: unknown): string[] {
+  const items = Array.isArray(json)
+    ? json
+    : json && typeof json === "object" && "ref" in json
+      ? [json]
+      : []
+  const names: string[] = []
+  for (const item of items) {
+    if (!item || typeof item !== "object" || !("ref" in item)) continue
+    const ref = item.ref
+    if (typeof ref !== "string" || !ref.startsWith("refs/heads/")) continue
+    const name = ref.slice("refs/heads/".length).trim()
+    if (isLuxReleaseTag(name)) names.push(name)
+  }
+  return names
+}
+
 export function buildLuxReleasesSnapshot(
   currentVersion: string,
   raw: readonly GithubReleaseInput[],
+  branches: readonly LuxReleaseBranchInput[] = [],
 ): LuxReleasesSnapshot {
   const current = currentVersion.trim() || "0.0.0"
   const releases: LuxRelease[] = []
@@ -133,6 +164,28 @@ export function buildLuxReleasesSnapshot(
       htmlUrl,
       notesExcerpt,
       prerelease: item.prerelease === true,
+      unpublished: false,
+      relation,
+      losesVersionManagement: losesVersionManagement(tag),
+    })
+  }
+
+  const published = new Set(releases.map((release) => release.tag))
+  for (const branch of branches) {
+    const tag = typeof branch.name === "string" ? branch.name.trim() : ""
+    if (!isLuxReleaseTag(tag) || published.has(tag)) continue
+    const relation = luxVersionRelation(current, tag)
+    if (!relation) continue
+    published.add(tag)
+    const htmlUrl = typeof branch.html_url === "string" ? branch.html_url : ""
+    releases.push({
+      tag,
+      name: tag,
+      publishedAt: "",
+      htmlUrl,
+      notesExcerpt: "",
+      prerelease: false,
+      unpublished: true,
       relation,
       losesVersionManagement: losesVersionManagement(tag),
     })
@@ -142,10 +195,13 @@ export function buildLuxReleasesSnapshot(
     const as = luxTagToSemver(a.tag)
     const bs = luxTagToSemver(b.tag)
     if (!as || !bs) return 0
-    return compareLuxSemver(bs, as)
+    const cmp = compareLuxSemver(bs, as)
+    if (cmp !== 0) return cmp
+    if (a.unpublished !== b.unpublished) return a.unpublished ? 1 : -1
+    return 0
   })
 
-  const latestStable = releases.find((r) => !r.prerelease)?.tag ?? null
+  const latestStable = releases.find((r) => !r.prerelease && !r.unpublished)?.tag ?? null
   const latestRel = latestStable ? luxVersionRelation(current, latestStable) : null
 
   return {

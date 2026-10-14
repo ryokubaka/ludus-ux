@@ -3,6 +3,7 @@ import {
   buildLuxReleasesSnapshot,
   compareLuxSemver,
   excerptReleaseNotes,
+  githubMatchingHeadNames,
   isLuxReleaseTag,
   losesVersionManagement,
   luxUpgradeFailureFromLog,
@@ -128,6 +129,71 @@ describe("lux-version", () => {
     expect(snap.updateAvailable).toBe(false)
     expect(snap.releases[0]?.prerelease).toBe(true)
     expect(snap.releases[0]?.relation).toBe("upgrade")
+    expect(snap.releases[0]?.unpublished).toBe(false)
+  })
+
+  it("lists version branches that have no published release", () => {
+    const snap = buildLuxReleasesSnapshot(
+      "1.3.2",
+      [
+        {
+          tag_name: "v1.3.4",
+          draft: false,
+          prerelease: false,
+          published_at: "2026-09-20T00:00:00Z",
+        },
+        {
+          tag_name: "v1.3.2",
+          draft: false,
+          prerelease: false,
+        },
+        {
+          tag_name: "v1.9.0",
+          draft: true,
+          prerelease: false,
+        },
+      ],
+      [
+        { name: "v1.4.1", html_url: "https://github.com/example/ludus-ux/tree/v1.4.1" },
+        { name: "v1.3.4" },
+        { name: "main" },
+        { name: "v1.9.0" },
+        { name: "v1.2.0-rc1" },
+      ],
+    )
+    expect(snap.releases.map((r) => r.tag)).toEqual(["v1.9.0", "v1.4.1", "v1.3.4", "v1.3.2"])
+    expect(snap.releases.find((r) => r.tag === "v1.4.1")).toMatchObject({
+      unpublished: true,
+      relation: "upgrade",
+      htmlUrl: "https://github.com/example/ludus-ux/tree/v1.4.1",
+    })
+    expect(snap.releases.find((r) => r.tag === "v1.9.0")?.unpublished).toBe(true)
+    expect(snap.releases.find((r) => r.tag === "v1.3.4")?.unpublished).toBe(false)
+    expect(snap.latestStable).toBe("v1.3.4")
+    expect(snap.updateAvailable).toBe(true)
+  })
+
+  it("does not treat an unpublished branch as the update banner target", () => {
+    const snap = buildLuxReleasesSnapshot(
+      "1.3.2",
+      [{ tag_name: "v1.3.2", draft: false, prerelease: false }],
+      [{ name: "v1.4.1" }],
+    )
+    expect(snap.latestStable).toBe("v1.3.2")
+    expect(snap.updateAvailable).toBe(false)
+    expect(snap.releases[0]?.tag).toBe("v1.4.1")
+    expect(snap.releases[0]?.unpublished).toBe(true)
+  })
+
+  it("reads version heads from the GitHub matching-refs payload", () => {
+    expect(githubMatchingHeadNames([
+      { ref: "refs/heads/v1.4.1" },
+      { ref: "refs/heads/v1.4.0-rc1" },
+      { ref: "refs/heads/main" },
+      { ref: "refs/tags/v1.4.0" },
+    ])).toEqual(["v1.4.1"])
+    expect(githubMatchingHeadNames({ ref: "refs/heads/v1.4.2" })).toEqual(["v1.4.2"])
+    expect(githubMatchingHeadNames(null)).toEqual([])
   })
 
   it("reads a failed switch from the host log", () => {

@@ -92,4 +92,4 @@ This is the recommended way to recover from a broken install or update the lab a
 - Custom logo upload
 - Ludus API and SSH connectivity tests
 - **lux-host** — Settings → SSH & GOAD installs `/usr/local/sbin/lux-host` and a sudoers rule for that path only, so `PROXMOX_SSH_USER` does not have to be root. The dialog requires the Ludus host root password and does not save it. [What lux-host is](ssh-and-auth.md#lux-host).
-- LUX release check, upgrade, and downgrade (Settings → About)
+- LUX release check, upgrade, and downgrade (Settings → About), including unpublished `vX.Y.Z` branches marked as such

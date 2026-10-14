@@ -19,6 +19,7 @@ Each bullet uses a single tag:
 
 **LUX**
 
+- [Add] **Releases** — Settings → About lists `vX.Y.Z` branches that have no GitHub release and marks them Unpublished. They do not trigger the update banner. Upgrade and downgrade still check out that name on the clone remote.
 - [Fix] **VM and range lists** — Failed accessible-range fetches no longer clear the selected range. The dashboard keeps VMs across one empty Ludus poll, shows a spinner while range selection restores, and merges partial `/range` responses more predictably. The console picker uses the same merge rules as the dashboard.
 - [Fix] **Admin VM inventory** — Refresh bypasses stale server caches; admin data is keyed per API key; Ludus empty or short VM lists merge with prior data instead of wiping rows.
 - [Fix] **Cache invalidation** — Ludus proxy mutations invalidate in-process prefetch and admin SWR caches so the next navigation or admin GET is not stuck on an old VM list.

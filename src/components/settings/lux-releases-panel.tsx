@@ -297,6 +297,11 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
               <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="font-mono text-sm">{release.tag}</span>
                 {release.relation === "current" && <Badge variant="secondary">Current</Badge>}
+                {release.unpublished && (
+                  <Badge variant="outline" title="Branch with no GitHub release">
+                    Unpublished
+                  </Badge>
+                )}
                 {release.prerelease && <Badge variant="outline">Pre-release</Badge>}
                 {release.publishedAt && (
                   <span className="text-xs text-muted-foreground">{release.publishedAt.slice(0, 10)}</span>
@@ -309,8 +314,8 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
                       href={release.htmlUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label={`Release notes for ${release.tag}`}
-                      title="Release notes"
+                      aria-label={release.unpublished ? `Branch ${release.tag}` : `Release notes for ${release.tag}`}
+                      title={release.unpublished ? "Branch" : "Release notes"}
                     >
                       <ExternalLink />
                     </a>
@@ -355,6 +360,9 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           </DialogHeader>
           <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
             <li>Check out {pending?.tag} in the git clone on this Docker host.</li>
+            {pending?.unpublished && (
+              <li>This is an unpublished branch. The checkout follows that branch tip.</li>
+            )}
             <li>Rebuild the image and restart the stack. This page disconnects until the new version is up.</li>
             <li>Settings, the database, and files under <span className="font-mono">./data</span>, <span className="font-mono">./ssh</span>, and <span className="font-mono">.env</span> stay on the host.</li>
             {host?.dirty && (

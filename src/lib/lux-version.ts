@@ -26,6 +26,10 @@ export type LuxReleasesSnapshot = {
   latestStable: string | null
   updateAvailable: boolean
   releases: LuxRelease[]
+  /** Browse URL for the clone's remote. Empty when the remote has no web page. */
+  repoUrl?: string
+  /** Upgrade docs on that same remote. */
+  docsUrl?: string
   error?: string
 }
 
@@ -117,28 +121,6 @@ export type LuxReleaseBranchInput = {
   html_url?: unknown
 }
 
-/**
- * `GET /repos/{owner}/{repo}/git/matching-refs/heads/v` returns `{ ref }` objects.
- * An exact match is one object; a prefix match is an array. Other branch names
- * are not releases.
- */
-export function githubMatchingHeadNames(json: unknown): string[] {
-  const items = Array.isArray(json)
-    ? json
-    : json && typeof json === "object" && "ref" in json
-      ? [json]
-      : []
-  const names: string[] = []
-  for (const item of items) {
-    if (!item || typeof item !== "object" || !("ref" in item)) continue
-    const ref = item.ref
-    if (typeof ref !== "string" || !ref.startsWith("refs/heads/")) continue
-    const name = ref.slice("refs/heads/".length).trim()
-    if (isLuxReleaseTag(name)) names.push(name)
-  }
-  return names
-}
-
 export function buildLuxReleasesSnapshot(
   currentVersion: string,
   raw: readonly GithubReleaseInput[],
@@ -209,5 +191,145 @@ export function buildLuxReleasesSnapshot(
     latestStable,
     updateAvailable: latestRel === "upgrade",
     releases,
+  }
+}
+
+export type LuxGitRemote = {
+  /** HTTPS repo page with credentials removed. */
+  webUrl: string
+  docsUrl: string
+  /** owner/repo when the host is github.com, so release notes can be filled in. */
+  githubRepo: string | null
+  tagUrl: (tag: string) => string
+  branchUrl: (tag: string) => string
+}
+
+function gitRemoteHost(hostport: string): string {
+  const host = hostport.replace(/^www\./i, "").toLowerCase()
+  const port = /^(.*):(\d+)$/.exec(host)
+  if (port && !port[1].includes(":")) return port[1]
+  return host
+}
+
+function gitRemotePath(raw: string): string {
+  return raw.replace(/\.git$/i, "").replace(/\/+$/, "").replace(/^\/+/, "")
+}
+
+/**
+ * Browse links for the clone remote. Accepts https, ssh://, and git@host:path.
+ * Userinfo is dropped so a token in the remote URL never reaches the page.
+ * GitHub and GitLab get per-version links. Any other https remote links the repo root.
+ */
+export function parseLuxGitRemote(raw: string): LuxGitRemote | null {
+  const url = raw.trim()
+  if (!url || /[\r\n\0\s]/.test(url) || url.length > 500) return null
+
+  const scp = /^git@([^:]+):(.+)$/.exec(url)
+  const ssh = /^ssh:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/.exec(url)
+  const https = /^https?:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/.exec(url)
+  const matched = scp ?? ssh ?? https
+  if (!matched) return null
+
+  const host = gitRemoteHost(matched[1] ?? "")
+  const path = gitRemotePath(matched[2] ?? "")
+  if (!host || !path || path.includes("..") || /[?#]/.test(path)) return null
+
+  const isGithub = host === "github.com"
+  const isGitlab = host === "gitlab.com" || host.includes("gitlab")
+  if (isGithub) {
+    const parts = path.split("/").filter(Boolean)
+    if (parts.length < 2) return null
+    const repo = `${parts[0]}/${parts[1]}`
+    const web = `https://github.com/${repo}`
+    return {
+      webUrl: web,
+      docsUrl: `${web}/blob/main/docs/getting-started.md#upgrade-and-downgrade`,
+      githubRepo: repo,
+      tagUrl: (tag) => `${web}/releases/tag/${encodeURIComponent(tag)}`,
+      branchUrl: (tag) => `${web}/tree/${encodeURIComponent(tag)}`,
+    }
+  }
+
+  if (isGitlab) {
+    const web = `https://${host}/${path}`
+    return {
+      webUrl: web,
+      docsUrl: `${web}/-/blob/main/docs/getting-started.md#upgrade-and-downgrade`,
+      githubRepo: null,
+      tagUrl: (tag) => `${web}/-/tags/${encodeURIComponent(tag)}`,
+      branchUrl: (tag) => `${web}/-/tree/${encodeURIComponent(tag)}`,
+    }
+  }
+
+  if (!https) {
+    return {
+      webUrl: "",
+      docsUrl: "",
+      githubRepo: null,
+      tagUrl: () => "",
+      branchUrl: () => "",
+    }
+  }
+  const web = `https://${host}/${path}`
+  return {
+    webUrl: web,
+    docsUrl: web,
+    githubRepo: null,
+    tagUrl: () => "",
+    branchUrl: () => "",
+  }
+}
+
+/**
+ * Tags on the clone remote are published releases. vX.Y.Z branches with no tag
+ * of the same name are unpublished. GitHub release objects only add notes and dates.
+ */
+export function snapshotFromGitRefs(
+  currentVersion: string,
+  remoteUrl: string,
+  heads: readonly string[],
+  tags: readonly string[],
+  githubReleases: readonly GithubReleaseInput[] = [],
+): LuxReleasesSnapshot {
+  const remote = parseLuxGitRemote(remoteUrl)
+  const notes = new Map<string, GithubReleaseInput>()
+  for (const item of githubReleases) {
+    if (item.draft) continue
+    const tag = typeof item.tag_name === "string" ? item.tag_name.trim() : ""
+    if (isLuxReleaseTag(tag)) notes.set(tag, item)
+  }
+
+  const published = new Set<string>()
+  const raw: GithubReleaseInput[] = []
+  for (const tag of tags) {
+    const name = tag.trim()
+    if (!isLuxReleaseTag(name) || published.has(name)) continue
+    published.add(name)
+    const extra = notes.get(name)
+    const html = typeof extra?.html_url === "string" && extra.html_url ? extra.html_url : remote?.tagUrl(name) ?? ""
+    raw.push({
+      tag_name: name,
+      name: extra?.name,
+      draft: false,
+      prerelease: extra?.prerelease === true,
+      published_at: extra?.published_at,
+      html_url: html,
+      body: extra?.body,
+    })
+  }
+
+  const branches: LuxReleaseBranchInput[] = []
+  const seenHeads = new Set<string>()
+  for (const head of heads) {
+    const name = head.trim()
+    if (!isLuxReleaseTag(name) || published.has(name) || seenHeads.has(name)) continue
+    seenHeads.add(name)
+    branches.push({ name, html_url: remote?.branchUrl(name) ?? "" })
+  }
+
+  return {
+    ...buildLuxReleasesSnapshot(currentVersion, raw, branches),
+    repoUrl: remote?.webUrl ?? "",
+    docsUrl: remote?.docsUrl ?? "",
   }
 }

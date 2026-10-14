@@ -15,11 +15,13 @@ Each bullet uses a single tag:
 
 ---
 
-## [1.4.1] - 2026-10-13
+## [1.4.1] - 2026-10-14
 
 **LUX**
 
-- [Add] **Releases** — Settings → About lists `vX.Y.Z` branches that have no GitHub release and marks them Unpublished. They do not trigger the update banner. Upgrade and downgrade still check out that name on the clone remote.
+- [Add] **Releases** — Settings → About lists `vX.Y.Z` tags and branches from the git remote this install was cloned from. A version branch with no tag is marked Unpublished and does not trigger the update banner. Links and upgrade/downgrade use that remote.
+- [Fix] **Host commands** — `lux-host-exec` changes to `/` after entering the host mount namespace, so bash no longer logs `getcwd: cannot access parent directories` on every command.
+- [Fix] **Releases** — SSH to that remote uses the account that started the container. On Docker Desktop the checkout is owned by root and the key on the Windows profile is mode 777, which SSH ignores, so the lookup copies the key to a private directory for the one command and deletes it. Public GitHub remotes still need no key.
 - [Fix] **VM and range lists** — Failed accessible-range fetches no longer clear the selected range. The dashboard keeps VMs across one empty Ludus poll, shows a spinner while range selection restores, and merges partial `/range` responses more predictably. The console picker uses the same merge rules as the dashboard.
 - [Fix] **Admin VM inventory** — Refresh bypasses stale server caches; admin data is keyed per API key; Ludus empty or short VM lists merge with prior data instead of wiping rows.
 - [Fix] **Cache invalidation** — Ludus proxy mutations invalidate in-process prefetch and admin SWR caches so the next navigation or admin GET is not stuck on an old VM list.

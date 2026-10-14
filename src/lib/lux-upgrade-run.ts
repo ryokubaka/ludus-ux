@@ -3,7 +3,7 @@ import path from "node:path"
 import { luxHostSelfUpdateStdin } from "@/lib/lux-host-install"
 import { getLuxHostUpdateKey, getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
-import { listKnownLuxReleaseTags } from "@/lib/lux-releases"
+import { getLuxReleasesSnapshot } from "@/lib/lux-releases"
 import { LUX_VERSION_MANAGEMENT_SINCE, losesVersionManagement, validateLuxSwitchTag } from "@/lib/lux-version"
 import {
   discoverLuxRepoPathContext,
@@ -12,11 +12,14 @@ import {
 } from "@/lib/lux-upgrade-docker"
 import {
   buildHostProbeCmd,
+  buildHostReleaseRefsCmd,
   buildStartUpgradeCmd,
   parseHostProbe,
+  parseHostReleaseRefs,
   readLuxUpgradeLogTail,
   resolveConfiguredLuxRepoPath,
   type LuxHostCapability,
+  type LuxOriginRefs,
 } from "@/lib/lux-upgrade-host"
 
 export type LuxHostStatus = LuxHostCapability & { logTail: string }
@@ -83,6 +86,29 @@ async function execOnUpgradeHost(dockerScript: string, luxHostArgs: readonly str
   return sshLuxHost(luxHostArgs, signedBundledUpgradeStdin())
 }
 
+/** vX.Y.Z heads and tags on the remote this install was cloned from. */
+export async function readLuxOriginReleaseRefs(): Promise<LuxOriginRefs> {
+  const host = await probeLuxUpgradeHost()
+  if (!host.canSwitch || !host.repoPath) {
+    return {
+      url: "",
+      heads: [],
+      tags: [],
+      error: host.reason ?? "Could not find the LUX git clone on this host.",
+    }
+  }
+  try {
+    const out = await execOnUpgradeHost(
+      buildHostReleaseRefsCmd(host.repoPath),
+      ["release-refs", host.repoPath],
+    )
+    return parseHostReleaseRefs(out)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not list this install's git remote"
+    return { url: "", heads: [], tags: [], error: message }
+  }
+}
+
 export async function probeLuxUpgradeHost(): Promise<LuxHostStatus> {
   const logTail = readLuxUpgradeLogTail()
   const envRaw = (process.env.LUX_REPO_PATH ?? "").trim()
@@ -127,7 +153,11 @@ export async function startLuxUpgrade(
   tag: string,
   acknowledgeVersionManagementLoss: boolean,
 ): Promise<{ ok: true; tag: string } | { ok: false; status: number; error: string }> {
-  const known = await listKnownLuxReleaseTags()
+  const snap = await getLuxReleasesSnapshot()
+  if (snap.error && snap.releases.length === 0) {
+    return { ok: false, status: 503, error: snap.error }
+  }
+  const known = snap.releases.map((release) => release.tag)
   const invalid = validateLuxSwitchTag(tag, known)
   if (invalid) return { ok: false, status: 400, error: invalid }
   if (losesVersionManagement(tag) && !acknowledgeVersionManagementLoss) {

@@ -41,13 +41,33 @@ export type HostExecContainer = {
 /**
  * One-shot container that enters the host namespaces and runs `script`
  * with the host's own `git` and `docker`. `image` must contain `/usr/bin/nsenter`.
+ *
+ * util-linux 2.38 applies `nsenter -w` before the mount-namespace switch, so
+ * bash still inherits the container cwd and logs `getcwd: cannot access
+ * parent directories`. `env -C /` chdirs after the switch, by absolute path,
+ * before the shell starts.
  */
 export function buildHostExecContainer(script: string, image: string): HostExecContainer {
   return {
     Image: image,
     Tty: true,
     WorkingDir: "/",
-    Entrypoint: ["/usr/bin/nsenter", "-t", "1", "-w/", "-m", "-u", "-i", "-n", "-p", "--", "/bin/sh", "-c"],
+    Entrypoint: [
+      "/usr/bin/nsenter",
+      "-t",
+      "1",
+      "-m",
+      "-u",
+      "-i",
+      "-n",
+      "-p",
+      "--",
+      "/usr/bin/env",
+      "-C",
+      "/",
+      "/bin/sh",
+      "-c",
+    ],
     Cmd: [script],
     HostConfig: { Privileged: true, PidMode: "host", CgroupnsMode: "host" },
     Env: ["PWD=/", "HOME=/root"],

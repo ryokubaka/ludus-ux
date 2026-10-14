@@ -23,14 +23,13 @@ import {
   type LuxVersionRelation,
 } from "@/lib/lux-version"
 
-const DOCS_HREF =
-  "https://github.com/ryokubaka/ludus-ux/blob/main/docs/getting-started.md#upgrade-and-downgrade"
-
 type ReleasesResponse = {
   current: string
   latestStable: string | null
   updateAvailable: boolean
   releases: LuxRelease[]
+  repoUrl?: string
+  docsUrl?: string
   error?: string
   logTail?: string
 }
@@ -223,7 +222,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>LUX {latest.tag} is available</AlertTitle>
           <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span>This install is v{releases.current}. A newer stable release is on GitHub.</span>
+            <span>This install is v{releases.current}. A newer stable release is on this install&apos;s git remote.</span>
             {isAdmin && (
               <Button
                 size="sm"
@@ -249,14 +248,16 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
         <Alert>
           <AlertDescription>
             {host.reason}{" "}
-            <a
-              href={DOCS_HREF}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2 hover:text-primary"
-            >
-              Upgrade and downgrade
-            </a>
+            {releases?.docsUrl && (
+              <a
+                href={releases.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-primary"
+              >
+                Upgrade and downgrade
+              </a>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -278,15 +279,25 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       <div className="rounded-lg border border-border bg-card">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
-          <span className="text-sm font-medium">Releases</span>
-          {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/50">
+          <span className="text-sm font-medium shrink-0">Releases</span>
+          {releases?.repoUrl && (
+            <a
+              href={releases.repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 truncate text-xs text-muted-foreground hover:text-primary"
+            >
+              {releases.repoUrl.replace(/^https?:\/\//, "")}
+            </a>
+          )}
+          {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
         </div>
         <div className="divide-y divide-border/40">
           {!releases && !loadError && (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Checking GitHub…</span>
+              <span className="text-sm">Checking this install&apos;s git remote…</span>
             </div>
           )}
           {releases && releases.releases.length === 0 && (

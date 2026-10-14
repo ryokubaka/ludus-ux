@@ -3,8 +3,9 @@ import {
   buildLuxReleasesSnapshot,
   compareLuxSemver,
   excerptReleaseNotes,
-  githubMatchingHeadNames,
   isLuxReleaseTag,
+  parseLuxGitRemote,
+  snapshotFromGitRefs,
   losesVersionManagement,
   luxUpgradeFailureFromLog,
   luxVersionRelation,
@@ -185,15 +186,61 @@ describe("lux-version", () => {
     expect(snap.releases[0]?.unpublished).toBe(true)
   })
 
-  it("reads version heads from the GitHub matching-refs payload", () => {
-    expect(githubMatchingHeadNames([
-      { ref: "refs/heads/v1.4.1" },
-      { ref: "refs/heads/v1.4.0-rc1" },
-      { ref: "refs/heads/main" },
-      { ref: "refs/tags/v1.4.0" },
-    ])).toEqual(["v1.4.1"])
-    expect(githubMatchingHeadNames({ ref: "refs/heads/v1.4.2" })).toEqual(["v1.4.2"])
-    expect(githubMatchingHeadNames(null)).toEqual([])
+  it("builds browse links from the clone remote and drops credentials", () => {
+    const fork = parseLuxGitRemote("git@github.com:other/ludus-ux.git")
+    expect(fork?.githubRepo).toBe("other/ludus-ux")
+    expect(fork?.webUrl).toBe("https://github.com/other/ludus-ux")
+    expect(fork?.tagUrl("v1.4.0")).toBe("https://github.com/other/ludus-ux/releases/tag/v1.4.0")
+    expect(fork?.branchUrl("v1.4.1")).toBe("https://github.com/other/ludus-ux/tree/v1.4.1")
+
+    const tokened = parseLuxGitRemote("https://user:secret@github.com/fork/ludus-ux.git")
+    expect(tokened?.webUrl).toBe("https://github.com/fork/ludus-ux")
+    expect(JSON.stringify(tokened)).not.toContain("secret")
+
+    const gitlab = parseLuxGitRemote("git@gitlab.rain.mil:smeowden/ludus-ux.git")
+    expect(gitlab?.githubRepo).toBeNull()
+    expect(gitlab?.webUrl).toBe("https://gitlab.rain.mil/smeowden/ludus-ux")
+    expect(gitlab?.branchUrl("v1.4.1")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tree/v1.4.1")
+    expect(gitlab?.tagUrl("v1.4.0")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tags/v1.4.0")
+
+    const nested = parseLuxGitRemote("https://gitlab.com/group/sub/ludus-ux.git")
+    expect(nested?.branchUrl("v1.2.0")).toBe("https://gitlab.com/group/sub/ludus-ux/-/tree/v1.2.0")
+    expect(parseLuxGitRemote("not a url")).toBeNull()
+  })
+
+  it("lists the clone remote's tags and leaves version branches unpublished", () => {
+    const snap = snapshotFromGitRefs(
+      "1.4.0",
+      "git@gitlab.example.mil:lab/ludus-ux.git",
+      ["v1.4.1", "v1.4.0", "main"],
+      ["v1.4.0", "v1.3.2"],
+      [{
+        tag_name: "v1.4.0",
+        name: "1.4.0",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-10-04T00:00:00Z",
+        body: "notes",
+      }],
+    )
+    expect(snap.repoUrl).toBe("https://gitlab.example.mil/lab/ludus-ux")
+    expect(snap.releases.map((r) => `${r.tag}${r.unpublished ? "*" : ""}`)).toEqual([
+      "v1.4.1*",
+      "v1.4.0",
+      "v1.3.2",
+    ])
+    expect(snap.releases.find((r) => r.tag === "v1.4.1")?.htmlUrl).toBe(
+      "https://gitlab.example.mil/lab/ludus-ux/-/tree/v1.4.1",
+    )
+    expect(snap.releases.find((r) => r.tag === "v1.4.0")).toMatchObject({
+      unpublished: false,
+      relation: "current",
+      publishedAt: "2026-10-04T00:00:00Z",
+      htmlUrl: "https://gitlab.example.mil/lab/ludus-ux/-/tags/v1.4.0",
+    })
+    expect(snap.latestStable).toBe("v1.4.0")
+    expect(snap.updateAvailable).toBe(false)
+    expect(snap.releases.some((r) => r.tag === "main")).toBe(false)
   })
 
   it("reads a failed switch from the host log", () => {

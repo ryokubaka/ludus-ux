@@ -227,6 +227,112 @@ export function parseHostProbe(output: string): LuxHostCapability {
   return { canSwitch: true, repoPath, dirty, checkout, reason: null }
 }
 
+export type LuxOriginRefs = {
+  url: string
+  heads: string[]
+  tags: string[]
+  error?: string
+}
+
+/**
+ * List vX.Y.Z heads and tags from the clone's own remote.
+ * The remote name comes from `git remote` and is checked before it is used.
+ * SSH uses scripts/lux-git-identity.sh: the checkout owner, or on Docker
+ * Desktop the Windows profile that started the container.
+ */
+export function buildHostReleaseRefsCmd(repoPath: string): string {
+  if (!isSafeLuxRepoPath(repoPath)) throw new Error("Unsafe repository path")
+  const repo = shellSingleQuote(normalizeLuxHostRepoPath(repoPath))
+  const script = `
+REPO=${repo}
+if [ ! -f "$REPO/docker-compose.yml" ] || [ ! -f "$REPO/scripts/upgrade.sh" ] || [ ! -d "$REPO/.git" ]; then
+  printf 'ok=no\\nreason=not_found\\n'
+  exit 0
+fi
+cd "$REPO" || { printf 'ok=no\\nreason=not_found\\n'; exit 0; }
+GIT_ROOT=$(pwd -P)
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="$GIT_ROOT"
+REMOTE=""
+if git remote | grep -qx origin; then
+  REMOTE=origin
+else
+  REMOTE=$(git remote | head -n 1)
+fi
+case "$REMOTE" in
+  "") printf 'ok=no\\nreason=no_remote\\n'; exit 0 ;;
+  *[!A-Za-z0-9._-]*) printf 'ok=no\\nreason=remote\\n'; exit 0 ;;
+esac
+URL=$(git remote get-url "$REMOTE" 2>/dev/null || true)
+URL=$(printf '%s' "$URL" | head -n 1 | tr -d '\\015')
+printf 'url=%s\\n' "$URL"
+if [ -f "$REPO/scripts/lux-git-identity.sh" ]; then
+  . "$REPO/scripts/lux-git-identity.sh"
+fi
+lux_ls() {
+  if command -v lux_run_git >/dev/null 2>&1; then
+    if command -v timeout >/dev/null 2>&1; then
+      lux_run_git "$URL" -- timeout 40 git ls-remote --heads --tags "$REMOTE"
+      return $?
+    fi
+    lux_run_git "$URL" -- git ls-remote --heads --tags "$REMOTE"
+    return $?
+  fi
+  GIT_TERMINAL_PROMPT=0 git ls-remote --heads --tags "$REMOTE"
+}
+refs=$(lux_ls) || { printf 'ok=no\\nreason=ls_remote\\n'; exit 0; }
+printf '%s\\n' "$refs" | while IFS=$(printf '\\011') read -r _sha ref; do
+  name=""
+  kind=""
+  case "$ref" in
+    refs/heads/*)
+      name=\${ref#refs/heads/}
+      kind=head
+      ;;
+    refs/tags/*)
+      name=\${ref#refs/tags/}
+      name=\${name%"^{}"}
+      kind=tag
+      ;;
+    *) continue ;;
+  esac
+  printf '%s' "$name" | grep -Eq '^v[0-9]+\\.[0-9]+\\.[0-9]+$' || continue
+  printf '%s=%s\\n' "$kind" "$name"
+done
+printf 'ok=yes\\n'
+`
+  return wrapEncodedHostShellScript(script.replace(/^\n/, "").split("\n"))
+}
+
+export function parseHostReleaseRefs(output: string): LuxOriginRefs {
+  const text = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+  const urlLine = /^url=(.*)$/m.exec(text)?.[1]?.trim() ?? ""
+  const url = urlLine.length > 500 || /[\r\n\0]/.test(urlLine) ? "" : urlLine
+  const heads = new Set<string>()
+  const tags = new Set<string>()
+  for (const match of text.matchAll(/^(head|tag)=(\S+)$/gm)) {
+    const name = match[2] ?? ""
+    if (!isLuxReleaseTag(name)) continue
+    if (match[1] === "head") heads.add(name)
+    else tags.add(name)
+  }
+  if (!/^ok=yes$/m.test(text)) {
+    const reason = /^reason=(not_found|no_remote|remote|ls_remote)$/m.exec(text)?.[1] ?? "ls_remote"
+    const error =
+      reason === "not_found"
+        ? "Could not find the LUX git clone on this host."
+        : reason === "no_remote" || reason === "remote"
+          ? "This LUX clone has no usable git remote."
+          : "Could not list branches and tags from this install's git remote."
+    return { url, heads: [...heads], tags: [...tags], error }
+  }
+  if (!url) {
+    return { url: "", heads: [], tags: [], error: "This LUX clone has no usable git remote." }
+  }
+  return { url, heads: [...heads], tags: [...tags] }
+}
+
 export function buildStartUpgradeCmd(
   repoPath: string,
   tag: string,

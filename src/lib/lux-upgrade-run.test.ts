@@ -29,7 +29,12 @@ vi.mock("@/lib/lux-upgrade-docker", () => ({
 }))
 
 vi.mock("@/lib/lux-releases", () => ({
-  listKnownLuxReleaseTags: vi.fn(async () => ["v1.4.0", "v1.4.1"]),
+  getLuxReleasesSnapshot: vi.fn(async () => ({
+    current: "1.4.0",
+    latestStable: "v1.4.1",
+    updateAvailable: true,
+    releases: [{ tag: "v1.4.0" }, { tag: "v1.4.1" }],
+  })),
 }))
 
 import { sshExec } from "@/lib/proxmox-ssh"

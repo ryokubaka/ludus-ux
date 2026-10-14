@@ -198,6 +198,9 @@ describe("lux-host allowlist", () => {
     denied(["upgrade-start", "/opt/ludus-ux", "v1.3.3;id"])
     denied(["upgrade-start", "relative", "v1.3.3"])
     denied(["upgrade-probe", "/tmp/not-lux;id"])
+    denied(["release-refs"])
+    denied(["release-refs", "relative"])
+    denied(["release-refs", "/tmp/not-lux;id"])
   })
 
   it("runs a signed stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {

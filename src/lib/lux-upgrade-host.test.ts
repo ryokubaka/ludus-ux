@@ -17,7 +17,9 @@ import { luxUpgradeFailureFromLog } from "./lux-version"
 import {
   bindMountRepoRoot,
   buildHostProbeCmd,
+  buildHostReleaseRefsCmd,
   buildStartUpgradeCmd,
+  parseHostReleaseRefs,
   filterHostShellRepoCandidates,
   isSafeLuxRepoPath,
   normalizeLuxHostRepoPath,
@@ -70,6 +72,27 @@ describe("lux-upgrade-host", () => {
     const inner = Buffer.from(b64!, "base64").toString("utf8")
     expect(inner).toContain("'/opt/ludus-ux'")
     expect(inner).toContain('eq .Destination "/app/data"')
+  })
+
+  it("rejects an unsafe path before listing the clone remote", () => {
+    expect(() => buildHostReleaseRefsCmd("/opt/ludus-ux;id")).toThrow(/Unsafe/)
+  })
+
+  it("parses version heads and tags from the clone remote", () => {
+    const parsed = parseHostReleaseRefs(
+      [
+        "url=git@gitlab.rain.mil:smeowden/ludus-ux.git",
+        "head=v1.4.1",
+        "head=main",
+        "tag=v1.4.0",
+        "tag=v1.4.0^{}",
+        "ok=yes",
+      ].join("\n"),
+    )
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.url).toBe("git@gitlab.rain.mil:smeowden/ludus-ux.git")
+    expect(parsed.heads).toEqual(["v1.4.1"])
+    expect(parsed.tags).toEqual(["v1.4.0"])
   })
 
   it("parses a ready host probe when the tty added carriage returns", () => {

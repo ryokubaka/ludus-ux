@@ -39,6 +39,7 @@ import {
   Play,
 } from "lucide-react"
 import { ludusApi, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
+import { dropGoadInstanceFromCache } from "@/lib/goad-instance-list-cache"
 import type { RangeObject, UserObject } from "@/lib/types"
 import { cn, getRangeStateBadge } from "@/lib/utils"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
@@ -365,13 +366,25 @@ export function AdminPageClient() {
         return
       }
       if (ipsForHosts.length > 0) void pruneKnownHosts(ipsForHosts)
-      await cleanupGoadWorkspaceAfterRangeDelete(rangeID, { adminGlobalInstances: true })
+      const cleaned = await cleanupGoadWorkspaceAfterRangeDelete(rangeID, { adminGlobalInstances: true })
+      await dropGoadInstanceFromCache(queryClient, {
+        instanceId: cleaned.instanceId ?? undefined,
+        rangeId: rangeID,
+      })
       await fetch("/api/admin/ranges-data", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rangeID }),
       }).catch(() => {}) // non-fatal
-      toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
+      if (cleaned.instanceId && !cleaned.workspaceRemoved) {
+        toast({
+          variant: "destructive",
+          title: "Range deleted, GOAD workspace remains",
+          description: cleaned.errors.join("; ") || `${cleaned.instanceId} is still listed until the workspace is removed.`,
+        })
+      } else {
+        toast({ title: "Range deleted", description: `${rangeID} permanently removed` })
+      }
       await refetchAdminData()
     } finally {
       setRangeDeleteInFlight(null)

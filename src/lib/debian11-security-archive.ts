@@ -1,11 +1,19 @@
 import "server-only"
 
-import { sshExec } from "@/lib/goad-ssh"
+import { sshExec, sshExecAccount } from "@/lib/goad-ssh"
+import { loadLuxHostScriptText } from "@/lib/lux-host-install"
 import { ensureLuxHostCurrent } from "@/lib/lux-host-sync"
 
 export type Debian11ArchivePatch =
-  | { ok: true; changed: boolean; skipped: string | null }
+  | { ok: true; changed: boolean; skipped: string | null; warning?: string }
   | { ok: false; error: string }
+
+type HostPatchOp = "patch-debian11-apt" | "patch-chocolatey-openssh"
+
+/** The installed helper predates this LUX build and rejected the operation name. */
+export function luxHostMissingOperation(error: string): boolean {
+  return /operation not allowed/i.test(error)
+}
 
 /**
  * Lux-host prints `status=ok|skipped` for the Debian 11 playbook edit.
@@ -58,81 +66,124 @@ export function rangeDeployRunsWindowsTools(body: unknown): boolean {
   )
 }
 
-export function debian11ArchiveBlockMessage(error: string): string {
-  return `Debian 11 apt sources were not updated on the Ludus host (${error}). Host SSH has to run lux-host before deploy. Bullseye security packages are on https://archive.debian.org.`
+/**
+ * True when the deploy config names a Debian 11 guest (router template, vm_name, or Bullseye).
+ * Debian 13 templates do not match. An empty config does not match: the guest task
+ * exits immediately unless `/etc/os-release` says Debian 11, so a missed playbook
+ * edit cannot break a Debian 13 deploy.
+ */
+export function deployNeedsDebian11Archive(configText: string | null | undefined): boolean {
+  if (!configText) return false
+  return /debian-11\b|router-debian11-x64|\bbullseye\b/i.test(configText)
 }
 
-export function chocolateyOpenSshBlockMessage(error: string): string {
-  return `Chocolatey was not prepared on the Ludus host (${error}). Host SSH has to run lux-host before deploy. Windows OpenSSH does not see choco.exe until the VM reboots.`
+/** Stop the deploy only when a Debian 11 guest will run the hostname play and the edit failed. */
+export function debian11PatchBlocksDeploy(
+  patch: Debian11ArchivePatch,
+  body: unknown,
+  configText: string | null | undefined,
+): boolean {
+  return !patch.ok && rangeDeployRunsHostnameSetup(body) && deployNeedsDebian11Archive(configText)
+}
+
+async function invokeInstalledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch> {
+  try {
+    const result = await sshExec([op])
+    return parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
+  } catch (err) {
+    const error = err instanceof Error ? err.message : "SSH failed"
+    return { ok: false, error }
+  }
+}
+
+/**
+ * Run this build's helper from stdin. The copy in /usr/local/sbin may predate
+ * the operation. Root runs it directly. An account with passwordless sudo runs
+ * it the same way. A lux-host-only sudo rule cannot.
+ */
+async function invokeBundledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch | null> {
+  const script = loadLuxHostScriptText()
+  const probe = await sshExecAccount("id -u").catch(() => null)
+  const uid = probe && probe.code === 0 ? probe.stdout.trim() : ""
+  const command = uid === "0" ? `bash -s -- ${op}` : `sudo -n bash -s -- ${op}`
+  try {
+    const result = await sshExecAccount(command, { stdin: script })
+    const parsed = parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
+    if (!parsed.ok && /must run as root|a password is required|not allowed/i.test(parsed.error)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Apply one playbook edit. Prefer the installed helper. If that helper does not
+ * know the operation, update it once and retry, then run the script shipped
+ * with this LUX build. A failure here is not fatal: the caller keeps deploying.
+ */
+async function applyHostPatch(op: HostPatchOp, logPrefix: string): Promise<Debian11ArchivePatch> {
+  const sync = await ensureLuxHostCurrent()
+  if (!sync.ok) console.warn(`[${logPrefix}] lux-host sync: ${sync.detail}`)
+  let parsed = await invokeInstalledPatch(op)
+  if (!parsed.ok && luxHostMissingOperation(parsed.error) && sync.detail === "waiting to retry") {
+    const forced = await ensureLuxHostCurrent({ force: true })
+    if (!forced.ok) console.warn(`[${logPrefix}] lux-host sync: ${forced.detail}`)
+    else parsed = await invokeInstalledPatch(op)
+  }
+  if (!parsed.ok && luxHostMissingOperation(parsed.error)) {
+    const bundled = await invokeBundledPatch(op)
+    if (bundled) parsed = bundled
+  }
+  if (parsed.ok && parsed.changed) {
+    console.info(`[${logPrefix}] playbook updated`)
+  } else if (parsed.ok && parsed.skipped) {
+    console.warn(`[${logPrefix}] skipped (${parsed.skipped})`)
+  } else if (!parsed.ok) {
+    console.warn(`[${logPrefix}] ${parsed.error}`)
+  }
+  return parsed
 }
 
 /**
  * Rewrite Ludus's Linux hostname play so Debian 11 points bullseye-security at
- * the HTTPS archive before apt installs dbus. The guest task runs during deploy.
+ * the HTTPS archive before apt installs dbus. The guest task does nothing on
+ * any other release.
  */
 export async function ensureDebian11SecurityArchive(): Promise<Debian11ArchivePatch> {
-  const sync = await ensureLuxHostCurrent()
-  if (!sync.ok) {
-    return { ok: false, error: sync.detail }
-  }
-  try {
-    const result = await sshExec(["patch-debian11-apt"])
-    const parsed = parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
-    if (parsed.ok && parsed.changed) {
-      console.info("[debian11-apt] hostname play now points Bullseye security apt at the HTTPS archive")
-    } else if (parsed.ok && parsed.skipped) {
-      console.warn(`[debian11-apt] skipped (${parsed.skipped})`)
-    } else if (!parsed.ok) {
-      console.warn(`[debian11-apt] ${parsed.error}`)
-    }
-    return parsed
-  } catch (err) {
-    const error = err instanceof Error ? err.message : "SSH failed"
-    console.warn(`[debian11-apt] ${error}`)
-    return { ok: false, error }
-  }
+  return applyHostPatch("patch-debian11-apt", "debian11-apt")
 }
 
 /** Install Chocolatey, then reboot once, before Ludus's win_chocolatey bootstrap. */
 export async function ensureChocolateyOpenSshPatch(): Promise<Debian11ArchivePatch> {
-  const sync = await ensureLuxHostCurrent()
-  if (!sync.ok) {
-    return { ok: false, error: sync.detail }
-  }
-  try {
-    const result = await sshExec(["patch-chocolatey-openssh"])
-    const parsed = parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
-    if (parsed.ok && parsed.changed) {
-      console.info("[chocolatey] Windows tools play installs Chocolatey and reboots once so OpenSSH can see choco.exe")
-    } else if (parsed.ok && parsed.skipped) {
-      console.warn(`[chocolatey] skipped (${parsed.skipped})`)
-    } else if (!parsed.ok) {
-      console.warn(`[chocolatey] ${parsed.error}`)
-    }
-    return parsed
-  } catch (err) {
-    const error = err instanceof Error ? err.message : "SSH failed"
-    console.warn(`[chocolatey] ${error}`)
-    return { ok: false, error }
-  }
+  return applyHostPatch("patch-chocolatey-openssh", "chocolatey")
 }
 
 /**
- * Apply the host playbook edits a range deploy needs. A tag-limited deploy
- * ignores a patch for a play it will not run.
+ * Apply the host playbook edits a range deploy needs. A missed edit does not
+ * stop the deploy: an older lux-host rejects the operation name, and the stock
+ * Ludus plays still run.
  */
-export async function ensureRangeDeployHostPatches(body: unknown): Promise<Debian11ArchivePatch> {
+export async function ensureRangeDeployHostPatches(
+  body: unknown,
+  opts?: { configText?: string | null },
+): Promise<Debian11ArchivePatch> {
   const apt = await ensureDebian11SecurityArchive()
-  if (!apt.ok && rangeDeployRunsHostnameSetup(body)) {
-    return { ok: false, error: debian11ArchiveBlockMessage(apt.error) }
-  }
   const choco = await ensureChocolateyOpenSshPatch()
+  const warnings: string[] = []
+  if (!apt.ok && debian11PatchBlocksDeploy(apt, body, opts?.configText)) {
+    warnings.push(`Debian 11 apt edit skipped (${apt.error}). Deploy is continuing.`)
+  } else if (!apt.ok) {
+    console.warn(`[debian11-apt] continuing without the Bullseye archive task (${apt.error})`)
+  }
   if (!choco.ok && rangeDeployRunsWindowsTools(body)) {
-    return { ok: false, error: chocolateyOpenSshBlockMessage(choco.error) }
+    warnings.push(`Chocolatey OpenSSH edit skipped (${choco.error}). Deploy is continuing.`)
+  } else if (!choco.ok) {
+    console.warn(`[chocolatey] continuing without the OpenSSH reboot task (${choco.error})`)
   }
   return {
     ok: true,
     changed: (apt.ok && apt.changed) || (choco.ok && choco.changed),
     skipped: null,
+    warning: warnings.length > 0 ? warnings.join(" ") : undefined,
   }
 }

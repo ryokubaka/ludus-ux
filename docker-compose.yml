@@ -11,9 +11,8 @@ services:
       # Auth: SSH host for user login + .bashrc API key reads
       - LUDUS_SSH_HOST=${LUDUS_SSH_HOST}
       - LUDUS_SSH_PORT=${LUDUS_SSH_PORT:-22}
-      # Optional: IP address of the Ludus server, used when LUDUS_SSH_HOST is a hostname
-      # that Docker cannot resolve (VPN-only DNS, Windows hosts file entries, etc.).
-      # Set this in your .env and the container will add the mapping to /etc/hosts automatically.
+      # IP for LUDUS_SSH_HOST. The entrypoint always pins this in /etc/hosts so a later
+      # DNS failure (EAI_AGAIN) cannot break Ludus API calls.
       - LUDUS_SERVER_IP=${LUDUS_SERVER_IP:-}
       # Session encryption secret (required in production: min 32 chars, not a placeholder — see docs/environment.md)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}

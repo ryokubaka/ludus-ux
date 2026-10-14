@@ -117,6 +117,12 @@ export async function pruneKnownHosts(hosts: string[]): Promise<void> {
   }
 }
 
+export type GoadWorkspaceCleanup = {
+  instanceId: string | null
+  workspaceRemoved: boolean
+  errors: string[]
+}
+
 /**
  * After Ludus removes a range, delete the linked GOAD workspace folder on the GOAD
  * SSH host (`<goadPath>/workspace/<instanceId>`) when this Ludus range was tied to a GOAD instance.
@@ -126,9 +132,9 @@ export async function pruneKnownHosts(hosts: string[]): Promise<void> {
 export async function cleanupGoadWorkspaceAfterRangeDelete(
   rangeId: string,
   options?: { adminGlobalInstances?: boolean },
-): Promise<void> {
+): Promise<GoadWorkspaceCleanup> {
   const rid = rangeId?.trim()
-  if (!rid) return
+  if (!rid) return { instanceId: null, workspaceRemoved: false, errors: [] }
   const imp = getImpersonationHeaders()
   const qs = new URLSearchParams({ rangeId: rid })
   if (options?.adminGlobalInstances) qs.set("adminView", "1")
@@ -156,15 +162,26 @@ export async function cleanupGoadWorkspaceAfterRangeDelete(
           instData.instances?.find((i) => i.ludusRangeId === rid)?.instanceId ?? null
       }
     }
-    if (!instanceId) return
-    await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+    if (!instanceId) return { instanceId: null, workspaceRemoved: false, errors: [] }
+    const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...imp },
       body: JSON.stringify({ ludusRangeId: rid, skipRangeDeletion: true }),
-    }).catch(() => {})
-  } catch {
-    /* non-fatal */
+    })
+    const data = (await res.json().catch(() => ({}))) as {
+      workspaceRemoved?: boolean
+      errors?: string[]
+    }
+    const errors = Array.isArray(data.errors) ? data.errors.filter((e) => typeof e === "string") : []
+    if (!res.ok && errors.length === 0) errors.push(`HTTP ${res.status}`)
+    return { instanceId, workspaceRemoved: data.workspaceRemoved === true, errors }
+  } catch (err) {
+    return {
+      instanceId: null,
+      workspaceRemoved: false,
+      errors: [err instanceof Error ? err.message : "GOAD workspace cleanup failed"],
+    }
   }
 }
 

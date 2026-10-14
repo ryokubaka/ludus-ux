@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const patches = await ensureRangeDeployHostPatches(ludusBody)
+  const patches = await ensureRangeDeployHostPatches(ludusBody, { configText: router.template })
   if (!patches.ok) {
     logLuxRouteAction(request, session, { outcome: "failure", detail: patches.error })
     return NextResponse.json({ error: patches.error, code: "deploy_host_patch" }, { status: 503 })

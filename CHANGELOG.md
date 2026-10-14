@@ -19,22 +19,25 @@ Each bullet uses a single tag:
 
 **LUX**
 
-- [Add] **Releases** — Settings → About lists `vX.Y.Z` tags and branches from the git remote this install was cloned from. A version branch with no tag is marked Unpublished and does not trigger the update banner. Links and upgrade/downgrade use that remote.
+- [Add] **Releases** — Settings → About lists `vX.Y.Z` tags and branches from the git remote this install was cloned from. A version branch with no tag is marked Unpublished and does not trigger the update banner. Links and upgrade/downgrade use that remote. `GITHUB_TOKEN` or `LUX_GITHUB_TOKEN` is sent when set.
 - [Fix] **Host commands** — `lux-host-exec` changes to `/` after entering the host mount namespace, so bash no longer logs `getcwd: cannot access parent directories` on every command.
-- [Fix] **Releases** — SSH to that remote uses the account that started the container. On Docker Desktop the checkout is owned by root and the key on the Windows profile is mode 777, which SSH ignores, so the lookup copies the key to a private directory for the one command and deletes it. Public GitHub remotes still need no key.
+- [Fix] **Release lookup** — The checkout is discovered from the running container (Compose working directory or the host path of the `/app/data` bind mount). `LUX_REPO_PATH` is only an override when that fails. Mount paths come from the Docker API, including Windows `E:\` client paths, and are translated on the Linux host. Translation does not depend on a `docker` CLI in the host namespace. The probe runs as a base64-encoded host script. SSH uses the account that started the container. On Docker Desktop, a key file mode 777 is copied to a private directory for that one command and then deleted. Public GitHub remotes still need no key.
 - [Fix] **VM and range lists** — Failed accessible-range fetches no longer clear the selected range. The dashboard keeps VMs across one empty Ludus poll, shows a spinner while range selection restores, and merges partial `/range` responses more predictably. The console picker uses the same merge rules as the dashboard.
 - [Fix] **Admin VM inventory** — Refresh bypasses stale server caches; admin data is keyed per API key; Ludus empty or short VM lists merge with prior data instead of wiping rows.
 - [Fix] **Cache invalidation** — Ludus proxy mutations invalidate in-process prefetch and admin SWR caches so the next navigation or admin GET is not stuck on an old VM list.
 - [Fix] **Source catalog API** — Ensure `source_content_pins` (and related tables) exist on startup so `/api/sources/.../blueprints|templates|roles|collections` no longer 502 when the DB predates migration v17.
-- [Fix] **Debian 11 deploys** — Before a range deploy, LUX points Bullseye security apt at `https://archive.debian.org`. `security.debian.org` still lists those packages and returns 404 for the files. The VM switches mirrors during deploy, before hostname setup installs packages.
-- [Fix] **Windows Chocolatey** — Before a range deploy, LUX installs Chocolatey and reboots the VM once so OpenSSH can see `choco.exe`. The stock bootstrap installs Chocolatey, then fails because the SSH session still has the old PATH.
-- [Fix] **In-app releases (host probe)** — Discover mount paths via the Docker API (including Windows `E:\` client paths), translate them on the Linux host (bind-mount mirrors under `/run/desktop/mnt/host/…`, `/mnt/…`), and run the probe through a base64-encoded host script so nested quoting survives `lux-host-exec`. Docker Desktop VMs often have no `docker` CLI in the host namespace; translation does not depend on it.
-- [Improve] **In-app releases** — Discover the git checkout from the running container (Compose working directory or the host path of the `/app/data` bind mount). `LUX_REPO_PATH` is only an override when auto-discovery fails.
-- [Improve] **GitHub releases** — Settings → About sends `GITHUB_TOKEN` or `LUX_GITHUB_TOKEN` when set, so unauthenticated rate limits (HTTP 403) are less common.
+- [Fix] **Debian 11 apt** — Before a range or GOAD deploy, LUX tries to point Bullseye security apt at `https://archive.debian.org`. `security.debian.org` still lists those packages and returns 404 for the files. The guest task runs during hostname setup and does nothing on Debian 13. If the host's lux-host cannot apply the edit, the deploy continues.
+- [Fix] **Windows Chocolatey** — The same deploys try to install Chocolatey and reboot the VM once so OpenSSH can see `choco.exe`. The stock bootstrap installs Chocolatey, then fails because the SSH session still has the old PATH. If lux-host cannot apply the edit, the deploy continues.
 - [Perf] **Sources page** — Defer cross-source Ansible catalog fetches until roles/collections are expanded or Ansible is already installed on the host.
 - [Perf] **Blueprint provenance** — Fetch source blueprint catalogs only for sources tied to installed blueprint IDs, not every registered source.
 - [Perf] **Sidebar navigation** — Instant active state and header title on pointer down; hover/focus route warmup with `prefetch="auto"` (loading-boundary prefetch only); drop duplicate dynamic-import spinner when `loading.tsx` already covers the segment.
 - [Security] **Dependencies** — Bump `sharp`, `source-map-js`, and `postcss-selector-parser` (via npm overrides) to clear reported moderate/high audit findings.
+
+**GOAD**
+
+- [Fix] **List after delete** — Deleting a range or a GOAD instance removes that row from the cached list before the page is shown again. The list no longer keeps a deleted range for the two-minute cache window. If the workspace folder is still on the host, the delete reports that instead of saying the lab is gone.
+- [Fix] **Range delete** — Delete Instance + Range locks the action buttons and shows a deletion banner until the workspace is gone. The log is the GOAD `ludus range rm` output. Ludus deploy logs stay hidden during that delete. GOAD's destroy only removes VMs and keeps the range record; LUX waits for that to finish, then deletes the range. The active-range menu drops that range and selects the next one without a reload.
+- [Fix] **Live range logs** — A new GOAD deploy passes the dedicated range id into the instance page, so range logs stream during provide instead of showing "No dedicated range" until a refresh.
 
 ## [1.4.0] - 2026-10-02
 

@@ -35,17 +35,26 @@ export function GoadDeployTab({
   rangeElapsed,
   goadElapsed,
   postProcessingStep,
+  deletingRange,
 }: GoadDeployTabProps) {
+  const goadFinished = exitCode !== null && !isRunning
   return (
     <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
       <div className="flex items-center gap-3 mb-3 flex-shrink-0 flex-wrap">
-        {isRunning && currentAction && (
+        {deletingRange ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-status-error" />
+            <span className="text-sm text-status-error">
+              {goadFinished ? "Removing the GOAD workspace…" : "Deleting range…"}
+            </span>
+          </>
+        ) : isRunning && currentAction ? (
           <>
             <div className="h-2 w-2 rounded-full bg-status-success animate-pulse" />
             <span className="text-sm text-status-success">Running: {currentAction}</span>
           </>
-        )}
-        {instance.ludusRangeId && rangeState && (
+        ) : null}
+        {instance.ludusRangeId && rangeState && !deletingRange && (
           <Badge
             variant={
               rangeState === "SUCCESS"
@@ -64,7 +73,7 @@ export function GoadDeployTab({
             No dedicated range — click Provide to create one before provisioning.
           </span>
         )}
-        {exitCode !== null && (
+        {exitCode !== null && !deletingRange && (
           <Badge variant={exitCode === 0 ? "success" : "destructive"}>
             GOAD {exitCode === 0 ? "Completed ✓" : `Failed (exit ${exitCode})`}
           </Badge>
@@ -116,7 +125,20 @@ export function GoadDeployTab({
         </div>
       )}
 
-      {!isRangeStreaming &&
+      {deletingRange && (
+        <Alert variant="destructive" className="mb-3 flex-shrink-0">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <AlertDescription className="text-xs">
+            <strong>Deleting {instance.ludusRangeId ?? "the Ludus range"}.</strong>{" "}
+            {goadFinished
+              ? "GOAD finished ludus range rm. The workspace is being removed."
+              : "GOAD is running ludus range rm. Ludus deploy logs stay hidden — they are the previous deploy, not this delete."}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {!deletingRange &&
+        !isRangeStreaming &&
         !isRunning &&
         (rangeState === "DEPLOYING" || rangeState === "WAITING") &&
         instance.ludusRangeId && (
@@ -131,6 +153,14 @@ export function GoadDeployTab({
           </Alert>
         )}
 
+      {deletingRange ? (
+        <GoadTerminal
+          lines={lines}
+          onClear={clear}
+          label={`Range deletion — ${instanceId}${isRunning ? ` · ludus range rm${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
+          className="flex flex-col min-h-0 flex-1 h-full"
+        />
+      ) : (
       <GoadLogSplitPane
         className="flex-1 min-h-0 gap-3"
         left={
@@ -152,6 +182,7 @@ export function GoadDeployTab({
           />
         }
       />
+      )}
     </TabsContent>
   )
 }

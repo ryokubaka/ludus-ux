@@ -4,26 +4,34 @@ set -e
 # ---------------------------------------------------------------------------
 # Hostname resolution helper
 #
-# When LUDUS_SSH_HOST is set to a DNS name that Docker
-# cannot resolve — because the name is only in the host's /etc/hosts file,
-# behind a VPN DNS, or in a Windows hosts file — all SSH and HTTP connections
-# inside the container will fail with ENOTFOUND.
+# When LUDUS_SSH_HOST is a DNS name, lookups inside the container go through
+# Docker's resolver. A temporary failure comes back as getaddrinfo EAI_AGAIN
+# and every Ludus API call fails until DNS answers again.
 #
-# Fix: set LUDUS_SERVER_IP=<ip> in your .env.  This entrypoint will inject
-# the mapping into the container's /etc/hosts so every hostname lookup
-# (SSH, fetch, TLS) resolves correctly, without any other configuration.
+# Fix: set LUDUS_SERVER_IP=<ip> in your .env. This entrypoint always pins that
+# name in /etc/hosts, even if DNS happens to work at startup.
 # ---------------------------------------------------------------------------
 
 inject_host() {
     local HOST="$1"
     local IP="$2"
-    if [ -n "$HOST" ] && [ -n "$IP" ]; then
-        # Only add if not already resolvable
-        if ! getent hosts "$HOST" > /dev/null 2>&1; then
-            echo "$IP  $HOST" >> /etc/hosts
-            echo "[entrypoint] Added hosts entry: $HOST -> $IP"
-        fi
+    local tmp
+    if [ -z "$HOST" ] || [ -z "$IP" ]; then
+        return
     fi
+    # Always pin. A successful lookup at startup used to skip this, so a later
+    # DNS blip (getaddrinfo EAI_AGAIN) still broke every Ludus API call.
+    tmp=$(mktemp)
+    awk -v host="$HOST" '
+        {
+            for (i = 2; i <= NF; i++) if ($i == host) next
+            print
+        }
+    ' /etc/hosts > "$tmp"
+    printf '%s %s\n' "$IP" "$HOST" >> "$tmp"
+    cat "$tmp" > /etc/hosts
+    rm -f "$tmp"
+    echo "[entrypoint] Pinned hosts entry: $HOST -> $IP"
 }
 
 if [ -n "$LUDUS_SERVER_IP" ]; then

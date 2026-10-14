@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, type Dispatch, type SetStateAction } from "react"
+import { useState, useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react"
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime"
 import type { QueryClient } from "@tanstack/react-query"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
@@ -11,6 +11,7 @@ import {
 } from "@/lib/goad-catalog-capabilities"
 import { removeExtensionVmsFromRangeConfig } from "@/lib/network-rules"
 import { clearRangeAborting } from "@/lib/range-aborting"
+import { dropGoadInstanceFromCache } from "@/lib/goad-instance-list-cache"
 import { queryKeys } from "@/lib/query-keys"
 import type { GoadCatalog, GoadExtensionDef, GoadInstance } from "@/lib/types"
 import type { useToast } from "@/hooks/use-toast"
@@ -38,7 +39,6 @@ export interface UseGoadInstanceActionHandlersParams {
   toast: ToastFn
   impersonationHeaders: () => Record<string, string>
   scopeTag: string
-  goadListQueryBucket: string
   queryClient: QueryClient
   router: AppRouterInstance
   taskId: string | null
@@ -47,6 +47,8 @@ export interface UseGoadInstanceActionHandlersParams {
   setRemovingExtension: Dispatch<SetStateAction<string | null>>
   stop: () => void | Promise<void>
   stopRangeStreaming: () => void
+  /** While true, the instance page must not open Ludus range-deploy logs. */
+  suppressRangeLogsRef: MutableRefObject<boolean>
   abortRangeUnified: (args: {
     rangeId: string
     goadInstanceId: string | null
@@ -55,6 +57,7 @@ export interface UseGoadInstanceActionHandlersParams {
   refreshRangeStateFromServer: (rangeId: string) => Promise<string | null>
   fetchInstances: () => void | Promise<void>
   refreshRanges: () => void | Promise<void>
+  forgetRange: (rangeId: string) => Promise<void>
 }
 
 export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandlersParams) {
@@ -67,7 +70,6 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     toast,
     impersonationHeaders,
     scopeTag,
-    goadListQueryBucket,
     queryClient,
     router,
     taskId,
@@ -76,10 +78,12 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     setRemovingExtension,
     stop,
     stopRangeStreaming,
+    suppressRangeLogsRef,
     abortRangeUnified,
     refreshRangeStateFromServer,
     fetchInstances,
     refreshRanges,
+    forgetRange,
   } = params
 
   const extMap: Record<string, GoadExtensionDef> = Object.fromEntries(
@@ -522,6 +526,8 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
       `ext-remove:${ext}`,
     )
 
+  const [deletion, setDeletion] = useState<null | "range" | "instance">(null)
+
   const handleDestroy = () => {
     const rangeInfo = instance?.ludusRangeId
       ? `This will delete dedicated Ludus range "${instance.ludusRangeId}" and all its VMs.`
@@ -529,21 +535,81 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     confirm(
       `Permanently destroy "${instanceId}"? ${rangeInfo} This cannot be undone.`,
       async () => {
-        await runAction("destroy", `-i ${instanceId} -t destroy`)
+        suppressRangeLogsRef.current = true
+        stopRangeStreaming()
+        setDeletion("range")
         try {
-          await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...impersonationHeaders() },
-            body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+          await runAction("destroy", `-i ${instanceId} -t destroy`)
+          let removed = false
+          let errors: string[] = []
+          try {
+            const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+              body: JSON.stringify({ ludusRangeId: instance?.ludusRangeId }),
+            })
+            const result = (await res.json().catch(() => ({}))) as {
+              workspaceRemoved?: boolean
+              rangeDeleted?: boolean
+              errors?: string[]
+            }
+            removed = res.ok && result.workspaceRemoved === true
+            errors = Array.isArray(result.errors) ? result.errors : []
+            if (!res.ok && errors.length === 0) errors.push(`HTTP ${res.status}`)
+            if (instance?.ludusRangeId && result.rangeDeleted !== true) {
+              errors.unshift(
+                `Ludus range ${instance.ludusRangeId} is still in the database. GOAD destroy only removes its VMs.`,
+              )
+            }
+          } catch (err) {
+            errors = [(err as Error).message]
+          }
+          await refreshRanges()
+          if (instance?.ludusRangeId && !errors.some((line) => line.startsWith("Ludus range "))) {
+            await forgetRange(instance.ludusRangeId)
+          }
+          if (!removed) {
+            suppressRangeLogsRef.current = false
+            setDeletion(null)
+            toast({
+              variant: "destructive",
+              title: "Lab was not removed",
+              description: errors.join("; ") || "The GOAD workspace is still on the host.",
+            })
+            return
+          }
+          await dropGoadInstanceFromCache(queryClient, {
+            instanceId,
+            rangeId: instance?.ludusRangeId,
           })
+          const rangeStillThere = errors.some((line) => line.startsWith("Ludus range "))
+          if (rangeStillThere) {
+            toast({
+              variant: "destructive",
+              title: "Ludus range was not deleted",
+              description: errors.join("; "),
+            })
+          } else if (errors.length > 0) {
+            toast({
+              variant: "destructive",
+              title: "GOAD instance removed",
+              description: errors.join("; "),
+            })
+          } else {
+            toast({ title: "Lab destroyed" })
+          }
+          suppressRangeLogsRef.current = false
+          setDeletion(null)
+          router.replace("/goad")
         } catch (err) {
-          console.warn("[goad-actions] force-delete failed:", (err as Error).message)
+          suppressRangeLogsRef.current = false
+          setDeletion(null)
+          toast({
+            variant: "destructive",
+            title: "Lab was not removed",
+            description: (err as Error).message,
+          })
         }
-        await refreshRanges()
-        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
-        void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
-        toast({ title: "Lab destroyed" })
-        router.push("/goad")
       },
     )
   }
@@ -552,6 +618,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     confirm(
       `Remove GOAD instance "${instanceId}" from the server? The Ludus range and its VMs will not be deleted. You can deploy a new GOAD instance into this range later. This cannot be undone.`,
       async () => {
+        setDeletion("instance")
         try {
           const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
             method: "POST",
@@ -561,14 +628,29 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
               skipRangeDeletion: true,
             }),
           })
-          const result = await res.json()
+          const result = (await res.json().catch(() => ({}))) as {
+            workspaceRemoved?: boolean
+            errors?: string[]
+          }
           await refreshRanges()
-          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, goadListQueryBucket) })
-          void queryClient.invalidateQueries({ queryKey: queryKeys.goadInstancesList(scopeTag, "admin-global") })
-          if (result.errors?.length) {
+          const errors = Array.isArray(result.errors) ? result.errors : []
+          if (!res.ok || result.workspaceRemoved !== true) {
+            setDeletion(null)
             toast({
-              title: "Remove instance completed with issues",
-              description: result.errors.join("; "),
+              title: "GOAD instance was not removed",
+              description: errors.join("; ") || `HTTP ${res.status}`,
+              variant: "destructive",
+            })
+            return
+          }
+          await dropGoadInstanceFromCache(queryClient, {
+            instanceId,
+            rangeId: instance?.ludusRangeId,
+          })
+          if (errors.length > 0) {
+            toast({
+              title: "GOAD instance removed",
+              description: errors.join("; "),
               variant: "destructive",
             })
           } else {
@@ -579,6 +661,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
           }
           router.push("/goad")
         } catch (err) {
+          setDeletion(null)
           toast({
             title: "Remove instance failed",
             description: (err as Error).message,
@@ -589,6 +672,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     )
 
   return {
+    deletion,
     syncingIps,
     handleStart,
     handleStop,

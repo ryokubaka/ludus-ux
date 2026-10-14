@@ -22,10 +22,52 @@ import {
   resolveAdminImpersonationFromRequest,
 } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
-import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
+import { sshExec, sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
 import { getDb } from "@/lib/db"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import type { RangeObject } from "@/lib/types"
+import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import { invalidateInProcessLudusCachesAfterMutation } from "@/lib/ludus-swr-invalidate"
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * GOAD `-t destroy` runs `ludus range rm`, which destroys VMs and keeps the range
+ * record (`The range object will be kept in the database`). Wait out DESTROYING,
+ * then DELETE the record. 404 means it is already gone.
+ */
+async function deleteLudusRangeRecord(
+  apiKey: string,
+  rangeId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const deadline = Date.now() + 20 * 60 * 1000
+  while (Date.now() < deadline) {
+    const status = await ludusRequest<RangeObject>(
+      `/range?rangeID=${encodeURIComponent(rangeId)}`,
+      { apiKey, timeout: 45_000 },
+    )
+    if (status.status === 404) return { ok: true }
+    const rs = String(status.data?.rangeState ?? "").trim().toUpperCase()
+    if (rs !== "DESTROYING" && rs !== "DEPLOYING" && rs !== "WAITING") break
+    await sleep(3_000)
+  }
+
+  let lastError = "Ludus range delete failed"
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await ludusRequest(
+      `/range?rangeID=${encodeURIComponent(rangeId)}&force=true`,
+      { method: "DELETE", apiKey, timeout: 120_000 },
+    )
+    if (res.status === 404 || (res.status >= 200 && res.status < 300)) return { ok: true }
+    lastError = res.error || `Ludus range delete returned ${res.status}`
+    await sleep(2_000)
+  }
+  return { ok: false, error: lastError }
+}
 
 
 export async function POST(
@@ -90,13 +132,15 @@ export async function POST(
     results.rangeDeleted = false
   } else if (ludusRangeId) {
     try {
-      const res = await ludusRequest(
-        `/range?rangeID=${encodeURIComponent(ludusRangeId)}&force=true`,
-        { method: "DELETE", apiKey: effectiveApiKey }
-      )
-      results.rangeDeleted = res.status >= 200 && res.status < 300
-      if (!results.rangeDeleted) {
-        results.errors.push(`Ludus range delete returned ${res.status}`)
+      const deleted = await deleteLudusRangeRecord(effectiveApiKey, ludusRangeId)
+      results.rangeDeleted = deleted.ok
+      if (deleted.ok) {
+        const scopeTag = effectiveScopeTagFromSession(session)
+        revalidateLudusResource("ranges")
+        revalidateLudusScopeResource(scopeTag, "ranges")
+        invalidateInProcessLudusCachesAfterMutation(effectiveApiKey)
+      } else if (deleted.error) {
+        results.errors.push(deleted.error)
       }
     } catch (err) {
       results.errors.push(`Range delete failed: ${(err as Error).message}`)
@@ -105,28 +149,43 @@ export async function POST(
     results.errors.push("No rangeID available — Ludus range was NOT deleted. Remove it manually via the Ranges page.")
   }
 
-  // Step 2: Remove the GOAD workspace directory
-  try {
-    const goadPath = resolveGoadPath()
-    const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
-    const workspacePath = `${goadPath}/workspace/${safeId}`
-
-    const { code } = await runAsOwner(`rm -rf '${workspacePath}'`)
-    results.workspaceRemoved = code === 0
-    if (!results.workspaceRemoved) {
-      results.errors.push(`Workspace removal exited with code ${code}`)
+  // Step 2: Remove the GOAD workspace directory. The list is the workspace
+  // folder, so a failed rm leaves the range name on the GOAD page.
+  if (!/^[A-Za-z0-9_-]+$/.test(instanceId)) {
+    results.errors.push("Refusing to remove a workspace for this instance id")
+  } else {
+    try {
+      const goadPath = resolveGoadPath()
+      const workspacePath = `${goadPath}/workspace/${instanceId}`
+      const ownerRm = await runAsOwner(`rm -rf '${workspacePath}'`)
+      let code = ownerRm.code
+      if (code !== 0) {
+        try {
+          const rootRm = await sshExec(`rm -rf '${workspacePath}'`)
+          code = rootRm.code
+        } catch {
+          // A non-root host account cannot run an arbitrary rm. The owner attempt stands.
+        }
+      }
+      results.workspaceRemoved = code === 0
+      if (!results.workspaceRemoved) {
+        results.errors.push(`Workspace removal exited with code ${code}`)
+      }
+    } catch (err) {
+      results.errors.push(`Workspace removal failed: ${(err as Error).message}`)
     }
-  } catch (err) {
-    results.errors.push(`Workspace removal failed: ${(err as Error).message}`)
   }
 
-  // Step 3: Remove local DB entry so the instance no longer appears in the list
-  try {
-    getDb()
-      .prepare("DELETE FROM goad_instance_ranges WHERE instance_id = ?")
-      .run(instanceId)
-  } catch {
-    // Non-fatal — old entry will be harmlessly ignored since workspace is gone
+  // Step 3: Drop the local link only after the folder is gone. A leftover
+  // workspace is still found by the SSH listing.
+  if (results.workspaceRemoved) {
+    try {
+      getDb()
+        .prepare("DELETE FROM goad_instance_ranges WHERE instance_id = ?")
+        .run(instanceId)
+    } catch {
+      // Non-fatal — the folder is already gone, so the list will not show it.
+    }
   }
 
   logLuxRouteAction(request, session, {

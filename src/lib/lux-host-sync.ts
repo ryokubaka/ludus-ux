@@ -53,12 +53,13 @@ async function readInstalledRevision(): Promise<{ revision: string | null; versi
  * already checks an HMAC on `self-update` (version 4+) replaces itself, so
  * later LUX releases do not need another manual install.
  */
-export async function ensureLuxHostCurrent(): Promise<LuxHostSyncResult> {
+export async function ensureLuxHostCurrent(opts?: { force?: boolean }): Promise<LuxHostSyncResult> {
   const want = bundledLuxHostSha256()
-  if (syncedHash === want) return { ok: true, updated: false, detail: "current" }
-  if (Date.now() < nextAttemptAt) {
+  if (!opts?.force && syncedHash === want) return { ok: true, updated: false, detail: "current" }
+  if (!opts?.force && Date.now() < nextAttemptAt) {
     return { ok: false, updated: false, detail: "waiting to retry" }
   }
+  if (opts?.force) nextAttemptAt = 0
   try {
     const result = await syncLuxHost(want)
     if (result.ok) syncedHash = want

@@ -22,6 +22,7 @@ export interface RangeContextValue {
   setRangeSelectionLocked: (locked: boolean) => void
   selectRange: (rangeId: string) => void
   refreshRanges: () => Promise<void>
+  forgetRange: (rangeId: string) => Promise<void>
 }
 
 const RangeContext = createContext<RangeContextValue>({
@@ -33,6 +34,7 @@ const RangeContext = createContext<RangeContextValue>({
   setRangeSelectionLocked: () => {},
   selectRange: () => {},
   refreshRanges: async () => {},
+  forgetRange: async () => {},
 })
 
 const STORAGE_KEY = "lux_selected_range"
@@ -141,6 +143,38 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     await queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
   }, [queryClient])
 
+  /**
+   * Drop a deleted range from the sidebar immediately, then refetch.
+   * The button shows `selectedRangeId` even when that id is no longer in the list,
+   * so selection has to move in the same update.
+   */
+  const forgetRange = useCallback(async (rangeId: string) => {
+    const id = rangeId.trim()
+    if (!id) return
+    queryClient.setQueriesData<RangeAccessEntry[]>(
+      { predicate: accessibleRangesPredicate },
+      (current) => (Array.isArray(current) ? current.filter((r) => r.rangeID !== id) : current),
+    )
+    setSelectedRangeId((current) => {
+      if (current !== id) return current
+      const cached = queryClient.getQueriesData<RangeAccessEntry[]>({
+        predicate: accessibleRangesPredicate,
+      })
+      const next = cached
+        .flatMap(([, data]) => (Array.isArray(data) ? data : []))
+        .find((r) => r.rangeID !== id)?.rangeID ?? null
+      if (next) {
+        sessionStorage.setItem(STORAGE_KEY, next)
+        syncSelectedRangeCookie(next)
+        return next
+      }
+      sessionStorage.removeItem(STORAGE_KEY)
+      syncSelectedRangeCookie(null)
+      return null
+    })
+    await queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
+  }, [queryClient])
+
   useEffect(() => {
     const handler = () => {
       setSelectedRangeId(null)
@@ -162,9 +196,10 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
       setRangeSelectionLocked,
       selectRange,
       refreshRanges,
+      forgetRange,
     }),
     // setRangeSelectionLocked is a stable useState setter.
-    [ranges, selectedRangeId, isLoading, rangesFetching, rangeSelectionLocked, selectRange, refreshRanges],
+    [ranges, selectedRangeId, isLoading, rangesFetching, rangeSelectionLocked, selectRange, refreshRanges, forgetRange],
   )
 
   return <RangeContext.Provider value={value}>{children}</RangeContext.Provider>

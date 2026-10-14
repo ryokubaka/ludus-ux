@@ -113,7 +113,7 @@ async function handler(
           { status: 409 },
         )
       }
-      const patches = await ensureRangeDeployHostPatches(body)
+      const patches = await ensureRangeDeployHostPatches(body, { configText: router.template })
       if (!patches.ok) {
         return NextResponse.json(
           { error: patches.error, code: "deploy_host_patch" },

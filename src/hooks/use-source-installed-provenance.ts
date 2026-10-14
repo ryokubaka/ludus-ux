@@ -5,7 +5,10 @@ import { useQueries, useQuery } from "@tanstack/react-query"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
-import { mapRegisteredSources } from "@/lib/registered-ludus-sources"
+import {
+  mapRegisteredSources,
+  sourceIdsAreSameRegistration,
+} from "@/lib/registered-ludus-sources"
 import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/source-catalog-client"
 import {
   buildAnsibleSourceMatchMap,
@@ -73,6 +76,26 @@ export function useSourceInstalledProvenance(opts: {
   const needTemplates = (opts.templates?.length ?? 0) > 0
   const needBlueprints = (opts.blueprints?.length ?? 0) > 0
 
+  const blueprintCatalogSources = useMemo(() => {
+    if (!needBlueprints) return []
+    const preferred = new Set<string>()
+    let scanAllSources = false
+    for (const bp of opts.blueprints ?? []) {
+      const id = bp.id.trim()
+      if (bp.sourceID?.trim()) {
+        preferred.add(bp.sourceID.trim())
+      } else if (id.includes("/")) {
+        preferred.add(id.slice(0, id.lastIndexOf("/")))
+      } else {
+        scanAllSources = true
+      }
+    }
+    if (scanAllSources || preferred.size === 0) return sources
+    return sources.filter((s) =>
+      [...preferred].some((prefix) => sourceIdsAreSameRegistration(prefix, s.id)),
+    )
+  }, [needBlueprints, opts.blueprints, sources])
+
   const roleQueries = useQueries({
     queries: sources.map((s) => ({
       queryKey: queryKeys.sourceRoles(scopeTag, s.id, s.ref),
@@ -101,7 +124,7 @@ export function useSourceInstalledProvenance(opts: {
   })
 
   const blueprintQueries = useQueries({
-    queries: sources.map((s) => ({
+    queries: blueprintCatalogSources.map((s) => ({
       queryKey: queryKeys.sourceBlueprints(scopeTag, s.id, s.ref),
       queryFn: () => fetchSourceCatalog<SourceCatalogRef>(s.id, "blueprints"),
       enabled: enabled && sourcesAvailable && needBlueprints,
@@ -138,12 +161,12 @@ export function useSourceInstalledProvenance(opts: {
   )
   const blueprintCatalogs = useMemo(
     () =>
-      sources.map((s, i) => ({
+      blueprintCatalogSources.map((s, i) => ({
         sourceId: s.id,
         items: sourceCatalogItems(blueprintQueries[i]?.data),
         pins: blueprintQueries[i]?.data?.pins,
       })),
-    [sources, blueprintQueries],
+    [blueprintCatalogSources, blueprintQueries],
   )
 
   const roleMap = useMemo(

@@ -23,14 +23,13 @@ import {
   type LuxVersionRelation,
 } from "@/lib/lux-version"
 
-const DOCS_HREF =
-  "https://github.com/ryokubaka/ludus-ux/blob/main/docs/getting-started.md#upgrade-and-downgrade"
-
 type ReleasesResponse = {
   current: string
   latestStable: string | null
   updateAvailable: boolean
   releases: LuxRelease[]
+  repoUrl?: string
+  docsUrl?: string
   error?: string
   logTail?: string
 }
@@ -223,7 +222,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>LUX {latest.tag} is available</AlertTitle>
           <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span>This install is v{releases.current}. A newer stable release is on GitHub.</span>
+            <span>This install is v{releases.current}. A newer stable release is on this install&apos;s git remote.</span>
             {isAdmin && (
               <Button
                 size="sm"
@@ -249,14 +248,16 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
         <Alert>
           <AlertDescription>
             {host.reason}{" "}
-            <a
-              href={DOCS_HREF}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2 hover:text-primary"
-            >
-              Upgrade and downgrade
-            </a>
+            {releases?.docsUrl && (
+              <a
+                href={releases.docsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-primary"
+              >
+                Upgrade and downgrade
+              </a>
+            )}
           </AlertDescription>
         </Alert>
       )}
@@ -278,15 +279,25 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
       )}
 
       <div className="rounded-lg border border-border bg-card">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
-          <span className="text-sm font-medium">Releases</span>
-          {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/50">
+          <span className="text-sm font-medium shrink-0">Releases</span>
+          {releases?.repoUrl && (
+            <a
+              href={releases.repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="min-w-0 truncate text-xs text-muted-foreground hover:text-primary"
+            >
+              {releases.repoUrl.replace(/^https?:\/\//, "")}
+            </a>
+          )}
+          {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
         </div>
         <div className="divide-y divide-border/40">
           {!releases && !loadError && (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Checking GitHub…</span>
+              <span className="text-sm">Checking this install&apos;s git remote…</span>
             </div>
           )}
           {releases && releases.releases.length === 0 && (
@@ -297,6 +308,11 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
               <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="font-mono text-sm">{release.tag}</span>
                 {release.relation === "current" && <Badge variant="secondary">Current</Badge>}
+                {release.unpublished && (
+                  <Badge variant="outline" title="Branch with no GitHub release">
+                    Unpublished
+                  </Badge>
+                )}
                 {release.prerelease && <Badge variant="outline">Pre-release</Badge>}
                 {release.publishedAt && (
                   <span className="text-xs text-muted-foreground">{release.publishedAt.slice(0, 10)}</span>
@@ -309,8 +325,8 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
                       href={release.htmlUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      aria-label={`Release notes for ${release.tag}`}
-                      title="Release notes"
+                      aria-label={release.unpublished ? `Branch ${release.tag}` : `Release notes for ${release.tag}`}
+                      title={release.unpublished ? "Branch" : "Release notes"}
                     >
                       <ExternalLink />
                     </a>
@@ -355,6 +371,9 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           </DialogHeader>
           <ul className="list-disc space-y-1.5 pl-5 text-sm text-muted-foreground">
             <li>Check out {pending?.tag} in the git clone on this Docker host.</li>
+            {pending?.unpublished && (
+              <li>This is an unpublished branch. The checkout follows that branch tip.</li>
+            )}
             <li>Rebuild the image and restart the stack. This page disconnects until the new version is up.</li>
             <li>Settings, the database, and files under <span className="font-mono">./data</span>, <span className="font-mono">./ssh</span>, and <span className="font-mono">.env</span> stay on the host.</li>
             {host?.dirty && (

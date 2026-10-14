@@ -4,6 +4,8 @@ import {
   compareLuxSemver,
   excerptReleaseNotes,
   isLuxReleaseTag,
+  parseLuxGitRemote,
+  snapshotFromGitRefs,
   losesVersionManagement,
   luxUpgradeFailureFromLog,
   luxVersionRelation,
@@ -128,6 +130,117 @@ describe("lux-version", () => {
     expect(snap.updateAvailable).toBe(false)
     expect(snap.releases[0]?.prerelease).toBe(true)
     expect(snap.releases[0]?.relation).toBe("upgrade")
+    expect(snap.releases[0]?.unpublished).toBe(false)
+  })
+
+  it("lists version branches that have no published release", () => {
+    const snap = buildLuxReleasesSnapshot(
+      "1.3.2",
+      [
+        {
+          tag_name: "v1.3.4",
+          draft: false,
+          prerelease: false,
+          published_at: "2026-09-20T00:00:00Z",
+        },
+        {
+          tag_name: "v1.3.2",
+          draft: false,
+          prerelease: false,
+        },
+        {
+          tag_name: "v1.9.0",
+          draft: true,
+          prerelease: false,
+        },
+      ],
+      [
+        { name: "v1.4.1", html_url: "https://github.com/example/ludus-ux/tree/v1.4.1" },
+        { name: "v1.3.4" },
+        { name: "main" },
+        { name: "v1.9.0" },
+        { name: "v1.2.0-rc1" },
+      ],
+    )
+    expect(snap.releases.map((r) => r.tag)).toEqual(["v1.9.0", "v1.4.1", "v1.3.4", "v1.3.2"])
+    expect(snap.releases.find((r) => r.tag === "v1.4.1")).toMatchObject({
+      unpublished: true,
+      relation: "upgrade",
+      htmlUrl: "https://github.com/example/ludus-ux/tree/v1.4.1",
+    })
+    expect(snap.releases.find((r) => r.tag === "v1.9.0")?.unpublished).toBe(true)
+    expect(snap.releases.find((r) => r.tag === "v1.3.4")?.unpublished).toBe(false)
+    expect(snap.latestStable).toBe("v1.3.4")
+    expect(snap.updateAvailable).toBe(true)
+  })
+
+  it("does not treat an unpublished branch as the update banner target", () => {
+    const snap = buildLuxReleasesSnapshot(
+      "1.3.2",
+      [{ tag_name: "v1.3.2", draft: false, prerelease: false }],
+      [{ name: "v1.4.1" }],
+    )
+    expect(snap.latestStable).toBe("v1.3.2")
+    expect(snap.updateAvailable).toBe(false)
+    expect(snap.releases[0]?.tag).toBe("v1.4.1")
+    expect(snap.releases[0]?.unpublished).toBe(true)
+  })
+
+  it("builds browse links from the clone remote and drops credentials", () => {
+    const fork = parseLuxGitRemote("git@github.com:other/ludus-ux.git")
+    expect(fork?.githubRepo).toBe("other/ludus-ux")
+    expect(fork?.webUrl).toBe("https://github.com/other/ludus-ux")
+    expect(fork?.tagUrl("v1.4.0")).toBe("https://github.com/other/ludus-ux/releases/tag/v1.4.0")
+    expect(fork?.branchUrl("v1.4.1")).toBe("https://github.com/other/ludus-ux/tree/v1.4.1")
+
+    const tokened = parseLuxGitRemote("https://user:secret@github.com/fork/ludus-ux.git")
+    expect(tokened?.webUrl).toBe("https://github.com/fork/ludus-ux")
+    expect(JSON.stringify(tokened)).not.toContain("secret")
+
+    const gitlab = parseLuxGitRemote("git@gitlab.rain.mil:smeowden/ludus-ux.git")
+    expect(gitlab?.githubRepo).toBeNull()
+    expect(gitlab?.webUrl).toBe("https://gitlab.rain.mil/smeowden/ludus-ux")
+    expect(gitlab?.branchUrl("v1.4.1")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tree/v1.4.1")
+    expect(gitlab?.tagUrl("v1.4.0")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tags/v1.4.0")
+
+    const nested = parseLuxGitRemote("https://gitlab.com/group/sub/ludus-ux.git")
+    expect(nested?.branchUrl("v1.2.0")).toBe("https://gitlab.com/group/sub/ludus-ux/-/tree/v1.2.0")
+    expect(parseLuxGitRemote("not a url")).toBeNull()
+  })
+
+  it("lists the clone remote's tags and leaves version branches unpublished", () => {
+    const snap = snapshotFromGitRefs(
+      "1.4.0",
+      "git@gitlab.example.mil:lab/ludus-ux.git",
+      ["v1.4.1", "v1.4.0", "main"],
+      ["v1.4.0", "v1.3.2"],
+      [{
+        tag_name: "v1.4.0",
+        name: "1.4.0",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-10-04T00:00:00Z",
+        body: "notes",
+      }],
+    )
+    expect(snap.repoUrl).toBe("https://gitlab.example.mil/lab/ludus-ux")
+    expect(snap.releases.map((r) => `${r.tag}${r.unpublished ? "*" : ""}`)).toEqual([
+      "v1.4.1*",
+      "v1.4.0",
+      "v1.3.2",
+    ])
+    expect(snap.releases.find((r) => r.tag === "v1.4.1")?.htmlUrl).toBe(
+      "https://gitlab.example.mil/lab/ludus-ux/-/tree/v1.4.1",
+    )
+    expect(snap.releases.find((r) => r.tag === "v1.4.0")).toMatchObject({
+      unpublished: false,
+      relation: "current",
+      publishedAt: "2026-10-04T00:00:00Z",
+      htmlUrl: "https://gitlab.example.mil/lab/ludus-ux/-/tags/v1.4.0",
+    })
+    expect(snap.latestStable).toBe("v1.4.0")
+    expect(snap.updateAvailable).toBe(false)
+    expect(snap.releases.some((r) => r.tag === "main")).toBe(false)
   })
 
   it("reads a failed switch from the host log", () => {

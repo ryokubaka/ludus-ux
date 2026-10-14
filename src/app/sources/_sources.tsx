@@ -257,36 +257,6 @@ function SourceDetailPanel({
 
   const sourceRef = (source.ref || "").trim()
   const siblingSources = sources.filter((row) => sourceId(row) !== sid)
-  const siblingRoleQueries = useQueries({
-    queries: siblingSources.map((row) => {
-      const id = sourceId(row)
-      return {
-        queryKey: queryKeys.sourceRoles(scopeTag, id, (row.ref || "").trim()),
-        queryFn: () => fetchSourceCatalog<SourceRole>(id, "roles"),
-        staleTime: STALE.short,
-      }
-    }),
-  })
-  const siblingCollectionQueries = useQueries({
-    queries: siblingSources.map((row) => {
-      const id = sourceId(row)
-      return {
-        queryKey: queryKeys.sourceCollections(scopeTag, id, (row.ref || "").trim()),
-        queryFn: () => fetchSourceCatalog<SourceCollection>(id, "collections"),
-        staleTime: STALE.short,
-      }
-    }),
-  })
-  const siblingRoles = siblingSources.map((row, index) => ({
-    ref: (row.ref || "").trim(),
-    label: row.name || sourceId(row),
-    items: sourceCatalogItems(siblingRoleQueries[index]?.data),
-  }))
-  const siblingCollections = siblingSources.map((row, index) => ({
-    ref: (row.ref || "").trim(),
-    label: row.name || sourceId(row),
-    items: sourceCatalogItems(siblingCollectionQueries[index]?.data),
-  }))
 
   const { data: blueprintPayload, isLoading: bpLoading } = useQuery({
     queryKey: queryKeys.sourceBlueprints(scopeTag, sid, sourceRef),
@@ -422,6 +392,43 @@ function SourceDetailPanel({
     () => buildInstalledAnsibleVersions(ansibleData?.roles ?? [], ansibleData?.collections ?? []),
     [ansibleData],
   )
+
+  /** Cross-branch ansible hints — skip N−1 Ludus/git catalog round-trips until needed. */
+  const needSiblingAnsibleCatalog =
+    listOpen("roles") || listOpen("coll") || installedAnsibleNames.size > 0
+
+  const siblingRoleQueries = useQueries({
+    queries: siblingSources.map((row) => {
+      const id = sourceId(row)
+      return {
+        queryKey: queryKeys.sourceRoles(scopeTag, id, (row.ref || "").trim()),
+        queryFn: () => fetchSourceCatalog<SourceRole>(id, "roles"),
+        staleTime: STALE.short,
+        enabled: needSiblingAnsibleCatalog,
+      }
+    }),
+  })
+  const siblingCollectionQueries = useQueries({
+    queries: siblingSources.map((row) => {
+      const id = sourceId(row)
+      return {
+        queryKey: queryKeys.sourceCollections(scopeTag, id, (row.ref || "").trim()),
+        queryFn: () => fetchSourceCatalog<SourceCollection>(id, "collections"),
+        staleTime: STALE.short,
+        enabled: needSiblingAnsibleCatalog,
+      }
+    }),
+  })
+  const siblingRoles = siblingSources.map((row, index) => ({
+    ref: (row.ref || "").trim(),
+    label: row.name || sourceId(row),
+    items: sourceCatalogItems(siblingRoleQueries[index]?.data),
+  }))
+  const siblingCollections = siblingSources.map((row, index) => ({
+    ref: (row.ref || "").trim(),
+    label: row.name || sourceId(row),
+    items: sourceCatalogItems(siblingCollectionQueries[index]?.data),
+  }))
 
   const blueprints = useMemo(
     () => blueprintPayload?.items ?? [],

@@ -1,6 +1,5 @@
 "use client"
 
-import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
@@ -48,6 +47,9 @@ import { queryKeys } from "@/lib/query-keys"
 import { STALE } from "@/lib/query-client"
 import { ludusApi } from "@/lib/api"
 import { ludusSupportsSources } from "@/lib/ludus-version"
+import { AppNavLink } from "@/components/layout/app-nav-link"
+import { navHrefMatches } from "@/lib/nav-href"
+import { useNavPending } from "@/lib/nav-pending-context"
 
 interface NavItem {
   href: string
@@ -112,15 +114,19 @@ const navGroups: NavGroup[] = [
   },
 ]
 
-function navItemMatches(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/"
-  return pathname === href || pathname.startsWith(`${href}/`)
+function navLinkClass(isActive: boolean, extra?: string) {
+  return cn(
+    extra,
+    isActive
+      ? "bg-sidebar-accent text-sidebar-primary transition-none"
+      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors",
+  )
 }
 
 function resolveActiveNavHref(pathname: string, items: NavItem[]): string | null {
   let best: string | null = null
   for (const item of items) {
-    if (!navItemMatches(pathname, item.href)) continue
+    if (!navHrefMatches(pathname, item.href)) continue
     if (!best || item.href.length > best.length) best = item.href
   }
   return best
@@ -148,6 +154,8 @@ function navItemVisible(
 
 export function Sidebar() {
   const pathname = usePathname()
+  const { pendingHref } = useNavPending()
+  const navPathForActive = pendingHref ?? pathname
   const scopeTag = useEffectiveScopeTag()
   const { collapsed, toggle } = useSidebar()
   const shell = useShellSession()
@@ -256,8 +264,8 @@ export function Sidebar() {
     const visible = navGroups.flatMap((group) =>
       group.items.filter((item) => navItemVisible(item, navCtx)),
     )
-    return resolveActiveNavHref(pathname, visible)
-  }, [pathname, navCtx])
+    return resolveActiveNavHref(navPathForActive, visible)
+  }, [navPathForActive, navCtx])
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -271,8 +279,7 @@ export function Sidebar() {
         {/* Logo */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Link
-              prefetch={false}
+            <AppNavLink
               href="/"
               className={cn(
                 "flex items-center gap-3 hover:opacity-80 transition-opacity flex-shrink-0",
@@ -293,7 +300,7 @@ export function Sidebar() {
                   <p className="text-xs text-muted-foreground">Cyber Range Manager</p>
                 </div>
               )}
-            </Link>
+            </AppNavLink>
           </TooltipTrigger>
           {collapsed && (
             <TooltipContent side="right">Ludus UX — Dashboard</TooltipContent>
@@ -423,18 +430,13 @@ export function Sidebar() {
                         <div key={item.href} className="relative group/collapsed">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Link
-                                prefetch={false}
+                              <AppNavLink
                                 href={item.href}
-                                className={cn(
-                                  "flex items-center justify-center rounded-md p-2 transition-colors",
-                                  isActive
-                                    ? "bg-sidebar-accent text-sidebar-primary"
-                                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                                )}
+                                aria-current={isActive ? "page" : undefined}
+                                className={navLinkClass(isActive, "flex items-center justify-center rounded-md p-2")}
                               >
                                 <Icon className={cn("h-5 w-5 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
-                              </Link>
+                              </AppNavLink>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="flex items-center gap-2">
                               {item.label}
@@ -453,14 +455,12 @@ export function Sidebar() {
 
                     return (
                       <li key={item.href} className="flex items-center gap-0.5">
-                        <Link
-                          prefetch={false}
+                        <AppNavLink
                           href={item.href}
-                          className={cn(
-                            "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors group",
-                            isActive
-                              ? "bg-sidebar-accent text-sidebar-primary"
-                              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                          aria-current={isActive ? "page" : undefined}
+                          className={navLinkClass(
+                            isActive,
+                            "flex flex-1 items-center gap-3 rounded-md px-3 py-2 text-sm font-medium group",
                           )}
                         >
                           <Icon className={cn("h-4 w-4 flex-shrink-0", isActive ? "text-sidebar-primary" : "")} />
@@ -471,7 +471,7 @@ export function Sidebar() {
                           {isActive && !isConsoles && (
                             <ChevronRight className="h-3 w-3 text-sidebar-primary" />
                           )}
-                        </Link>
+                        </AppNavLink>
                         {isConsoles && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -511,7 +511,7 @@ export function Sidebar() {
           collapsed ? "px-2 py-3 justify-center" : "px-4 py-3 justify-between",
         )}>
           {!collapsed && (
-            <Link prefetch={false} href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
+            <AppNavLink href="/settings?tab=about" className="flex flex-col gap-0.5 text-left hover:opacity-80 transition-opacity cursor-pointer">
               <p className="text-xs font-semibold text-muted-foreground">
                 v{APP_VERSION}
                 {APP_VERSION_LABEL ? (
@@ -522,15 +522,15 @@ export function Sidebar() {
                 ) : null}
               </p>
               <p className="text-xs text-muted-foreground/60">Open Source · Apache 2.0</p>
-            </Link>
+            </AppNavLink>
           )}
           {collapsed && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <Link prefetch={false} href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">
+                <AppNavLink href="/settings?tab=about" className="text-[10px] text-muted-foreground/50 font-mono cursor-pointer select-none hover:text-muted-foreground transition-colors">
                   v{APP_VERSION}
                   {luxUpdateAvailable ? <span className="text-status-warning"> •</span> : null}
-                </Link>
+                </AppNavLink>
               </TooltipTrigger>
               <TooltipContent side="right">
                 v{APP_VERSION}

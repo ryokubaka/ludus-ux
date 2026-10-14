@@ -12,9 +12,22 @@ describe("lux-upgrade-docker", () => {
     const script = "printf 'repo=%s\\n' '/opt/ludus-ux'"
     const spec = buildHostExecContainer(script, "sha256:lux")
     expect(spec.Image).toBe("sha256:lux")
-    expect(spec.Entrypoint.slice(0, 4)).toEqual(["/usr/bin/nsenter", "-t", "1", "-w/"])
-    expect(spec.Entrypoint).toContain("-p")
-    expect(spec.Entrypoint.at(-2)).toBe("/bin/sh")
+    expect(spec.Entrypoint).toEqual([
+      "/usr/bin/nsenter",
+      "-t",
+      "1",
+      "-m",
+      "-u",
+      "-i",
+      "-n",
+      "-p",
+      "--",
+      "/usr/bin/env",
+      "-C",
+      "/",
+      "/bin/sh",
+      "-c",
+    ])
     expect(spec.Cmd).toEqual([script])
     expect(spec.HostConfig).toEqual({ Privileged: true, PidMode: "host", CgroupnsMode: "host" })
   })

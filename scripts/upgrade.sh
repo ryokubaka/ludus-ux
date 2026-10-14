@@ -101,34 +101,18 @@ echo ""
 
 # In-app switches have no terminal. A passphrase prompt or a stuck SSH
 # connection would sit forever and look like a freeze.
+# shellcheck source=scripts/lux-git-identity.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lux-git-identity.sh"
 lux_git() {
   if [[ "${LUX_UPGRADE_YES:-}" != "1" ]]; then
     "$@"
     return
   fi
-  export GIT_TERMINAL_PROMPT=0
-  if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
-    export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new"
-  fi
-  local runner=("$@")
-  # systemd starts this as root. GitHub SSH for this clone belongs to the
-  # directory owner (their key and known_hosts), not root.
-  if [[ "$(id -u)" -eq 0 ]]; then
-    local uid home user
-    uid="$(stat -c %u "$ROOT" 2>/dev/null || echo 0)"
-    if [[ "$uid" != "0" ]] && command -v runuser >/dev/null 2>&1; then
-      home="$(getent passwd "$uid" | awk -F: '{print $6}')"
-      user="$(getent passwd "$uid" | awk -F: '{print $1}')"
-      if [[ -n "$home" && -n "$user" ]]; then
-        runner=(runuser -u "$user" -- env HOME="$home" GIT_SSH_COMMAND="$GIT_SSH_COMMAND" GIT_TERMINAL_PROMPT=0 "$@")
-      fi
-    fi
-  fi
   if command -v timeout >/dev/null 2>&1; then
-    timeout 180 "${runner[@]}"
+    lux_run_git "$REMOTE_URL" -- timeout 180 "$@"
     return
   fi
-  "${runner[@]}"
+  lux_run_git "$REMOTE_URL" -- "$@"
 }
 
 echo "Fetching from $REMOTE ..."

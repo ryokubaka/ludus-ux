@@ -4,6 +4,7 @@ import { writeLudushoundRangeId } from "@/lib/ludushound-ssh"
 import { assertLudushoundTemplatesReady } from "@/lib/ludushound-template-assert"
 import { assertRouterTemplateReady } from "@/lib/ludus-router-template-assert"
 import { routerTemplateBlockMessage } from "@/lib/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 import { isLudushoundCollectionInstalled } from "@/lib/ludushound-ansible-requirements"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
@@ -140,6 +141,14 @@ export async function POST(request: NextRequest) {
   if (tagsWithRoles?.length) deployBody.tags = tagsWithRoles.join(",")
   if (onlyRolesList.length) deployBody.only_roles = onlyRolesList.join(",")
   if (body.force) deployBody.force = true
+
+  const patches = await ensureRangeDeployHostPatches(deployBody)
+  if (!patches.ok) {
+    return NextResponse.json(
+      { error: patches.error, code: "deploy_host_patch" },
+      { status: 503 },
+    )
+  }
 
   const dep = await ludusRequest(`/range/deploy?rangeID=${encodeURIComponent(rangeId)}`, {
     method: "POST",

@@ -177,8 +177,16 @@ export function VmInventoryTab() {
   }, [vms, search, templateFilter, rangeFilter, ownerFilter, powerFilter])
 
   const refresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.adminRangeVms(scopeTag) })
-    void queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
+    void (async () => {
+      const res = await fetch("/api/admin/range-vms?refresh=1")
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(d.error || `HTTP ${res.status}`)
+      }
+      const payload = (await res.json()) as { vms: RangeVmInventoryRow[]; ts: number }
+      queryClient.setQueryData(queryKeys.adminRangeVms(scopeTag), payload)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
+    })()
   }, [queryClient, scopeTag])
 
   const clearPendingPower = useCallback((keys: string[]) => {

@@ -21,10 +21,20 @@ vi.mock("@/lib/proxmox-ssh", () => ({
 vi.mock("@/lib/lux-upgrade-docker", () => ({
   dockerSocketAvailable: vi.fn(),
   runHostScriptViaDocker: vi.fn(),
+  discoverLuxRepoPathContext: vi.fn(async () => ({
+    containerRef: "ludus-ux",
+    candidates: ["/opt/ludus-ux"],
+    clientPaths: ["E:/gitlab/ludus-ux/data"],
+  })),
 }))
 
 vi.mock("@/lib/lux-releases", () => ({
-  listKnownLuxReleaseTags: vi.fn(async () => ["v1.4.0", "v1.4.1"]),
+  getLuxReleasesSnapshot: vi.fn(async () => ({
+    current: "1.4.0",
+    latestStable: "v1.4.1",
+    updateAvailable: true,
+    releases: [{ tag: "v1.4.0" }, { tag: "v1.4.1" }],
+  })),
 }))
 
 import { sshExec } from "@/lib/proxmox-ssh"
@@ -125,7 +135,13 @@ describe("lux upgrade host transport", () => {
     const probed = await probeLuxUpgradeHost()
     expect(probed.canSwitch).toBe(true)
     expect(runHostScriptViaDocker).toHaveBeenCalledTimes(1)
-    expect(runHostScriptViaDocker).toHaveBeenCalledWith(buildHostProbeCmd("/opt/ludus-ux"))
+    expect(runHostScriptViaDocker).toHaveBeenCalledWith(
+      buildHostProbeCmd({
+        containerRef: "ludus-ux",
+        candidates: ["/opt/ludus-ux"],
+        clientPaths: ["E:/gitlab/ludus-ux/data"],
+      }),
+    )
     expect(sshExec).not.toHaveBeenCalled()
   })
 })

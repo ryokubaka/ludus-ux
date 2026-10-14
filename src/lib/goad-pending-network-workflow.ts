@@ -20,6 +20,7 @@ import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-corre
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { getSettings } from "@/lib/settings-store"
 import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
 import { readUnlinkPendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
 import type { RangeObject } from "@/lib/types"
@@ -134,6 +135,8 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
         }),
       { pollMs: 5_000, absoluteMaxMs: LUDUS_WAIT_ABSOLUTE_MAX_MS },
     )
+
+    await ensureRangeDeployHostPatches({ tags: "network" })
 
     for (let attempt = 0; attempt < 3; attempt++) {
       const { assertRouterTemplateReady } = await import("@/lib/ludus-router-template-assert")

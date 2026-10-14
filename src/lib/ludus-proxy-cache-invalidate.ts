@@ -1,6 +1,6 @@
 import "server-only"
 
-import type { SessionData } from "@/lib/session-edge"
+import type { ResolvedSession } from "@/lib/session-edge"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import {
   revalidateLudusAdminMutation,
@@ -10,6 +10,7 @@ import {
 import type { LudusRangeCacheResource } from "@/lib/ludus-cache-tags"
 import { ludusGlobalRangeCacheTag } from "@/lib/ludus-cache-tags"
 import { revalidateTag } from "next/cache"
+import { invalidateInProcessLudusCachesAfterMutation } from "@/lib/ludus-swr-invalidate"
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -35,16 +36,21 @@ function revalidateRangeCaches(scopeTag: string): void {
 export function revalidateAfterLudusProxyMutation(
   method: string,
   ludusPath: string,
-  session: Pick<SessionData, "username" | "impersonationUserId">,
+  session: Pick<
+    ResolvedSession,
+    "username" | "impersonationUserId" | "apiKey" | "impersonationApiKey"
+  >,
 ): void {
   if (!MUTATING.has(method.toUpperCase())) return
 
   const path = ludusPath.split("?")[0]
   const scopeTag = effectiveScopeTagFromSession(session)
+  const apiKey = (session.impersonationApiKey || session.apiKey)?.trim()
 
   if (path.startsWith("/groups")) {
     revalidateLudusResource("groups")
     revalidateLudusScopeResource(scopeTag, "groups")
+    invalidateInProcessLudusCachesAfterMutation(apiKey)
     return
   }
 
@@ -70,16 +76,19 @@ export function revalidateAfterLudusProxyMutation(
     revalidateLudusResource("users")
     revalidateLudusScopeResource(scopeTag, "users")
     revalidateLudusAdminMutation()
+    invalidateInProcessLudusCachesAfterMutation(apiKey)
     return
   }
 
   if (path.startsWith("/range") || path.startsWith("/ranges") || path.startsWith("/snapshots")) {
     revalidateRangeCaches(scopeTag)
+    invalidateInProcessLudusCachesAfterMutation(apiKey)
     return
   }
 
   if (path.startsWith("/testing")) {
     revalidateTag(ludusGlobalRangeCacheTag("rangeLogEnrichment"), "max")
     revalidateRangeCaches(scopeTag)
+    invalidateInProcessLudusCachesAfterMutation(apiKey)
   }
 }

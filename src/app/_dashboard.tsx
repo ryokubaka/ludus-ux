@@ -125,7 +125,10 @@ export function DashboardPageClient() {
 
   const { abortRange } = useAbortRange(scopeTag)
 
-  const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0 && !selectedRangeId
+  const hasNoRanges = !rangeCtxLoading && accessibleRanges.length === 0
+  /** Sidebar still restoring sessionStorage/cookie selection — avoid "No ranges available yet". */
+  const waitingForRangeSelection =
+    rangeCtxLoading || (accessibleRanges.length > 0 && !selectedRangeId?.trim())
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [wireguardDownloading, setWireguardDownloading] = useState(false)
@@ -1169,7 +1172,7 @@ export function DashboardPageClient() {
       </Card>
 
       {/* ── Selected range (single card; range switcher is in the sidebar) ─── */}
-      {isLoading ? (
+      {waitingForRangeSelection || isLoading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>

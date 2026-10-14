@@ -7,17 +7,14 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getAdminData } from "@/lib/admin-data"
+import { getRangeVmsCache, bustRangeVmsCache } from "@/lib/admin-range-vms-cache"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import {
   buildRangeVmInventoryRows,
   mapWithConcurrency,
-  type RangeVmInventoryRow,
 } from "@/lib/range-vm-inventory"
 import { resolveSession } from "@/lib/session"
-import { SWRCache } from "@/lib/server-cache"
-
-const _cache = new SWRCache<{ vms: RangeVmInventoryRow[]; ts: number }>(30_000)
 
 async function fetchRangeConfigYaml(apiKey: string, rangeId: string): Promise<string> {
   const res = await ludusRequest<{ result?: string }>(
@@ -40,8 +37,13 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const payload = await _cache.get(`range-vms:${apiKey}`, async () => {
-      const adminData = await getAdminData(apiKey)
+    const refresh = request.nextUrl.searchParams.get("refresh") === "1"
+    if (refresh) {
+      bustRangeVmsCache(apiKey)
+    }
+    const cache = getRangeVmsCache()
+    const payload = await cache.get(`range-vms:${apiKey}`, async () => {
+      const adminData = await getAdminData(apiKey, refresh ? { bypassCache: true } : undefined)
       const rangesWithVms = adminData.ranges.filter((r) => (r.VMs?.length ?? 0) > 0)
 
       const configEntries = await mapWithConcurrency(rangesWithVms, 8, async (range) => {

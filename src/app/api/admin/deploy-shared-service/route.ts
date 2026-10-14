@@ -26,6 +26,7 @@ import {
 import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
 
 
 export async function POST(request: NextRequest) {
@@ -77,6 +78,12 @@ export async function POST(request: NextRequest) {
       },
       { status: 409 },
     )
+  }
+
+  const patches = await ensureRangeDeployHostPatches(ludusBody)
+  if (!patches.ok) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: patches.error })
+    return NextResponse.json({ error: patches.error, code: "deploy_host_patch" }, { status: 503 })
   }
 
   const result = await ludusRequest(ludusPath, {

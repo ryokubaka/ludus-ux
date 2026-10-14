@@ -560,6 +560,16 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   const [changelogCount, setChangelogCount] = useState<number | null>(null)
   const [notesOpen, setNotesOpen] = useState(false)
   const [depsOpen, setDepsOpen] = useState(false)
+  const [repoUrl, setRepoUrl] = useState("")
+
+  useEffect(() => {
+    fetch("/api/lux/releases", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { repoUrl?: string } | null) => {
+        if (d?.repoUrl) setRepoUrl(d.repoUrl)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetch("/api/about")
@@ -597,15 +607,19 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
           <p className="text-xs text-muted-foreground mt-0.5">Cyber range manager</p>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
-          <a
-            href="https://github.com/ryokubaka/ludus-ux"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-primary transition-colors"
-          >
-            GitHub
-          </a>
-          <span className="text-border">·</span>
+          {repoUrl && (
+            <>
+              <a
+                href={repoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-primary transition-colors"
+              >
+                {repoUrl.includes("github.com") ? "GitHub" : "Repository"}
+              </a>
+              <span className="text-border">·</span>
+            </>
+          )}
           <span>Apache 2.0</span>
           <span className="text-border">·</span>
           <a

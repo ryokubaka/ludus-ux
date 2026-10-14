@@ -15,6 +15,27 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.4.1] - 2026-10-14
+
+**LUX**
+
+- [Add] **Releases** — Settings → About lists `vX.Y.Z` tags and branches from the git remote this install was cloned from. A version branch with no tag is marked Unpublished and does not trigger the update banner. Links and upgrade/downgrade use that remote.
+- [Fix] **Host commands** — `lux-host-exec` changes to `/` after entering the host mount namespace, so bash no longer logs `getcwd: cannot access parent directories` on every command.
+- [Fix] **Releases** — SSH to that remote uses the account that started the container. On Docker Desktop the checkout is owned by root and the key on the Windows profile is mode 777, which SSH ignores, so the lookup copies the key to a private directory for the one command and deletes it. Public GitHub remotes still need no key.
+- [Fix] **VM and range lists** — Failed accessible-range fetches no longer clear the selected range. The dashboard keeps VMs across one empty Ludus poll, shows a spinner while range selection restores, and merges partial `/range` responses more predictably. The console picker uses the same merge rules as the dashboard.
+- [Fix] **Admin VM inventory** — Refresh bypasses stale server caches; admin data is keyed per API key; Ludus empty or short VM lists merge with prior data instead of wiping rows.
+- [Fix] **Cache invalidation** — Ludus proxy mutations invalidate in-process prefetch and admin SWR caches so the next navigation or admin GET is not stuck on an old VM list.
+- [Fix] **Source catalog API** — Ensure `source_content_pins` (and related tables) exist on startup so `/api/sources/.../blueprints|templates|roles|collections` no longer 502 when the DB predates migration v17.
+- [Fix] **Debian 11 deploys** — Before a range deploy, LUX points Bullseye security apt at `https://archive.debian.org`. `security.debian.org` still lists those packages and returns 404 for the files. The VM switches mirrors during deploy, before hostname setup installs packages.
+- [Fix] **Windows Chocolatey** — Before a range deploy, LUX installs Chocolatey and reboots the VM once so OpenSSH can see `choco.exe`. The stock bootstrap installs Chocolatey, then fails because the SSH session still has the old PATH.
+- [Fix] **In-app releases (host probe)** — Discover mount paths via the Docker API (including Windows `E:\` client paths), translate them on the Linux host (bind-mount mirrors under `/run/desktop/mnt/host/…`, `/mnt/…`), and run the probe through a base64-encoded host script so nested quoting survives `lux-host-exec`. Docker Desktop VMs often have no `docker` CLI in the host namespace; translation does not depend on it.
+- [Improve] **In-app releases** — Discover the git checkout from the running container (Compose working directory or the host path of the `/app/data` bind mount). `LUX_REPO_PATH` is only an override when auto-discovery fails.
+- [Improve] **GitHub releases** — Settings → About sends `GITHUB_TOKEN` or `LUX_GITHUB_TOKEN` when set, so unauthenticated rate limits (HTTP 403) are less common.
+- [Perf] **Sources page** — Defer cross-source Ansible catalog fetches until roles/collections are expanded or Ansible is already installed on the host.
+- [Perf] **Blueprint provenance** — Fetch source blueprint catalogs only for sources tied to installed blueprint IDs, not every registered source.
+- [Perf] **Sidebar navigation** — Instant active state and header title on pointer down; hover/focus route warmup with `prefetch="auto"` (loading-boundary prefetch only); drop duplicate dynamic-import spinner when `loading.tsx` already covers the segment.
+- [Security] **Dependencies** — Bump `sharp`, `source-map-js`, and `postcss-selector-parser` (via npm overrides) to clear reported moderate/high audit findings.
+
 ## [1.4.0] - 2026-10-02
 
 **LUX**

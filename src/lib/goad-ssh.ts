@@ -934,13 +934,15 @@ export async function streamGoadCommand(
   // Other GOAD commands do not run that play.
   if (/(?:^|[;\s"])(provide|install|install_extension)\b/.test(goadArgs)) {
     const { ensureRangeDeployHostPatches } = await import("./debian11-security-archive")
-    const patches = await ensureRangeDeployHostPatches(undefined)
+    const patches = await ensureRangeDeployHostPatches(undefined, {
+      configText: trimmedWizardYaml || null,
+    })
     if (!patches.ok) {
-      onData(`[!] LUX: ${patches.error}\n`)
-      onError(new Error(patches.error))
-      return () => {}
+      onData(`[~] LUX: ${patches.error} Deploy is continuing.\n`)
+    } else if (patches.warning) {
+      onData(`[~] LUX: ${patches.warning}\n`)
     }
-    if (patches.changed) {
+    if (patches.ok && patches.changed) {
       onData("[+] LUX: deploy playbooks were updated for this Ludus host\n")
     }
   }

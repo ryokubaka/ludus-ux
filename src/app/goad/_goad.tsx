@@ -326,7 +326,7 @@ export function GoadPageClient() {
                       <Server className="h-3 w-3" />{instance.provider}
                     </div>
                   )}
-                  {instance.extensions.length > 0 && (
+                  {(instance.extensions?.length ?? 0) > 0 && (
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <Puzzle className="h-3 w-3" />{instance.extensions.join(", ")}
                     </div>

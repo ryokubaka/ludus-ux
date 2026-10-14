@@ -56,6 +56,7 @@ import {
   ShieldAlert,
 } from "lucide-react"
 import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
+import { dropGoadInstanceFromCache } from "@/lib/goad-instance-list-cache"
 import {
   isRouterTemplateReadyForDeploy,
   requiredRouterTemplateName,
@@ -692,9 +693,21 @@ export function DashboardPageClient() {
         void pruneKnownHosts(ipsForKnownHosts)
       }
 
-      await cleanupGoadWorkspaceAfterRangeDelete(rangeId)
+      const cleaned = await cleanupGoadWorkspaceAfterRangeDelete(rangeId)
+      await dropGoadInstanceFromCache(queryClient, {
+        instanceId: cleaned.instanceId ?? undefined,
+        rangeId,
+      })
 
-      toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
+      if (cleaned.instanceId && !cleaned.workspaceRemoved) {
+        toast({
+          variant: "destructive",
+          title: "Range deleted, GOAD workspace remains",
+          description: cleaned.errors.join("; ") || `${cleaned.instanceId} is still on the GOAD page until the workspace is removed.`,
+        })
+      } else {
+        toast({ title: "Range deleted", description: `${rangeId} has been permanently removed` })
+      }
 
       // Remove stale cache entry immediately so the UI shows nothing while the
       // context picks the next range.

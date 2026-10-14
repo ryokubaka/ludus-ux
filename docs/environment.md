@@ -72,4 +72,4 @@ Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go w
 
 ## DNS resolution
 
-If `LUDUS_SSH_HOST` is a hostname Docker can't resolve (e.g. only in your host's `/etc/hosts`), set `LUDUS_SERVER_IP` to the server's IP and the container will inject it into `/etc/hosts` automatically.
+If `LUDUS_SSH_HOST` is a hostname, set `LUDUS_SERVER_IP` to the server's IP. On start the container pins that name in `/etc/hosts`, including when DNS answers at startup and later returns `EAI_AGAIN`. Rebuild and recreate the app container after changing the entrypoint or this value.

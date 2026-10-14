@@ -134,7 +134,10 @@ export function useGoadRunAction(params: UseGoadRunActionParams) {
           }
         }
       }
-      if (DEPLOY_TAB_ACTIONS.has(action)) {
+      if (action === "destroy") {
+        // ludus range rm is the GOAD log. Do not open the Ludus deploy log beside it.
+        setActiveTab("deploy")
+      } else if (DEPLOY_TAB_ACTIONS.has(action)) {
         setActiveTab("deploy")
         if (commandRangeId) {
           startRangeStreaming(commandRangeId, { snapshotStart: true })

@@ -872,10 +872,10 @@ export function NewGoadInstancePageClient() {
 
       selectRange(targetRangeId)
       void refreshRanges()
-      const taskQ = taskIdForRedirect
-        ? `&goadTaskId=${encodeURIComponent(taskIdForRedirect)}`
-        : ""
-      router.push(`/goad/${encodeURIComponent(existingId)}?tab=deploy${taskQ}`)
+      const taskQ = new URLSearchParams({ tab: "deploy" })
+      if (taskIdForRedirect) taskQ.set("goadTaskId", taskIdForRedirect)
+      if (rangeId) taskQ.set("rangeId", rangeId)
+      router.push(`/goad/${encodeURIComponent(existingId)}?${taskQ.toString()}`)
 
     } else {
       // ── Fresh install path ───────────────────────────────────────────────────
@@ -1023,10 +1023,10 @@ export function NewGoadInstancePageClient() {
               }
               if (capturedRangeId) selectRange(capturedRangeId)
               void refreshRanges()
-              const taskQ = taskId
-                ? `&goadTaskId=${encodeURIComponent(taskId)}`
-                : ""
-              router.push(`/goad/${encodeURIComponent(newId)}?tab=deploy${taskQ}`)
+              const taskQ = new URLSearchParams({ tab: "deploy" })
+              if (taskId) taskQ.set("goadTaskId", taskId)
+              if (capturedRangeId) taskQ.set("rangeId", capturedRangeId)
+              router.push(`/goad/${encodeURIComponent(newId)}?${taskQ.toString()}`)
             }
           } catch { /* retry */ }
         }

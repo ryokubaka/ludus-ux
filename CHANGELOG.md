@@ -22,6 +22,7 @@ Each bullet uses a single tag:
 - [Improve] **Settings** — GOAD, LudusHound, Ansible verbose, and Use Ludus host DNS are on General. The SSH tab is named Auth.
 - [Add] **Host DNS** — Settings → General → **Use Ludus host DNS** (or `LUX_USE_LUDUS_HOST_DNS=true`). Before a deploy, LUX rewrites the AdGuard template so range DNS uses `192.0.2.254` instead of public resolvers. A Ludus update restores the stock template; the next deploy puts the host resolver back. If lux-host cannot apply the edit, the deploy continues.
 - [Fix] **lux-host update** — A new LUX release replaces the helper already installed for the SSH account. The update body is written to a file and then given to `lux-host self-update`, because current sudo does not pass an SSH pipe through to the helper. The one-time root-password install is still what creates `/etc/lux-host.update-key`. After that key exists, later releases do not ask for it again.
+- [Add] **Release check** — Settings → About → Releases has **Check again**. It reads the git remote immediately. The sidebar otherwise keeps a successful check for one hour.
 
 **GOAD**
 

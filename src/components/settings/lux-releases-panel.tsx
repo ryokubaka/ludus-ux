@@ -1,7 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, ExternalLink, Loader2 } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { AlertTriangle, ExternalLink, Loader2, RefreshCw } from "lucide-react"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -54,7 +55,9 @@ function relationLabel(relation: LuxVersionRelation): string {
 }
 
 export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
+  const queryClient = useQueryClient()
   const [releases, setReleases] = useState<ReleasesResponse | null>(null)
+  const [checking, setChecking] = useState(false)
   const [showAllReleases, setShowAllReleases] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [host, setHost] = useState<HostStatus | null>(null)
@@ -66,14 +69,28 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   const [switchError, setSwitchError] = useState<string | null>(null)
   const [logTail, setLogTail] = useState("")
 
-  const loadReleases = useCallback(async () => {
-    const res = await fetch("/api/lux/releases", { cache: "no-store" })
+  const loadReleases = useCallback(async (refresh = false) => {
+    const url = refresh ? "/api/lux/releases?refresh=1" : "/api/lux/releases"
+    const res = await fetch(url, { cache: "no-store" })
     if (!res.ok) throw new Error("Could not load releases")
     const body = (await res.json()) as ReleasesResponse
     setReleases(body)
     if (body.logTail) setLogTail(body.logTail)
     return body
   }, [])
+
+  const recheck = useCallback(async () => {
+    setChecking(true)
+    setLoadError(null)
+    try {
+      await loadReleases(true)
+      await queryClient.invalidateQueries({ queryKey: ["lux", "releases", "update"] })
+    } catch {
+      setLoadError("Could not check for LUX releases.")
+    } finally {
+      setChecking(false)
+    }
+  }, [loadReleases, queryClient])
 
   useEffect(() => {
     let cancelled = false
@@ -291,6 +308,17 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
               {releases.repoUrl.replace(/^https?:\/\//, "")}
             </a>
           )}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            disabled={checking || !!switchingTag}
+            onClick={() => { void recheck() }}
+          >
+            {checking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Check again
+          </Button>
           {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
         </div>
         <div className="divide-y divide-border/40">

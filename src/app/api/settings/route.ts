@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
   if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
   if (typeof body.ludushoundEnabled === "boolean") patch.ludushoundEnabled = body.ludushoundEnabled
   if (typeof body.ludusAnsibleVerbose === "boolean") patch.ludusAnsibleVerbose = body.ludusAnsibleVerbose
+  if (typeof body.useLudusHostDns === "boolean") patch.useLudusHostDns = body.useLudusHostDns
   if (typeof body.rootApiKey === "string") patch.rootApiKey = body.rootApiKey.trim()
   if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
   if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword

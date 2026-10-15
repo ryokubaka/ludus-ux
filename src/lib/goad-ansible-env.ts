@@ -85,10 +85,28 @@ export function buildEnsureGoadVenvShell(
 /** @deprecated Use {@link buildEnsureGoadVenvShell}. */
 export const buildEnsureGoadAnsibleEnvShell = buildEnsureGoadVenvShell
 
-/** Relative path under ansible_collections/&lt;ns&gt;/&lt;name&gt;/ proving a collection is usable on disk. */
+/**
+ * Present in every installed Galaxy collection.
+ * galaxy.yml is source metadata and is excluded from the built artifact.
+ */
+export const GOAD_COLLECTION_FALLBACK_CANARY = "MANIFEST.json"
+
+/**
+ * Relative path under ansible_collections/&lt;ns&gt;/&lt;name&gt;/ proving a collection is usable.
+ * community.mysql 5.x removed plugins/modules/mysql_user.py and redirects to ansible.mysql.
+ */
 export const GOAD_COLLECTION_CANARY_FILES: Record<string, string> = {
   "ansible.windows": "plugins/modules/win_dns_client.ps1",
   "community.windows": "plugins/modules/win_http_proxy.ps1",
+  "ansible.mysql": "plugins/modules/mysql_user.py",
+}
+
+/** Canary relative path for a namespace.name collection, or null when the name is not a FQCN. */
+export function goadCollectionCanaryRel(name: string): string | null {
+  const parts = name.split(".")
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null
+  if (!/^[A-Za-z0-9_]+$/.test(parts[0]) || !/^[A-Za-z0-9_]+$/.test(parts[1])) return null
+  return GOAD_COLLECTION_CANARY_FILES[name] ?? GOAD_COLLECTION_FALLBACK_CANARY
 }
 
 /** SSH check that required collection plugin files exist under the Ludus user tree. */
@@ -99,7 +117,7 @@ export function buildVerifyGoadCollectionsShell(
 ): string {
   const checks = collectionNames
     .map((name) => {
-      const rel = GOAD_COLLECTION_CANARY_FILES[name]
+      const rel = goadCollectionCanaryRel(name)
       if (!rel) return ""
       const [ns, col] = name.split(".")
       if (!ns || !col) return ""

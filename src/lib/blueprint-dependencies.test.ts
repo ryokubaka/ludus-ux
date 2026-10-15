@@ -108,6 +108,17 @@ describe("findMissingRequirements", () => {
     ])
     expect(missing).toEqual([])
   })
+
+  it("does not treat the geerlingguy.mysql role as the community.mysql collection", () => {
+    const missing = findMissingRequirements(
+      [{ name: "geerlingguy.mysql", version: "4.3.0", type: "role" }],
+      [
+        { kind: "role", name: "geerlingguy.mysql" },
+        { kind: "collection", name: "community.mysql" },
+      ],
+    )
+    expect(missing).toEqual([{ kind: "collection", name: "community.mysql" }])
+  })
 })
 
 describe("mergeBlueprintRequirements", () => {

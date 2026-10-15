@@ -101,6 +101,53 @@ describe("parseDebian11ArchivePatch", () => {
   })
 })
 
+describe("patch-adguard-host-dns", () => {
+  it("replaces public AdGuard resolvers with the Ludus host and stays put on the second run", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      template="$dir/AdGuardHome.yaml.j2"
+      cat > "$template" <<'EOF'
+dns:
+  port: 53
+  upstream_dns:
+  - https://1.1.1.1/dns-query
+  upstream_dns_file: ""
+  bootstrap_dns:
+  - 1.1.1.1
+  - 9.9.9.10
+  - 149.112.112.10
+  - 2620:fe::10
+  - 2620:fe::fe:10
+  all_servers: false
+EOF
+      export LUX_ADGUARD_TEMPLATE="$template"
+      bash "$LUX_HOST_HELPER" patch-adguard-host-dns
+      echo "---FILE---"
+      cat "$template"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-adguard-host-dns
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    expect(file).not.toMatch(/1\.1\.1\.1|9\.9\.9\.10|2620:fe/)
+    expect(file).toContain("upstream_dns:\n    - 192.0.2.254\n")
+    expect(file).toContain("bootstrap_dns:\n    - 192.0.2.254\n")
+    expect(file).toContain("upstream_dns_file:")
+    expect(file).toContain("all_servers: false")
+  })
+
+  it("rejects arguments", () => {
+    const result = bash('bash "$LUX_HOST_HELPER" patch-adguard-host-dns extra')
+    expect(result.status).toBe(2)
+    expect(result.stderr).toMatch(/lux-host:/)
+  })
+})
+
 describe("patch-chocolatey-openssh", () => {
   it("inserts an install and a one-time reboot ahead of the Chocolatey bootstrap", () => {
     const result = bash(

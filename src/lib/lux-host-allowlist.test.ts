@@ -166,6 +166,10 @@ describe("lux-host allowlist", () => {
     expect(run(["ansible-collection-file", "luxuser", "ansible", "windows", "plugins/modules/win_dns_client.ps1"]).stdout).toContain(
       "FAIL:ansible.windows",
     )
+    denied(["ansible-collection-repair"])
+    denied(["ansible-collection-repair", "root", "community", "mysql", "plugins/modules/mysql_user.py"])
+    denied(["ansible-collection-repair", "luxuser", "community", "mysql", "../x"])
+    denied(["ansible-collection-repair", "o'brien", "community", "mysql", "MANIFEST.json"])
     denied(["getent-home", "root"])
   })
 

@@ -42,6 +42,19 @@ describe("buildVerifyGoadCollectionsShell", () => {
     expect(sh).toContain("FAIL:ansible.windows")
     expect(sh).toContain("LUX_ANSIBLE_VERIFY_DONE")
   })
+
+  it("checks ansible.mysql's mysql_user module and MANIFEST.json for other collections", () => {
+    const sh = buildVerifyGoadCollectionsShell(
+      ludusInstallPathFromEnv(),
+      ["ansible.mysql", "community.mysql", "community.crypto"],
+      "labuser",
+    )
+    expect(sh).toContain("ansible_collections/ansible/mysql/plugins/modules/mysql_user.py")
+    expect(sh).toContain("FAIL:ansible.mysql")
+    expect(sh).toContain("ansible_collections/community/mysql/MANIFEST.json")
+    expect(sh).toContain("FAIL:community.mysql")
+    expect(sh).toContain("ansible_collections/community/crypto/MANIFEST.json")
+  })
 })
 
 describe("buildEnsureGoadVenvShell", () => {

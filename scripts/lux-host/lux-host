@@ -40,6 +40,7 @@
 #   sources-repair [id]
 #   ansible-home <user>
 #   ansible-collection-file <user> <namespace> <name> <relative-path>
+#   ansible-collection-repair <user> <namespace> <name> <relative-path>
 #   mkdir-goad-workspace <goadPath>
 #   prepare-goad-submodule <goadPath> <user>
 #   chown-goad <user> <goadPath> <instanceId>
@@ -50,6 +51,7 @@
 #   upgrade-start <repo> <tag>       (HMAC line, then upgrade.sh, on stdin)
 #   patch-debian11-apt               (no args; rewrites one Ludus playbook task)
 #   patch-chocolatey-openssh         (no args; rewrites the Windows Chocolatey bootstrap)
+#   patch-adguard-host-dns           (no args; points AdGuard upstream at 192.0.2.254)
 #   release-refs <repo>              (vX.Y.Z heads and tags on this clone's remote)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
@@ -541,6 +543,71 @@ patch_chocolatey_openssh() {
   printf 'status=ok\nchanged=yes\n'
 }
 
+# Range VMs ask AdGuard on the router. The stock template forwards to public
+# resolvers. Point both lists at the Ludus host (192.0.2.254), which is where
+# the operator's internal forwarder lives. LUX_ADGUARD_TEMPLATE is for tests.
+patch_adguard_host_dns() {
+  local template
+  if [[ -n "${LUX_ADGUARD_TEMPLATE:-}" ]]; then
+    template=$LUX_ADGUARD_TEMPLATE
+    is_abs_path "$template" || die "bad template path"
+    [[ "$template" == /tmp/* ]] || die "bad template path"
+    [[ "$(basename -- "$template")" == "AdGuardHome.yaml.j2" ]] || die "bad template path"
+  else
+    template=/opt/ludus/ansible/range-management/templates/AdGuardHome.yaml.j2
+    if [[ -e "$template" || -L "$template" ]]; then
+      realpath_under "$template" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$template" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$template"
+  local out
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$out")" RETURN
+  if ! awk '
+    function keyname(s,   t) {
+      t = s
+      sub(/^[[:space:]]*/, "", t)
+      if (t ~ /^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*$/) {
+        sub(/:.*/, "", t)
+        return t
+      }
+      return ""
+    }
+    {
+      k = keyname($0)
+      if (k == "upstream_dns" || k == "bootstrap_dns") {
+        match($0, /^[[:space:]]*/)
+        print $0
+        printf "%s- 192.0.2.254\n", substr($0, 1, RLENGTH) "  "
+        if (k == "upstream_dns") saw_up = 1
+        else saw_boot = 1
+        skip = 1
+        next
+      }
+      if (skip) {
+        if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*-/) next
+        skip = 0
+      }
+      print
+    }
+    END { if (!saw_up || !saw_boot) exit 3 }
+  ' "$template" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$template"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$template"
+  printf 'status=ok\nchanged=yes\n'
+}
+
 # Same listing as buildHostReleaseRefsCmd. vX.Y.Z only, from this clone's remote.
 list_origin_release_refs() {
   local repo="$1" remote url refs
@@ -998,10 +1065,82 @@ case "$op" in
     [[ "$3" =~ ^[A-Za-z0-9_]+$ ]] || die "name"
     [[ "$4" =~ ^[A-Za-z0-9._/-]+$ && "$4" != /* && "$4" != *..* ]] || die "path"
     file="/opt/ludus/users/$1/.ansible/collections/ansible_collections/$2/$3/$4"
-    if [[ -f "$file" && ! -L "$file" ]]; then
+    # Root can see mode 000 files. GOAD runs as the range user, so the file
+    # has to be readable by that user or the check is a false pass.
+    if [[ -f "$file" && ! -L "$file" ]] && su -s /bin/sh "$1" -c "test -r '$file'"; then
       echo "OK:$2.$3"
     else
       echo "FAIL:$2.$3"
+    fi
+    ;;
+  ansible-collection-repair)
+    # A Ludus API "force" install can report success while leaving the collection
+    # directory root-owned or half-written. Clear that one directory, install it
+    # with ansible-galaxy, then give it back to the range user.
+    [[ $# -eq 4 ]] || die "ansible-collection-repair"
+    is_login "$1" || die "user"
+    [[ "$1" != "root" ]] || die "user"
+    [[ "$2" =~ ^[A-Za-z0-9_]+$ ]] || die "namespace"
+    [[ "$3" =~ ^[A-Za-z0-9_]+$ ]] || die "name"
+    [[ "$4" =~ ^[A-Za-z0-9._/-]+$ && "$4" != /* && "$4" != *..* ]] || die "path"
+    user="$1"
+    ns="$2"
+    name="$3"
+    rel="$4"
+    id -u "$user" >/dev/null 2>&1 || die "user"
+    coll="/opt/ludus/users/$user/.ansible/collections"
+    ac="$coll/ansible_collections"
+    dest="$ac/$ns/$name"
+    file="$dest/$rel"
+    fix_collection_owner() {
+      [[ -e "$coll" ]] || return 0
+      assert_not_symlink "$coll"
+      chown -R "$user:ludus" -- "$coll"
+      chmod -R u=rwX,g=rwX,o= -- "$coll"
+    }
+    collection_readable() {
+      [[ -f "$file" && ! -L "$file" ]] && su -s /bin/sh "$user" -c "test -r '$file'"
+    }
+    mkdir -p -- "$ac/$ns"
+    assert_not_symlink "$coll"
+    assert_not_symlink "$ac"
+    fix_collection_owner
+    if ! collection_readable; then
+      if [[ -e "$dest" || -L "$dest" ]]; then
+        assert_not_symlink "$dest"
+        real=$(realpath_under "$dest" "$ac/$ns")
+        rm -rf -- "$real"
+      fi
+      shopt -s nullglob
+      for info in "$ac/$ns.$name-"*.info; do
+        [[ -f "$info" && ! -L "$info" ]] || continue
+        bn=$(basename -- "$info")
+        [[ "$bn" =~ ^[A-Za-z0-9_]+\.[A-Za-z0-9_]+-[A-Za-z0-9.+_-]+\.info$ ]] || continue
+        rm -f -- "$info"
+      done
+      shopt -u nullglob
+      galaxy=$(command -v ansible-galaxy || true)
+      if [[ -z "$galaxy" ]]; then
+        echo "FAIL:$ns.$name" >&1
+        echo "ansible-galaxy not found" >&2
+        exit 0
+      fi
+      log=$(mktemp)
+      if ! "$galaxy" collection install "$ns.$name" --force -p "$coll" >"$log" 2>&1; then
+        reason=$(tail -n 1 "$log" 2>/dev/null || true)
+        rm -f -- "$log"
+        fix_collection_owner
+        echo "FAIL:$ns.$name" >&1
+        echo "ansible-galaxy: ${reason:-install failed}" >&2
+        exit 0
+      fi
+      rm -f -- "$log"
+      fix_collection_owner
+    fi
+    if collection_readable; then
+      echo "OK:$ns.$name"
+    else
+      echo "FAIL:$ns.$name"
     fi
     ;;
   mkdir-goad-workspace)
@@ -1175,6 +1314,10 @@ PY
   patch-chocolatey-openssh)
     [[ $# -eq 0 ]] || die "patch-chocolatey-openssh"
     patch_chocolatey_openssh
+    ;;
+  patch-adguard-host-dns)
+    [[ $# -eq 0 ]] || die "patch-adguard-host-dns"
+    patch_adguard_host_dns
     ;;
   release-refs)
     [[ $# -eq 1 ]] || die "repo"

@@ -5,4 +5,7 @@
 # /usr/local/sbin/lux-host (pvesh, qm, chpasswd, packer files, ansible home,
 # GOAD workspace ownership, range logs).
 Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
+# Debian 13 sudo allocates a pty by default and drops an SSH pipe. The helper
+# reads self-update and other bodies on stdin.
+Defaults!LUX_HOST !use_pty
 __LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST

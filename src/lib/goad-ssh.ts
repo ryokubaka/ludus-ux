@@ -17,7 +17,7 @@ import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-requ
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
-import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost } from "./root-ssh-preflight"
+import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, wrapLuxHostStdin } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
@@ -371,9 +371,10 @@ export async function sshExec(
       : Array.isArray(command)
         ? formatLuxHost(cfg.username || "root", command)
         : asPrivilegedShell(cfg.username || "root", command as string)
+    const execCommand = Array.isArray(command) && opts?.stdin != null ? wrapLuxHostStdin(remote) : remote
 
     conn.on("ready", () => {
-      conn.exec(remote, (err, stream) => {
+      conn.exec(execCommand, (err, stream) => {
         if (err) {
           conn.end();
           return reject(err);

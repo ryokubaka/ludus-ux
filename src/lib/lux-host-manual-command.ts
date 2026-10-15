@@ -32,6 +32,7 @@ export function luxHostManualInstallCommand(user: string, helper: string): strin
     "tmp=$(mktemp)",
     "cat > \"$tmp\" << 'EOF'",
     "Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host",
+    "Defaults!LUX_HOST !use_pty",
     `${name} ALL=(root) NOPASSWD: LUX_HOST`,
     "EOF",
     "visudo -cf \"$tmp\"",

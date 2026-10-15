@@ -76,6 +76,7 @@ interface Settings {
   goadEnabled: boolean
   ludushoundEnabled: boolean
   ludusAnsibleVerbose: boolean
+  useLudusHostDns: boolean
   rootApiKey?: string
   /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
   rootApiKeyOverriddenByEnv?: boolean
@@ -765,7 +766,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   const tabs = useMemo(
     () => [
       { value: "general", label: "General" },
-      { value: "ssh", label: "SSH & GOAD" },
+      { value: "ssh", label: "Auth" },
       ...(session?.isAdmin ? [{ value: "branding", label: "Branding" }] : []),
       { value: "about", label: "About" },
     ],
@@ -1061,25 +1062,10 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
             </CardContent>
           </Card>
 
-          {isDirty && (
-            <div className="flex justify-end">
-              <Button onClick={handleSave} disabled={saving} size="sm" className="gap-2">
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                Save Changes
-              </Button>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ── SSH & GOAD ──────────────────────────────────────────────── */}
-        <TabsContent value="ssh" className="space-y-4 mt-0">
           <Card>
             <CardHeader>
-              <div className="flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-status-success" />
-                <CardTitle className="text-base">SSH, GOAD &amp; LudusHound</CardTitle>
-              </div>
-              <CardDescription>SSH server used for user login, GOAD, and LudusHound command execution</CardDescription>
+              <CardTitle className="text-base">Integrations</CardTitle>
+              <CardDescription>Sidebar entries and deploy behavior</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
@@ -1112,6 +1098,43 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
                   disabled={!session?.isAdmin}
                 />
               </div>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Use Ludus host DNS</p>
+                  <p className="text-xs text-muted-foreground">
+                    Before a deploy, point the router AdGuard template at 192.0.2.254 instead of public DNS.
+                  </p>
+                </div>
+                <Switch
+                  checked={draft?.useLudusHostDns ?? false}
+                  onCheckedChange={(v) => setDraft((d) => d ? { ...d, useLudusHostDns: v } : d)}
+                  disabled={!session?.isAdmin}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {isDirty && (
+            <div className="flex justify-end">
+              <Button onClick={handleSave} disabled={saving} size="sm" className="gap-2">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                Save Changes
+              </Button>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ── Auth ────────────────────────────────────────────────────── */}
+        <TabsContent value="ssh" className="space-y-4 mt-0">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-status-success" />
+                <CardTitle className="text-base">Authentication</CardTitle>
+              </div>
+              <CardDescription>Host SSH account used for login, GOAD, and LudusHound</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
               <div className="grid grid-cols-3 gap-4">
                 <div className="col-span-2 space-y-1.5">
                   <Label htmlFor="ssh-host">

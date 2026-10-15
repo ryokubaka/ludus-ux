@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import {
   asPrivilegedShell,
   formatLuxHost,
+  wrapLuxHostStdin,
   assessConfiguredSshUser,
   buildLuxHostAuthProbeCommand,
   buildRootSshProbeCommand,
@@ -100,6 +101,13 @@ describe("formatLuxHost", () => {
     )
     expect(formatLuxHost("root", ["id"])).toBe("/usr/local/sbin/lux-host 'id'")
     expect(formatLuxHost("lux-ssh-test", ["echo", "o'brien"])).toContain("'\\''")
+  })
+
+  it("feeds lux-host stdin from a file so sudo does not drop the update body", () => {
+    const wrapped = wrapLuxHostStdin(formatLuxHost("lux-ssh-test", ["self-update"]))
+    expect(wrapped).toContain("cat > \"$f\"")
+    expect(wrapped).toContain("sudo -n /usr/local/sbin/lux-host 'self-update' < \"$f\"")
+    expect(wrapped).toContain("rm -f \"$f\"")
   })
 })
 

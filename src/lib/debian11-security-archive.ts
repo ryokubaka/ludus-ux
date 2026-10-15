@@ -3,12 +3,13 @@ import "server-only"
 import { sshExec, sshExecAccount } from "@/lib/goad-ssh"
 import { loadLuxHostScriptText } from "@/lib/lux-host-install"
 import { ensureLuxHostCurrent } from "@/lib/lux-host-sync"
+import { getSettings } from "@/lib/settings-store"
 
 export type Debian11ArchivePatch =
   | { ok: true; changed: boolean; skipped: string | null; warning?: string }
   | { ok: false; error: string }
 
-type HostPatchOp = "patch-debian11-apt" | "patch-chocolatey-openssh"
+type HostPatchOp = "patch-debian11-apt" | "patch-chocolatey-openssh" | "patch-adguard-host-dns"
 
 /** The installed helper predates this LUX build and rejected the operation name. */
 export function luxHostMissingOperation(error: string): boolean {
@@ -122,17 +123,20 @@ async function invokeBundledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch
  * with this LUX build. A failure here is not fatal: the caller keeps deploying.
  */
 async function applyHostPatch(op: HostPatchOp, logPrefix: string): Promise<Debian11ArchivePatch> {
-  const sync = await ensureLuxHostCurrent()
+  let sync = await ensureLuxHostCurrent()
   if (!sync.ok) console.warn(`[${logPrefix}] lux-host sync: ${sync.detail}`)
   let parsed = await invokeInstalledPatch(op)
-  if (!parsed.ok && luxHostMissingOperation(parsed.error) && sync.detail === "waiting to retry") {
-    const forced = await ensureLuxHostCurrent({ force: true })
-    if (!forced.ok) console.warn(`[${logPrefix}] lux-host sync: ${forced.detail}`)
+  if (!parsed.ok && luxHostMissingOperation(parsed.error)) {
+    sync = await ensureLuxHostCurrent({ force: true })
+    if (!sync.ok) console.warn(`[${logPrefix}] lux-host sync: ${sync.detail}`)
     else parsed = await invokeInstalledPatch(op)
   }
   if (!parsed.ok && luxHostMissingOperation(parsed.error)) {
     const bundled = await invokeBundledPatch(op)
     if (bundled) parsed = bundled
+  }
+  if (!parsed.ok && luxHostMissingOperation(parsed.error) && !sync.ok) {
+    parsed = { ok: false, error: `${parsed.error}. lux-host was not updated (${sync.detail})` }
   }
   if (parsed.ok && parsed.changed) {
     console.info(`[${logPrefix}] playbook updated`)
@@ -159,6 +163,15 @@ export async function ensureChocolateyOpenSshPatch(): Promise<Debian11ArchivePat
 }
 
 /**
+ * Point AdGuardHome.yaml.j2 at 192.0.2.254. Range VMs use that resolver, and the
+ * stock lists are public DNS. A Ludus update extracts a fresh template; this
+ * runs again on the next deploy.
+ */
+export async function ensureAdguardHostDns(): Promise<Debian11ArchivePatch> {
+  return applyHostPatch("patch-adguard-host-dns", "adguard-dns")
+}
+
+/**
  * Apply the host playbook edits a range deploy needs. A missed edit does not
  * stop the deploy: an older lux-host rejects the operation name, and the stock
  * Ludus plays still run.
@@ -169,6 +182,9 @@ export async function ensureRangeDeployHostPatches(
 ): Promise<Debian11ArchivePatch> {
   const apt = await ensureDebian11SecurityArchive()
   const choco = await ensureChocolateyOpenSshPatch()
+  const dns = getSettings().useLudusHostDns
+    ? await ensureAdguardHostDns()
+    : ({ ok: true, changed: false, skipped: null } satisfies Debian11ArchivePatch)
   const warnings: string[] = []
   if (!apt.ok && debian11PatchBlocksDeploy(apt, body, opts?.configText)) {
     warnings.push(`Debian 11 apt edit skipped (${apt.error}). Deploy is continuing.`)
@@ -180,9 +196,12 @@ export async function ensureRangeDeployHostPatches(
   } else if (!choco.ok) {
     console.warn(`[chocolatey] continuing without the OpenSSH reboot task (${choco.error})`)
   }
+  if (!dns.ok) {
+    warnings.push(`AdGuard host DNS edit skipped (${dns.error}). Deploy is continuing.`)
+  }
   return {
     ok: true,
-    changed: (apt.ok && apt.changed) || (choco.ok && choco.changed),
+    changed: (apt.ok && apt.changed) || (choco.ok && choco.changed) || (dns.ok && dns.changed),
     skipped: null,
     warning: warnings.length > 0 ? warnings.join(" ") : undefined,
   }

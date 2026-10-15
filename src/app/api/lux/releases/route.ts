@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { markRouteDynamic } from "@/lib/mark-route-dynamic"
 import { getSessionFromRequest } from "@/lib/session"
-import { getLuxReleasesSnapshot } from "@/lib/lux-releases"
+import { clearLuxReleasesCache, getLuxReleasesSnapshot } from "@/lib/lux-releases"
 import { readLuxUpgradeLogTail } from "@/lib/lux-upgrade-host"
 
 export async function GET(request: NextRequest) {
@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
+  if (request.nextUrl.searchParams.get("refresh") === "1") clearLuxReleasesCache()
   const snapshot = await getLuxReleasesSnapshot()
   return NextResponse.json({
     ...snapshot,

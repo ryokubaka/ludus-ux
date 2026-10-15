@@ -15,6 +15,19 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.4.2] - 2026-10-15
+
+**LUX**
+
+- [Improve] **Settings** — GOAD, LudusHound, Ansible verbose, and Use Ludus host DNS are on General. The SSH tab is named Auth.
+- [Add] **Host DNS** — Settings → General → **Use Ludus host DNS** (or `LUX_USE_LUDUS_HOST_DNS=true`). Before a deploy, LUX rewrites the AdGuard template so range DNS uses `192.0.2.254` instead of public resolvers. A Ludus update restores the stock template; the next deploy puts the host resolver back. If lux-host cannot apply the edit, the deploy continues.
+- [Fix] **lux-host update** — A new LUX release replaces the helper already installed for the SSH account. The update body is written to a file and then given to `lux-host self-update`, because current sudo does not pass an SSH pipe through to the helper. The one-time root-password install is still what creates `/etc/lux-host.update-key`. After that key exists, later releases do not ask for it again.
+
+**GOAD**
+
+- [Fix] **Ansible dependencies** — Before provision, LUX installs every role and collection named in the GOAD requirements file. A role named `geerlingguy.mysql` no longer counts as the `community.mysql` collection. Each collection is confirmed under the Ludus user's `ansible_collections` tree. If Ludus already lists it but the range user cannot read it, LUX fixes ownership and installs that collection again.
+- [Fix] **MySQL collection** — `community.mysql` 5.x does not ship `mysql_user`. The `community.mysql-5.0.2.info` folder is Galaxy's install receipt, not the collection. LUX also installs `ansible.mysql`, which has that module, and does not stop provision because the old module file is gone.
+
 ## [1.4.1] - 2026-10-14
 
 **LUX**

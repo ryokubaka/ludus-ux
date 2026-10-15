@@ -69,6 +69,15 @@ export function formatLuxHost(username: string, args: readonly string[]): string
 }
 
 /**
+ * Feed lux-host stdin from a file the SSH account writes first.
+ * `sudo -n` with `use_pty` (the Debian 13 default) does not forward an SSH
+ * pipe, so `self-update` saw an empty body and left the previous helper installed.
+ */
+export function wrapLuxHostStdin(remote: string): string {
+  return `f=$(mktemp) && cat > "$f" && ${remote} < "$f"; s=$?; rm -f "$f"; exit $s`
+}
+
+/**
  * Root may run a host command directly. A non-root account cannot pass an
  * arbitrary shell string through lux-host.
  */
@@ -150,7 +159,7 @@ export function rootSshProbeProblem(probe: RootSshProbe, packerDir: string): str
   if (probe.uid != null && !elevated) {
     return (
       `Login succeeded as ${who} (uid ${probe.uid}), without passwordless sudo for ${LUX_HOST_SUDO_BIN}. ` +
-      `Host writes need root, or a sudoers rule for that helper only. Settings → SSH & GOAD can install that rule; quickstart can too.`
+      `Host writes need root, or a sudoers rule for that helper only. Settings → Auth can install that rule; quickstart can too.`
     )
   }
   if (probe.packerWritable === false) {

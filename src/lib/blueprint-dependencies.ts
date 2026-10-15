@@ -221,7 +221,12 @@ export function findMissingRequirements(
 ): BlueprintRequirement[] {
   const roles = installed.filter((i) => ansibleItemType(i) === "role")
   const collections = installed.filter((i) => ansibleItemType(i) === "collection")
-  const installedNames = buildInstalledAnsibleNames(roles, collections)
+  // Short names are matched only within the same kind. geerlingguy.mysql must
+  // not satisfy community.mysql — glpi.yml needs the collection's mysql_user.
+  const installedByKind: Record<"role" | "collection", Set<string>> = {
+    role: buildInstalledAnsibleNames(roles, []),
+    collection: buildInstalledAnsibleNames([], collections),
+  }
 
   const missing: BlueprintRequirement[] = []
   const seen = new Set<string>()
@@ -231,7 +236,8 @@ export function findMissingRequirements(
     if (seen.has(key)) continue
     seen.add(key)
 
-    if (!isAnsibleCatalogNameInstalled(req.name, installedNames)) {
+    const installedNames = req.kind === "role" || req.kind === "collection" ? installedByKind[req.kind] : null
+    if (!installedNames || !isAnsibleCatalogNameInstalled(req.name, installedNames)) {
       missing.push(req)
     }
   }

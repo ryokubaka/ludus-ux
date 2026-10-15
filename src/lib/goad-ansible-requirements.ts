@@ -8,7 +8,7 @@ import {
   findMissingAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
-import { GOAD_COLLECTION_CANARY_FILES } from "@/lib/goad-ansible-env"
+import { goadCollectionCanaryRel } from "@/lib/goad-ansible-env"
 import { sshExec, sshExecAccount, type SSHCreds } from "@/lib/goad-ssh"
 import { resolveGoadPath, resolveLudusInstallPath } from "@/lib/runtime-paths"
 
@@ -32,9 +32,15 @@ export async function readGoadAnsibleRequirementsYaml(
 }
 
 function collectionsToVerify(required: BlueprintRequirement[]): string[] {
-  return required
-    .filter((r) => r.kind === "collection" && r.name in GOAD_COLLECTION_CANARY_FILES)
-    .map((r) => r.name)
+  return required.filter((r) => r.kind === "collection" && goadCollectionCanaryRel(r.name)).map((r) => r.name)
+}
+
+/** community.mysql 5.x is a redirect stub. glpi.yml's mysql_user lives in ansible.mysql. */
+function withMysqlModuleCollection(required: BlueprintRequirement[]): BlueprintRequirement[] {
+  const needsMysql = required.some((r) => r.kind === "collection" && r.name === "community.mysql")
+  const hasModule = required.some((r) => r.kind === "collection" && r.name === "ansible.mysql")
+  if (!needsMysql || hasModule) return required
+  return [...required, { kind: "collection", name: "ansible.mysql" }]
 }
 
 function parseBrokenCollectionNames(stdout: string): string[] {
@@ -59,7 +65,7 @@ export async function findBrokenGoadCollectionsOnDisk(
 
   const brokenNames = new Set<string>()
   for (const name of names) {
-    const rel = GOAD_COLLECTION_CANARY_FILES[name]
+    const rel = goadCollectionCanaryRel(name)
     const [ns, col] = name.split(".")
     if (!rel || !ns || !col) continue
     const { stdout } = await sshExec(["ansible-collection-file", user, ns, col, rel])
@@ -137,7 +143,7 @@ export async function ensureGoadAnsibleRequirements(
     return { ok: true }
   }
 
-  const required = parseRequirementsYaml(requirementsYaml)
+  const required = withMysqlModuleCollection(parseRequirementsYaml(requirementsYaml))
   if (required.length === 0) {
     return { ok: true }
   }
@@ -172,23 +178,46 @@ export async function ensureGoadAnsibleRequirements(
     onLog(
       `[!] Incomplete collection(s) on disk (Ludus inventory can lie after a failed install): ${broken.map((b) => b.name).join(", ")}`,
     )
-    const repairResult = await installAndLog(key, broken, onLog, true, runAsUser)
-    if (!repairResult.ok) return repairResult
+    const user = runAsUser?.trim().toLowerCase()
+    const unresolved: BlueprintRequirement[] = []
+    if (user) {
+      onLog("[+] Repairing collection ownership and reinstalling on the Ludus host…")
+      for (const req of broken) {
+        const rel = goadCollectionCanaryRel(req.name)
+        const [ns, col] = req.name.split(".")
+        if (!rel || !ns || !col) {
+          unresolved.push(req)
+          continue
+        }
+        onLog(`[+] Repairing collection ${req.name}`)
+        const repaired = await sshExec(["ansible-collection-repair", user, ns, col, rel])
+        const reason = repaired.stderr.trim()
+        if (reason) onLog(`[!] ${req.name}: ${reason}`)
+        const ok = repaired.stdout.split("\n").some((line) => line.trim() === `OK:${req.name}`)
+        if (!ok) unresolved.push(req)
+      }
+    } else {
+      unresolved.push(...broken)
+    }
+
+    if (unresolved.length > 0) {
+      const repairResult = await installAndLog(key, unresolved, onLog, true, runAsUser)
+      if (!repairResult.ok) return repairResult
+    }
 
     try {
       const stillBroken = await findBrokenGoadCollectionsOnDisk(required, creds, runAsUser)
       if (stillBroken.length > 0) {
         const ludusRoot = resolveLudusInstallPath()
-        return {
-          ok: false,
-          error:
-            `Collection still missing plugin files after force reinstall: ${stillBroken.map((b) => b.name).join(", ")}. ` +
-            `Check ownership under ${ludusRoot}/users/<user>/.ansible/collections (remove broken dirs or chown to the Ludus user).`,
-        }
+        const error =
+          `Collection still missing plugin files after repair: ${stillBroken.map((b) => b.name).join(", ")}. ` +
+          `Expected under ${ludusRoot}/users/${user ?? "<user>"}/.ansible/collections/ansible_collections.`
+        onLog(`[-] ${error}`)
+        return { ok: false, error }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      return { ok: false, error: `Collection verify failed after force reinstall: ${msg}` }
+      return { ok: false, error: `Collection verify failed after repair: ${msg}` }
     }
   }
 

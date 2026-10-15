@@ -26,6 +26,7 @@ function mockSettings(overrides: Partial<RuntimeSettings>): void {
     goadEnabled: true,
     ludushoundEnabled: true,
     ludusAnsibleVerbose: true,
+    useLudusHostDns: false,
     rootApiKey: "",
     blueprintOperatorApiKey: "",
     blueprintOperatorUserId: "",

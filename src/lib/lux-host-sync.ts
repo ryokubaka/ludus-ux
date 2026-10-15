@@ -110,7 +110,7 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
         ok: false,
         updated: false,
         detail:
-          "Install lux-host once from Settings → SSH & GOAD using the Ludus host root password. Later updates use self-update and do not ask for that password again.",
+          "Install lux-host once from Settings → Auth using the Ludus host root password. Later updates use self-update and do not ask for that password again.",
       }
     }
     const updated = await sshExec(["self-update"], undefined, { stdin: luxHostSelfUpdateStdin(script, updateKey) })
@@ -121,7 +121,7 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
         ok: false,
         updated: false,
         detail: needsInstall
-          ? "Install lux-host once from Settings → SSH & GOAD using the Ludus host root password. Later updates use self-update and do not ask for that password again."
+          ? "Install lux-host once from Settings → Auth using the Ludus host root password. Later updates use self-update and do not ask for that password again."
           : stderr || "lux-host self-update failed",
       }
     }
@@ -130,7 +130,7 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
       ok: false,
       updated: false,
       detail:
-        "lux-host on the Ludus host is older than this LUX build, and the SSH account cannot write /usr/local/sbin/lux-host. Install it once from Settings → SSH & GOAD. After this version is on the host, later updates install themselves.",
+        "lux-host on the Ludus host is older than this LUX build, and the SSH account cannot write /usr/local/sbin/lux-host. Install it once from Settings → Auth. After this version is on the host, later updates install themselves.",
     }
   }
 

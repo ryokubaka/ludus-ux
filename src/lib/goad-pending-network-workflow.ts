@@ -20,7 +20,7 @@ import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-corre
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { getSettings } from "@/lib/settings-store"
 import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
-import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
+import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
 import { readUnlinkPendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
 import type { RangeObject } from "@/lib/types"

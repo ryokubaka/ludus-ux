@@ -146,7 +146,7 @@ docker compose up -d --build
 # https://localhost   (port 443 — expected self-signed cert warning if using generated certs)
 ```
 
-7. Log in with your Ludus user’s **SSH username and password** (the person using LUX, not the host root account). LUX stores that password in the encrypted session for per-user GOAD and in-browser noVNC tickets. The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible. Host writes (templates, `pvesh`, password changes) use `PROXMOX_SSH_USER` separately. That account can be any user; if it is not root, it needs [lux-host](ssh-and-auth.md#lux-host).
+7. Log in with your Ludus user’s **SSH username and password** (the person using LUX, not the host root account). LUX stores that password in the encrypted session for per-user GOAD and console tickets (in-browser noVNC and `.vv` downloads). The UI reads `LUDUS_API_KEY` from `~/.bashrc` on the Ludus server when possible. Host writes (templates, `pvesh`, password changes) use `PROXMOX_SSH_USER` separately. That account can be any user; if it is not root, it needs [lux-host](ssh-and-auth.md#lux-host).
 
 > **GOAD prerequisite:** If you plan to use GOAD lab deployments, the GOAD repository must be present on your Ludus server along with the Python venv package:
 > ```bash
@@ -197,6 +197,6 @@ Every upgrade and downgrade asks you to confirm first. The dialog covers the hos
 With the stack up and `./ssh/id_rsa` readable in the container:
 
 - Open **Settings** and run the Ludus / SSH connectivity checks.
-- Hit an admin endpoint that uses `pvesh` (e.g. **Shared services** or **SPICE** download) — both use SSH with the same auth resolution as GOAD.
+- Hit an admin endpoint that uses `pvesh` (e.g. **Shared services**) — it uses SSH with the same auth resolution as GOAD. Console downloads use your login password, not that key.
 
 For deeper SSH, console, and key troubleshooting, see [SSH and authentication](ssh-and-auth.md).

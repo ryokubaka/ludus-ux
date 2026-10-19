@@ -81,7 +81,7 @@ describe("lux-upgrade-host", () => {
   it("parses version heads and tags from the clone remote", () => {
     const parsed = parseHostReleaseRefs(
       [
-        "url=git@gitlab.rain.mil:smeowden/ludus-ux.git",
+        "url=git@gitlab.example.com:group/ludus-ux.git",
         "head=v1.4.1",
         "head=main",
         "tag=v1.4.0",
@@ -90,7 +90,7 @@ describe("lux-upgrade-host", () => {
       ].join("\n"),
     )
     expect(parsed.error).toBeUndefined()
-    expect(parsed.url).toBe("git@gitlab.rain.mil:smeowden/ludus-ux.git")
+    expect(parsed.url).toBe("git@gitlab.example.com:group/ludus-ux.git")
     expect(parsed.heads).toEqual(["v1.4.1"])
     expect(parsed.tags).toEqual(["v1.4.0"])
   })

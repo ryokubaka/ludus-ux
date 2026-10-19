@@ -15,6 +15,24 @@ Each bullet uses a single tag:
 
 ---
 
+## Unreleased
+
+**LUX**
+
+- [Add] **Pull request summary** — Opening a pull request sets the title to `vX.Y.Z - Feature, feature, and feature` and the description to a Summary list from that version's changelog section. Later pushes refresh it while the description still contains the `lux-pr-summary` comment. Delete that comment to keep a hand-edited description.
+
+## [1.4.3] - 2026-10-19
+
+**LUX**
+
+- [Fix] **SPICE console** — A `.vv` download uses the signed-in user's Proxmox account, the same way in-browser noVNC does. The host SSH account is not used, so a mounted root key does not open another user's console. Log in with your SSH/PAM password. A key-only login cannot request this ticket. ([Issue #44](https://github.com/ryokubaka/ludus-ux/issues/44))
+- [Fix] **Linux router reboot** — A range deploy waits for SSH on a Linux VM to drop before it waits for SSH to return. Ludus was treating an already-open port 22 as a finished reboot, and the next task failed while the VM was still shutting down.
+- [Fix] **Router clone** — A network deploy no longer clones a second router when one with that name already exists. VLAN setup uses one Proxmox VMID when more than one VM shares the name.
+- [Fix] **Range VM list** — The dashboard keeps one row per Proxmox VMID. A one-VM first paint is replaced by the next full range snapshot instead of being appended, and the same short snapshot twice replaces the cached list.
+- [Fix] **Domain controller OUs** — After a new forest is promoted, the deploy waits until Active Directory Web Services answers `Get-ADDomain` before creating the Workstations and Servers OUs. WinRM comes back first, and the stock task was failing while that service was still starting.
+- [Fix] **Sysinternals checksum** — The additional-tools install no longer checks the Sysinternals zip against the Chocolatey package checksum. That URL is not versioned, so the package still has the previous zip's hash after Microsoft replaces the file.
+- [Fix] **Host DNS env** — Compose passes `LUX_USE_LUDUS_HOST_DNS` into the app. A `.env` value was ignored because the container never received it. A value already saved in Settings still wins.
+
 ## [1.4.2] - 2026-10-15
 
 **LUX**

@@ -1,26 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession, type ResolvedSession } from "@/lib/session"
+import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { proxmoxLogin, proxmoxGetNodeForVmid, proxmoxCreateVncProxy } from "@/lib/proxmox-http"
+import { CONSOLE_PAM_PASSWORD_REQUIRED, resolveSessionProxmoxUser } from "@/lib/session-proxmox-user"
 import { storeVncSession } from "@/lib/vnc-token-store"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { ludusRequest } from "@/lib/ludus-client"
-import type { UserObject } from "@/lib/types"
 import { isNumericId } from "@/lib/validate-id"
-
-
-async function resolveSessionProxmoxUser(session: ResolvedSession): Promise<string> {
-  const result = await ludusRequest<UserObject | UserObject[]>("/user", { apiKey: session.apiKey })
-  if (result.error || result.status !== 200) {
-    throw new Error(`Failed to resolve logged-in user's Proxmox username from Ludus API (HTTP ${result.status}): ${result.error || "unknown error"}`)
-  }
-
-  const raw = Array.isArray(result.data) ? result.data[0] : result.data
-  const user = (raw?.proxmoxUsername || raw?.userID || session.username).trim().toLowerCase()
-  if (!user) throw new Error("Failed to resolve logged-in user's Proxmox username from Ludus API")
-  return user
-}
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)
@@ -33,13 +19,7 @@ export async function GET(request: NextRequest) {
   const settings = getSettings()
   const password = (session.sshPassword || "").trim()
   if (!password) {
-    return NextResponse.json(
-      {
-        error:
-          "In-browser VNC needs your Ludus login password so LUX can request a Proxmox PAM ticket for your user. SSH keys work for SPICE and pvesh-over-SSH, but not for the Proxmox REST ticket used by noVNC. Log out and log in with your SSH/PAM password.",
-      },
-      { status: 503 },
-    )
+    return NextResponse.json({ error: CONSOLE_PAM_PASSWORD_REQUIRED }, { status: 503 })
   }
 
   const { sshHost } = settings

@@ -2,33 +2,22 @@ import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { hasSshExecAuth } from "@/lib/root-ssh-auth"
+import {
+  proxmoxCreateSpiceProxy,
+  proxmoxCreateVncProxy,
+  proxmoxGetNodeForVmid,
+  proxmoxLogin,
+  type SpiceProxyInfo,
+} from "@/lib/proxmox-http"
+import { CONSOLE_PAM_PASSWORD_REQUIRED, resolveSessionProxmoxUser } from "@/lib/session-proxmox-user"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { isNumericId } from "@/lib/validate-id"
 
-
-interface SpiceTicket {
-  type?: string
-  password: string
-  proxy?: string
-  host: string
-  "tls-port"?: number
-  port?: number
-  ca?: string
-  "host-subject"?: string
-  "release-cursor"?: string
-  "secure-attention"?: string
-  "toggle-fullscreen"?: string
-}
-
-interface VncTicket {
-  port: string
-  ticket: string
-  upid?: string
-}
-
-function formatSpiceVv(ticket: SpiceTicket, vmName: string, proxyHost: string): string {
+function formatSpiceVv(
+  ticket: SpiceProxyInfo & { password: string; host: string },
+  vmName: string,
+  proxyHost: string,
+): string {
   // Keep this as close to what Proxmox itself generates as possible.
   // Extra fields like tls-ciphers, enable-smartcard, enable-usb-autoshare, fullscreen
   // are NOT emitted by Proxmox and can interfere with SPICE agent channel negotiation
@@ -57,33 +46,6 @@ function formatSpiceVv(ticket: SpiceTicket, vmName: string, proxyHost: string): 
   return lines.join("\n") + "\n"
 }
 
-async function requestSpiceTicket(
-  sshHost: string,
-  sshPort: number,
-  sshUser: string,
-  sshPass: string,
-  node: string,
-  vmId: string
-): Promise<SpiceTicket> {
-  const commands: readonly (readonly string[])[] = [
-    ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/spiceproxy`, "--proxy", `http://${sshHost}:3128`, "--output-format", "json"],
-    ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/spiceproxy`, "--output-format", "json"],
-  ]
-
-  let lastError: Error | null = null
-  for (const cmd of commands) {
-    try {
-      const spiceJson = await sshExec(sshHost, sshPort, sshUser, sshPass, cmd)
-      const ticket = JSON.parse(spiceJson) as SpiceTicket
-      if (ticket?.password) return ticket
-      lastError = new Error("No SPICE password in ticket")
-    } catch (err) {
-      lastError = err as Error
-    }
-  }
-  throw lastError || new Error("Failed to create SPICE ticket")
-}
-
 function formatVncVv(host: string, port: string, ticket: string, vmName: string): string {
   return [
     "[virt-viewer]",
@@ -99,6 +61,16 @@ function formatVncVv(host: string, port: string, ticket: string, vmName: string)
   ].join("\n") + "\n"
 }
 
+function vvAttachment(body: string, filename: string, consoleType?: "vnc"): Response {
+  return new Response(body, {
+    headers: {
+      "Content-Type": "application/x-virt-viewer",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Cache-Control": "no-store",
+      ...(consoleType ? { "X-Console-Type": consoleType } : {}),
+    },
+  })
+}
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)
@@ -114,69 +86,49 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "vmId must be a numeric VM identifier" }, { status: 400 })
   }
 
-  const settings = getSettings()
-
-  // Prefer dedicated Proxmox credentials; fall back to the logged-in user's SSH password.
-  const sshPass = settings.proxmoxSshPassword || session.sshPassword || ""
-  if (!hasSshExecAuth(settings, session.sshPassword)) {
-    return NextResponse.json(
-      { error: "No Proxmox SSH auth for pvesh: set PROXMOX_SSH_PASSWORD, mount a private key for PROXMOX_SSH_USER (./ssh), or log in with your SSH password." },
-      { status: 503 }
-    )
+  const password = (session.sshPassword || "").trim()
+  if (!password) {
+    return NextResponse.json({ error: CONSOLE_PAM_PASSWORD_REQUIRED }, { status: 503 })
   }
 
-  const { sshHost, sshPort, proxmoxSshUser: sshUser } = settings
+  const { sshHost } = getSettings()
 
   try {
-    // Discover Proxmox node (login shell ensures pvesh is on PATH)
-    const nodeJson = await sshExec(sshHost, sshPort, sshUser, sshPass,
-      ["pvesh", "get", "/nodes", "--output-format", "json"])
-    const nodes = JSON.parse(nodeJson) as Array<{ node: string }>
-    if (!nodes?.length) throw new Error("No Proxmox nodes found")
-    const node = nodes[0].node
+    // Same PAM identity as in-browser noVNC. Host SSH is not used: pvesh via lux-host
+    // runs as root and would hand out a ticket for every VM that account can see.
+    const user = await resolveSessionProxmoxUser(session)
+    const auth = await proxmoxLogin(sshHost, user, password)
+    const node = await proxmoxGetNodeForVmid(sshHost, auth, vmId)
     if (!/^[a-zA-Z0-9._-]+$/.test(node)) throw new Error("Invalid Proxmox node name")
 
-    // Try SPICE first
-    try {
-      const ticket = await requestSpiceTicket(sshHost, sshPort, sshUser, sshPass, node, vmId)
+    const filename = `${vmName.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
 
-      const vvContent = formatSpiceVv(ticket, vmName, sshHost)
-      const filename = `${vmName.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
-      logLuxRouteAction(request, session, { detail: `vmId=${vmId} type=spice` })
-      return new Response(vvContent, {
-        headers: {
-          "Content-Type": "application/x-virt-viewer",
-          "Content-Disposition": `attachment; filename="${filename}"`,
-          "Cache-Control": "no-store",
-        },
-      })
+    try {
+      const ticket = await proxmoxCreateSpiceProxy(sshHost, auth, node, vmId)
+      const spicePassword = ticket.password
+      const spiceHost = ticket.host
+      if (spicePassword && spiceHost) {
+        logLuxRouteAction(request, session, { detail: `vmId=${vmId} type=spice` })
+        return vvAttachment(
+          formatSpiceVv({ ...ticket, password: spicePassword, host: spiceHost }, vmName, sshHost),
+          filename,
+        )
+      }
     } catch {
       // SPICE not available on this VM — fall back to VNC
     }
 
-    // VNC fallback
-    const vncJson = await sshExec(sshHost, sshPort, sshUser, sshPass,
-      ["pvesh", "create", `/nodes/${node}/qemu/${vmId}/vncproxy`, "--output-format", "json"])
-    const vnc = JSON.parse(vncJson) as VncTicket
-    if (!vnc?.ticket) throw new Error("VNC ticket missing — is the VM powered on?")
+    const vnc = await proxmoxCreateVncProxy(sshHost, auth, node, vmId, { websocket: false })
+    if (!vnc.port || vnc.port === "undefined") throw new Error("VNC ticket missing — is the VM powered on?")
 
-    const vvContent = formatVncVv(sshHost, vnc.port, vnc.ticket, vmName)
-    const filename = `${vmName.replace(/[^a-zA-Z0-9._-]/g, "_")}.vv`
     logLuxRouteAction(request, session, { detail: `vmId=${vmId} type=vnc` })
-    return new Response(vvContent, {
-      headers: {
-        "Content-Type": "application/x-virt-viewer",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Cache-Control": "no-store",
-        "X-Console-Type": "vnc",
-      },
-    })
+    return vvAttachment(formatVncVv(sshHost, vnc.port, vnc.ticket, vmName), filename, "vnc")
   } catch (err) {
     const message = (err as Error).message
     logLuxRouteAction(request, session, { outcome: "failure", detail: message.slice(0, 120) })
     return NextResponse.json(
       { error: logAndSafeError("console/spice", err, "Console access failed") },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

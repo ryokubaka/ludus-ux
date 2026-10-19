@@ -197,11 +197,11 @@ describe("lux-version", () => {
     expect(tokened?.webUrl).toBe("https://github.com/fork/ludus-ux")
     expect(JSON.stringify(tokened)).not.toContain("secret")
 
-    const gitlab = parseLuxGitRemote("git@gitlab.rain.mil:smeowden/ludus-ux.git")
+    const gitlab = parseLuxGitRemote("git@gitlab.example.com:group/ludus-ux.git")
     expect(gitlab?.githubRepo).toBeNull()
-    expect(gitlab?.webUrl).toBe("https://gitlab.rain.mil/smeowden/ludus-ux")
-    expect(gitlab?.branchUrl("v1.4.1")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tree/v1.4.1")
-    expect(gitlab?.tagUrl("v1.4.0")).toBe("https://gitlab.rain.mil/smeowden/ludus-ux/-/tags/v1.4.0")
+    expect(gitlab?.webUrl).toBe("https://gitlab.example.com/group/ludus-ux")
+    expect(gitlab?.branchUrl("v1.4.1")).toBe("https://gitlab.example.com/group/ludus-ux/-/tree/v1.4.1")
+    expect(gitlab?.tagUrl("v1.4.0")).toBe("https://gitlab.example.com/group/ludus-ux/-/tags/v1.4.0")
 
     const nested = parseLuxGitRemote("https://gitlab.com/group/sub/ludus-ux.git")
     expect(nested?.branchUrl("v1.2.0")).toBe("https://gitlab.com/group/sub/ludus-ux/-/tree/v1.2.0")
@@ -211,7 +211,7 @@ describe("lux-version", () => {
   it("lists the clone remote's tags and leaves version branches unpublished", () => {
     const snap = snapshotFromGitRefs(
       "1.4.0",
-      "git@gitlab.example.mil:lab/ludus-ux.git",
+      "git@gitlab.example.com:lab/ludus-ux.git",
       ["v1.4.1", "v1.4.0", "main"],
       ["v1.4.0", "v1.3.2"],
       [{
@@ -223,20 +223,20 @@ describe("lux-version", () => {
         body: "notes",
       }],
     )
-    expect(snap.repoUrl).toBe("https://gitlab.example.mil/lab/ludus-ux")
+    expect(snap.repoUrl).toBe("https://gitlab.example.com/lab/ludus-ux")
     expect(snap.releases.map((r) => `${r.tag}${r.unpublished ? "*" : ""}`)).toEqual([
       "v1.4.1*",
       "v1.4.0",
       "v1.3.2",
     ])
     expect(snap.releases.find((r) => r.tag === "v1.4.1")?.htmlUrl).toBe(
-      "https://gitlab.example.mil/lab/ludus-ux/-/tree/v1.4.1",
+      "https://gitlab.example.com/lab/ludus-ux/-/tree/v1.4.1",
     )
     expect(snap.releases.find((r) => r.tag === "v1.4.0")).toMatchObject({
       unpublished: false,
       relation: "current",
       publishedAt: "2026-10-04T00:00:00Z",
-      htmlUrl: "https://gitlab.example.mil/lab/ludus-ux/-/tags/v1.4.0",
+      htmlUrl: "https://gitlab.example.com/lab/ludus-ux/-/tags/v1.4.0",
     })
     expect(snap.latestStable).toBe("v1.4.0")
     expect(snap.updateAvailable).toBe(false)

@@ -38,6 +38,7 @@ services:
       - LUDUSHOUND_PATH=${LUDUSHOUND_PATH:-/opt/LudusHound}
       - LUDUS_INSTALL_PATH=${LUDUS_INSTALL_PATH:-/opt/ludus}
       - ENABLE_GOAD=${ENABLE_GOAD:-true}
+      - LUX_USE_LUDUS_HOST_DNS=${LUX_USE_LUDUS_HOST_DNS:-false}
       - ENABLE_LUDUSHOUND=${ENABLE_LUDUSHOUND:-true}
       - LUDUS_ANSIBLE_VERBOSE=${LUDUS_ANSIBLE_VERBOSE:-true}
       # Re-pull git Ludus sources so catalog tip stays current (default 5m).

@@ -929,12 +929,12 @@ export async function streamGoadCommand(
     }
   }
 
-  // debian11-security-archive imports sshExec from this module, so the import
+  // range-deploy-host-patches imports sshExec from this module, so the import
   // stays inside the function. `provide` / `install` call `ludus range deploy`
   // on the host; the playbook edit has to be on disk before that session starts.
   // Other GOAD commands do not run that play.
   if (/(?:^|[;\s"])(provide|install|install_extension)\b/.test(goadArgs)) {
-    const { ensureRangeDeployHostPatches } = await import("./debian11-security-archive")
+    const { ensureRangeDeployHostPatches } = await import("./range-deploy-host-patches")
     const patches = await ensureRangeDeployHostPatches(undefined, {
       configText: trimmedWizardYaml || null,
     })

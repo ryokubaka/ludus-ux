@@ -1,0 +1,47 @@
+# When a pull request opens, fill the title and ## Summary from CHANGELOG.md.
+# Later pushes refresh it while <!-- lux-pr-summary --> is still in the description.
+
+name: Pull request summary
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-summary-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  summary:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Update pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          LUX_PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          current="$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')"
+          if ! printf '%s\n' "$current" | bash scripts/pr-summary-should-replace.sh; then
+            echo "Description was edited by hand; leaving it"
+            exit 0
+          fi
+          notes="${RUNNER_TEMP}/pr-body.md"
+          parsed="$(LUX_PR_BRANCH="$LUX_PR_BRANCH" LUX_PR_BODY="$notes" bash scripts/changelog-pr.sh)"
+          skip="$(printf '%s\n' "$parsed" | sed -n 's/^skip=//p')"
+          if [[ "$skip" == "1" ]]; then
+            echo "No changelog bullets to summarize"
+            exit 0
+          fi
+          title="$(printf '%s\n' "$parsed" | sed -n 's/^title=//p')"
+          gh pr edit "$PR_NUMBER" --title "$title" --body-file "$notes"

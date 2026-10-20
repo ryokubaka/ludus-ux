@@ -5,11 +5,17 @@ import { loadLuxHostScriptText } from "@/lib/lux-host-install"
 import { ensureLuxHostCurrent } from "@/lib/lux-host-sync"
 import { getSettings } from "@/lib/settings-store"
 
-export type Debian11ArchivePatch =
+export type HostPlaybookPatch =
   | { ok: true; changed: boolean; skipped: string | null; warning?: string }
   | { ok: false; error: string }
 
-type HostPatchOp = "patch-debian11-apt" | "patch-chocolatey-openssh" | "patch-adguard-host-dns"
+type HostPatchOp =
+  | "patch-debian11-apt"
+  | "patch-chocolatey-openssh"
+  | "patch-adguard-host-dns"
+  | "patch-linux-reboot-wait"
+  | "patch-adws-wait"
+  | "patch-router-single-clone"
 
 /** The installed helper predates this LUX build and rejected the operation name. */
 export function luxHostMissingOperation(error: string): boolean {
@@ -17,15 +23,15 @@ export function luxHostMissingOperation(error: string): boolean {
 }
 
 /**
- * Lux-host prints `status=ok|skipped` for the Debian 11 playbook edit.
- * A missing playbook or a renamed dbus task is a skip: the deploy can still
+ * Lux-host prints `status=ok|skipped` for a host playbook edit.
+ * A missing playbook or a renamed task is a skip: the deploy can still
  * start. A non-zero exit means the file was not updated.
  */
-export function parseDebian11ArchivePatch(
+export function parseHostPlaybookPatch(
   stdout: string,
   stderr: string,
   code: number,
-): Debian11ArchivePatch {
+): HostPlaybookPatch {
   if (code !== 0) {
     const detail = (stderr || stdout).trim().slice(0, 300)
     return { ok: false, error: detail || `lux-host exited ${code}` }
@@ -38,7 +44,7 @@ export function parseDebian11ArchivePatch(
     const reason = /^reason=(missing|task)$/m.exec(stdout)?.[1] ?? "unknown"
     return { ok: true, changed: false, skipped: reason }
   }
-  return { ok: false, error: "lux-host did not report a Debian 11 apt patch status" }
+  return { ok: false, error: "lux-host did not report a host playbook patch status" }
 }
 
 /**
@@ -80,17 +86,17 @@ export function deployNeedsDebian11Archive(configText: string | null | undefined
 
 /** Stop the deploy only when a Debian 11 guest will run the hostname play and the edit failed. */
 export function debian11PatchBlocksDeploy(
-  patch: Debian11ArchivePatch,
+  patch: HostPlaybookPatch,
   body: unknown,
   configText: string | null | undefined,
 ): boolean {
   return !patch.ok && rangeDeployRunsHostnameSetup(body) && deployNeedsDebian11Archive(configText)
 }
 
-async function invokeInstalledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch> {
+async function invokeInstalledPatch(op: HostPatchOp): Promise<HostPlaybookPatch> {
   try {
     const result = await sshExec([op])
-    return parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
+    return parseHostPlaybookPatch(result.stdout, result.stderr, result.code)
   } catch (err) {
     const error = err instanceof Error ? err.message : "SSH failed"
     return { ok: false, error }
@@ -102,14 +108,14 @@ async function invokeInstalledPatch(op: HostPatchOp): Promise<Debian11ArchivePat
  * the operation. Root runs it directly. An account with passwordless sudo runs
  * it the same way. A lux-host-only sudo rule cannot.
  */
-async function invokeBundledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch | null> {
+async function invokeBundledPatch(op: HostPatchOp): Promise<HostPlaybookPatch | null> {
   const script = loadLuxHostScriptText()
   const probe = await sshExecAccount("id -u").catch(() => null)
   const uid = probe && probe.code === 0 ? probe.stdout.trim() : ""
   const command = uid === "0" ? `bash -s -- ${op}` : `sudo -n bash -s -- ${op}`
   try {
     const result = await sshExecAccount(command, { stdin: script })
-    const parsed = parseDebian11ArchivePatch(result.stdout, result.stderr, result.code)
+    const parsed = parseHostPlaybookPatch(result.stdout, result.stderr, result.code)
     if (!parsed.ok && /must run as root|a password is required|not allowed/i.test(parsed.error)) return null
     return parsed
   } catch {
@@ -122,7 +128,7 @@ async function invokeBundledPatch(op: HostPatchOp): Promise<Debian11ArchivePatch
  * know the operation, update it once and retry, then run the script shipped
  * with this LUX build. A failure here is not fatal: the caller keeps deploying.
  */
-async function applyHostPatch(op: HostPatchOp, logPrefix: string): Promise<Debian11ArchivePatch> {
+async function applyHostPatch(op: HostPatchOp, logPrefix: string): Promise<HostPlaybookPatch> {
   let sync = await ensureLuxHostCurrent()
   if (!sync.ok) console.warn(`[${logPrefix}] lux-host sync: ${sync.detail}`)
   let parsed = await invokeInstalledPatch(op)
@@ -153,12 +159,12 @@ async function applyHostPatch(op: HostPatchOp, logPrefix: string): Promise<Debia
  * the HTTPS archive before apt installs dbus. The guest task does nothing on
  * any other release.
  */
-export async function ensureDebian11SecurityArchive(): Promise<Debian11ArchivePatch> {
+export async function ensureDebian11SecurityArchive(): Promise<HostPlaybookPatch> {
   return applyHostPatch("patch-debian11-apt", "debian11-apt")
 }
 
 /** Install Chocolatey, then reboot once, before Ludus's win_chocolatey bootstrap. */
-export async function ensureChocolateyOpenSshPatch(): Promise<Debian11ArchivePatch> {
+export async function ensureChocolateyOpenSshPatch(): Promise<HostPlaybookPatch> {
   return applyHostPatch("patch-chocolatey-openssh", "chocolatey")
 }
 
@@ -167,8 +173,35 @@ export async function ensureChocolateyOpenSshPatch(): Promise<Debian11ArchivePat
  * stock lists are public DNS. A Ludus update extracts a fresh template; this
  * runs again on the next deploy.
  */
-export async function ensureAdguardHostDns(): Promise<Debian11ArchivePatch> {
+export async function ensureAdguardHostDns(): Promise<HostPlaybookPatch> {
   return applyHostPatch("patch-adguard-host-dns", "adguard-dns")
+}
+
+/**
+ * Ludus reboots a Linux VM, then waits only until port 22 accepts a connection.
+ * The new address is already up, so that wait returns during shutdown and the
+ * next task cannot create its temporary directory. Insert a wait until SSH drops.
+ */
+export async function ensureLinuxRebootWait(): Promise<HostPlaybookPatch> {
+  return applyHostPatch("patch-linux-reboot-wait", "linux-reboot-wait")
+}
+
+/**
+ * After promoting a forest, WinRM is up before Active Directory Web Services.
+ * Ludus then creates OUs and the module cannot find a DC. Wait for Get-ADDomain
+ * first. A later deploy finds the service already answering and continues.
+ */
+export async function ensureAdwsWait(): Promise<HostPlaybookPatch> {
+  return applyHostPatch("patch-adws-wait", "adws-wait")
+}
+
+/**
+ * A network deploy runs the router clone task again. Proxmox allows a second
+ * VM with the same name, and the VLAN lookup then prints every VMID. Skip the
+ * clone when one already exists, and keep a single VMID in the lookups.
+ */
+export async function ensureRouterSingleClone(): Promise<HostPlaybookPatch> {
+  return applyHostPatch("patch-router-single-clone", "router-clone")
 }
 
 /**
@@ -179,12 +212,15 @@ export async function ensureAdguardHostDns(): Promise<Debian11ArchivePatch> {
 export async function ensureRangeDeployHostPatches(
   body: unknown,
   opts?: { configText?: string | null },
-): Promise<Debian11ArchivePatch> {
+): Promise<HostPlaybookPatch> {
   const apt = await ensureDebian11SecurityArchive()
   const choco = await ensureChocolateyOpenSshPatch()
   const dns = getSettings().useLudusHostDns
     ? await ensureAdguardHostDns()
-    : ({ ok: true, changed: false, skipped: null } satisfies Debian11ArchivePatch)
+    : ({ ok: true, changed: false, skipped: null } satisfies HostPlaybookPatch)
+  const rebootWait = await ensureLinuxRebootWait()
+  const adwsWait = await ensureAdwsWait()
+  const routerClone = await ensureRouterSingleClone()
   const warnings: string[] = []
   if (!apt.ok && debian11PatchBlocksDeploy(apt, body, opts?.configText)) {
     warnings.push(`Debian 11 apt edit skipped (${apt.error}). Deploy is continuing.`)
@@ -199,9 +235,24 @@ export async function ensureRangeDeployHostPatches(
   if (!dns.ok) {
     warnings.push(`AdGuard host DNS edit skipped (${dns.error}). Deploy is continuing.`)
   }
+  if (!rebootWait.ok) {
+    warnings.push(`Linux reboot wait edit skipped (${rebootWait.error}). Deploy is continuing.`)
+  }
+  if (!adwsWait.ok) {
+    warnings.push(`Active Directory Web Services wait edit skipped (${adwsWait.error}). Deploy is continuing.`)
+  }
+  if (!routerClone.ok) {
+    warnings.push(`Router clone edit skipped (${routerClone.error}). Deploy is continuing.`)
+  }
   return {
     ok: true,
-    changed: (apt.ok && apt.changed) || (choco.ok && choco.changed) || (dns.ok && dns.changed),
+    changed:
+      (apt.ok && apt.changed) ||
+      (choco.ok && choco.changed) ||
+      (dns.ok && dns.changed) ||
+      (rebootWait.ok && rebootWait.changed) ||
+      (adwsWait.ok && adwsWait.changed) ||
+      (routerClone.ok && routerClone.changed),
     skipped: null,
     warning: warnings.length > 0 ? warnings.join(" ") : undefined,
   }

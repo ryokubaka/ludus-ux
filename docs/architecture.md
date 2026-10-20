@@ -23,7 +23,7 @@ Browser
   │                      │                              ├─ /api/goad/*  ──► SSH → Ludus server (GOAD)
   │                      │                              ├─ /api/ludushound/* ──► SSH → LudusHound CLI + Ludus API
   │                      │                              ├─ /api/admin/* ──► SSH → Proxmox (pvesh)
-  │                      │                              └─ /api/console/* ► SSH → Proxmox (pvesh) + user PAM HTTP for noVNC tickets
+  │                      │                              └─ /api/console/* ► user PAM HTTP for noVNC and .vv tickets
   │
   └─ WSS (same origin :443) ──► nginx ──► ws-server.ts ──► Proxmox VNC WebSocket
 ```

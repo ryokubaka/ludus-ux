@@ -444,11 +444,3 @@ export function requireProxmoxSsh():
     },
   }
 }
-
-/** For pvesh-over-SSH: settings password, session login password, or mounted root key. */
-export function hasSshExecAuth(
-  settings: Pick<RuntimeSettings, "proxmoxSshPassword" | "proxmoxSshKeyPath">,
-  sessionPassword?: string | null,
-): boolean {
-  return isRootProxmoxSshConfigured(settings) || !!(sessionPassword || "").trim()
-}

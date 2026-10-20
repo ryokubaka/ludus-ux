@@ -5,10 +5,10 @@ import {
   debian11PatchBlocksDeploy,
   deployNeedsDebian11Archive,
   luxHostMissingOperation,
-  parseDebian11ArchivePatch,
+  parseHostPlaybookPatch,
   rangeDeployRunsHostnameSetup,
   rangeDeployRunsWindowsTools,
-} from "@/lib/debian11-security-archive"
+} from "@/lib/range-deploy-host-patches"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
 
@@ -45,14 +45,14 @@ function bash(script: string, extraEnv: Record<string, string> = {}) {
   })
 }
 
-describe("parseDebian11ArchivePatch", () => {
+describe("parseHostPlaybookPatch", () => {
   it("accepts an updated playbook and a skip", () => {
-    expect(parseDebian11ArchivePatch("status=ok\nchanged=yes\n", "", 0)).toEqual({
+    expect(parseHostPlaybookPatch("status=ok\nchanged=yes\n", "", 0)).toEqual({
       ok: true,
       changed: true,
       skipped: null,
     })
-    expect(parseDebian11ArchivePatch("status=skipped\nreason=missing\n", "", 0)).toEqual({
+    expect(parseHostPlaybookPatch("status=skipped\nreason=missing\n", "", 0)).toEqual({
       ok: true,
       changed: false,
       skipped: "missing",
@@ -71,7 +71,7 @@ describe("parseDebian11ArchivePatch", () => {
   })
 
   it("uses stderr when lux-host refuses the edit", () => {
-    const parsed = parseDebian11ArchivePatch("", "lux-host: bad playbook path\n", 2)
+    const parsed = parseHostPlaybookPatch("", "lux-host: bad playbook path\n", 2)
     expect(parsed.ok).toBe(false)
     if (!parsed.ok) expect(parsed.error).toContain("bad playbook path")
   })
@@ -148,6 +148,170 @@ EOF
   })
 })
 
+describe("patch-router-single-clone", () => {
+  it("skips a second clone and keeps one router VMID", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      mkdir -p "$dir/tasks/proxmox" "$dir/tasks/router"
+      cat > "$dir/tasks/proxmox/deploy-vm.yml" <<'EOF'
+- name: Create a VM from a template
+  community.general.proxmox_kvm:
+    name: "{{ vm_name }}"
+    timeout: 500
+  register: clone_vm
+- name: Pause for 5 seconds to allow the vmid to populate
+  ansible.builtin.pause:
+    seconds: 5
+EOF
+      cat > "$dir/tasks/router/add-vlan-to-router.yml" <<'EOF'
+- name: Get the VM id of the router via Proxmox API
+  ansible.builtin.shell: |
+    curl -s example | jq -r '.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}").vmid'
+- name: Get the node name of the router via Proxmox API
+  ansible.builtin.shell: |
+    curl -s example | jq -r '.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}").node'
+EOF
+      export LUX_ROUTER_CLONE_ROOT="$dir"
+      bash "$LUX_HOST_HELPER" patch-router-single-clone
+      echo "---DEPLOY---"
+      cat "$dir/tasks/proxmox/deploy-vm.yml"
+      echo "---VLAN---"
+      cat "$dir/tasks/router/add-vlan-to-router.yml"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-router-single-clone
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const deploy = result.stdout.split("---DEPLOY---")[1]?.split("---VLAN---")[0] ?? ""
+    const vlan = result.stdout.split("---VLAN---")[1]?.split("---AGAIN---")[0] ?? ""
+    expect(deploy.indexOf("LUX find an existing VM with this name")).toBeGreaterThan(-1)
+    expect(deploy.indexOf("LUX find an existing VM with this name")).toBeLessThan(
+      deploy.indexOf("Create a VM from a template"),
+    )
+    expect(deploy).toContain('when: lux_existing_vmid.stdout | default("") | trim | length == 0')
+    expect(deploy).toContain("LUX keep the existing VM instead of cloning another")
+    expect(deploy).toMatch(/^- name: LUX keep the existing VM instead of cloning another$/m)
+    expect(deploy).toContain('select(.name=="{{ vm_name }}")')
+    expect(vlan).toContain("| .vmid] | first // empty")
+    expect(vlan).toContain("| .node] | first // empty")
+    expect(vlan).not.toContain('}}").vmid')
+  })
+})
+
+describe("patch-adws-wait", () => {
+  const dcPlaybook = `---
+- name: Reboot After Domain Creation
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+- name: Configure default OUs
+  microsoft.ad.ou:
+    name: "{{ item }}"
+    state: present
+- name: Configure DNS forwarding
+  ansible.windows.win_powershell:
+    script: echo
+`
+
+  it("rejects arguments", () => {
+    const result = bash('bash "$LUX_HOST_HELPER" patch-adws-wait extra')
+    expect(result.status).toBe(2)
+    expect(result.stderr).toMatch(/lux-host:/)
+  })
+
+  it("inserts an ADWS wait ahead of default OU creation and leaves it unchanged on the second run", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-dc.yml"
+      cat > "$play" <<'EOF'
+${dcPlaybook}
+EOF
+      export LUX_ADWS_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-adws-wait
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-adws-wait
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const begin = file.indexOf("# BEGIN LUX-ADWS-WAIT")
+    const wait = file.indexOf("- name: Wait until Active Directory Web Services answers")
+    const ous = file.indexOf("- name: Configure default OUs")
+    const dns = file.indexOf("- name: Configure DNS forwarding")
+    expect(begin).toBeGreaterThan(-1)
+    expect(wait).toBeGreaterThan(begin)
+    expect(wait).toBeLessThan(ous)
+    expect(dns).toBeGreaterThan(ous)
+    expect(file).toContain("Get-ADDomain -ErrorAction Stop")
+    expect(file).toContain("until: lux_adws_ready.rc == 0")
+    expect(file.match(/BEGIN LUX-ADWS-WAIT/g)).toHaveLength(1)
+  })
+})
+
+describe("patch-linux-reboot-wait", () => {
+  const rebootPlaybook = `---
+- name: Reboot to set ip and hostname (Linux)
+  ansible.builtin.shell: reboot
+  when: reboot is changed
+- name: Wait for the host's control interface (SSH) to come up
+  ansible.builtin.wait_for:
+    port: 22
+    state: started
+  when: reboot is changed
+- name: Refresh inventory
+  ansible.builtin.meta: refresh_inventory
+`
+
+  it("rejects arguments", () => {
+    const result = bash('bash "$LUX_HOST_HELPER" patch-linux-reboot-wait extra')
+    expect(result.status).toBe(2)
+    expect(result.stderr).toMatch(/lux-host:/)
+  })
+
+  it("inserts one SSH drop wait ahead of the come-up wait and leaves it unchanged on the second run", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-ip-and-hostname-linux.yml"
+      cat > "$play" <<'EOF'
+${rebootPlaybook}
+EOF
+      export LUX_LINUX_REBOOT_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-linux-reboot-wait
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-linux-reboot-wait
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const begin = file.indexOf("# BEGIN LUX-LINUX-REBOOT-WAIT")
+    const drop = file.indexOf("- name: Wait for SSH to drop before treating the reboot as finished")
+    const up = file.indexOf("- name: Wait for the host's control interface (SSH) to come up")
+    const refresh = file.indexOf("- name: Refresh inventory")
+    expect(begin).toBeGreaterThan(-1)
+    expect(drop).toBeGreaterThan(begin)
+    expect(drop).toBeLessThan(up)
+    expect(refresh).toBeGreaterThan(up)
+    expect(file).toContain("state: stopped")
+    expect(file).toContain("when: reboot is changed")
+    expect(file.match(/BEGIN LUX-LINUX-REBOOT-WAIT/g)).toHaveLength(1)
+  })
+})
+
 describe("patch-chocolatey-openssh", () => {
   it("inserts an install and a one-time reboot ahead of the Chocolatey bootstrap", () => {
     const result = bash(
@@ -187,6 +351,80 @@ EOF
     expect(file).toContain("exit 10")
     expect(file.match(/BEGIN LUX-CHOCOLATEY-OPENSSH/g)).toHaveLength(1)
   })
+
+  it("removes a Chocolatey cache install and does not put it back", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/add-additional-windows-tools.yml"
+      cat > "$play" <<'EOF'
+---
+# BEGIN LUX-CHOCOLATEY-CACHE
+- name: LUX install Chocolatey from the Ludus cache before the .NET bootstrap
+  win_shell: echo cache
+# END LUX-CHOCOLATEY-CACHE
+- name: Update dotnet framework if needed for Chocolatey 2.0+
+  ansible.builtin.include_tasks: tasks/windows/update-dotnet-framework.yml
+- name: Bootstrap chocolatey by hand
+  win_chocolatey:
+    name: chocolatey
+EOF
+      export LUX_CHOCOLATEY_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-chocolatey-openssh
+      echo "---FILE---"
+      cat "$play"
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    const file = result.stdout.split("---FILE---")[1] ?? ""
+    expect(file).not.toContain("LUX-CHOCOLATEY-CACHE")
+    expect(file).not.toContain("192.0.2.2:8081/repository/raw/install.ps1")
+    expect(file).toContain("https://community.chocolatey.org/install.ps1")
+  })
+
+  it("stops the sysinternals task from checking the previous zip", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/add-additional-windows-tools.yml"
+      cat > "$play" <<'EOF'
+---
+- name: Bootstrap chocolatey by hand
+  win_chocolatey:
+    name: chocolatey
+- name: Install Additional Tools
+  win_chocolatey:
+    name: 7zip
+    ignore_checksums: "{{ true if ignore_chocolatey_checksums is defined and ignore_chocolatey_checksums else false }}"
+- name: Install sysinternals to C:\\Tools
+  win_chocolatey:
+    name: sysinternals
+    ignore_checksums: "{{ true if ignore_chocolatey_checksums is defined and ignore_chocolatey_checksums else false }}"
+EOF
+      export LUX_CHOCOLATEY_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-chocolatey-openssh
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-chocolatey-openssh
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const tools = file.indexOf("- name: Install Additional Tools")
+    const sys = file.indexOf("- name: Install sysinternals")
+    expect(tools).toBeGreaterThan(-1)
+    expect(sys).toBeGreaterThan(tools)
+    expect(file.slice(tools, sys)).toContain("ignore_chocolatey_checksums")
+    expect(file.slice(sys)).toContain("ignore_checksums: true")
+    expect(file.slice(sys)).not.toContain("ignore_chocolatey_checksums")
+    expect(file.match(/ignore_checksums: true/g)).toHaveLength(1)
+  })
+
 })
 
 describe("patch-debian11-apt", () => {

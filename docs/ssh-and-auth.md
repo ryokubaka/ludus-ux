@@ -5,28 +5,25 @@
 | Mechanism | What it’s for |
 |---|---|
 | **`PROXMOX_SSH_USER` + password or key** (`PROXMOX_SSH_KEY_PATH`, default `/app/ssh/id_rsa`) | Server-side SSH for the admin tunnel, `pvesh`, template install, `chown` under `/opt/ludus`, `chpasswd`, and API keys in `~/.bashrc`. Any account can do this. Root runs those commands directly. Any other account runs them through [lux-host](#lux-host). A normal Ludus login, with neither root nor lux-host, is not enough. **Key auth is the recommended default** on hardened Proxmox hosts. |
-| **User password stored in session (login)** | Per-user GOAD, in-browser noVNC, and **fallback** for `pvesh` when that host password or key is not set. noVNC uses this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
+| **User password stored in session (login)** | Per-user GOAD and console tickets (in-browser noVNC and SPICE / VNC `.vv`). Consoles use this password with the logged-in user's `proxmoxUsername@pam` against the Proxmox HTTP API on port 8006. |
 
 Optional: `PROXMOX_SSH_KEY_PASSPHRASE` for encrypted SSH keys.
 
-## Console / noVNC authentication
+## Console authentication
 
-noVNC uses the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
+noVNC and `.vv` downloads use the logged-in LUX user's PAM identity instead of `PROXMOX_SSH_USER`.
 
-The browser console uses two separate Proxmox mechanisms:
+Both use the Proxmox HTTP API on `https://<LUDUS_SSH_HOST>:8006`. LUX logs in as the current LUX user's Ludus `proxmoxUsername@pam` using the password captured during LUX login, then requests that VM's console ticket. Proxmox applies that user's VM permissions. A host SSH key cannot request this ticket.
 
-- **SPICE / VNC `.vv` downloads** use `pvesh` over server-side SSH. Host SSH key auth works here.
-- **In-browser noVNC** uses the Proxmox HTTP API on `https://<LUDUS_SSH_HOST>:8006`. LUX logs in as the current LUX user's Ludus `proxmoxUsername@pam` using the password captured during LUX login, then requests the VM's VNC proxy ticket.
+Green **Settings → Test host SSH & admin API** results do not prove a console will work. That test validates host SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.
 
-Green **Settings → Test host SSH & admin API** results do not prove noVNC will work. That test validates host SSH and the Ludus admin API, not the user's Proxmox PAM login on port 8006.
-
-If noVNC fails with `Proxmox login failed (HTTP 401)`:
+If a console fails with `Proxmox login failed (HTTP 401)`:
 
 - Confirm the user can log in to Proxmox as `proxmoxUsername@pam` with the same password they used for LUX.
 - Confirm Ludus has the expected `proxmoxUsername` for that user.
 - Confirm `LUDUS_SSH_HOST` points at the Proxmox node or cluster endpoint serving port 8006.
 - If an admin is using LUX impersonation, the console still uses the admin's own PAM credentials, not the impersonated user's password. That admin must have Proxmox permission to access the target VM.
-- Host SSH key auth can be fully working while noVNC fails, because Proxmox's HTTP ticket endpoint does not accept SSH keys.
+- Host SSH key auth can be fully working while a console fails, because Proxmox's HTTP ticket endpoint does not accept SSH keys.
 
 ## Admin API URL (`LUDUS_ADMIN_URL`)
 

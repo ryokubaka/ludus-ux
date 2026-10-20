@@ -23,7 +23,7 @@ import {
 import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus-router-template"
-import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
+import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 

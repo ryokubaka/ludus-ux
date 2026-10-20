@@ -26,7 +26,7 @@ import {
 import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus-router-template"
-import { ensureRangeDeployHostPatches } from "@/lib/debian11-security-archive"
+import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
 
 
 export async function POST(request: NextRequest) {

@@ -1,6 +1,5 @@
 /**
  * SSH helper for running pvesh / curl commands on the Proxmox host.
- * Used by console API routes (SPICE + VNC).
  *
  * When `password` is empty, authenticates with a private key (same resolution
  * as GOAD / admin tunnel: PROXMOX_SSH_KEY_PATH, GOAD_SSH_KEY_PATH, /app/ssh/*).

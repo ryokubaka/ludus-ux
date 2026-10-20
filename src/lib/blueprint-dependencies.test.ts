@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  applyLudusVersionPins,
+  requirementsAtWrongVersion,
   extractConfigRoleRefs,
   extractConfigTemplates,
   findMissingRequirements,
@@ -149,6 +151,40 @@ describe("extractConfigTemplates", () => {
       "kali-x64-desktop-template",
       "securityonion-2.4-x64-template",
     ])
+  })
+})
+
+describe("applyLudusVersionPins", () => {
+  const pins = [
+    { kind: "collection" as const, name: "community.general", version: "10.3.0" },
+    { kind: "collection" as const, name: "community.windows", version: ">=1.2.0" },
+  ]
+
+  it("fills an unpinned GOAD collection with the Ludus pin", () => {
+    const pinned = applyLudusVersionPins(
+      [{ kind: "collection", name: "community.general" }],
+      pins,
+    )
+    expect(pinned).toEqual([{ kind: "collection", name: "community.general", version: "10.3.0" }])
+  })
+
+  it("replaces a different version and ignores a comparison range", () => {
+    const pinned = applyLudusVersionPins(
+      [
+        { kind: "collection", name: "community.general", version: "13.5.0" },
+        { kind: "collection", name: "community.windows", version: "2.3.0" },
+      ],
+      pins,
+    )
+    expect(pinned.map((item) => item.version)).toEqual(["10.3.0", "2.3.0"])
+  })
+
+  it("selects an installed collection that is not the pinned version", () => {
+    const wrong = requirementsAtWrongVersion(
+      [{ name: "community.general", version: "13.5.0", type: "collection" }],
+      [{ kind: "collection", name: "community.general", version: "10.3.0" }],
+    )
+    expect(wrong).toEqual([{ kind: "collection", name: "community.general", version: "10.3.0" }])
   })
 })
 

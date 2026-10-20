@@ -1,13 +1,16 @@
 import "server-only"
 
 import {
+  applyLudusVersionPins,
   parseRequirementsYaml,
   type BlueprintRequirement,
 } from "@/lib/blueprint-dependencies"
 import {
   findMissingAnsibleRequirementsServer,
+  findWrongVersionAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
+import { readLudusPlatformRequirementsYaml } from "@/lib/ludus-platform-ansible-requirements"
 import { goadCollectionCanaryRel } from "@/lib/goad-ansible-env"
 import { sshExec, sshExecAccount, type SSHCreds } from "@/lib/goad-ssh"
 import { resolveGoadPath, resolveLudusInstallPath } from "@/lib/runtime-paths"
@@ -143,7 +146,21 @@ export async function ensureGoadAnsibleRequirements(
     return { ok: true }
   }
 
-  const required = withMysqlModuleCollection(parseRequirementsYaml(requirementsYaml))
+  let pins: BlueprintRequirement[] = []
+  try {
+    pins = parseRequirementsYaml(await readLudusPlatformRequirementsYaml())
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    onLog(`[!] Could not read Ludus collection pins: ${msg}`)
+  }
+  const parsed = withMysqlModuleCollection(parseRequirementsYaml(requirementsYaml))
+  const required = applyLudusVersionPins(parsed, pins)
+  for (const req of required) {
+    const original = parsed.find((item) => item.kind === req.kind && item.name === req.name)
+    if (req.version && req.version !== original?.version) {
+      onLog(`[+] Using Ludus pin ${req.name}@${req.version}`)
+    }
+  }
   if (required.length === 0) {
     return { ok: true }
   }
@@ -164,6 +181,18 @@ export async function ensureGoadAnsibleRequirements(
     if (!installResult.ok) return installResult
   } else {
     onLog("[+] GOAD Ansible dependencies listed in Ludus")
+  }
+
+  let wrongVersion: BlueprintRequirement[] = []
+  try {
+    wrongVersion = await findWrongVersionAnsibleRequirementsServer(key, required)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: `Ludus GET /ansible failed: ${msg}` }
+  }
+  if (wrongVersion.length > 0) {
+    const pinned = await installAndLog(key, wrongVersion, onLog, true, runAsUser)
+    if (!pinned.ok) return pinned
   }
 
   let broken: BlueprintRequirement[] = []

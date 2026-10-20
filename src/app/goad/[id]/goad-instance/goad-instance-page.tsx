@@ -84,14 +84,26 @@ import type { GoadPostProcessingStep } from "@/components/goad/goad-instance-tab
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
-function GoadInstancePage() {
+function routeInstanceIdFromParams(value: unknown): string {
+  const raw = Array.isArray(value) ? value[0] : value
+  if (typeof raw !== "string" || !raw) return ""
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return raw
+  }
+}
+
+function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
   const params = useParams()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const shell = useShellSession()
   const queryClient = useQueryClient()
-  const instanceId = decodeURIComponent(params.id as string)
+  // Prefer the id from the request URL. useParams can still be the previous segment during a client transition.
+  const instanceId =
+    routeInstanceId?.trim() || routeInstanceIdFromParams(params.id)
 
   const [instance, setInstance] = useState<GoadInstance | null>(null)
   const [loading, setLoading] = useState(true)
@@ -766,6 +778,24 @@ function GoadInstancePage() {
           typeof window !== "undefined"
             ? new URLSearchParams(window.location.search).get("rangeId")?.trim() ?? ""
             : ""
+        if (!found) {
+          const rangeId = selectedRangeId?.trim() || rangeFromUrl
+          if (rangeId) {
+            const byRes = await fetch(
+              `/api/goad/by-range?rangeId=${encodeURIComponent(rangeId)}`,
+              { credentials: "include", headers: impersonationHeaders() },
+            )
+            if (byRes.ok) {
+              const by = (await byRes.json()) as { instanceId?: string | null }
+              const realId = typeof by.instanceId === "string" ? by.instanceId.trim() : ""
+              if (realId && realId !== instanceId) {
+                const q = typeof window !== "undefined" ? window.location.search : ""
+                router.replace(`/goad/${encodeURIComponent(realId)}${q}`)
+                return
+              }
+            }
+          }
+        }
         if (found && !found.ludusRangeId && rangeFromUrl) {
           setInstance({ ...found, ludusRangeId: rangeFromUrl })
         } else {
@@ -778,7 +808,7 @@ function GoadInstancePage() {
     }
     if (isInitial) setLoading(false)
     else if (!silent) setRefreshing(false)
-  }, [instanceId, impersonationHeaders])
+  }, [instanceId, impersonationHeaders, selectedRangeId, router])
 
   // set-range often finishes after the first instance fetch. Keep asking until
   // the dedicated range id is on the instance so range logs can stream live.
@@ -1295,7 +1325,7 @@ function GoadInstancePage() {
   )
 }
 
-export function GoadInstancePageClient() {
+export function GoadInstancePageClient({ routeInstanceId }: { routeInstanceId?: string }) {
   return (
     <Suspense
       fallback={
@@ -1304,7 +1334,7 @@ export function GoadInstancePageClient() {
         </div>
       }
     >
-      <GoadInstancePage />
+      <GoadInstancePage routeInstanceId={routeInstanceId} />
     </Suspense>
   )
 }

@@ -58,7 +58,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const [activeRangeId, setActiveRangeId] = useState<string | null>(null)
   const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null)
 
-  const esRef = useRef<EventSource | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const isStreamingRef = useRef(false)
   const targetRangeRef = useRef<string | undefined>(undefined)
   const intentionalStopRef = useRef(false)
@@ -78,10 +78,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     intentionalStopRef.current = true
     clearReconnectTimer()
     reconnectAttemptRef.current = 0
-    if (esRef.current) {
-      esRef.current.close()
-      esRef.current = null
-    }
+    abortRef.current?.abort()
+    abortRef.current = null
     isStreamingRef.current = false
     setIsStreaming(false)
   }, [clearReconnectTimer])
@@ -108,15 +106,9 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const startStreaming = useCallback((rangeId?: string, opts?: StartRangeStreamOptions) => {
-    // Close any previous connection first (strip handlers so close() cannot schedule reconnect)
     clearReconnectTimer()
-    if (esRef.current) {
-      const prev = esRef.current
-      esRef.current = null
-      prev.onerror = null
-      prev.onmessage = null
-      prev.close()
-    }
+    abortRef.current?.abort()
+    abortRef.current = null
 
     const isReconnect = Boolean(opts?.reconnect)
     if (!isReconnect) {
@@ -131,7 +123,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         : isReconnect && streamStartedAtRef.current != null
           ? streamStartedAtRef.current
           : Date.now()
-    /** Per-connection id — targetRangeRef updates before old EventSource onerror may run. */
+    /** Per-connection id — targetRangeRef updates before an older read can reconnect. */
     const streamRangeId = rangeId?.trim() ?? ""
 
     targetRangeRef.current = rangeId
@@ -161,24 +153,16 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    const es = new EventSource(url.toString())
-    esRef.current = es
-
-    es.onmessage = (event) => {
-      const raw: string = event.data
-
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    const accept = (raw: string) => {
       if (raw.startsWith("[STATE] ")) {
-        // Intermediate state update — update UI badge without stopping the stream
-        const s = raw.slice(8).trim()
-        setRangeState(s)
+        setRangeState(raw.slice(8).trim())
         reconnectAttemptRef.current = 0
       } else if (raw.startsWith("[DONE] ")) {
-        // Server signals deploy finished (SUCCESS / ERROR / ABORTED / etc.)
-        const s = raw.slice(7).trim()
-        setRangeState(s)
+        setRangeState(raw.slice(7).trim())
         stopStreaming()
       } else if (raw.startsWith("[ERROR] ")) {
-        // Server-side error — surface it as a log line and stop
         setLines((prev) => appendStreamLines(prev, raw))
         stopStreaming()
       } else if (raw.startsWith("[LUDUS] ") || raw.startsWith("[GOAD] ")) {
@@ -187,46 +171,61 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         }
         reconnectAttemptRef.current = 0
       }
-      // Unknown prefix: silently ignore to stay forward-compatible
     }
-
-    es.onerror = () => {
-      if (streamRangeId) void refreshRangeStateFromServer(streamRangeId)
-
-      if (esRef.current === es) {
-        es.close()
-        esRef.current = null
+    // EventSource reports a closed stream as a failure and never shows the
+    // lines that already arrived. fetch reads those bytes, then reconnects
+    // only when the body never started.
+    void (async () => {
+      let sawLine = false
+      try {
+        const res = await fetch(url.toString(), { signal: ctrl.signal, credentials: "same-origin" })
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+        const reader = res.body.getReader()
+        const dec = new TextDecoder()
+        let buf = ""
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          const parts = buf.split("\n")
+          buf = parts.pop() ?? ""
+          for (const line of parts) {
+            if (!line.startsWith("data: ")) continue
+            sawLine = true
+            accept(line.slice(6))
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name === "AbortError" || intentionalStopRef.current) return
       }
-
-      // User/stopStreaming or terminal [DONE]/[ERROR] — do not reconnect.
       if (intentionalStopRef.current || !isStreamingRef.current) {
         isStreamingRef.current = false
         setIsStreaming(false)
         return
       }
-
+      if (streamRangeId) void refreshRangeStateFromServer(streamRangeId)
+      if (abortRef.current === ctrl) abortRef.current = null
       const attempt = reconnectAttemptRef.current + 1
       if (attempt > RECONNECT_MAX_ATTEMPTS || !streamRangeId) {
         isStreamingRef.current = false
         setIsStreaming(false)
+        if (!sawLine) {
+          setLines((prev) =>
+            appendStreamLines(prev, "[ERROR] Deploy log stream disconnected and could not auto-reconnect."),
+          )
+        }
+        return
+      }
+      reconnectAttemptRef.current = attempt
+      const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.5, attempt - 1), RECONNECT_MAX_MS)
+      if (!sawLine) {
         setLines((prev) =>
           appendStreamLines(
             prev,
-            "[ERROR] Deploy log stream disconnected and could not auto-reconnect.",
+            `[LUDUS] Log stream blip — reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt}/${RECONNECT_MAX_ATTEMPTS})…`,
           ),
         )
-        return
       }
-
-      reconnectAttemptRef.current = attempt
-      const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.5, attempt - 1), RECONNECT_MAX_MS)
-      setLines((prev) =>
-        appendStreamLines(
-          prev,
-          `[LUDUS] Log stream blip — reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempt}/${RECONNECT_MAX_ATTEMPTS})…`,
-        ),
-      )
-      // Keep isStreaming true while we wait to reconnect
       clearReconnectTimer()
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null
@@ -243,7 +242,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
           deployElapsedAnchorMs: streamStartedAtRef.current ?? undefined,
         })
       }, delay)
-    }
+    })()
   }, [stopStreaming, refreshRangeStateFromServer, clearReconnectTimer])
 
   startStreamingRef.current = startStreaming

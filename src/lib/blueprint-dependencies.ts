@@ -27,6 +27,15 @@ export function ansibleItemName(item: AnsibleItem): string {
   return (item.name || item.Name || "").trim()
 }
 
+export function ansibleItemVersion(item: AnsibleItem): string {
+  return (item.version || item.Version || "").trim()
+}
+
+/** Galaxy comparison ranges are not a Ludus pin. 10.3.0 and v2.5.2 are. */
+function isExactVersion(version: string): boolean {
+  return /^v?\d+\.\d+\.\d+(?:[-.][A-Za-z0-9]+)?$/.test(version)
+}
+
 export function ansibleItemType(item: AnsibleItem): BlueprintDepKind {
   const t = (item.type || item.Type || "role").toLowerCase()
   return t === "collection" ? "collection" : "role"
@@ -213,6 +222,50 @@ export function mergeBlueprintRequirements(...lists: BlueprintRequirement[][]): 
     if (ko !== 0) return ko
     return a.name.localeCompare(b.name)
   })
+}
+
+/**
+ * Ludus requirements.yml is the version range deploys were built against.
+ * An unpinned GOAD line, or a different version, is replaced with that pin.
+ */
+export function applyLudusVersionPins(
+  required: BlueprintRequirement[],
+  pins: BlueprintRequirement[],
+): BlueprintRequirement[] {
+  const pinByKey = new Map<string, string>()
+  for (const pin of pins) {
+    if (pin.version && isExactVersion(pin.version)) pinByKey.set(reqKey(pin.kind, pin.name), pin.version)
+  }
+  return required.map((req) => {
+    const pinned = pinByKey.get(reqKey(req.kind, req.name))
+    if (!pinned || req.version === pinned) return req
+    return { ...req, version: pinned }
+  })
+}
+
+/** Installed name matches, but not the pinned version. Those get a force reinstall. */
+export function requirementsAtWrongVersion(
+  installed: AnsibleItem[],
+  required: BlueprintRequirement[],
+): BlueprintRequirement[] {
+  const installedVersion = new Map<string, string>()
+  for (const item of installed) {
+    const name = ansibleItemName(item)
+    const version = ansibleItemVersion(item)
+    if (!name || !version) continue
+    installedVersion.set(reqKey(ansibleItemType(item), name), version)
+  }
+  const wrong: BlueprintRequirement[] = []
+  const seen = new Set<string>()
+  for (const req of required) {
+    if (!req.version || !isExactVersion(req.version)) continue
+    const key = reqKey(req.kind, req.name)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const have = installedVersion.get(key)
+    if (have && have !== req.version) wrong.push(req)
+  }
+  return wrong
 }
 
 export function findMissingRequirements(

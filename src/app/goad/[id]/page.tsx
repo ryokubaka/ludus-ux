@@ -5,6 +5,11 @@ const GoadInstancePageClient = dynamicPageClient(
   "GoadInstancePageClient",
 )
 
-export default function GoadInstancePage() {
-  return <GoadInstancePageClient />
+export default async function GoadInstancePage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+  return <GoadInstancePageClient routeInstanceId={id} />
 }

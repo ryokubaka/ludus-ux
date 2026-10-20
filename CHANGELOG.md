@@ -15,11 +15,11 @@ Each bullet uses a single tag:
 
 ---
 
-## Unreleased
+## [1.4.4] - 2026-10-20
 
 **LUX**
 
-- [Add] **Pull request summary** — Opening a pull request sets the title to `vX.Y.Z - Feature, feature, and feature` and the description to a Summary list from that version's changelog section. Later pushes refresh it while the description still contains the `lux-pr-summary` comment. Delete that comment to keep a hand-edited description.
+- [Fix] **Ansible collection pin** — GOAD lists `community.general` with no version. A force repair installed the newest Galaxy release, which removed `proxmox_kvm` and does not support the Ansible that range deploys use. LUX now installs the version pinned in Ludus `requirements.yml` (`community.general` 10.3.0) and reinstalls when the copy on disk is a different version.
 
 ## [1.4.3] - 2026-10-19
 
@@ -32,6 +32,7 @@ Each bullet uses a single tag:
 - [Fix] **Domain controller OUs** — After a new forest is promoted, the deploy waits until Active Directory Web Services answers `Get-ADDomain` before creating the Workstations and Servers OUs. WinRM comes back first, and the stock task was failing while that service was still starting.
 - [Fix] **Sysinternals checksum** — The additional-tools install no longer checks the Sysinternals zip against the Chocolatey package checksum. That URL is not versioned, so the package still has the previous zip's hash after Microsoft replaces the file.
 - [Fix] **Host DNS env** — Compose passes `LUX_USE_LUDUS_HOST_DNS` into the app. A `.env` value was ignored because the container never received it. A value already saved in Settings still wins.
+- [Add] **Pull request summary** — Opening a pull request sets the title to `vX.Y.Z - Feature, feature, and feature` and the description to a Summary list from that version's changelog section. Later pushes refresh it while the description still contains the `lux-pr-summary` comment. Delete that comment to keep a hand-edited description.
 
 ## [1.4.2] - 2026-10-15
 

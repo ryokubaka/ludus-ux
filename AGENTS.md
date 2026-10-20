@@ -96,14 +96,9 @@ Deploy logs are an SSE stream from `src/app/api/logs/stream/route.ts` into `src/
 
 ## Changelog and pull requests
 
-User-facing notes go under `## Unreleased` in `CHANGELOG.md`, with one tag: `[Add]`, `[Fix]`, `[Improve]`, `[Perf]`, `[Security]`, `[Docs]`, `[Remove]`, or `[Breaking]`. Do not add a `## [X.Y.Z]` heading unless the user asked to cut a release. `.github/workflows/release.yml` publishes the newest versioned section when a PR merges to `main`.
+User-facing notes go under `## Unreleased` in `CHANGELOG.md`, with one tag: `[Add]`, `[Fix]`, `[Improve]`, `[Perf]`, `[Security]`, `[Docs]`, `[Remove]`, or `[Breaking]`. Do not add a `## [X.Y.Z]` heading unless the user asked to cut a release. `.github/workflows/release.yml` publishes the newest versioned section when a pull request merges to `main`.
 
-Pull request bodies use only these sections, in order:
-
-1. **Intent** — one short paragraph. No decision log.
-2. **What Changed** — a few bullets of behavior.
-3. **Risk Assessment** — one line.
-4. **Pipeline** — leave the no-mistakes attestation comment in place.
+Pull request titles look like `vX.Y.Z - Feature, feature, and feature`. The body is `## Summary` and one bullet per changelog item. `.github/workflows/pr-summary.yml` writes that from `CHANGELOG.md`. Delete the `lux-pr-summary` comment to keep a hand-edited description.
 
 No **Testing** section, screenshots, or command logs.
 

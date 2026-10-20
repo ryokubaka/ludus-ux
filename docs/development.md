@@ -25,3 +25,9 @@ npm run test:perf
 Config file: [`config/playwright.config.ts`](../config/playwright.config.ts).
 
 Default creds: `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser`. **Unauthenticated** specs (`e2e/health.spec.ts`, `auth-gate`, `login-ui`, `goad-task-acl`) only need the app reachable. **Authenticated** specs (`navigation`, `logout`, `impersonation`, `goad-instance-tabs`, `goad-instance-deploy`) need valid SSH login and at least one GOAD instance when testing instance tabs; impersonation may need `E2E_LUDUS_API_KEY`. Shared helpers: `e2e/helpers/auth.ts`, `e2e/helpers/goad.ts`. WSL notes: [`playwright.yaml`](playwright.yaml).
+
+## CI
+
+Opening a pull request sets the title to `vX.Y.Z - Feature, feature, and feature` and the description to a **Summary** list taken from that version's section in `CHANGELOG.md`. A branch named `vX.Y.Z` uses `## [X.Y.Z]`. Otherwise the job uses `## Unreleased`, then the newest versioned section. Later pushes refresh the description while it contains `<!-- lux-pr-summary -->`. Delete that comment to keep a hand-edited title and description.
+
+Merging to `main` tags `vX.Y.Z` and publishes that changelog section (`.github/workflows/release.yml`).

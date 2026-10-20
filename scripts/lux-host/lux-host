@@ -52,6 +52,9 @@
 #   patch-debian11-apt               (no args; rewrites one Ludus playbook task)
 #   patch-chocolatey-openssh         (no args; rewrites the Windows Chocolatey bootstrap)
 #   patch-adguard-host-dns           (no args; points AdGuard upstream at 192.0.2.254)
+#   patch-linux-reboot-wait         (no args; wait for SSH to drop after a Linux reboot)
+#   patch-adws-wait                  (no args; wait for ADWS before default OU creation)
+#   patch-router-single-clone        (no args; do not clone a second router; one VMID)
 #   release-refs <repo>              (vX.Y.Z heads and tags on this clone's remote)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
@@ -438,6 +441,262 @@ patch_debian11_security_archive() {
   printf 'status=ok\nchanged=yes\n'
 }
 
+# Ludus starts `reboot` in the background, then waits only for port 22 to accept
+# connections. The static address is already up, so that wait returns while
+# sshd is still the pre-reboot process. The next task then fails creating
+# ~/.ansible/tmp. Wait for the port to close first. LUX_LINUX_REBOOT_PLAYBOOK
+# is for tests; sudo env_reset drops it.
+patch_linux_reboot_wait() {
+  local playbook indent line wait_re
+  if [[ -n "${LUX_LINUX_REBOOT_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_LINUX_REBOOT_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-ip-and-hostname-linux.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/proxmox/configure-ip-and-hostname-linux.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  # Dots stand in for the apostrophe and parentheses. Awk treats \( as a plain
+  # parenthesis and then fails to match the task line.
+  wait_re='^[[:space:]]*- name:.*Wait for the host.s control interface .SSH. to come up[[:space:]]*$'
+  local stripped task out
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-LINUX-REBOOT-WAIT$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-LINUX-REBOOT-WAIT$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$wait_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  {
+    printf '%s# BEGIN LUX-LINUX-REBOOT-WAIT\n' "$indent"
+    printf '%s- name: Wait for SSH to drop before treating the reboot as finished\n' "$indent"
+    printf '%s  ansible.builtin.wait_for:\n' "$indent"
+    printf '%s    host: "{{ static_ip }}"\n' "$indent"
+    printf '%s    port: 22\n' "$indent"
+    printf '%s    delay: 1\n' "$indent"
+    printf '%s    state: stopped\n' "$indent"
+    printf '%s    timeout: 180\n' "$indent"
+    printf '%s  delegate_to: localhost\n' "$indent"
+    printf '%s  become: false\n' "$indent"
+    printf '%s  when: reboot is changed\n' "$indent"
+    printf '%s# END LUX-LINUX-REBOOT-WAIT\n' "$indent"
+  } > "$task"
+  if ! awk -v taskfile="$task" -v re="$wait_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
+# After a new forest is promoted, WinRM accepts connections before Active
+# Directory Web Services does. The next task creates OUs and fails with
+# "Unable to find a default server with Active Directory Web Services running."
+# Poll Get-ADDomain, the same lookup that task uses. LUX_ADWS_PLAYBOOK is for
+# tests; sudo env_reset drops it.
+patch_adws_wait() {
+  local playbook indent line wait_re
+  if [[ -n "${LUX_ADWS_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_ADWS_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-dc.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/windows/configure-dc.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  wait_re='^[[:space:]]*- name:[[:space:]]*"?Configure default OUs"?[[:space:]]*$'
+  local stripped task out
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-ADWS-WAIT$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-ADWS-WAIT$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$wait_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  {
+    printf '%s# BEGIN LUX-ADWS-WAIT\n' "$indent"
+    printf '%s- name: Wait until Active Directory Web Services answers\n' "$indent"
+    printf '%s  ansible.windows.win_shell: |\n' "$indent"
+    printf '%s    $svc = Get-Service -Name ADWS -ErrorAction SilentlyContinue\n' "$indent"
+    printf '%s    if ($null -ne $svc -and $svc.Status -ne '"'"'Running'"'"') { Start-Service -Name ADWS }\n' "$indent"
+    printf '%s    Import-Module ActiveDirectory\n' "$indent"
+    printf '%s    Get-ADDomain -ErrorAction Stop | Out-Null\n' "$indent"
+    printf '%s  register: lux_adws_ready\n' "$indent"
+    printf '%s  changed_when: false\n' "$indent"
+    printf '%s  retries: 40\n' "$indent"
+    printf '%s  delay: 15\n' "$indent"
+    printf '%s  until: lux_adws_ready.rc == 0\n' "$indent"
+    printf '%s# END LUX-ADWS-WAIT\n' "$indent"
+  } > "$task"
+  if ! awk -v taskfile="$task" -v re="$wait_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
+# Proxmox allows two VMs with the same name. A later network deploy clones
+# another router, then the VLAN task's jq prints every VMID ("144\n211") and
+# proxmox_nic rejects it. Skip the clone when one already exists, and keep a
+# single VMID in the lookups. LUX_ROUTER_CLONE_ROOT is for tests.
+patch_router_single_clone() {
+  local root changed=0
+  if [[ -n "${LUX_ROUTER_CLONE_ROOT:-}" ]]; then
+    root=$LUX_ROUTER_CLONE_ROOT
+    is_abs_path "$root" || die "bad playbook path"
+    [[ "$root" == /tmp/* ]] || die "bad playbook path"
+  else
+    root=/opt/ludus/ansible/range-management
+  fi
+  if [[ ! -d "$root" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  local vmid_old vmid_new node_old node_new
+  vmid_old='.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}").vmid'
+  vmid_new='[.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}") | .vmid] | first // empty'
+  node_old='.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}").node'
+  node_new='[.[] | .[] | select(.name=="{{ router.vm_name | default(default_router_vm_name) }}") | .node] | first // empty'
+  local file body file_changed
+  while IFS= read -r file; do
+    [[ -f "$file" ]] || continue
+    body=$(cat "$file")
+    file_changed=0
+    if [[ "$body" == *"$vmid_old"* ]]; then
+      body=${body//"$vmid_old"/"$vmid_new"}
+      file_changed=1
+    fi
+    if [[ "$body" == *"$node_old"* ]]; then
+      body=${body//"$node_old"/"$node_new"}
+      file_changed=1
+    fi
+    if [[ "$file_changed" -eq 1 ]]; then
+      printf '%s' "$body" > "$file"
+      changed=1
+    fi
+  done < <(find "$root" -type f -name '*.yml' ! -type l)
+  local playbook="$root/tasks/proxmox/deploy-vm.yml"
+  if [[ -f "$playbook" ]] && ! grep -q 'BEGIN LUX-ROUTER-CLONE-ONCE' "$playbook"; then
+    assert_not_symlink "$playbook"
+    local line indent stripped task out
+    stripped=$(mktemp)
+    task=$(mktemp)
+    out=$(mktemp)
+    # shellcheck disable=SC2064
+    trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+    cp "$playbook" "$stripped"
+    line=$(grep -E '^[[:space:]]*- name:[[:space:]]*"?Create a VM from a template"?[[:space:]]*$' "$stripped" | head -n 1 || true)
+    if [[ -n "$line" ]]; then
+      indent=${line%%-*}
+      {
+        printf '%s# BEGIN LUX-ROUTER-CLONE-ONCE\n' "$indent"
+        printf '%s- name: LUX find an existing VM with this name\n' "$indent"
+        printf '%s  ansible.builtin.shell: |\n' "$indent"
+        printf '%s    curl -s -k -H "Authorization: PVEAPIToken={{ hostvars['"'"'localhost'"'"']['"'"'proxmox_full_token_id'"'"'] }}={{ hostvars['"'"'localhost'"'"']['"'"'proxmox_token_secret'"'"'] }}" "https://127.0.0.1:8006/api2/json/cluster/resources?type=vm" | jq -r '"'"'[.[] | .[] | select(.name=="{{ vm_name }}") | .vmid] | first // empty'"'"'\n' "$indent"
+        printf '%s  register: lux_existing_vmid\n' "$indent"
+        printf '%s  changed_when: false\n' "$indent"
+        printf '%s  delegate_to: localhost\n' "$indent"
+        printf '%s# END LUX-ROUTER-CLONE-ONCE\n' "$indent"
+      } > "$task"
+      awk -v taskfile="$task" -v taskindent="$indent" '
+        BEGIN { inserted=0; armed=0; after=0 }
+        !inserted && $0 ~ /^[[:space:]]*- name:[[:space:]]*"?Create a VM from a template"?[[:space:]]*$/ {
+          while ((getline line < taskfile) > 0) print line
+          close(taskfile)
+          inserted=1
+          armed=1
+        }
+        armed && $0 ~ /^[[:space:]]*register:[[:space:]]*clone_vm[[:space:]]*$/ {
+          match($0, /^[[:space:]]*/)
+          pad=substr($0, 1, RLENGTH)
+          print pad "when: lux_existing_vmid.stdout | default(\"\") | trim | length == 0"
+          print
+          print taskindent "# BEGIN LUX-ROUTER-CLONE-ID"
+          print taskindent "- name: LUX keep the existing VM instead of cloning another"
+          print taskindent "  ansible.builtin.set_fact:"
+          print taskindent "    clone_vm:"
+          print taskindent "      changed: false"
+          print taskindent "      failed: false"
+          print taskindent "      vmid: \"{{ lux_existing_vmid.stdout | trim | int }}\""
+          print taskindent "  when: lux_existing_vmid.stdout | default(\"\") | trim | length > 0"
+          print taskindent "# END LUX-ROUTER-CLONE-ID"
+          armed=0
+          after=1
+          next
+        }
+        { print }
+        END { if (!inserted || !after) exit 2 }
+      ' "$stripped" > "$out" && cat "$out" > "$playbook" && changed=1
+    fi
+  fi
+  if [[ "$changed" -eq 1 ]]; then
+    printf 'status=ok\nchanged=yes\n'
+  else
+    printf 'status=ok\nchanged=no\n'
+  fi
+}
+
 # OpenSSH on Windows keeps the PATH from when sshd started. win_chocolatey
 # installs Chocolatey, then looks up choco.exe in that stale PATH and fails.
 # Install first, record the machine PATH, and reboot once so the next SSH
@@ -513,6 +772,8 @@ patch_chocolatey_openssh() {
   awk '
     /^[[:space:]]*# BEGIN LUX-CHOCOLATEY-OPENSSH$/ { skip=1; next }
     /^[[:space:]]*# END LUX-CHOCOLATEY-OPENSSH$/ { skip=0; next }
+    /^[[:space:]]*# BEGIN LUX-CHOCOLATEY-CACHE$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-CHOCOLATEY-CACHE$/ { skip=0; next }
     skip { next }
     { print }
   ' "$playbook" > "$stripped"
@@ -535,6 +796,25 @@ patch_chocolatey_openssh() {
     printf 'status=skipped\nreason=task\n'
     return 0
   fi
+  # SysinternalsSuite.zip has no version in the URL. The package checksum is
+  # the zip from when the package was built, not the file Microsoft serves now.
+  local sysout
+  sysout=$(mktemp)
+  awk '
+    $0 ~ /^[[:space:]]*- name:[[:space:]]*"?Install sysinternals/ { hit=1 }
+    hit && $0 ~ /^[[:space:]]*ignore_checksums:/ {
+      if ($0 ~ /ignore_checksums:[[:space:]]*true[[:space:]]*$/) { hit=0; print; next }
+      match($0, /^[[:space:]]*/)
+      pad = substr($0, 1, RLENGTH)
+      print pad "# SysinternalsSuite.zip is not versioned, so the package checksum is the previous zip."
+      print pad "ignore_checksums: true"
+      hit=0
+      next
+    }
+    { print }
+  ' "$out" > "$sysout"
+  cat "$sysout" > "$out"
+  rm -f "$sysout"
   if cmp -s "$out" "$playbook"; then
     printf 'status=ok\nchanged=no\n'
     return 0
@@ -1318,6 +1598,18 @@ PY
   patch-adguard-host-dns)
     [[ $# -eq 0 ]] || die "patch-adguard-host-dns"
     patch_adguard_host_dns
+    ;;
+  patch-linux-reboot-wait)
+    [[ $# -eq 0 ]] || die "patch-linux-reboot-wait"
+    patch_linux_reboot_wait
+    ;;
+  patch-adws-wait)
+    [[ $# -eq 0 ]] || die "patch-adws-wait"
+    patch_adws_wait
+    ;;
+  patch-router-single-clone)
+    [[ $# -eq 0 ]] || die "patch-router-single-clone"
+    patch_router_single_clone
     ;;
   release-refs)
     [[ $# -eq 1 ]] || die "repo"

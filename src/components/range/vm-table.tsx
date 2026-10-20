@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Monitor, Power, PowerOff, Circle, Download, MonitorPlay, Loader2, ExternalLink, Trash2 } from "lucide-react"
+import { vmIdentityKey } from "@/lib/dashboard-vm-merge"
 import type { VMObject } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
@@ -481,7 +482,7 @@ export function VMTable({
                 const proxmoxId = vm.proxmoxID ?? vm.ID
                 return (
                   <VMTableRow
-                    key={vm.ID || name}
+                    key={vmIdentityKey(vm)}
                     vm={vm}
                     name={name}
                     running={isRunning(vm)}

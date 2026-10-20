@@ -1,8 +1,8 @@
 /**
  * Direct HTTP calls to the Proxmox VE API.
  *
- * Used for in-browser VNC — authenticates with a PAM password.
- * SSH key auth is not used here; SPICE / pvesh paths use SSH separately.
+ * Used for console tickets (in-browser noVNC and .vv downloads).
+ * Authenticates as the signed-in user's PAM account. SSH keys are not used here.
  *
  * TLS: Node verifies certs by default. Set LUDUS_TLS_INSECURE=true (lab only) to allow
  * Proxmox self-signed certificates, or use NODE_EXTRA_CA_CERTS with your CA bundle.
@@ -93,9 +93,17 @@ export interface VncProxyInfo {
 }
 
 export interface SpiceProxyInfo {
+  type?: string
   password?: string
-  host?: string
   proxy?: string
+  host?: string
+  "tls-port"?: number
+  port?: number
+  ca?: string
+  "host-subject"?: string
+  "release-cursor"?: string
+  "secure-attention"?: string
+  "toggle-fullscreen"?: string
 }
 
 export async function proxmoxCreateSpiceProxy(

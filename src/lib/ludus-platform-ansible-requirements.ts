@@ -6,6 +6,7 @@ import {
 } from "@/lib/blueprint-dependencies"
 import {
   findMissingAnsibleRequirementsServer,
+  findWrongVersionAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
 import { sshExec, type SSHCreds } from "@/lib/goad-ssh"
@@ -26,10 +27,11 @@ async function installAndLog(
   items: BlueprintRequirement[],
   onLog: (line: string) => void,
   runAsUser?: string,
+  force = false,
 ): Promise<{ ok: boolean; error?: string }> {
   if (items.length === 0) return { ok: true }
 
-  onLog(`[+] Ludus: install ${items.length} platform Ansible item(s)…`)
+  onLog(`[+] Ludus: ${force ? "force reinstall" : "install"} ${items.length} platform Ansible item(s)…`)
   for (const req of items) {
     const name = `${req.kind} ${req.name}${req.version ? `@${req.version}` : ""}`
     onLog(`[+] Ludus: install ${name}`)
@@ -37,6 +39,7 @@ async function installAndLog(
 
   const result = await installMissingAnsibleRequirementsServer(apiKey, items, {
     linuxUser: runAsUser,
+    force,
   })
   for (const name of result.installed) {
     onLog(`[+] Installed (or already present): ${name}`)
@@ -107,6 +110,19 @@ export async function ensureLudusPlatformAnsibleRequirements(
     if (!installResult.ok) return installResult
   } else {
     onLog("[+] Ludus platform Ansible dependencies listed in Ludus")
+  }
+
+  let wrongVersion: BlueprintRequirement[] = []
+  try {
+    wrongVersion = await findWrongVersionAnsibleRequirementsServer(key, required)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, error: `Ludus GET /ansible failed: ${msg}` }
+  }
+  if (wrongVersion.length > 0) {
+    onLog(`[+] Reinstalling ${wrongVersion.length} collection(s) at the Ludus pin…`)
+    const pinned = await installAndLog(key, wrongVersion, onLog, runAsUser, true)
+    if (!pinned.ok) return pinned
   }
 
   return { ok: true }

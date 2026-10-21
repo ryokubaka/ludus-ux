@@ -6,6 +6,22 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/** Save text without navigating the current page. A detached anchor click after
+ * an await is no longer a user gesture, so the browser follows the blob URL. */
+export function downloadTextFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: "application/octet-stream" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.rel = "noopener"
+  a.style.display = "none"
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500)
+}
+
 export function formatDate(date: string | Date | undefined): string {
   if (!date) return "Never";
   try {

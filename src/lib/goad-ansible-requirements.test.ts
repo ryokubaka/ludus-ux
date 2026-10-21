@@ -12,12 +12,14 @@ vi.mock("@/lib/ansible-home-repair", () => ({
 
 vi.mock("@/lib/ansible-requirements-server", () => ({
   findMissingAnsibleRequirementsServer: vi.fn(),
+  findWrongVersionAnsibleRequirementsServer: vi.fn(),
   installMissingAnsibleRequirementsServer: vi.fn(),
 }))
 
 import { sshExec, sshExecAccount } from "@/lib/goad-ssh"
 import {
   findMissingAnsibleRequirementsServer,
+  findWrongVersionAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
 import { ensureGoadAnsibleRequirements } from "./goad-ansible-requirements"
@@ -37,6 +39,8 @@ roles:
 describe("ensureGoadAnsibleRequirements", () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    vi.mocked(findWrongVersionAnsibleRequirementsServer).mockResolvedValue([])
+    vi.mocked(sshExec).mockResolvedValue({ stdout: "", stderr: "", code: 0 })
   })
 
   it("installs missing deps via Ludus API before GOAD runs", async () => {
@@ -70,6 +74,7 @@ describe("ensureGoadAnsibleRequirements", () => {
   it("force reinstalls collections that fail on-disk verification", async () => {
     vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
     vi.mocked(sshExec)
+      .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "FAIL:ansible.windows\n", stderr: "ansible-galaxy: denied", code: 0 })
@@ -96,7 +101,7 @@ describe("ensureGoadAnsibleRequirements", () => {
       [expect.objectContaining({ name: "ansible.windows" })],
       { force: true, linuxUser: "labuser" },
     )
-    expect(vi.mocked(sshExec).mock.calls[2]?.[0]).toEqual([
+    expect(vi.mocked(sshExec).mock.calls[3]?.[0]).toEqual([
       "ansible-collection-repair",
       "labuser",
       "ansible",
@@ -108,6 +113,7 @@ describe("ensureGoadAnsibleRequirements", () => {
   it("reads requirements via root SSH and verifies collections as impersonated user", async () => {
     vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
     vi.mocked(sshExec)
+      .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:ansible.windows\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([])
@@ -123,6 +129,7 @@ describe("ensureGoadAnsibleRequirements", () => {
     expect(String(vi.mocked(sshExecAccount).mock.calls[0]?.[0])).toContain("requirements")
     expect(String(vi.mocked(sshExecAccount).mock.calls[0]?.[0])).not.toContain("sudo -H -u")
     expect(vi.mocked(sshExec).mock.calls.map((call) => call[0])).toEqual([
+      ["read-ludus-requirements"],
       [
         "ansible-collection-file",
         IMPERSONATED_SSH_USER,
@@ -149,6 +156,7 @@ roles:
 `
     vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: requirements, stderr: "", code: 0 })
     vi.mocked(sshExec)
+      .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "FAIL:community.mysql\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:ansible.mysql\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:community.mysql\n", stderr: "", code: 0 })
@@ -178,14 +186,14 @@ roles:
       [expect.objectContaining({ kind: "collection", name: "community.mysql" })],
       { force: false, linuxUser: IMPERSONATED_SSH_USER },
     )
-    expect(vi.mocked(sshExec).mock.calls[2]?.[0]).toEqual([
+    expect(vi.mocked(sshExec).mock.calls[3]?.[0]).toEqual([
       "ansible-collection-repair",
       IMPERSONATED_SSH_USER,
       "community",
       "mysql",
       "MANIFEST.json",
     ])
-    expect(vi.mocked(sshExec).mock.calls[0]?.[0]).toEqual([
+    expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toEqual([
       "ansible-collection-file",
       IMPERSONATED_SSH_USER,
       "community",
@@ -197,6 +205,7 @@ roles:
   it("passes impersonated linuxUser to Ludus API install for ansible home repair", async () => {
     vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: REQUIREMENTS, stderr: "", code: 0 })
     vi.mocked(sshExec)
+      .mockResolvedValueOnce({ stdout: "", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:ansible.windows\n", stderr: "", code: 0 })
       .mockResolvedValueOnce({ stdout: "OK:community.windows\n", stderr: "", code: 0 })
     vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([
@@ -221,6 +230,38 @@ roles:
       expect.any(Array),
       { force: false, linuxUser: IMPERSONATED_SSH_USER },
     )
+  })
+
+  it("installs an unpinned GOAD collection at the Ludus pin", async () => {
+    const requirements = `
+collections:
+  - name: community.general
+`
+    vi.mocked(sshExecAccount).mockResolvedValueOnce({ stdout: requirements, stderr: "", code: 0 })
+    vi.mocked(sshExec).mockReset()
+    vi.mocked(sshExec).mockResolvedValueOnce({
+      stdout: "collections:\n  - name: community.general\n    version: 10.3.0\n",
+      stderr: "",
+      code: 0,
+    })
+    vi.mocked(findMissingAnsibleRequirementsServer).mockResolvedValue([
+      { kind: "collection", name: "community.general", version: "10.3.0" },
+    ])
+    vi.mocked(installMissingAnsibleRequirementsServer).mockResolvedValue({
+      ok: true,
+      installed: ["community.general"],
+      failed: [],
+    })
+
+    const lines: string[] = []
+    const result = await ensureGoadAnsibleRequirements("ROOT.test-key", undefined, (line) => lines.push(line), goadPathFromEnv())
+
+    expect(result.ok).toBe(true)
+    expect(findMissingAnsibleRequirementsServer).toHaveBeenCalledWith(
+      "ROOT.test-key",
+      [expect.objectContaining({ name: "community.general", version: "10.3.0" })],
+    )
+    expect(lines.some((line) => line.includes("community.general@10.3.0"))).toBe(true)
   })
 
   it("reads requirements as the logged-in user when that session has SSH credentials", async () => {

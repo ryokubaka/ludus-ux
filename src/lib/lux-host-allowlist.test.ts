@@ -95,6 +95,10 @@ describe("lux-host allowlist", () => {
     denied(["range-log", "tail", "so33"])
     denied(["range-log", "suffix", "so33", "-1", "10"])
     denied(["range-log", "suffix", "so33", "1", "10;id"])
+    expect(run(["range-log", "active", "30"]).status).toBe(0)
+    denied(["range-log", "active", "0"])
+    denied(["range-log", "active", "999999"])
+    denied(["range-log", "active", "30;id"])
   })
 
   it("admin vm, consoles, shared VMs, and node metrics via pvesh", () => {

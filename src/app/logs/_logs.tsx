@@ -21,7 +21,8 @@ import {
 import { useRange } from "@/lib/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/utils"
-import { augmentLudusDeployHistoryLines, isBlankDeployLogLine, omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { isBlankDeployLogLine, omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
 import { splitLogText } from "@/lib/strip-ansi"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
@@ -136,7 +137,12 @@ export function LogsPageClient() {
         if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
         const raw = omitBlankLogLines(splitLogText(result.data.result))
         lines.push(
-          ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
+          ...(await stampHistoryWithRecordedClock(
+            selectedRangeId ?? "",
+            raw,
+            result.data.start,
+            result.data.end,
+          )),
         )
       } else if (result.error && deployIds.length === 1) {
         toast({ variant: "destructive", title: "Failed to load log", description: result.error })

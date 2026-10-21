@@ -25,7 +25,7 @@
 #   qm-enroll-efi <vmid>
 #   testing-rollback <vmid> <node> <snap>
 #   testing-enroll <vmid> <node> <0|1>
-#   range-log <read|mtime|bytes> <rangeId>
+#   range-log <read|mtime|bytes|active> <rangeId|seconds>
 #   mkdir <path>
 #   chown-ludus <path>
 #   chmod-tree <755|644> <path>
@@ -1112,6 +1112,23 @@ case "$op" in
     echo "[lux-testing-efi] enroll done $1"
     ;;
   range-log)
+    if [[ "$1" == "active" ]]; then
+      [[ $# -eq 2 && "$2" =~ ^[0-9]+$ ]] || die "range-log"
+      [[ "$2" -ge 1 && "$2" -le 86400 ]] || die "range-log age"
+      now=$(date +%s)
+      shopt -s nullglob
+      for log in /opt/ludus/ranges/*/ansible.log; do
+        [[ -f "$log" && ! -L "$log" ]] || continue
+        id=$(basename "$(dirname "$log")")
+        is_range_id "$id" || continue
+        mt=$(stat -c %Y "$log" 2>/dev/null || echo 0)
+        age=$((now - mt))
+        [[ "$age" -le "$2" ]] || continue
+        bytes=$(stat -c %s "$log" 2>/dev/null || echo 0)
+        printf '%s\t%s\t%s\n' "$id" "$bytes" "$mt"
+      done
+      exit 0
+    fi
     [[ "$1" == "suffix" && $# -eq 4 || "$1" != "suffix" && $# -eq 2 ]] || die "range-log"
     [[ "$1" == "read" || "$1" == "mtime" || "$1" == "bytes" || "$1" == "suffix" ]] || die "range-log op"
     is_range_id "$2" || die "range id"

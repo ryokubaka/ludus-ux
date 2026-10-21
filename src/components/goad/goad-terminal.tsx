@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { LOG_PANE_WALL_CLOCK_CLASS } from "@/lib/log-line-timestamp"
 import { parseLogLine, LOG_VIRTUALIZE_THRESHOLD, type ParsedLogLine } from "@/lib/log-line-render"
 import { stripAnsi } from "@/lib/strip-ansi"
+import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { appendStreamLines } from "@/lib/log-buffer"
 import { usePauseAwareLines } from "@/components/range/use-pause-aware-lines"
 import { useLogSearch } from "@/components/range/use-log-search"
@@ -369,16 +370,37 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const [exitCode, setExitCode] = useState<number | null>(null)
   const [taskId, setTaskId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const filePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   /** Task id for the active /api/goad/execute or …/stream connection — used to backfill exitCode from SQLite. */
   const streamTaskIdRef = useRef<string | null>(null)
   const getExtraHeadersRef = useRef(options?.getExtraHeaders)
   getExtraHeadersRef.current = options?.getExtraHeaders
+
+  const startFilePoll = useCallback((taskIdToPoll: string) => {
+    if (filePollRef.current) {
+      clearInterval(filePollRef.current)
+      filePollRef.current = null
+    }
+    const pull = async () => {
+      const next = await fetchGoadTaskLogLines(taskIdToPoll, getExtraHeadersRef.current?.() ?? {})
+      if (next.length === 0) return
+      setLines((prev) => (next.length >= prev.length ? next : prev))
+    }
+    void pull()
+    filePollRef.current = setInterval(() => {
+      void pull()
+    }, 2000)
+  }, [])
 
   const connectToStream = useCallback(async (
     url: string,
     fetchOptions: RequestInit,
     captureTaskId: boolean
   ): Promise<number | null> => {
+    if (filePollRef.current) {
+      clearInterval(filePollRef.current)
+      filePollRef.current = null
+    }
     setLines([])
     setExitCode(null)
     setIsRunning(true)
@@ -396,6 +418,9 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       const inner = new Headers(fetchOptions.headers as HeadersInit)
       inner.forEach((v, k) => merged.set(k, v))
     }
+
+    const taskFromUrl = url.match(/\/api\/goad\/tasks\/([^/]+)\/stream/)?.[1]
+    if (taskFromUrl) startFilePoll(taskFromUrl)
 
     try {
       const response = await fetch(url, {
@@ -416,6 +441,7 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           const tid = line.slice(9).trim()
           streamTaskIdRef.current = tid
           setTaskId(tid)
+          startFilePoll(tid)
           return // hide [TASKID] lines from display
         }
         if (line.startsWith("[EXIT] ")) {
@@ -423,6 +449,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           streamExit = Number.isNaN(code) ? null : code
           setExitCode(streamExit)
         }
+        // The task file poll owns the pane. A buffered stream would append the same lines later.
+        if (filePollRef.current) return
         setLines((prev) => appendStreamLines(prev, line))
       }
 
@@ -503,8 +531,12 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
         }
       }
     }
+    if (filePollRef.current) {
+      clearInterval(filePollRef.current)
+      filePollRef.current = null
+    }
     return streamExit
-  }, [])
+  }, [startFilePoll])
 
   const resumeTask = useCallback(async (tid: string) => {
     abortRef.current?.abort()

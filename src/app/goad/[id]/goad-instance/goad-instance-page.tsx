@@ -6,7 +6,7 @@
 const DEPLOY_STREAM_STALL_MS = 15_000
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
-import { useParams, useRouter, useSearchParams } from "next/navigation"
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -84,6 +84,20 @@ import type { GoadPostProcessingStep } from "@/components/goad/goad-instance-tab
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 
+/** The id in the address bar. useParams can still be an older segment during a client transition. */
+function goadIdFromPath(pathname: string): string {
+  const parts = pathname.split("/").filter(Boolean)
+  const at = parts.lastIndexOf("goad")
+  if (at < 0) return ""
+  const id = parts[at + 1] ?? ""
+  if (!id || id === "new") return ""
+  try {
+    return decodeURIComponent(id)
+  } catch {
+    return id
+  }
+}
+
 function routeInstanceIdFromParams(value: unknown): string {
   const raw = Array.isArray(value) ? value[0] : value
   if (typeof raw !== "string" || !raw) return ""
@@ -96,14 +110,17 @@ function routeInstanceIdFromParams(value: unknown): string {
 
 function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
   const params = useParams()
+  const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const shell = useShellSession()
   const queryClient = useQueryClient()
-  // Prefer the id from the request URL. useParams can still be the previous segment during a client transition.
+  // The address bar wins. A server prop or useParams can still say "nodes" while the URL is the lab id.
   const instanceId =
-    routeInstanceId?.trim() || routeInstanceIdFromParams(params.id)
+    goadIdFromPath(pathname) ||
+    routeInstanceId?.trim() ||
+    routeInstanceIdFromParams(params.id)
 
   const [instance, setInstance] = useState<GoadInstance | null>(null)
   const [loading, setLoading] = useState(true)
@@ -810,6 +827,16 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
     else if (!silent) setRefreshing(false)
   }, [instanceId, impersonationHeaders, selectedRangeId, router])
 
+  // The workspace is often missing from the list until GOAD finishes creating it.
+  // Keep asking instead of leaving the not-found panel up for the whole deploy.
+  useEffect(() => {
+    if (loading || instance) return
+    const timer = window.setInterval(() => {
+      void fetchInstances(true)
+    }, 3_000)
+    return () => window.clearInterval(timer)
+  }, [loading, instance, fetchInstances])
+
   // set-range often finishes after the first instance fetch. Keep asking until
   // the dedicated range id is on the instance so range logs can stream live.
   useEffect(() => {
@@ -1151,8 +1178,10 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
         <Button variant="ghost" asChild>
           <Link href="/goad"><ArrowLeft className="h-4 w-4" /> Back</Link>
         </Button>
-        <Alert variant="destructive">
-          <AlertDescription>Instance &quot;{instanceId}&quot; not found</AlertDescription>
+        <Alert>
+          <AlertDescription>
+            Lab {instanceId || "workspace"} is not in the list yet. This page keeps checking while the deploy is running.
+          </AlertDescription>
         </Alert>
       </div>
     )

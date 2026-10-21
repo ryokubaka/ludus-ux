@@ -1,8 +1,11 @@
 "use client"
 
 import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo } from "react"
+import { ludusApi } from "@/lib/api"
 import { appendStreamLines } from "@/lib/log-buffer"
-import { isBlankDeployLogLine } from "@/lib/log-line-timestamp"
+import { augmentLudusDeployHistoryLines, isBlankDeployLogLine } from "@/lib/log-line-timestamp"
+import { extractArray } from "@/lib/utils"
+import type { LogHistoryEntry } from "@/lib/types"
 
 export type StartRangeStreamOptions = {
   /**
@@ -63,6 +66,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const targetRangeRef = useRef<string | undefined>(undefined)
   const intentionalStopRef = useRef(false)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const snapshotTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectAttemptRef = useRef(0)
   const streamStartedAtRef = useRef<number | null>(null)
   const startStreamingRef = useRef<(rangeId?: string, opts?: StartRangeStreamOptions) => void>(() => {})
@@ -71,6 +75,10 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
+    }
+    if (snapshotTimerRef.current) {
+      clearInterval(snapshotTimerRef.current)
+      snapshotTimerRef.current = null
     }
   }, [])
 
@@ -144,6 +152,33 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     // Build the URL for the server-side SSE stream.  The server polls the Ludus
     // API internally every 2 s and pushes incremental log lines + state changes —
     // no client-side polling needed at all.
+    if (streamRangeId) {
+      // History already has the running deploy text. The live stream can stay
+      // empty until that connection finishes, so read the same record on a timer.
+      const pullHistory = async () => {
+        if (intentionalStopRef.current || targetRangeRef.current?.trim() !== streamRangeId) return
+        try {
+          const listed = await ludusApi.getRangeLogHistory(streamRangeId)
+          const entries = extractArray<LogHistoryEntry>(listed.data as unknown)
+          const running =
+            entries.find((entry) => /running|waiting/i.test(entry.status || "")) ?? entries[0]
+          if (!running) return
+          const detail = await ludusApi.getRangeLogHistoryById(running.id, streamRangeId)
+          const text = detail.data?.result
+          if (!text) return
+          const raw = text.split("\n").filter((line) => line.trim())
+          const stamped = augmentLudusDeployHistoryLines(raw, running.start, running.end)
+          setLines((prev) => (stamped.length >= prev.length ? stamped : prev))
+        } catch {
+          /* the open stream still owns state updates */
+        }
+      }
+      void pullHistory()
+      snapshotTimerRef.current = setInterval(() => {
+        void pullHistory()
+      }, 2000)
+    }
+
     const url = new URL("/api/logs/stream", window.location.origin)
     if (rangeId) {
       url.searchParams.set("rangeId", rangeId)
@@ -156,6 +191,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     const ctrl = new AbortController()
     abortRef.current = ctrl
     const accept = (raw: string) => {
+      // Keepalive so a quiet deploy does not look like a dead stream.
+      if (raw === "[PING]") return
       if (raw.startsWith("[STATE] ")) {
         setRangeState(raw.slice(8).trim())
         reconnectAttemptRef.current = 0
@@ -166,6 +203,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         setLines((prev) => appendStreamLines(prev, raw))
         stopStreaming()
       } else if (raw.startsWith("[LUDUS] ") || raw.startsWith("[GOAD] ")) {
+        // The history poll owns the pane. A buffered stream would append the same lines again.
+        if (snapshotTimerRef.current) return
         if (!isBlankDeployLogLine(raw)) {
           setLines((prev) => appendStreamLines(prev, raw))
         }

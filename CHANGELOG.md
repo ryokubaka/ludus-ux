@@ -20,6 +20,8 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Fix] **Ansible collection pin** — GOAD lists `community.general` with no version. A force repair installed the newest Galaxy release, which removed `proxmox_kvm` and does not support the Ansible that range deploys use. LUX now installs the version pinned in Ludus `requirements.yml` (`community.general` 10.3.0) and reinstalls when the copy on disk is a different version.
+- [Fix] **Deploy log stream** — The live range and GOAD panes read the same logs as Logs History while a deploy is running, so they fill in even when the event stream is held open until the job ends.
+- [Fix] **GOAD instance page** — The lab id comes from the address bar. While GOAD is still creating the workspace, the page keeps checking instead of saying the instance was not found.
 
 ## [1.4.3] - 2026-10-19
 

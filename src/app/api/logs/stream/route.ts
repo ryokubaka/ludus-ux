@@ -102,6 +102,17 @@ export async function GET(request: NextRequest) {
         return
       }
 
+      // Ansible can block the first log poll for a long time. A data frame on a
+      // timer keeps the proxy from closing the stream and the client from
+      // reporting a reconnect blip while the deploy is still quiet.
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode("data: [PING]\n\n"))
+        } catch {
+          clearInterval(heartbeat)
+        }
+      }, 2000)
+
       try {
         let lastLudusCount = 0
         let lastGoadCount = 0
@@ -316,6 +327,7 @@ export async function GET(request: NextRequest) {
       } catch (err) {
         send("ERROR", safeClientError(err, "Stream error"), getCachedLudusWallHmsOrUtc())
       } finally {
+        clearInterval(heartbeat)
         try { controller.close() } catch { /* already closed */ }
       }
     },

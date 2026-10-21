@@ -6,7 +6,7 @@
 const DEPLOY_STREAM_STALL_MS = 15_000
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
-import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useParams, usePathname, useRouter } from "next/navigation"
 import { useDeployLogContext } from "@/lib/deploy-log-context"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -32,7 +32,9 @@ import {
 } from "@/lib/goad-catalog-capabilities"
 import type { InstanceInventoryFile } from "@/lib/goad-ssh"
 import { cn, extractArray, timeAgo } from "@/lib/utils"
-import { augmentLudusDeployHistoryLines } from "@/lib/log-line-timestamp"
+import { omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { splitLogText } from "@/lib/strip-ansi"
+import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
@@ -44,6 +46,7 @@ import {
   type CorrelatedHistoryEntry,
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
+  pickGoadTaskForLiveLog,
 } from "@/lib/goad-deploy-history-correlation"
 import { GoadDeployTab } from "@/components/goad/goad-instance-tabs/goad-deploy-tab"
 import { GoadTerminalTab } from "@/components/goad/goad-instance-tabs/goad-terminal-tab"
@@ -112,7 +115,6 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
   const params = useParams()
   const pathname = usePathname()
   const router = useRouter()
-  const searchParams = useSearchParams()
   const { toast } = useToast()
   const shell = useShellSession()
   const queryClient = useQueryClient()
@@ -570,34 +572,47 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
         const urlTaskId = new URLSearchParams(window.location.search)
           .get("goadTaskId")
           ?.trim()
-        if (urlTaskId) {
-          resumedAsDeployRef.current = true
-          await resumeTask(urlTaskId)
-          return
-        }
 
-        const findRunning = async (): Promise<GoadTaskForCorrelation | undefined> => {
+        const loadTasks = async (): Promise<GoadTaskForCorrelation[]> => {
           const res = await fetch("/api/goad/tasks", {
             credentials: "include",
             headers: impersonationHeaders(),
           })
-          if (!res.ok) return undefined
+          if (!res.ok) return []
           const data = (await res.json()) as { tasks: GoadTaskForCorrelation[] }
-          return (data.tasks ?? []).find(
-            (t) => t.instanceId === instanceId && t.status === "running",
-          )
+          return data.tasks ?? []
+        }
+
+        const showTask = async (task: GoadTaskForCorrelation) => {
+          resumedAsDeployRef.current = isDeployActionCommand(task.command)
+          const params = new URLSearchParams(window.location.search)
+          if (params.get("goadTaskId") !== task.id) {
+            params.set("goadTaskId", task.id)
+            if (!params.get("tab")) params.set("tab", "deploy")
+            window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`)
+          }
+          await resumeTask(task.id)
         }
 
         const deadline = Date.now() + 20_000
+        let fallback: GoadTaskForCorrelation | undefined
         while (Date.now() < deadline && !cancelled && !taskIdRef.current) {
-          const running = await findRunning()
-          if (running) {
-            resumedAsDeployRef.current = isDeployActionCommand(running.command)
-            await resumeTask(running.id)
+          const tasks = await loadTasks()
+          if (cancelled || taskIdRef.current) return
+          // The wizard puts the new task id in the URL before the row exists.
+          if (urlTaskId && !tasks.some((task) => task.id === urlTaskId)) {
+            await new Promise((r) => setTimeout(r, 500))
+            continue
+          }
+          const chosen = pickGoadTaskForLiveLog(tasks, instanceId, urlTaskId)
+          if (chosen) fallback = chosen
+          if (chosen && (chosen.status === "running" || urlTaskId)) {
+            await showTask(chosen)
             return
           }
           await new Promise((r) => setTimeout(r, 500))
         }
+        if (!cancelled && !taskIdRef.current && fallback) await showTask(fallback)
       } catch { /* best-effort */ }
     })()
     return () => { cancelled = true }
@@ -898,7 +913,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
       const data = await res.json()
       const allTasks: GoadTaskForCorrelation[] = data.tasks ?? []
       setTaskHistory(allTasks.filter((t) =>
-        t.instanceId === instanceId || t.command.includes(instanceId)
+        t.instanceId === instanceId || (typeof t.command === "string" && t.command.includes(instanceId))
       ))
     } catch (err) {
       console.warn("[goad-instance] fetchTaskHistory failed:", (err as Error).message)
@@ -964,8 +979,15 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
             const result = await ludusApi.getRangeLogHistoryById(d.id, instance.ludusRangeId)
             if (result.data?.result) {
               if (deploys.length > 1) lines.push(`--- Ludus range deploy ${d.id} ---`)
-              const raw = result.data.result.split("\n").filter((l) => l.trim())
-              lines.push(...augmentLudusDeployHistoryLines(raw, d.start, d.end))
+              const raw = omitBlankLogLines(splitLogText(result.data.result))
+              lines.push(
+                ...(await stampHistoryWithRecordedClock(
+                  instance.ludusRangeId ?? "",
+                  raw,
+                  d.start,
+                  d.end,
+                )),
+              )
             }
           }
           setHistoryDeployLines(lines)
@@ -1032,8 +1054,9 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
 
   // Deep-link: /goad/{id}?tab=history&deployLogId=… → open History and select entry.
   useEffect(() => {
-    const tab = searchParams.get("tab")
-    const deployLogId = searchParams.get("deployLogId")
+    const params = new URLSearchParams(window.location.search)
+    const tab = params.get("tab")
+    const deployLogId = params.get("deployLogId")
     if (!deployLogId) {
       historyUrlHandledRef.current = null
       return
@@ -1045,42 +1068,46 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
 
     let cancelled = false
     void (async () => {
-      setActiveTab("history")
-      const [deployResult, tasksRes] = await Promise.all([
-        ludusApi.getRangeLogHistory(rangeIdForDeepLink),
-        fetch("/api/goad/tasks", { headers: impersonationHeaders() }).then((r) => r.json()),
-      ])
-      if (cancelled) return
-      const dh = extractArray<LogHistoryEntry>(deployResult.data as unknown)
-      const allTasks = (tasksRes.tasks ?? []) as GoadTaskForCorrelation[]
-      const th = allTasks.filter(
-        (t) => t.instanceId === instanceId || t.command.includes(instanceId),
-      )
-      let entry: CorrelatedHistoryEntry | undefined = correlateHistoryEntries(dh, th).find(
-        (c) =>
-          c.deployEntry?.id === deployLogId ||
-          (c.mergedBatchDeploys?.some((x) => x.id === deployLogId) ?? false),
-      )
-      if (!entry) {
-        const d = dh.find((x) => x.id === deployLogId)
-        if (d) {
-          entry = {
-            deployEntry: d,
-            sortTime: new Date(d.start).getTime(),
-            kind: "ludus_only",
+      try {
+        setActiveTab("history")
+        const [deployResult, tasksRes] = await Promise.all([
+          ludusApi.getRangeLogHistory(rangeIdForDeepLink),
+          fetch("/api/goad/tasks", { headers: impersonationHeaders() }).then((r) => r.json()),
+        ])
+        if (cancelled) return
+        const dh = extractArray<LogHistoryEntry>(deployResult.data as unknown)
+        const allTasks = (tasksRes.tasks ?? []) as GoadTaskForCorrelation[]
+        const th = allTasks.filter(
+          (t) => t.instanceId === instanceId || (typeof t.command === "string" && t.command.includes(instanceId)),
+        )
+        let entry: CorrelatedHistoryEntry | undefined = correlateHistoryEntries(dh, th).find(
+          (c) =>
+            c.deployEntry?.id === deployLogId ||
+            (c.mergedBatchDeploys?.some((x) => x.id === deployLogId) ?? false),
+        )
+        if (!entry) {
+          const d = dh.find((x) => x.id === deployLogId)
+          if (d) {
+            entry = {
+              deployEntry: d,
+              sortTime: new Date(d.start).getTime(),
+              kind: "ludus_only",
+            }
           }
         }
-      }
-      if (entry && !cancelled) await handleSelectHistoryEntry(entry)
-      if (!cancelled) {
-        router.replace(`/goad/${encodeURIComponent(instanceId)}?tab=history`, { scroll: false })
+        if (entry && !cancelled) await handleSelectHistoryEntry(entry)
+        if (!cancelled) {
+          router.replace(`/goad/${encodeURIComponent(instanceId)}?tab=history`, { scroll: false })
+        }
+      } catch (err) {
+        console.warn("[goad-instance] history deep link failed:", err instanceof Error ? err.message : err)
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [searchParams.toString(), instance?.ludusRangeId, instanceId, impersonationHeaders, router, handleSelectHistoryEntry])
+  }, [instance?.ludusRangeId, instanceId, impersonationHeaders, router, handleSelectHistoryEntry])
 
   const { runAction } = useGoadRunAction({
     instance,

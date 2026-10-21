@@ -79,7 +79,8 @@ import { queryKeys } from "@/lib/query-keys"
 import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
 import { STALE } from "@/lib/query-client"
-import { augmentLudusDeployHistoryLines, omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { omitBlankLogLines } from "@/lib/log-line-timestamp"
+import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
 import { splitLogText } from "@/lib/strip-ansi"
 import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
@@ -424,7 +425,12 @@ export function DashboardPageClient() {
           if (deployIds.length > 1) lines.push(`--- Ludus range deploy ${id} ---`)
           const raw = omitBlankLogLines(splitLogText(result.data.result))
           lines.push(
-            ...augmentLudusDeployHistoryLines(raw, result.data.start, result.data.end),
+            ...(await stampHistoryWithRecordedClock(
+              selectedRangeId ?? "",
+              raw,
+              result.data.start,
+              result.data.end,
+            )),
           )
         } else if (result.error && deployIds.length === 1) {
           toast({ variant: "destructive", title: "Failed to load log", description: result.error })

@@ -3,7 +3,10 @@
 import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { ludusApi } from "@/lib/api"
 import { appendStreamLines } from "@/lib/log-buffer"
-import { augmentLudusDeployHistoryLines, isBlankDeployLogLine } from "@/lib/log-line-timestamp"
+import { isBlankDeployLogLine, omitBlankLogLines, stampDeployLogForDisplay, stampObservedDeployLines } from "@/lib/log-line-timestamp"
+import { splitLogText } from "@/lib/strip-ansi"
+import { fetchDeployLogClock } from "@/lib/deploy-log-clock"
+import { pickLatestDeployHistoryEntry } from "@/lib/range-deploy-elapsed-anchor"
 import { extractArray } from "@/lib/utils"
 import type { LogHistoryEntry } from "@/lib/types"
 
@@ -69,6 +72,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const snapshotTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectAttemptRef = useRef(0)
   const streamStartedAtRef = useRef<number | null>(null)
+  const historyLogIdRef = useRef("")
+  const observedLinesRef = useRef<string[]>([])
   const startStreamingRef = useRef<(rangeId?: string, opts?: StartRangeStreamOptions) => void>(() => {})
 
   const clearReconnectTimer = useCallback(() => {
@@ -122,6 +127,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     if (!isReconnect) {
       intentionalStopRef.current = false
       reconnectAttemptRef.current = 0
+      historyLogIdRef.current = ""
+      observedLinesRef.current = []
     }
 
     const snapshotStart = opts?.snapshotStart ?? (isReconnect ? false : Boolean(rangeId))
@@ -160,15 +167,32 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         try {
           const listed = await ludusApi.getRangeLogHistory(streamRangeId)
           const entries = extractArray<LogHistoryEntry>(listed.data as unknown)
-          const running =
-            entries.find((entry) => /running|waiting/i.test(entry.status || "")) ?? entries[0]
+          const running = pickLatestDeployHistoryEntry(entries)
           if (!running) return
-          const detail = await ludusApi.getRangeLogHistoryById(running.id, streamRangeId)
+          const [detail, generations] = await Promise.all([
+            ludusApi.getRangeLogHistoryById(running.id, streamRangeId),
+            fetchDeployLogClock(streamRangeId),
+          ])
           const text = detail.data?.result
           if (!text) return
-          const raw = text.split("\n").filter((line) => line.trim())
-          const stamped = augmentLudusDeployHistoryLines(raw, running.start, running.end)
-          setLines((prev) => (stamped.length >= prev.length ? stamped : prev))
+          const raw = omitBlankLogLines(splitLogText(text))
+          const logChanged = historyLogIdRef.current !== running.id
+          if (logChanged) {
+            historyLogIdRef.current = running.id
+            observedLinesRef.current = []
+          }
+          const now = Date.now()
+          // First paint spreads the backlog across the run. Lines that arrive
+          // after that keep the time this pane first saw them.
+          const stamped =
+            observedLinesRef.current.length === 0
+              ? stampDeployLogForDisplay(raw, generations, running.start, running.end, now)
+              : stampObservedDeployLines(observedLinesRef.current, raw, now)
+          observedLinesRef.current = stamped
+          setLines((prev) => {
+            if (!logChanged && stamped.length < prev.length) return prev
+            return stamped
+          })
         } catch {
           /* the open stream still owns state updates */
         }
@@ -292,6 +316,8 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     setActiveRangeId(null)
     setStreamStartedAt(null)
     streamStartedAtRef.current = null
+    historyLogIdRef.current = ""
+    observedLinesRef.current = []
   }, [])
 
   // Clean up on provider unmount

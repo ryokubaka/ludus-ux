@@ -30,6 +30,33 @@ export interface CorrelatedHistoryEntry {
   kind: "goad_integrated" | "goad_only" | "ludus_only"
 }
 
+/**
+ * Which GOAD task the deploy-tab log should follow.
+ * A running task wins. Otherwise the newest start for this instance wins,
+ * including when the address bar still names an older aborted task.
+ */
+export function pickGoadTaskForLiveLog(
+  tasks: GoadTaskForCorrelation[],
+  instanceId: string,
+  urlTaskId?: string,
+): GoadTaskForCorrelation | undefined {
+  const id = instanceId.trim()
+  if (!id) return undefined
+  const mine = tasks.filter(
+    (task) => task.instanceId === id || (typeof task.command === "string" && task.command.includes(id)),
+  )
+  const running = mine.filter((task) => task.status === "running")
+  const pool = running.length > 0 ? running : mine
+  let newest: GoadTaskForCorrelation | undefined
+  for (const task of pool) {
+    if (!newest || task.startedAt >= newest.startedAt) newest = task
+  }
+  if (running.length > 0) return newest
+  const urlTask = urlTaskId ? mine.find((task) => task.id === urlTaskId) : undefined
+  if (urlTask && newest && urlTask.startedAt >= newest.startedAt) return urlTask
+  return newest ?? urlTask
+}
+
 /** REPL flows that pair with a Ludus deploy on the same instance (overlap can be 0 while "Running"). */
 export function taskMatchesIntegrationRepl(command: string): boolean {
   return /--repl\s+"[^"]*;\s*(provide|install|install_extension|provision_lab|provision_extension)\b/.test(

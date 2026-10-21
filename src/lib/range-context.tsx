@@ -39,6 +39,23 @@ const RangeContext = createContext<RangeContextValue>({
 
 const STORAGE_KEY = "lux_selected_range"
 
+function readStoredRange(): string | null {
+  try {
+    return sessionStorage.getItem(STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredRange(rangeId: string | null): void {
+  try {
+    if (rangeId) sessionStorage.setItem(STORAGE_KEY, rangeId)
+    else sessionStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // A blocked or full store must not take down the shell on refresh.
+  }
+}
+
 async function fetchAccessibleRanges(): Promise<RangeAccessEntry[]> {
   const res = await fetch("/api/proxy/ranges/accessible", {
     headers: readImpersonationHeadersFromSessionStorage(),
@@ -98,17 +115,17 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     if (ranges.length === 0) {
       if (status === "success") {
         setSelectedRangeId(null)
-        sessionStorage.removeItem(STORAGE_KEY)
+        writeStoredRange(null)
         syncSelectedRangeCookie(null)
       }
       return
     }
 
-    const saved = sessionStorage.getItem(STORAGE_KEY)
+    const saved = readStoredRange()
 
     if (selectedRangeId && ranges.some((r) => r.rangeID === selectedRangeId)) {
       if (saved !== selectedRangeId) {
-        sessionStorage.setItem(STORAGE_KEY, selectedRangeId)
+        writeStoredRange(selectedRangeId)
         syncSelectedRangeCookie(selectedRangeId)
       }
       return
@@ -122,14 +139,14 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
 
     const first = ranges[0].rangeID
     setSelectedRangeId(first)
-    sessionStorage.setItem(STORAGE_KEY, first)
+    writeStoredRange(first)
     syncSelectedRangeCookie(first)
   }, [ranges, isLoading, status, selectedRangeId])
 
   const selectRange = useCallback((rangeId: string) => {
     setSelectedRangeId((current) => {
       if (rangeSelectionLocked && rangeId !== current) return current
-      sessionStorage.setItem(STORAGE_KEY, rangeId)
+      writeStoredRange(rangeId)
       syncSelectedRangeCookie(rangeId)
       window.dispatchEvent(new Event("range-changed"))
       return rangeId
@@ -164,11 +181,11 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
         .flatMap(([, data]) => (Array.isArray(data) ? data : []))
         .find((r) => r.rangeID !== id)?.rangeID ?? null
       if (next) {
-        sessionStorage.setItem(STORAGE_KEY, next)
+        writeStoredRange(next)
         syncSelectedRangeCookie(next)
         return next
       }
-      sessionStorage.removeItem(STORAGE_KEY)
+      writeStoredRange(null)
       syncSelectedRangeCookie(null)
       return null
     })
@@ -178,7 +195,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const handler = () => {
       setSelectedRangeId(null)
-      sessionStorage.removeItem(STORAGE_KEY)
+      writeStoredRange(null)
       syncSelectedRangeCookie(null)
       void queryClient.invalidateQueries({ predicate: accessibleRangesPredicate })
     }

@@ -10,7 +10,6 @@ import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
 import { createDeployLogDedupe } from "@/lib/deploy-log-sse-dedupe"
 import { readLudusAnsibleLogMtimeMs } from "@/lib/goad-ludus-reconcile"
 import {
-  augmentLudusDeployHistoryLines,
   deployLogLineHasLeadingWallTimestamp,
   omitBlankLogLines,
 } from "@/lib/log-line-timestamp"
@@ -197,28 +196,12 @@ export async function GET(request: NextRequest) {
               firstPoll = false
             } else {
               firstPoll = false
-              let ludusEmit = newLines
-              if (
-                newLines.length > 1 &&
-                newLines.every((l) => !deployLogLineHasLeadingWallTimestamp(l))
-              ) {
-                const rid = rangeId || rangeIdParam || ""
-                let t1 = Date.now()
-                if (rid) {
-                  const mtime = await readLudusAnsibleLogMtimeMs(rid)
-                  if (mtime != null) t1 = mtime
-                }
-                const t0 = t1 - Math.min(6 * 60 * 60 * 1000, Math.max(60_000, newLines.length * 2000))
-                ludusEmit = augmentLudusDeployHistoryLines(
-                  newLines,
-                  new Date(t0).toISOString(),
-                  new Date(t1).toISOString(),
-                )
-              }
-              for (let i = 0; i < ludusEmit.length; i++) {
-                const out = ludusEmit[i]
+              // One clock for the whole poll. Ludus text has no per-line times,
+              // and spreading a batch backward made skips look one second long.
+              for (let i = 0; i < newLines.length; i++) {
+                const out = newLines[i] ?? ""
                 sendLudusOrGoadLine("LUDUS", out, pollStamp)
-                deployDedupe.remember(newLines[i] ?? out)
+                deployDedupe.remember(out)
               }
               if (newLines.length > 0) lastActivityAt = Date.now()
             }

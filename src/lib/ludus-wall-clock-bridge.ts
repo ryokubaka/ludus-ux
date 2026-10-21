@@ -51,7 +51,12 @@ export function ludusWallClockSampleFresh(maxAgeMs: number): boolean {
 
 /** Prefer Ludus-host instant when fresh; else this process clock — both in `TZ`. */
 export function getCachedLudusWallHmsOrUtc(): string {
+  return formatInstantForDeployLog(getLudusWallClockMs())
+}
+
+/** Ludus-host epoch ms when a fresh SSH sample exists; otherwise this process. */
+export function getLudusWallClockMs(): number {
   const now = Date.now()
-  const ms = sample && now - sample.at < TTL_MS + 500 ? sample.epochMs : now
-  return formatInstantForDeployLog(ms)
+  if (sample && now - sample.at < TTL_MS + 500) return sample.epochMs + (now - sample.at)
+  return now
 }

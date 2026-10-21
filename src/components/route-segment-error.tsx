@@ -4,10 +4,10 @@ import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { AlertTriangle, RefreshCw } from "lucide-react"
+import { reloadDocument } from "@/lib/document-reload"
 
 export function RouteSegmentError({
   error,
-  reset,
 }: {
   error: Error & { digest?: string }
   reset: () => void
@@ -32,7 +32,7 @@ export function RouteSegmentError({
           {error.digest && (
             <code className="text-xs text-muted-foreground/60 mt-1 mb-4">{error.digest}</code>
           )}
-          <Button onClick={reset} className="mt-4">
+          <Button onClick={() => reloadDocument()} className="mt-4">
             <RefreshCw className="h-4 w-4" />
             Try Again
           </Button>

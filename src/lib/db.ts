@@ -110,6 +110,7 @@ export function getDb(): BetterSqlite3.Database {
   _db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes
   _db.pragma("foreign_keys = ON")
   _db.pragma("synchronous = NORMAL")  // safe with WAL, faster than FULL
+  _db.pragma("busy_timeout = 8000")   // wait out a deploy's writes instead of failing the page
   runMigrations(_db)
   // Belt-and-suspenders: ensure range_ops exists even if the migration system
   // hasn't caught up yet (e.g. first request to this route before any GOAD
@@ -519,6 +520,21 @@ function runMigrations(db: BetterSqlite3.Database): void {
           published   INTEGER NOT NULL,
           updated_at  INTEGER NOT NULL
         );
+      `)
+    },
+
+    // v19 — Per-line deploy log clocks recorded while ansible.log is growing.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS deploy_log_clock (
+          range_id     TEXT    NOT NULL,
+          generation   TEXT    NOT NULL,
+          entries_json TEXT    NOT NULL,
+          updated_at   INTEGER NOT NULL,
+          PRIMARY KEY (range_id, generation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_deploy_log_clock_updated
+          ON deploy_log_clock(updated_at);
       `)
     },
   ]

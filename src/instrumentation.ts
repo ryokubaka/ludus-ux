@@ -15,5 +15,7 @@ export async function register() {
     // Periodic Ludus source git pulls so catalog/install tip stays current.
     const { startSourceAutoSyncLoop } = await import("@/lib/source-auto-sync")
     startSourceAutoSyncLoop()
+    const { startDeployLogClockLoop } = await import("@/lib/deploy-log-clock-recorder")
+    startDeployLogClockLoop()
   }
 }

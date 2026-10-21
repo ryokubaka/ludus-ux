@@ -371,6 +371,8 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
   const [taskId, setTaskId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const filePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** Bumps when the polled task changes so a late read of an older task cannot replace the new log. */
+  const filePollGenRef = useRef(0)
   /** Task id for the active /api/goad/execute or …/stream connection — used to backfill exitCode from SQLite. */
   const streamTaskIdRef = useRef<string | null>(null)
   const getExtraHeadersRef = useRef(options?.getExtraHeaders)
@@ -381,9 +383,10 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
       clearInterval(filePollRef.current)
       filePollRef.current = null
     }
+    const gen = ++filePollGenRef.current
     const pull = async () => {
       const next = await fetchGoadTaskLogLines(taskIdToPoll, getExtraHeadersRef.current?.() ?? {})
-      if (next.length === 0) return
+      if (filePollGenRef.current !== gen || next.length === 0) return
       setLines((prev) => (next.length >= prev.length ? next : prev))
     }
     void pull()
@@ -445,9 +448,10 @@ export function useGoadStream(options?: UseGoadStreamOptions) {
           return // hide [TASKID] lines from display
         }
         if (line.startsWith("[EXIT] ")) {
-          const code = parseInt(line.match(/code (\d+)/)?.[1] || "0", 10)
+          const matched = line.match(/code (-?\d+)/)?.[1]
+          const code = matched == null ? Number.NaN : parseInt(matched, 10)
           streamExit = Number.isNaN(code) ? null : code
-          setExitCode(streamExit)
+          if (streamExit !== null) setExitCode(streamExit)
         }
         // The task file poll owns the pane. A buffered stream would append the same lines later.
         if (filePollRef.current) return

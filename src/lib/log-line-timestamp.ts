@@ -97,11 +97,186 @@ export function splitLeadingWallTimestamp(line: string): { ts: string | null; bo
  * Ludus GET /range/logs/history/{id} returns plain `result` text — no per-line
  * timestamps like the live SSE panel. Interpolate between `start` and `end`
  * using the same second-level `TZ` format as live logs (`formatInstantForDeployLog`).
- * When `start` and `end` are identical (common until Ludus fills `end`), stamps step
- * by ~1s per line (order hints, capped), not true wall time.
+ * A finished run is spread between its real start and end. A still-running run
+ * has no end, so it spreads from `start` to now. That is the stand-in when no
+ * per-line time was recorded. A one-second step per line is not wall time.
  */
-const HISTORY_INTERPOLATE_MIN_GAP_MS = 1000
 const HISTORY_INTERPOLATE_MAX_SPAN_MS = 6 * 60 * 60 * 1000
+
+/** Stable short hash of one log body. Same result in the browser and on the server. */
+export function hashDeployLogLine(body: string): string {
+  let h = 5381
+  for (let i = 0; i < body.length; i++) h = Math.imul(h, 33) ^ body.charCodeAt(i)
+  return (h >>> 0).toString(16).padStart(8, "0")
+}
+
+export type DeployLogClockEntry = { h: string; ms: number }
+
+/** Leading raw lines whose hash matches `entries`, in order. */
+export function deployLogClockPrefix(rawLines: string[], entries: DeployLogClockEntry[]): number {
+  const n = Math.min(rawLines.length, entries.length)
+  let i = 0
+  while (i < n && hashDeployLogLine(rawLines[i] ?? "") === entries[i]?.h) i++
+  return i
+}
+
+/**
+ * Clock whose hashes are a prefix of this text (or this text is a prefix of the clock).
+ * A generation that diverges in the middle is an older deploy.
+ */
+export function selectDeployLogClock(
+  rawLines: string[],
+  generations: DeployLogClockEntry[][],
+): DeployLogClockEntry[] | null {
+  let best: DeployLogClockEntry[] | null = null
+  let bestN = 0
+  for (const entries of generations) {
+    if (entries.length === 0) continue
+    const n = deployLogClockPrefix(rawLines, entries)
+    if (n < entries.length && n < rawLines.length) continue
+    if (n > bestN) {
+      best = entries
+      bestN = n
+    }
+  }
+  return best
+}
+
+/** Prefix lines get their recorded clock. Lines the recorder has not seen yet stay plain. */
+export function stampLinesWithClock(rawLines: string[], entries: DeployLogClockEntry[] | null): string[] {
+  if (!entries) return rawLines
+  const n = deployLogClockPrefix(rawLines, entries)
+  if (n === 0) return rawLines
+  if (n < entries.length && n < rawLines.length) return rawLines
+  return rawLines.map((line, i) => {
+    if (i >= n) return line
+    if (deployLogLineHasLeadingWallTimestamp(line)) return line
+    const ms = entries[i]?.ms
+    // ms 0 is the baseline the recorder writes the first time it sees a file.
+    // Those lines were already there; they do not share one real timestamp.
+    if (ms == null || ms <= 0) return line
+    return `[${formatInstantForDeployLog(ms)}] ${line}`
+  })
+}
+
+/**
+ * Append hashes for lines new since `entries`. `fresh` means this text is not
+ * an append (new deploy); the caller stores it as its own generation.
+ */
+export function extendDeployLogClock(
+  entries: DeployLogClockEntry[],
+  rawLines: string[],
+  observedAtMs: number,
+): { entries: DeployLogClockEntry[]; fresh: boolean } {
+  const n = entries.length === 0 ? 0 : deployLogClockPrefix(rawLines, entries)
+  if (entries.length > 0 && n < entries.length) {
+    return {
+      fresh: true,
+      entries: rawLines.map((line) => ({ h: hashDeployLogLine(line), ms: observedAtMs })),
+    }
+  }
+  if (n >= rawLines.length) return { entries, fresh: false }
+  const next = entries.slice()
+  // The first sight of a file is a backlog, not a moment. Only lines that show
+  // up on a later read get `observedAtMs`.
+  const ms = entries.length === 0 ? 0 : observedAtMs
+  for (let i = entries.length; i < rawLines.length; i++) {
+    next.push({ h: hashDeployLogLine(rawLines[i] ?? ""), ms })
+  }
+  return { entries: next, fresh: false }
+}
+
+/** True when the matched prefix has more than one real recorded time. */
+export function deployLogClockHasVariedTimes(entries: DeployLogClockEntry[], count: number): boolean {
+  let first = 0
+  let saw = false
+  const n = Math.min(count, entries.length)
+  for (let i = 0; i < n; i++) {
+    const ms = entries[i]?.ms ?? 0
+    if (ms <= 0) continue
+    if (!saw) {
+      first = ms
+      saw = true
+      continue
+    }
+    if (ms !== first) return true
+  }
+  return false
+}
+
+/**
+ * Index of the first recorded time that is not the opening stamp.
+ * Lines before that were already in the file when recording started, so they
+ * share one clock and the start/now spread is the better display.
+ */
+function firstChangedClockIndex(entries: DeployLogClockEntry[], count: number): number {
+  const n = Math.min(count, entries.length)
+  let first = 0
+  let saw = false
+  for (let i = 0; i < n; i++) {
+    const ms = entries[i]?.ms ?? 0
+    if (ms <= 0) continue
+    if (!saw) {
+      first = ms
+      saw = true
+      continue
+    }
+    if (ms !== first) return i
+  }
+  return n
+}
+
+/**
+ * Recorded times win once the clock actually moves.
+ * Lines before that, and lines the recorder has not seen, keep the start/end
+ * (or start/now) spread.
+ */
+export function stampDeployLogForDisplay(
+  rawLines: string[],
+  generations: DeployLogClockEntry[][],
+  startIso: string,
+  endIso: string,
+  nowMs: number = Date.now(),
+): string[] {
+  const spanned = augmentLudusDeployHistoryLines(rawLines, startIso, endIso, nowMs)
+  const clock = selectDeployLogClock(rawLines, generations)
+  if (!clock) return spanned
+  const n = deployLogClockPrefix(rawLines, clock)
+  if (n === 0 || (n < clock.length && n < rawLines.length)) return spanned
+  if (!deployLogClockHasVariedTimes(clock, n)) return spanned
+  const changeAt = firstChangedClockIndex(clock, n)
+  return spanned.map((line, i) => {
+    if (i < changeAt || i >= n) return line
+    const ms = clock[i]?.ms ?? 0
+    if (ms <= 0) return line
+    if (deployLogLineHasLeadingWallTimestamp(rawLines[i] ?? "")) return rawLines[i] ?? line
+    return `[${formatInstantForDeployLog(ms)}] ${rawLines[i]}`
+  })
+}
+
+/**
+ * Stamp lines when this process first sees them.
+ * `previousStamped` is the last result for the same Ludus log text. Those stamps
+ * stay. Lines appended since then share `observedAtMs`. A log that is not an
+ * append of that text is stamped again from the first changed line.
+ */
+export function stampObservedDeployLines(
+  previousStamped: string[],
+  rawLines: string[],
+  observedAtMs: number,
+): string[] {
+  const stamp = formatInstantForDeployLog(observedAtMs)
+  const prevBodies = previousStamped.map((line) => splitLeadingWallTimestamp(line).body)
+  let prefix = 0
+  const limit = Math.min(prevBodies.length, rawLines.length)
+  while (prefix < limit && prevBodies[prefix] === rawLines[prefix]) prefix++
+  const kept = previousStamped.slice(0, prefix)
+  const fresh = rawLines.slice(prefix).map((line) => {
+    if (deployLogLineHasLeadingWallTimestamp(line)) return normalizeBracketedIsoTimestampPrefix(line)
+    return `[${stamp}] ${line}`
+  })
+  return [...kept, ...fresh]
+}
 
 export function augmentLudusDeployHistoryLines(
   lines: string[],
@@ -110,12 +285,13 @@ export function augmentLudusDeployHistoryLines(
   nowMs: number = Date.now(),
 ): string[] {
   const t0 = new Date(startIso).getTime()
-  const t1Raw = new Date(endIso || startIso).getTime()
-  let t1 = Number.isFinite(t1Raw) && t1Raw > t0 ? t1Raw : t0
-  // A still-running log has no end. Spreading one second per line from `start`
-  // stamps the tail after "now". Never project past the current instant.
+  const t1Raw = new Date(endIso || "").getTime()
+  const hasEnd = Number.isFinite(t1Raw) && t1Raw > t0
+  // No end yet: spread across the time the run has actually used.
+  let t1 = hasEnd ? t1Raw : Number.isFinite(nowMs) && nowMs > t0 ? nowMs : t0
   if (Number.isFinite(nowMs) && t1 > nowMs) t1 = Math.max(t0, nowMs)
   let span = Math.max(0, t1 - t0)
+  if (span > HISTORY_INTERPOLATE_MAX_SPAN_MS) span = HISTORY_INTERPOLATE_MAX_SPAN_MS
 
   const augmentableIdx: number[] = []
   lines.forEach((line, i) => {
@@ -126,14 +302,6 @@ export function augmentLudusDeployHistoryLines(
     augmentableIdx.push(i)
   })
   const m = augmentableIdx.length
-  if (m > 1 && span < 1) {
-    const elapsed = Number.isFinite(nowMs) ? Math.max(0, nowMs - t0) : 0
-    const synthetic = (m - 1) * HISTORY_INTERPOLATE_MIN_GAP_MS
-    span = Math.min(
-      HISTORY_INTERPOLATE_MAX_SPAN_MS,
-      elapsed > 0 ? Math.min(synthetic, elapsed) : 0,
-    )
-  }
 
   return lines.map((line, i) => {
     const pos = augmentableIdx.indexOf(i)

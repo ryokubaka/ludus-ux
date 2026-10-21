@@ -1,4 +1,6 @@
+import { Suspense } from "react"
 import { dynamicPageClient } from "@/lib/dynamic-page-client"
+import { RouteSegmentLoading } from "@/components/route-segment-loading"
 
 const GoadInstancePageClient = dynamicPageClient(
   () => import("./goad-instance/goad-instance-page"),
@@ -11,5 +13,12 @@ export default async function GoadInstancePage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  return <GoadInstancePageClient routeInstanceId={id} />
+  // Suspense has to sit outside the dynamic import. A query string on refresh
+  // otherwise bails out of the root layout and the whole document becomes the
+  // error screen.
+  return (
+    <Suspense fallback={<RouteSegmentLoading />}>
+      <GoadInstancePageClient routeInstanceId={id} />
+    </Suspense>
+  )
 }

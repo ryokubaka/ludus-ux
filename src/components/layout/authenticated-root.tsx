@@ -8,10 +8,18 @@ import { prefetchGlobal } from "@/lib/server-prefetch"
 import { getLayoutSession } from "@/lib/session-layout"
 import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { RouteSegmentLoading } from "@/components/route-segment-loading"
+import { ShellErrorBoundary } from "@/components/layout/shell-error-boundary"
 
 async function AuthenticatedRootInner({ children }: { children: React.ReactNode }) {
-  const { session, resolved } = await getLayoutSession()
-  const dehydratedState = await prefetchGlobal(resolved)
+  let session: Awaited<ReturnType<typeof getLayoutSession>>["session"] = null
+  let dehydratedState: Awaited<ReturnType<typeof prefetchGlobal>> | undefined
+  try {
+    const layout = await getLayoutSession()
+    session = layout.session
+    dehydratedState = await prefetchGlobal(layout.resolved)
+  } catch (err) {
+    console.error("[layout] failed to read the session:", err instanceof Error ? err.message : err)
+  }
   const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"
   const shellSession = session
     ? {
@@ -22,14 +30,16 @@ async function AuthenticatedRootInner({ children }: { children: React.ReactNode 
     : null
 
   return (
-    <QueryProvider initialScopeTag={initialScopeTag} shellSession={shellSession}>
-      <HydrationBoundary state={dehydratedState}>
-        <TooltipProvider>
-          <AppShell>{children}</AppShell>
-          <Toaster />
-        </TooltipProvider>
-      </HydrationBoundary>
-    </QueryProvider>
+    <ShellErrorBoundary>
+      <QueryProvider initialScopeTag={initialScopeTag} shellSession={shellSession}>
+        <HydrationBoundary state={dehydratedState}>
+          <TooltipProvider>
+            <AppShell>{children}</AppShell>
+            <Toaster />
+          </TooltipProvider>
+        </HydrationBoundary>
+      </QueryProvider>
+    </ShellErrorBoundary>
   )
 }
 

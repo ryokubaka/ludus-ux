@@ -15,6 +15,14 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.4.5] - 2026-10-21
+
+**LUX**
+
+- [Fix] **Deploy log timestamps** — A live range line is stamped when it appears, and that time stays. History for a running deploy spreads from the start to now. A finished run that was never recorded spreads from its start to its end.
+- [Fix] **GOAD instance refresh** — Reloading an instance page loads the lab again. If the session, address, or selected range cannot be read, the shell stays up. The error screen reloads once, then offers Reload.
+- [Fix] **Deploy tab logs** — The range and GOAD logs follow the latest run. An old task id in the address bar does not keep that run on screen after a newer deploy finishes.
+
 ## [1.4.4] - 2026-10-20
 
 **LUX**

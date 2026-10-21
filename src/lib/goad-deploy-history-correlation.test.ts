@@ -10,6 +10,7 @@ import {
   isNetworkOnlyTagDeploy,
   findCorrelatedGoadTask,
   correlateHistoryEntries,
+  pickGoadTaskForLiveLog,
   type GoadTaskForCorrelation,
   type CorrelatedHistoryEntry,
 } from "./goad-deploy-history-correlation"
@@ -324,5 +325,41 @@ describe("correlateHistoryEntries", () => {
     expect(result.some((e) => e.kind === "ludus_only" && e.deployEntry?.id === "stale")).toBe(
       true,
     )
+  })
+})
+
+describe("pickGoadTaskForLiveLog", () => {
+  const instanceId = "ff801d-goad-mini-ludus"
+
+  it("follows the newest finished task when the URL still names an older aborted run", () => {
+    const aborted = makeTask({
+      id: "old",
+      instanceId,
+      status: "aborted",
+      startedAt: 1_000,
+    })
+    const done = makeTask({
+      id: "new",
+      instanceId,
+      status: "completed",
+      startedAt: 5_000,
+    })
+    expect(pickGoadTaskForLiveLog([aborted, done], instanceId, "old")?.id).toBe("new")
+  })
+
+  it("keeps a running task ahead of a newer finished one", () => {
+    const running = makeTask({
+      id: "live",
+      instanceId,
+      status: "running",
+      startedAt: 1_000,
+    })
+    const done = makeTask({
+      id: "later",
+      instanceId,
+      status: "completed",
+      startedAt: 9_000,
+    })
+    expect(pickGoadTaskForLiveLog([done, running], instanceId, "later")?.id).toBe("live")
   })
 })

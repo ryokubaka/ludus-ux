@@ -41,7 +41,7 @@ import { ludusApi } from "@/lib/api"
 import { formatLudusUserDeleteError } from "@/lib/user-delete-errors"
 import type { UserObject, RangeObject } from "@/lib/types"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn, downloadTextFile } from "@/lib/utils"
 import { saveImpersonation } from "@/lib/impersonation-context"
 import { ludusImpersonationFields } from "@/lib/ludus-user-from-profile"
 
@@ -458,13 +458,7 @@ export function UsersPageClient() {
         })
         return
       }
-      const blob = new Blob([content], { type: "text/plain" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `${user.userID}-wireguard.conf`
-      a.click()
-      URL.revokeObjectURL(url)
+      downloadTextFile(`${user.userID}-wireguard.conf`, content)
       toast({ title: "WireGuard config downloaded" })
     } catch (err) {
       toast({
@@ -603,6 +597,7 @@ export function UsersPageClient() {
                               <Lock className="h-3 w-3 text-primary" />
                             </Button>
                             <Button
+                              type="button"
                               size="sm"
                               variant="outline"
                               className="h-7 gap-1.5 border-status-info/40 text-status-info hover:bg-status-info/10 text-xs whitespace-nowrap"

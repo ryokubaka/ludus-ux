@@ -24,7 +24,7 @@ const LogViewer = dynamic(() => import("@/components/range/log-viewer").then((m)
   loading: () => <div className="p-4 text-xs italic text-muted-foreground">Loading logs…</div>,
 })
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
-import { timeAgo, cn, extractArray, getRangeStateBadge } from "@/lib/utils"
+import { timeAgo, cn, downloadTextFile, extractArray, getRangeStateBadge } from "@/lib/utils"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import {
   Server,
@@ -929,13 +929,7 @@ export function DashboardPageClient() {
         toast({ variant: "destructive", title: "WireGuard", description: "Empty configuration from server" })
         return
       }
-      const blob = new Blob([content], { type: "text/plain" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = "ludus-wireguard.conf"
-      a.click()
-      URL.revokeObjectURL(url)
+      downloadTextFile("ludus-wireguard.conf", content)
       toast({ title: "WireGuard config downloaded" })
     } finally {
       setWireguardDownloading(false)
@@ -1170,6 +1164,7 @@ export function DashboardPageClient() {
             </p>
           </div>
           <Button
+            type="button"
             className="gap-2 shrink-0 bg-blue-600 hover:bg-blue-600/90 text-white"
             disabled={wireguardDownloading}
             onClick={() => void handleDownloadOwnWireguard()}

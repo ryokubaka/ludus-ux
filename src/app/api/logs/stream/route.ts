@@ -74,7 +74,8 @@ export async function GET(request: NextRequest) {
           const payload = (prefix === "LUDUS" || prefix === "GOAD")
             ? `[${prefix}] [${stamp}] ${data}`
             : `[${prefix}] ${data}`
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+          const frame = payload.replace(/\r\n/g, "\n").replace(/\n/g, "\ndata: ")
+          controller.enqueue(encoder.encode(`data: ${frame}\n\n`))
         } catch {
           // Controller already closed (client disconnected)
         }
@@ -86,11 +87,31 @@ export async function GET(request: NextRequest) {
           const payload = deployLogLineHasLeadingWallTimestamp(line)
             ? `[${prefix}] ${line}`
             : `[${prefix}] [${stamp}] ${line}`
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+          const frame = payload.replace(/\r\n/g, "\n").replace(/\n/g, "\ndata: ")
+          controller.enqueue(encoder.encode(`data: ${frame}\n\n`))
         } catch {
           /* controller closed */
         }
       }
+
+      // Comment frame so nginx and the browser see bytes before the first
+      // Ludus poll. An empty stream is closed and retried as a "blip".
+      try {
+        controller.enqueue(encoder.encode(": ok\n\n"))
+      } catch {
+        return
+      }
+
+      // Ansible can block the first log poll for a long time. A data frame on a
+      // timer keeps the proxy from closing the stream and the client from
+      // reporting a reconnect blip while the deploy is still quiet.
+      const heartbeat = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode("data: [PING]\n\n"))
+        } catch {
+          clearInterval(heartbeat)
+        }
+      }, 2000)
 
       try {
         let lastLudusCount = 0
@@ -306,6 +327,7 @@ export async function GET(request: NextRequest) {
       } catch (err) {
         send("ERROR", safeClientError(err, "Stream error"), getCachedLudusWallHmsOrUtc())
       } finally {
+        clearInterval(heartbeat)
         try { controller.close() } catch { /* already closed */ }
       }
     },
@@ -314,9 +336,9 @@ export async function GET(request: NextRequest) {
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
     },
   })
 }

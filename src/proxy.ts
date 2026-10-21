@@ -111,5 +111,9 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // SSE routes check the session themselves. Running them through this proxy
+  // buffers the body, so the browser sees a closed stream and reconnects.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|api/logs/stream|api/admin/app-logs/stream|api/goad/tasks/events|api/goad/execute|api/goad/tasks/.+/stream).*)",
+  ],
 }

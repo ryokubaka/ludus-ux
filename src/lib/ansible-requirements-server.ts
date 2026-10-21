@@ -2,6 +2,7 @@ import "server-only"
 
 import {
   findMissingRequirements,
+  requirementsAtWrongVersion,
   type BlueprintRequirement,
 } from "@/lib/blueprint-dependencies"
 import { revalidateLudusResource } from "@/lib/ludus-cache-revalidate"
@@ -93,4 +94,13 @@ export async function findMissingAnsibleRequirementsServer(
 ): Promise<BlueprintRequirement[]> {
   const installed = await fetchInstalledAnsibleServer(apiKey)
   return findMissingRequirements(installed, required)
+}
+
+/** Installed, but not the version Ludus pinned. A later install must pass that version. */
+export async function findWrongVersionAnsibleRequirementsServer(
+  apiKey: string,
+  required: BlueprintRequirement[],
+): Promise<BlueprintRequirement[]> {
+  const installed = await fetchInstalledAnsibleServer(apiKey)
+  return requirementsAtWrongVersion(installed, required)
 }

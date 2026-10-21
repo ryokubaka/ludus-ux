@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -67,6 +67,7 @@
     "browserslist": ">=4.28.7",
     "baseline-browser-mapping": ">=2.11.0",
     "postcss-selector-parser": ">=7.1.6",
+    "vite": "8.2.4",
     "@eslint/config-array": {
       "minimatch": "10.2.5"
     },

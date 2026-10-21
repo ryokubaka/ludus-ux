@@ -10,12 +10,14 @@ vi.mock("@/lib/ansible-home-repair", () => ({
 
 vi.mock("@/lib/ansible-requirements-server", () => ({
   findMissingAnsibleRequirementsServer: vi.fn(),
+  findWrongVersionAnsibleRequirementsServer: vi.fn(),
   installMissingAnsibleRequirementsServer: vi.fn(),
 }))
 
 import { sshExec } from "@/lib/goad-ssh"
 import {
   findMissingAnsibleRequirementsServer,
+  findWrongVersionAnsibleRequirementsServer,
   installMissingAnsibleRequirementsServer,
 } from "@/lib/ansible-requirements-server"
 import { ensureLudusPlatformAnsibleRequirements } from "./ludus-platform-ansible-requirements"
@@ -32,6 +34,7 @@ collections:
 describe("ensureLudusPlatformAnsibleRequirements", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(findWrongVersionAnsibleRequirementsServer).mockResolvedValue([])
   })
 
   it("installs missing Ludus platform roles before range deploy", async () => {
@@ -64,7 +67,7 @@ describe("ensureLudusPlatformAnsibleRequirements", () => {
       expect.arrayContaining([
         expect.objectContaining({ name: "ansible-thoteam.nexus3-oss" }),
       ]),
-      { linuxUser: "melchior" },
+      { linuxUser: "melchior", force: false },
     )
     expect(lines.some((l) => l.includes("platform Ansible"))).toBe(true)
     expect(lines.some((l) => l.includes("Repaired ~/.ansible"))).toBe(false)

@@ -79,8 +79,9 @@ type DockerResult = { status: number; body: string }
 function dockerApi(method: string, apiPath: string, body?: unknown, timeoutMs = 60_000): Promise<DockerResult> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body)
-    // codeql[js/file-access-to-http]
+    // Local Docker socket. Callers send this build's upgrade script, not an open URL.
     const req = http.request(
+      // codeql[js/file-access-to-http]
       {
         socketPath: DOCKER_SOCKET_PATH,
         path: `/${dockerApiVersion()}${apiPath}`,

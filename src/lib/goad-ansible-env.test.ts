@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { assertBashScript } from "@/test-support/assert-bash"
 import {
   buildEnsureGoadVenvShell,
   buildLudusAnsibleEnvShell,
@@ -75,10 +76,10 @@ describe("buildEnsureGoadVenvShell", () => {
     expect(sh).toContain("requirements_311.yml")
   })
 
-  it("does not emit invalid bash then; from semicolon joining", () => {
+  it("is a script bash accepts", () => {
     const sh = buildEnsureGoadVenvShell(goadPathFromEnv(), ludusInstallPathFromEnv())
-    expect(sh).not.toMatch(/then;\s*;/)
-    expect(sh).not.toContain("then;   _LUX_VER")
+    assertBashScript(sh)
+    assertBashScript(buildLudusAnsibleEnvShell(ludusInstallPathFromEnv(), goadPathFromEnv(), "labuser"))
   })
 
   it("recreates broken venv and pip-installs when rich missing", () => {

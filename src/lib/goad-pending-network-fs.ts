@@ -92,9 +92,10 @@ export function writePendingNetworkSnapshot(
 ): void {
   const filePath = pendingNetworkJsonPath(instanceId)
   fs.mkdirSync(pendingNetworkDir(), { recursive: true })
-  // codeql[js/http-to-file-access]
+  // Path is one instance-id segment. The body is that lab's network rules.
   fs.writeFileSync(
     filePath,
+    // codeql[js/http-to-file-access]
     JSON.stringify({
       snapshot: JSON.parse(snapshotJson),
       savedAt: Date.now(),

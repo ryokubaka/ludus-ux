@@ -15,6 +15,19 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.5.2] - 2026-10-28
+
+**LUX**
+
+- [Security] **CodeQL sinks** — The pending-network snapshot write and the Docker socket request are marked on the lines code scanning reports. A marker on the call above those lines did not cover them, so those two alerts stayed open.
+- [Security] **Bash syntax check** — The test that syntax-checks a shell script writes it to a file and runs `bash -n` on that path. Paths from the environment are no longer a `bash -c` argument.
+- [Improve] **Build log** — Prerendering no longer prints a session failure for every page. `connection()` still opts those routes out of the static shell, and the source-sync loop and lux-host SSH stay off until the server is running.
+
+**GOAD**
+
+- [Fix] **Extension install** — Enabling an extension on an existing lab stopped before Ansible ran. The workspace writability check was joined into `then;`, which Bash rejects. Install, remove, workspace refresh, and the network snapshot before a deploy all use that check.
+- [Fix] **Range switch on an instance** — Choosing another range in the sidebar while a GOAD instance is open left the page on that lab and put the sidebar back. It now opens that range's GOAD instance when one is deployed, and the Dashboard otherwise. The move uses the lab list already loaded on the page, so it does not wait on another host scan.
+
 ## [1.5.1] - 2026-10-28
 
 **LUX**

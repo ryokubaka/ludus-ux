@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
+import { assertBashScript, bashCArgument } from "@/test-support/assert-bash"
 import { buildWorkspaceSshExecPlan, wrapImpersonatedGoadCommand, writeGoadRangeId } from "./goad-ssh"
+
+/** Same shape as enable-extension: single-quoted base64 on the command line. */
+const QUOTED_INNER = `echo 'cHJpbnQoJ2hpJykK' | base64 -d | python3 - 'L29wdC9HT0FE' 'aWQ=' 'ZXh0'`
+const WORKSPACE = "/opt/GOAD/workspace/0ad38a-goad-mini-ludus"
 
 describe("buildWorkspaceSshExecPlan", () => {
   it("runs as the owner when they logged in with an SSH password", () => {
@@ -98,6 +103,52 @@ describe("buildWorkspaceSshExecPlan", () => {
     if (plan.ok) return
     expect(plan.status).toBe(503)
     expect(plan.error).toContain("abd6f1")
+  })
+
+  it("writes a bash script for the owner, for root, and for lux-host", () => {
+    const direct = buildWorkspaceSshExecPlan({
+      owner: "execudon",
+      innerCommand: QUOTED_INNER,
+      ownerSshCreds: { username: "execudon", password: "secret" },
+      privilegedSshConfigured: true,
+      callerIsAdmin: false,
+      hostSshUser: "root",
+      workspaceDir: WORKSPACE,
+    })
+    expect(direct.ok).toBe(true)
+    if (!direct.ok || typeof direct.command !== "string") return
+    expect(direct.command).toContain("not writable by")
+    expect(direct.command).toContain(QUOTED_INNER)
+    assertBashScript(direct.command)
+
+    const asRoot = buildWorkspaceSshExecPlan({
+      owner: "execudon",
+      innerCommand: QUOTED_INNER,
+      privilegedSshConfigured: true,
+      callerIsAdmin: true,
+      hostSshUser: "root",
+      workspaceDir: WORKSPACE,
+    })
+    expect(asRoot.ok).toBe(true)
+    if (!asRoot.ok || typeof asRoot.command !== "string") return
+    assertBashScript(asRoot.command)
+    const inner = bashCArgument(asRoot.command)
+    expect(inner).toContain("not writable by")
+    expect(inner).toContain(QUOTED_INNER)
+    assertBashScript(inner)
+
+    const asHost = buildWorkspaceSshExecPlan({
+      owner: "abd6f1",
+      innerCommand: QUOTED_INNER,
+      privilegedSshConfigured: true,
+      callerIsAdmin: true,
+      hostSshUser: "ludus",
+      workspaceDir: WORKSPACE,
+    })
+    expect(asHost.ok).toBe(true)
+    if (!asHost.ok || !asHost.stdin) return
+    expect(asHost.stdin).toContain(QUOTED_INNER)
+    assertBashScript(asHost.stdin)
   })
 })
 

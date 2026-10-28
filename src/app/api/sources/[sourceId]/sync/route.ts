@@ -4,6 +4,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { isHttp404Error, syncSource } from "@/lib/ludus-source-client"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
 export const maxDuration = 300
@@ -30,7 +31,7 @@ export async function POST(
   }
 
   // `--global` installs roles and collections for every user. Ludus allows that for admins only.
-  if (options.globalRoles && !session.isAdmin) {
+  if (options.globalRoles && !(await liveSessionIsAdmin(session))) {
     options = { ...options, globalRoles: false }
   }
 

@@ -20,6 +20,7 @@ import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { getSettings } from "@/lib/settings-store"
+import { logInfo } from "@/lib/log-safe"
 import {
   assertRouterTemplateReady,
 } from "@/lib/ludus-router-template-assert"
@@ -60,10 +61,8 @@ export async function POST(request: NextRequest) {
     verbose: getSettings().ludusAnsibleVerbose,
   }
 
-  console.log(
-    `[deploy-shared-service] Calling Ludus: POST ${ludusPath}`,
-    `body=${JSON.stringify(ludusBody)}`,
-    `user=${session.username}`,
+  logInfo(
+    `[deploy-shared-service] Calling Ludus: POST ${ludusPath} body=${JSON.stringify(ludusBody)} user=${session.username}`,
   )
 
   const router = await assertRouterTemplateReady(session.apiKey)

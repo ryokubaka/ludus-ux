@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getInstanceInventories, isGoadConfigured } from "@/lib/goad-ssh"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { resolveSession } from "@/lib/session"
 
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ instanceId: string }> }
 ) {
+  const session = await resolveSession(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
   if (!isGoadConfigured()) {
     return NextResponse.json(
       { error: "GOAD SSH not configured." },
@@ -20,8 +26,10 @@ export async function GET(
     return NextResponse.json({ error: "Missing instance ID" }, { status: 400 })
   }
 
-  const session = await resolveSession(_request)
-  const creds = session?.sshPassword
+  const denied = await assertGoadInstanceAccess(session, request, decoded)
+  if (denied) return denied
+
+  const creds = session.sshPassword
     ? { username: session.username, password: session.sshPassword }
     : undefined
 

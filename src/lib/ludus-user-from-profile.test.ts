@@ -42,10 +42,20 @@ describe("ludusImpersonationFields", () => {
 })
 
 describe("ludusCallerFromGetUser", () => {
-  it("returns user from single-element array", () => {
+  it("returns user from single-element array when no login hint is given", () => {
     const raw = [{ userID: "uid1", name: "alice", isAdmin: false }]
     const result = ludusCallerFromGetUser(raw, "")
     expect(result?.userId).toBe("uid1")
+  })
+
+  it("rejects a single profile that does not match the login hint", () => {
+    const raw = [{ userID: "admin", name: "admin", isAdmin: true, proxmoxUsername: "root" }]
+    expect(ludusCallerFromGetUser(raw, "alice")).toBeUndefined()
+  })
+
+  it("accepts a single profile when the login hint matches", () => {
+    const raw = [{ userID: "uid1", name: "alice", isAdmin: false }]
+    expect(ludusCallerFromGetUser(raw, "alice")?.userId).toBe("uid1")
   })
 
   it("matches by loginHint in multi-user array", () => {

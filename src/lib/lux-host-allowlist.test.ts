@@ -4,22 +4,33 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { lacks } from "../test-support/host-capabilities"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
 
-function fakeRootBin(opts?: { python?: boolean }): string {
+function fakeRootBin(opts?: { python?: boolean; stubs?: Record<string, string> }): string {
   const dir = mkdtempSync(path.join(tmpdir(), "lux-host-fake-"))
   const stub = (name: string, body: string) => {
     const file = path.join(dir, name)
     writeFileSync(file, body, { mode: 0o755 })
   }
-  stub("id", "#!/bin/sh\nif [ \"$1\" = \"-u\" ]; then echo 0; exit 0; fi\nif [ \"$1\" = \"-un\" ]; then echo root; exit 0; fi\necho 0\n")
+  stub(
+    "id",
+    `#!/bin/sh
+if [ "$1" = "-u" ] && [ -n "$2" ]; then echo "\${LUX_FAKE_UID:-0}"; exit 0; fi
+if [ "$1" = "-u" ]; then echo 0; exit 0; fi
+if [ "$1" = "-un" ]; then echo root; exit 0; fi
+if [ "$1" = "-nG" ]; then echo "\${LUX_FAKE_GROUPS:-luxuser}"; exit 0; fi
+echo 0
+`,
+  )
   stub("getent", "#!/bin/sh\nif [ \"$1\" = passwd ] && [ \"$2\" = luxuser ]; then echo 'luxuser:x:1000:1000::/home/luxuser:/bin/bash'; exit 0; fi\nexit 2\n")
-  const names = ["pvesh", "qm", "chown", "chmod", "chpasswd", "mkdir", "rm", "find", "cat", "date", "python3", "go", "curl", "wget", "brctl", "ip", "docker", "git", "systemd-run", "base64", "install", "sudo"]
+  const names = ["pvesh", "qm", "chown", "chmod", "chpasswd", "mkdir", "rm", "find", "cat", "date", "python3", "go", "curl", "wget", "brctl", "ip", "docker", "git", "systemd-run", "base64", "install", "sudo", "ludus"]
   for (const name of names) {
     if (name === "python3" && opts?.python === false) continue
     stub(name, "#!/bin/sh\necho \"$0 $*\" >> \"${LUX_HOST_STUB_LOG}\"\nexit 0\n")
   }
+  for (const [name, body] of Object.entries(opts?.stubs ?? {})) stub(name, body)
   return dir
 }
 
@@ -27,8 +38,9 @@ function run(
   args: string[],
   stdin = "",
   extraEnv: Record<string, string> = {},
+  stubs: Record<string, string> = {},
 ): { status: number; stdout: string; stderr: string; log: string } {
-  const bin = fakeRootBin()
+  const bin = fakeRootBin({ stubs })
   const log = path.join(bin, "stub.log")
   writeFileSync(log, "")
   const result = spawnSync("bash", [helper, ...args], {
@@ -63,7 +75,7 @@ function denied(args: string[], stdin = "") {
 }
 
 describe("lux-host allowlist", () => {
-  it("refuses to run unless it is root", () => {
+  it.skipIf(lacks("nonroot"))("refuses to run unless it is root", () => {
     const result = spawnSync("bash", [helper, "id"], { encoding: "utf8" })
     expect(result.status).toBe(1)
     expect(result.stderr).toMatch(/must run as root/)
@@ -152,6 +164,18 @@ describe("lux-host allowlist", () => {
     expect(purged.status).toBe(0)
     denied(["ludus-template-add", "/tmp/t", "abcdefgh"])
     denied(["ludus-template-rm", "ok-name", "short"])
+    // The key reaches ludus through its environment. Through /usr/bin/env it
+    // would sit in an argv that any host user can read with ps.
+    const key = "luxuser.SECRETapikey123"
+    const removed = run(["ludus-template-rm", "ok-name"], `${key}\n`, {}, {
+      env: "#!/bin/sh\necho \"env $*\" >> \"${LUX_HOST_STUB_LOG}\"\nexec /usr/bin/env \"$@\"\n",
+      ludus: "#!/bin/sh\necho \"ludus $* key=${LUDUS_API_KEY} version=${LUDUS_VERSION}\" >> \"${LUX_HOST_STUB_LOG}\"\n",
+    })
+    expect(removed.status).toBe(0)
+    expect(removed.log).toContain(`ludus templates rm -n ok-name key=${key} version=2`)
+    expect(removed.log).not.toMatch(/^env /m)
+    expect(run(["run-as-user", "luxuser"], "echo hi\n", { LUX_FAKE_UID: "1000", LUX_FAKE_GROUPS: "luxuser sudo" }).status).toBe(2)
+    expect(run(["run-as-user", "root"], "echo hi\n").status).toBe(2)
     denied(["sources-repair", "../x"])
     denied(["find-packer", "/etc"])
   })
@@ -211,7 +235,7 @@ describe("lux-host allowlist", () => {
     denied(["release-refs", "/tmp/not-lux;id"])
   })
 
-  it("runs a signed stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {
+  it.skipIf(lacks("userns"))("runs a signed stdin upgrade script from a root-owned temp file and refuses a caller-writable checkout script", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "lux-upgrade-owned-"))
     mkdirSync(path.join(repo, "scripts"), { recursive: true })
     mkdirSync(path.join(repo, "data"), { recursive: true })

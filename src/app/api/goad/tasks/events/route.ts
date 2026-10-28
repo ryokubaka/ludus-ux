@@ -11,7 +11,8 @@
 
 import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/session"
-import { subscribeToTaskStatusEvents } from "@/lib/goad-task-store"
+import { getTask, subscribeToTaskStatusEvents } from "@/lib/goad-task-store"
+import { canAccessGoadTask } from "@/lib/goad-task-api"
 
 
 export async function GET(request: NextRequest) {
@@ -42,10 +43,18 @@ export async function GET(request: NextRequest) {
         }
       }, 20_000)
 
+      // Other users' task ids and states are not broadcast to every session.
       const unsub = subscribeToTaskStatusEvents((taskId, status) => {
-        if (!request.signal.aborted) {
+        if (request.signal.aborted) return
+        const task = getTask(taskId)
+        if (!task) {
           send(`[TASK_UPDATED] ${taskId} ${status}`)
+          return
         }
+        void canAccessGoadTask(session, request, task).then((allowed) => {
+          if (request.signal.aborted || !allowed) return
+          send(`[TASK_UPDATED] ${taskId} ${status}`)
+        })
       })
 
       request.signal.addEventListener("abort", () => {

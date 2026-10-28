@@ -12,23 +12,32 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { requireSession } from "@/lib/require-session"
+import {
+  effectiveImpersonatedOperatorUsername,
+  resolveAdminImpersonationFromRequest,
+} from "@/lib/admin-impersonation-request"
 import {
   createDeployHandoff,
+  getHandoffById,
   linkHandoffToTask,
   pruneOldHandoffs,
 } from "@/lib/goad-deploy-handoff-store"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { writePendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
+import { sameOperator } from "@/lib/operator-name"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
+import { writePendingNetworkSnapshot, InvalidInstanceIdError, assertSafeInstanceId } from "@/lib/goad-pending-network-fs"
+import { assertGoadTaskAccess } from "@/lib/goad-task-api"
+import { getTask } from "@/lib/goad-task-store"
+import { ludusRequest } from "@/lib/ludus-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: {
     rangeId?: string
@@ -46,16 +55,38 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "rangeId is required" }, { status: 400 })
   }
 
-  // Resolve the effective username for multi-user / impersonation scenarios.
-  const imp = resolveAdminImpersonationFromRequest(session, request)
-  const sshUser = ((imp.apiKey ? imp.sshLogin || imp.ludusPrincipal : null) || session.username || "").trim()
-  const username = sshUser
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
+  const username = (await effectiveImpersonatedOperatorUsername(session, request)).trim()
+
+  if (instanceId) {
+    try {
+      assertSafeInstanceId(instanceId)
+    } catch (err) {
+      if (err instanceof InvalidInstanceIdError) {
+        return NextResponse.json({ error: "Invalid instance id" }, { status: 400 })
+      }
+      throw err
+    }
+    const denied = await assertGoadInstanceAccess(session, request, instanceId)
+    if (denied) {
+      logLuxRouteAction(request, session, { outcome: "failure", detail: `instanceId=${instanceId} forbidden` })
+      return denied
+    }
+  }
+
+  // The workflow later writes this range with the task owner's key, and the
+  // instance link feeds other lookups, so the caller must be able to read it.
+  const rangeCheck = await ludusRequest<unknown>(`/range?rangeID=${encodeURIComponent(rangeId)}`, {
+    apiKey: imp.apiKey || session.apiKey,
+  })
+  if (rangeCheck.error || rangeCheck.status !== 200) {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: `rangeId=${rangeId} not accessible` })
+    return NextResponse.json({ error: "Range not accessible" }, { status: 403 })
+  }
 
   // Persist the range→instance mapping immediately so the server can find it
   // even if the client-side set-range call never completes.
-  if (instanceId) {
-    setInstanceRangeLocal(instanceId, rangeId)
-  }
+  if (instanceId) setInstanceRangeLocal(instanceId, rangeId)
 
   // Persist the network rules snapshot to disk so the server-side workflow
   // can apply them after GOAD finishes, exactly as the client would have done.
@@ -63,7 +94,17 @@ export async function POST(request: NextRequest) {
   if (networkRules && typeof networkRules === "string" && networkRules.trim()) {
     networkRulesJson = networkRules
     if (instanceId) {
-      writePendingNetworkSnapshot(instanceId, networkRules)
+      try {
+        writePendingNetworkSnapshot(instanceId, networkRules, username)
+      } catch (err) {
+        if (err instanceof InvalidInstanceIdError) {
+          return NextResponse.json({ error: "Invalid instance id" }, { status: 400 })
+        }
+        if (err instanceof SyntaxError) {
+          return NextResponse.json({ error: "Invalid network rules" }, { status: 400 })
+        }
+        throw err
+      }
     }
   }
 
@@ -75,10 +116,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: { handoffId?: string; taskId?: string }
   try {
@@ -92,7 +132,22 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "handoffId and taskId are required" }, { status: 400 })
   }
 
+  const isAdmin = await liveSessionIsAdmin(session)
+  const notFound = () => {
+    logLuxRouteAction(request, session, { outcome: "failure", detail: `handoffId=${handoffId} taskId=${taskId} not found` })
+    return refreshRevokedAdminCookie(NextResponse.json({ error: "Not found" }, { status: 404 }), session, isAdmin)
+  }
+
+  const handoff = getHandoffById(handoffId)
+  const task = getTask(taskId)
+  if (!handoff || !task) return notFound()
+  if (await assertGoadTaskAccess(session, request, task)) return notFound()
+  const caller = await effectiveImpersonatedOperatorUsername(session, request)
+  if (!isAdmin && !sameOperator(handoff.username, caller)) return notFound()
+  // The workflow trusts this handoff's range and rules for the task's owner.
+  if (task.username && !sameOperator(handoff.username, task.username)) return notFound()
+
   linkHandoffToTask(handoffId, taskId)
   logLuxRouteAction(request, session, { detail: `handoffId=${handoffId} taskId=${taskId}` })
-  return NextResponse.json({ ok: true })
+  return refreshRevokedAdminCookie(NextResponse.json({ ok: true }), session, isAdmin)
 }

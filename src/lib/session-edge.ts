@@ -95,20 +95,10 @@ export function isLegacyCookiePayload(data: CookiePayload): boolean {
 
 export async function readCookieToken(request?: NextRequest): Promise<string | null> {
   if (request) {
-    const token = request.cookies.get(SESSION_COOKIE)?.value
-    if (token) return token
-    if (IS_SECURE_CONTEXT) {
-      return request.cookies.get(LEGACY_SESSION_COOKIE)?.value ?? null
-    }
-    return null
+    return request.cookies.get(SESSION_COOKIE)?.value ?? null
   }
   const cookieStore = await cookies()
-  const token = cookieStore.get(SESSION_COOKIE)?.value
-  if (token) return token
-  if (IS_SECURE_CONTEXT) {
-    return cookieStore.get(LEGACY_SESSION_COOKIE)?.value ?? null
-  }
-  return null
+  return cookieStore.get(SESSION_COOKIE)?.value ?? null
 }
 
 export async function encryptSession(data: SessionData): Promise<string> {

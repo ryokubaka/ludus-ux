@@ -8,6 +8,9 @@ import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-req
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
   const result = await fetchGoadInstancesForRequest(request, session)
 
   if (!result.configured) {

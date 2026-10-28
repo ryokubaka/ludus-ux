@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
+import { requireAdmin } from "@/lib/require-admin"
 import { insertVmOperation, listVmOperations } from "@/lib/vm-operation-log"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -13,12 +14,16 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
  * to see everyone. Rows are newest-first.
  */
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  let session = gate.session
+  if (session.isAdmin) {
+    const admin = await requireAdmin(request)
+    if (!admin.ok) session = { ...session, isAdmin: false }
+    else session = admin.session
   }
 
-  const effectiveOp = effectiveImpersonatedOperatorUsername(session, request)
+  const effectiveOp = await effectiveImpersonatedOperatorUsername(session, request)
 
   const url = new URL(request.url)
   const rangeId = url.searchParams.get("rangeId")?.trim() || null
@@ -57,12 +62,16 @@ export async function GET(request: NextRequest) {
  * Append one row to the local SQLite audit table (VM destroy / extension removal).
  */
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  let session = gate.session
+  if (session.isAdmin) {
+    const admin = await requireAdmin(request)
+    if (!admin.ok) session = { ...session, isAdmin: false }
+    else session = admin.session
   }
 
-  const username = effectiveImpersonatedOperatorUsername(session, request)
+  const username = await effectiveImpersonatedOperatorUsername(session, request)
 
   let body: Record<string, unknown>
   try {

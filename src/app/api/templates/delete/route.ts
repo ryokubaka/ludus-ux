@@ -18,7 +18,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { ludusRequest } from "@/lib/ludus-client"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { sshExec } from "@/lib/goad-ssh"
 import { resolveLudusInstallPath } from "@/lib/runtime-paths"
 import {
@@ -46,13 +46,9 @@ function templateStillListed(
 }
 
 export async function DELETE(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   const body = (await request.json().catch(() => null)) as { name?: string } | null
   const name = body?.name?.trim() || ""
@@ -63,7 +59,7 @@ export async function DELETE(request: NextRequest) {
     )
   }
 
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const apiKey = (imp.apiKey || session.apiKey || "").trim()
   if (!apiKey) {
     return NextResponse.json({ error: "No Ludus API key in session — sign in again." }, { status: 400 })
@@ -94,7 +90,7 @@ export async function DELETE(request: NextRequest) {
   // CLI unregister first (API often soft-refuses shared/source packer paths).
   let cliOut = ""
   try {
-    const cli = await sshExec(buildLudusTemplateRmCliCmd(name, apiKey))
+    const cli = await sshExec(buildLudusTemplateRmCliCmd(name), undefined, { stdin: `${apiKey}\n` })
     cliOut = (cli.stdout + cli.stderr).trim()
   } catch (err) {
     cliOut = logAndSafeError("templates/delete", err, "ludus templates rm failed")
@@ -231,11 +227,11 @@ export async function DELETE(request: NextRequest) {
     detail: `template=${name}${apiRefused ? " (ssh cleanup after packer refuse)" : ""}`,
   })
 
-  return NextResponse.json({
+  return finishAdminResponse(NextResponse.json({
     ok: true,
     message: apiRefused
       ? `Template "${name}" removed from disk (Ludus soft-refused API delete for shared packer path — not a stock template)`
       : `Template "${name}" deleted`,
     apiMessage: apiMessage || undefined,
-  })
+  }), admin)
 }

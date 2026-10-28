@@ -27,5 +27,12 @@ export default defineConfig({
     // Optional: PW_CHANNEL=chrome|msedge when bundled Chromium is not installed
     ...(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL as "chrome" | "msedge" } : {}),
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", testIgnore: /security[\\/]/, use: { ...devices["Desktop Chrome"] } },
+    // Live security suite (scripts/ci/live-security.sh). Setup creates a
+    // throwaway non-admin user; teardown always deletes it.
+    { name: "security-setup", testMatch: /security[\\/]setup\.ts$/, teardown: "security-teardown" },
+    { name: "security-teardown", testMatch: /security[\\/]teardown\.ts$/ },
+    { name: "security", testMatch: /security[\\/].*\.spec\.ts$/, dependencies: ["security-setup"] },
+  ],
 })

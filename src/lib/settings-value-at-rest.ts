@@ -47,7 +47,7 @@ function decryptWithKey(stored: string, prefix: string, key: Buffer): string {
   const iv = raw.subarray(0, 12)
   const tag = raw.subarray(12, 28)
   const ciphertext = raw.subarray(28)
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv)
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv, { authTagLength: 16 })
   decipher.setAuthTag(tag)
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")
 }

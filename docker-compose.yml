@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        # Image user. Baked in at build time from .env. A change needs --build.
+        LUX_UID: ${LUX_UID:-64532}
+        LUX_GID: ${LUX_GID:-64532}
     container_name: ludus-ux
     restart: unless-stopped
     expose:
@@ -17,7 +21,8 @@ services:
       # Session encryption secret (required in production: min 32 chars, not a placeholder — see docs/environment.md)
       - APP_SECRET=${APP_SECRET:-change-me-in-production}
       # Lab-only: accept self-signed TLS to Ludus/PocketBase/Proxmox. Omit or false in hardened production (use NODE_EXTRA_CA_CERTS).
-      - LUDUS_TLS_INSECURE=${LUDUS_TLS_INSECURE:-true}
+      # Unset passes empty, which verifies, so login can tell an old .env from an explicit false.
+      - LUDUS_TLS_INSECURE=${LUDUS_TLS_INSECURE:-}
       # Ludus API — defaults from LUDUS_SSH_HOST; override LUDUS_URL / LUDUS_ADMIN_URL in .env if needed.
       - LUDUS_URL=${LUDUS_URL:-https://${LUDUS_SSH_HOST}:8080}
       - LUDUS_ADMIN_URL=${LUDUS_ADMIN_URL:-https://${LUDUS_SSH_HOST}:8081}
@@ -53,11 +58,14 @@ services:
       # Host path of this git clone on the Docker host. Empty: discover via `docker inspect`.
       - LUX_REPO_PATH=${LUX_REPO_PATH:-}
     volumes:
-      - ${SSH_KEY_PATH:-./ssh}:/app/ssh
+      - ${SSH_KEY_PATH:-./ssh}:/app/ssh:ro
       - ${DATA_DIR:-./data}:/app/data
       # Lets Settings → About run scripts/upgrade.sh on this Docker host.
       # The socket is root-equivalent for the daemon: the app can start and stop containers here.
       - /var/run/docker.sock:/var/run/docker.sock
+    # The entrypoint copies an SSH key the app user cannot read here, so the copy stays in memory.
+    tmpfs:
+      - /run/lux-ssh:mode=0700
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

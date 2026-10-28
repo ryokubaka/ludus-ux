@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { buildLudusTemplateDeleteCmd } from "./template-packer-paths"
+import { lacks } from "../test-support/host-capabilities"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
 
@@ -43,7 +44,7 @@ ${body}
 }
 
 describe("lux-host template-purge", () => {
-  it("removes install copies by alias and list-name vm_name and leaves source checkouts", () => {
+  it.skipIf(lacks("userns"))("removes install copies by alias and list-name vm_name and leaves source checkouts", () => {
     const out = runPurge(`
 write_hcl /opt/ludus/packer/debian13/debian.pkr.hcl debian-13-x64-server-template
 write_hcl /opt/ludus/packer/templates/debian13/debian.pkr.hcl debian-13-x64-server-template
@@ -85,7 +86,7 @@ gone /opt/ludus/users/alice/packer/securityonion-2.4
     expect(out.stderr).not.toMatch(/still present/)
   })
 
-  it("fails when an install directory whose vm_name is the list name is still present", () => {
+  it.skipIf(lacks("userns"))("fails when an install directory whose vm_name is the list name is still present", () => {
     const bin = mkdtempSync(path.join(tmpdir(), "lux-purge-rm-"))
     writeFileSync(path.join(bin, "rm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
     const out = runPurge(

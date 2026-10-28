@@ -20,7 +20,7 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -44,4 +44,7 @@ jobs:
             exit 0
           fi
           title="$(printf '%s\n' "$parsed" | sed -n 's/^title=//p')"
+          # Keep the checklist from .github/pull_request_template.md, ticks included.
+          checklist="$(printf '%s\n' "$current" | awk '/^## Security checklist/{keep=1} keep')"
+          if [[ -n "$checklist" ]]; then printf '\n%s\n' "$checklist" >>"$notes"; fi
           gh pr edit "$PR_NUMBER" --title "$title" --body-file "$notes"

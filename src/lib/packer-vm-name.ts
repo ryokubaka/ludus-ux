@@ -39,8 +39,15 @@ export function ludusTemplateInstallName(dirName: string, packerSource: string |
  * the install name is `debian-13-x64-server-template`.
  * Null when that folder is not one safe directory name.
  */
+/** Drop trailing slashes without a regex that can be driven into polynomial backtracking. */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1
+  return value.slice(0, end)
+}
+
 export function packerDirFromTemplatePath(templatePath: string, fallbackName: string): string | null {
-  const base = templatePath.replace(/\/+$/, "").split("/").filter(Boolean).pop() ?? ""
+  const base = trimTrailingSlashes(templatePath).split("/").filter(Boolean).pop() ?? ""
   const candidate = !base || base === "templates" ? fallbackName : base
   if (!isSafePackerDirName(candidate)) return null
   return candidate

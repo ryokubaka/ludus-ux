@@ -1,0 +1,2 @@
+# Semgrep rules excluded from scripts/ci/sast.sh, one per line: <rule-id> <reason>.
+# Exclude a rule only after reviewing every finding it raises in this repo.

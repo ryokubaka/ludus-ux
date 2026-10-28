@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { insertLuxTestingEvent, pruneLuxRangeLogMarkers } from "@/lib/range-log-markers-store"
 import type { LuxTestingOpType } from "@/lib/range-log-marker-types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -17,7 +17,7 @@ function isAllowlistTestingOpType(s: string): s is "testing_allow_add" | "testin
   return s === "testing_allow_add" || s === "testing_allow_remove"
 }
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: {
     username: string
@@ -28,7 +28,7 @@ function getEffective(
     impersonationSshLogin?: string
   },
 ) {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   return {
     effectiveUsername:
       imp.apiKey
@@ -44,8 +44,9 @@ export async function POST(request: NextRequest) {
     console.warn("[testing-activity] pruneLuxRangeLogMarkers:", (err as Error).message)
   }
 
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: { rangeId?: unknown; opType?: unknown; detail?: unknown; success?: unknown }
   try {
@@ -69,7 +70,7 @@ export async function POST(request: NextRequest) {
 
   const success = body.success === true
 
-  const { effectiveUsername } = getEffective(request, session)
+  const { effectiveUsername } = await getEffective(request, session)
   const now = Date.now()
 
   const id = insertLuxTestingEvent({

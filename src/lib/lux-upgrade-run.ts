@@ -14,6 +14,7 @@ import {
   buildHostProbeCmd,
   buildHostReleaseRefsCmd,
   buildStartUpgradeCmd,
+  upgradeStartArgs,
   parseHostProbe,
   parseHostReleaseRefs,
   readLuxUpgradeLogTail,
@@ -47,9 +48,9 @@ function upgradeHostFailure(message: string, viaDocker: boolean): string {
 }
 
 function bundledUpgradeScript(): string {
-  const file = path.join(process.cwd(), "scripts", "upgrade.sh")
-  const text = fs.readFileSync(file, "utf8")
-  if (!text || Buffer.byteLength(text) > UPGRADE_SCRIPT_MAX) {
+  const dir = path.join(process.cwd(), "scripts")
+  const text = `${fs.readFileSync(path.join(dir, "lux-verify-tag.sh"), "utf8")}\n${fs.readFileSync(path.join(dir, "upgrade.sh"), "utf8")}`
+  if (!text.includes("lux_verify_signed_tag") || Buffer.byteLength(text) > UPGRADE_SCRIPT_MAX) {
     throw new Error("This LUX build has no scripts/upgrade.sh to send to the host.")
   }
   return text
@@ -185,7 +186,7 @@ export async function startLuxUpgrade(
       : { containerRef: "ludus-ux" as const, candidates: [] as string[] }
     const out = await execOnUpgradeHost(
       buildStartUpgradeCmd(host.repoPath, tag, startCtx.containerRef),
-      ["upgrade-start", host.repoPath, tag],
+      upgradeStartArgs(host.repoPath, tag),
     )
     if (!/\bstarted\b/.test(out)) {
       return { ok: false, status: 500, error: out.trim() || "Failed to start the upgrade on the host" }

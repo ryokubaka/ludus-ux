@@ -19,6 +19,7 @@ import {
   buildHostProbeCmd,
   buildHostReleaseRefsCmd,
   buildStartUpgradeCmd,
+  upgradeStartArgs,
   parseHostReleaseRefs,
   filterHostShellRepoCandidates,
   isSafeLuxRepoPath,
@@ -155,7 +156,9 @@ describe("lux-upgrade-host", () => {
     )
     chmodSync(path.join(bin, "docker"), 0o755)
     chmodSync(path.join(bin, "systemd-run"), 0o755)
-    const cmd = buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")
+    delete process.env.LUX_UPGRADE_TRUSTED_KEY
+    delete process.env.LUX_UPGRADE_TRUSTED_FPR
+    const cmd = withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))
     const started = Date.now()
     const out = execFileSync("bash", ["-c", cmd], {
       encoding: "utf8",
@@ -170,8 +173,31 @@ describe("lux-upgrade-host", () => {
     expect(args).toContain("--setenv=REPO=/opt/ludus-ux")
     expect(args).toContain("--setenv=TAG=v1.3.3")
     expect(args).toContain("--setenv=LUX_UPGRADE_YES=1")
+    expect(args.some((arg) => arg.startsWith("--setenv=LUX_UPGRADE_TRUSTED_"))).toBe(false)
     expect(args.some((arg) => arg.includes("scripts/upgrade.sh") && arg.includes("LUX_UPGRADE_EXIT:"))).toBe(true)
     expect(readFileSync(path.join(data, "lux-upgrade.log"), "utf8")).toContain("v1.3.3")
+  })
+
+  it("forwards a trusted key path and fingerprint into the host switch", () => {
+    process.env.LUX_UPGRADE_TRUSTED_KEY = "/opt/lux-release.asc"
+    process.env.LUX_UPGRADE_TRUSTED_FPR = "ab".repeat(20)
+    try {
+      const cmd = buildStartUpgradeCmd("/opt/ludus-ux", "v1.4.6")
+      const b64 = /printf '%s' '([A-Za-z0-9+/=]+)'/.exec(cmd)?.[1]
+      const inner = Buffer.from(b64 ?? "", "base64").toString("utf8")
+      expect(inner).toContain("--setenv=LUX_UPGRADE_TRUSTED_KEY=/opt/lux-release.asc")
+      expect(inner).toContain(`--setenv=LUX_UPGRADE_TRUSTED_FPR=${"ab".repeat(20)}`)
+      expect(upgradeStartArgs("/opt/ludus-ux", "v1.4.6")).toEqual([
+        "upgrade-start",
+        "/opt/ludus-ux",
+        "v1.4.6",
+        "/opt/lux-release.asc",
+        "ab".repeat(20),
+      ])
+    } finally {
+      delete process.env.LUX_UPGRADE_TRUSTED_KEY
+      delete process.env.LUX_UPGRADE_TRUSTED_FPR
+    }
   })
 
   it("records a numeric exit code in the upgrade log", () => {
@@ -199,7 +225,7 @@ describe("lux-upgrade-host", () => {
       { mode: 0o755 },
     )
     chmodSync(upgradeSh, 0o755)
-    const failed = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
+    const failed = execFileSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))], {
       encoding: "utf8",
       env,
     })
@@ -213,7 +239,7 @@ describe("lux-upgrade-host", () => {
 
     writeFileSync(upgradeSh, "#!/bin/sh\nprintf '%s\\n' 'Done. Running:'\nexit 0\n", { mode: 0o755 })
     chmodSync(upgradeSh, 0o755)
-    const ok = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.4")], {
+    const ok = execFileSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.4"))], {
       encoding: "utf8",
       env,
     })
@@ -231,7 +257,7 @@ describe("lux-upgrade-host", () => {
       mode: 0o755,
     })
     writeFileSync(path.join(bin, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
-    const result = spawnSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
+    const result = spawnSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, NODE_ENV: "test" },
     })
@@ -298,7 +324,7 @@ exit 1
       { mode: 0o755 },
     )
     chmodSync(path.join(bin, "git"), 0o755)
-    const out = execFileSync("bash", ["-c", buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })], {
+    const out = execFileSync("bash", ["-c", withStubsFirst(buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] }))], {
       encoding: "utf8",
       env: gitEnv(bin),
     })
@@ -326,7 +352,7 @@ exit 1
       { mode: 0o755 },
     )
     chmodSync(path.join(bin, "git"), 0o755)
-    const out = execFileSync("bash", ["-c", buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })], {
+    const out = execFileSync("bash", ["-c", withStubsFirst(buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] }))], {
       encoding: "utf8",
       env: gitEnv(bin),
     })
@@ -440,9 +466,28 @@ exec /bin/bash -c "$script"
 /** Stub docker so host probe tests do not pick up a real ludus-ux bind mount from the dev machine. */
 function writeProbeDockerStub(bin: string): void {
   const docker = path.join(bin, "docker")
-  if (existsSync(docker)) return
-  writeFileSync(docker, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  try {
+    writeFileSync(docker, "#!/bin/sh\nexit 0\n", { mode: 0o755, flag: "wx" })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return
+    throw err
+  }
   chmodSync(docker, 0o755)
+}
+
+/**
+ * The host script puts the system PATH first, so /usr/bin/git, docker, and
+ * systemd-run on a CI image run instead of the test stubs. Re-encode the same
+ * script with the caller's PATH first so those stubs are the ones called.
+ */
+function withStubsFirst(command: string): string {
+  const match = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d \| \/bin\/sh$/.exec(command)
+  if (!match) throw new Error("unexpected host script wrapper")
+  const inner = Buffer.from(match[1], "base64").toString("utf8")
+  const systemPath = 'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"'
+  if (!inner.includes(systemPath)) throw new Error("host script no longer sets the system PATH this way")
+  const rewritten = inner.replace(systemPath, 'export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"')
+  return command.replace(match[1], Buffer.from(rewritten, "utf8").toString("base64"))
 }
 
 function gitEnv(bin: string): NodeJS.ProcessEnv {
@@ -474,6 +519,10 @@ describe("upgrade.sh dubious ownership", () => {
     copyFileSync(
       path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/upgrade.sh"),
       path.join(root, "scripts/upgrade.sh"),
+    )
+    copyFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/lux-verify-tag.sh"),
+      path.join(root, "scripts/lux-verify-tag.sh"),
     )
     writeFileSync(
       path.join(bin, "git"),

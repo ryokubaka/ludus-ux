@@ -11,12 +11,14 @@
 
 import { NextRequest } from "next/server"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { POST as abortPost } from "../abort/route"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
   // Buffer the body so we can hand a fresh request to the new route without
   // streaming + duplex concerns. The old force-state body shape ({ rangeId,
   // apiKey }) is a strict subset of the new route's body shape so no

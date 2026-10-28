@@ -7,6 +7,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import {
   LUX_HOST_VERIFY_CMD,
   buildLuxHostInstallShell,
+  luxHostInstallStdin,
   explainLuxHostInstallFailure,
   loadLuxHostInstallPayload,
   luxHostSudoUsernameError,
@@ -87,7 +88,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const payload = loadLuxHostInstallPayload(user)
-    await runAsRoot(buildLuxHostInstallShell(payload.helperB64, payload.sudoersB64, "root"), updateKey)
+    await runAsRoot(
+      buildLuxHostInstallShell("root"),
+      luxHostInstallStdin(payload.helperB64, payload.sudoersB64, updateKey),
+    )
 
     const verify = (await runAsUser(LUX_HOST_VERIFY_CMD)).trim()
     if (verify !== "0") {

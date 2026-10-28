@@ -1,6 +1,6 @@
 /** Embedded Python: render GOAD Ludus provider config.yml (lab + extensions) without writing workspace. */
 export const GOAD_PREVIEW_CONFIG_PY = `
-import json, os, sys, base64
+import json, os, re, sys, base64
 
 def _b(i):
     return base64.b64decode(sys.argv[i]).decode("utf-8")
@@ -26,23 +26,32 @@ except Exception as e:
     print(json.dumps(out))
     sys.exit(0)
 
-# Trust boundary: templates are read only from the local, trusted GOAD repo
-# checkout under goad_path (ad/<lab> and extensions/<ext>). They are not
-# user-supplied, so a plain (non-sandboxed) Jinja2 Environment is acceptable
-# here. If custom/user-provided GOAD sources are ever introduced, switch to
-# jinja2.sandbox.SandboxedEnvironment before rendering.
+# Templates must stay inside the GOAD checkout. Names are a single path segment
+# and the resolved directory must remain under goad_path. Rendering uses the
+# Jinja sandbox so a template cannot reach Python internals.
 try:
-    from jinja2 import Environment, FileSystemLoader
+    from jinja2 import FileSystemLoader
+    from jinja2.sandbox import SandboxedEnvironment
 except ImportError:
-    out["error"] = "Jinja2 not installed on GOAD host"
+    out["error"] = "Jinja2 sandbox not installed on GOAD host"
     print(json.dumps(out))
     sys.exit(0)
 
 ip_range = _b(5) if len(sys.argv) > 5 and sys.argv[5] else "192.168.56"
 range_id = _b(6) if len(sys.argv) > 6 and sys.argv[6] else "{{ range_id }}"
 
+NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+def safe_under_goad(*parts):
+    if not all(isinstance(part, str) and NAME_RE.match(part) for part in parts):
+        raise ValueError("invalid path segment")
+    root_real = os.path.realpath(goad_path)
+    joined = os.path.realpath(os.path.join(root_real, *parts))
+    if joined != root_real and not joined.startswith(root_real + os.sep):
+        raise ValueError("path escapes GOAD root")
+    return joined
+
 def primary_vlan(config_text):
-    import re
     vlans = re.findall(r'(?m)^\\s*vlan:\\s*(\\d+)\\s*$', config_text or '')
     if not vlans:
         return "10"
@@ -52,13 +61,13 @@ def primary_vlan(config_text):
     return sorted(counts, key=lambda vlan: (-counts[vlan], int(vlan)))[0]
 
 def lab_provider_path(lab, provider):
-    return os.path.join(goad_path, "ad", lab, "providers", provider)
+    return safe_under_goad("ad", lab, "providers", provider)
 
 def ext_provider_path(ext, provider):
-    return os.path.join(goad_path, "extensions", ext, "providers", provider)
+    return safe_under_goad("extensions", ext, "providers", provider)
 
 def template_provider_path(provider):
-    return os.path.join(goad_path, "template", "provider", provider)
+    return safe_under_goad("template", "provider", provider)
 
 try:
     lab_path = lab_provider_path(lab_name, provider_name)
@@ -67,7 +76,7 @@ try:
         print(json.dumps(out))
         sys.exit(0)
 
-    lab_env = Environment(loader=FileSystemLoader(lab_path))
+    lab_env = SandboxedEnvironment(loader=FileSystemLoader(lab_path))
     lab_content = lab_env.get_template("config.yml").render(
         lab_name=lab_name, range_id=range_id, ip_range=ip_range
     )
@@ -79,7 +88,7 @@ try:
             out["error"] = "Extension " + extension + " has no " + provider_name + " provider directory"
             print(json.dumps(out))
             sys.exit(0)
-        ext_env = Environment(loader=FileSystemLoader(ext_path))
+        ext_env = SandboxedEnvironment(loader=FileSystemLoader(ext_path))
         ext_content += ext_env.get_template("config.yml").render(
             lab_name=lab_name,
             range_id=range_id,
@@ -93,7 +102,7 @@ try:
         print(json.dumps(out))
         sys.exit(0)
 
-    wrap_env = Environment(loader=FileSystemLoader(tpl_path))
+    wrap_env = SandboxedEnvironment(loader=FileSystemLoader(tpl_path))
     yaml_text = wrap_env.get_template("config.yml").render(
         lab_name=lab_name,
         lab=lab_content,

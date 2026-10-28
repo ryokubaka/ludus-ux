@@ -23,10 +23,13 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
+import { shellSingleQuote } from "@/lib/template-packer-paths"
+import { ipv4Octet, sedPatternForIpPrefix } from "@/lib/sync-ip-prefix"
 import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -41,10 +44,12 @@ export async function POST(
   }
 
   const { instanceId } = await params
+  const denied = await assertGoadInstanceAccess(session, request, instanceId)
+  if (denied) return denied
   const body = await request.json().catch(() => ({}))
   const { ludusRangeId: bodyRangeId } = body as { ludusRangeId?: string }
 
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const goadPath = resolveGoadPath()
@@ -97,22 +102,25 @@ export async function POST(
     )
   }
 
-  if (rangeNumber === null || rangeNumber === undefined) {
+  const rangeOctet = ipv4Octet(rangeNumber)
+  if (rangeNumber === null || rangeNumber === undefined || !rangeOctet) {
     return NextResponse.json(
       { error: "Ludus returned no rangeNumber — is the range deployed?" },
       { status: 400 }
     )
   }
 
-  const newIpRange = `10.${rangeNumber}.10`
+  const newIpRange = `10.${rangeOctet}.10`
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
   const workspacePath = `${goadPath}/workspace/${safeId}`
+  const instanceJson = shellSingleQuote(`${workspacePath}/instance.json`)
+  const quotedWorkspace = shellSingleQuote(workspacePath)
 
   // ── 3. Read current ip_range from instance.json ───────────────────────────
   let oldIpRange: string | null = null
   try {
     const { stdout } = await runAsOwner(
-      `python3 -c "import json; d=json.load(open('${workspacePath}/instance.json')); print(d.get('ip_range',''))"`,
+      `python3 -c "import json; d=json.load(open(${instanceJson})); print(d.get('ip_range',''))"`,
     )
     oldIpRange = stdout.trim() || null
   } catch {
@@ -127,7 +135,7 @@ export async function POST(
     const updateJsonCmd =
       `python3 -c "` +
       `import json; ` +
-      `path='${workspacePath}/instance.json'; ` +
+      `path=${instanceJson}; ` +
       `d=json.load(open(path)); ` +
       `d['ip_range']='${newIpRange}'; ` +
       `open(path,'w').write(json.dumps(d, indent=2)); ` +
@@ -159,11 +167,11 @@ export async function POST(
   //
   // Dots in the sed pattern must be escaped (\.) so they match only literal
   // dots, not any character.
-  const escapedOld = oldIpRange ? oldIpRange.replace(/\./g, "\\.") : null
+  const escapedOld = oldIpRange ? sedPatternForIpPrefix(oldIpRange) : null
 
   // Build a single shell command that is safe to pass to sshExec (no newlines,
   // no for-loops).  find -exec ... + bundles all matching files into one call.
-  const findInventories = `find '${workspacePath}' -maxdepth 1 -type f \\( -name 'inventory*' -o -name '*_inventory' \\)`
+  const findInventories = `find ${quotedWorkspace} -maxdepth 1 -type f \\( -name 'inventory*' -o -name '*_inventory' \\)`
 
   const sedCmds: string[] = []
   if (escapedOld) {
@@ -175,7 +183,7 @@ export async function POST(
   // Security Onion Ludus VMs sit on vlan 20 (10.R.20.20), not vlan 10.
   // Prefix rewrite above turns {{ip_range}}.20 into 10.R.10.20 — fix third octet.
   sedCmds.push(
-    `find '${workspacePath}' -maxdepth 1 -type f -name 'securityonion*_inventory' -exec sed -i "s|ansible_host=10\\.${rangeNumber}\\.10\\.20|ansible_host=10.${rangeNumber}.20.20|g" {} +`,
+    `find ${quotedWorkspace} -maxdepth 1 -type f -name 'securityonion*_inventory' -exec sed -i "s|ansible_host=10\\.${rangeOctet}\\.10\\.20|ansible_host=10.${rangeOctet}.20.20|g" {} +`,
   )
   sedCmds.push(`echo "[+] Inventory sync complete"`)
 

@@ -1,6 +1,7 @@
 const LINUX_USER = /^[a-z_][a-z0-9_-]{0,31}$/
 const PASTE_MARK = "LUX_HOST_PASTE"
 const FILE_MARK = "LUX_HOST_FILE"
+const SUDOERS_MARK = "LUX_HOST_SUDOERS"
 
 /**
  * One paste for a root shell. The block contains the helper and the sudoers
@@ -16,7 +17,7 @@ export function luxHostManualInstallCommand(user: string, helper: string): strin
     throw new Error("lux-host script is missing")
   }
   for (const line of body.split("\n")) {
-    if (line === PASTE_MARK || line === FILE_MARK || line === "EOF") {
+    if (line === PASTE_MARK || line === FILE_MARK || line === SUDOERS_MARK) {
       throw new Error("lux-host script collides with the install command")
     }
   }
@@ -30,11 +31,11 @@ export function luxHostManualInstallCommand(user: string, helper: string): strin
     "chown root:root /usr/local/sbin/lux-host",
     "chmod 755 /usr/local/sbin/lux-host",
     "tmp=$(mktemp)",
-    "cat > \"$tmp\" << 'EOF'",
+    `cat > "$tmp" << '${SUDOERS_MARK}'`,
     "Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host",
     "Defaults!LUX_HOST !use_pty",
     `${name} ALL=(root) NOPASSWD: LUX_HOST`,
-    "EOF",
+    SUDOERS_MARK,
     "visudo -cf \"$tmp\"",
     "install -o root -g root -m 440 \"$tmp\" /etc/sudoers.d/lux-host",
     "rm -f \"$tmp\"",

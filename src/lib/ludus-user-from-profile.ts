@@ -24,6 +24,17 @@ export function ludusImpersonationFields(u: Pick<UserObject, "userID" | "name" |
   return { ludusPrincipal, ludusUserId, sshLogin }
 }
 
+function profileMatchesLoginHint(user: UserObject, loginHint: string): boolean {
+  const want = loginHint.trim().toLowerCase()
+  if (!want) return false
+  const id = user.userID.trim().toLowerCase()
+  return (
+    id === want ||
+    (user.name ?? "").trim().toLowerCase() === want ||
+    (user.proxmoxUsername ?? "").trim().toLowerCase() === want
+  )
+}
+
 export function ludusCallerFromGetUser(
   raw: unknown,
   loginHint: string,
@@ -31,21 +42,14 @@ export function ludusCallerFromGetUser(
   const list = extractArray<UserObject>(raw).filter((u) => (u?.userID ?? "").trim() !== "")
   if (list.length === 0) return undefined
 
-  let user: UserObject | undefined
-  if (list.length === 1) {
-    user = list[0]
-  } else {
-    const want = loginHint.trim().toLowerCase()
-    if (!want) return undefined
-    user = list.find((u) => {
-      const id = u.userID.trim().toLowerCase()
-      return (
-        id === want ||
-        (u.name ?? "").trim().toLowerCase() === want ||
-        (u.proxmoxUsername ?? "").trim().toLowerCase() === want
-      )
-    })
-  }
+  const hint = loginHint.trim()
+  // A named login must match even when GET /user returns a single record.
+  // An empty hint is the "who am I" lookup for the caller's own key.
+  const user = hint
+    ? list.find((u) => profileMatchesLoginHint(u, hint))
+    : list.length === 1
+      ? list[0]
+      : undefined
 
   const userId = user?.userID?.trim()
   if (!user || !userId) return undefined

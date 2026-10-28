@@ -9,7 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { resolveLudusAdminApiBase } from "@/lib/ludus-client"
@@ -19,6 +19,8 @@ import {
   probeSshKeyMount,
 } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { ludusFetch } from "@/lib/ludus-fetch"
+import { isCertificateError, ludusTlsCertificateHint } from "@/lib/tls-insecure-env"
 import { resolveLudusInstallPath } from "@/lib/runtime-paths"
 import {
   buildRootSshProbeCommand,
@@ -53,10 +55,9 @@ function mergeTestSettings(base: RuntimeSettings, body: Body): RuntimeSettings {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin privileges required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let body: Body = {}
   try {
@@ -183,7 +184,7 @@ export async function POST(request: NextRequest) {
     try {
       const controller = new AbortController()
       const t = setTimeout(() => controller.abort(), 12_000)
-      const res = await fetch(url, {
+      const res = await ludusFetch(url, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
@@ -220,13 +221,16 @@ export async function POST(request: NextRequest) {
       const isConn =
         /ECONNREFUSED|fetch failed|network|ENOTFOUND|ETIMEDOUT|aborted/i.test(msg) ||
         err instanceof Error && err.name === "AbortError"
-      if (isConn) {
+      const causeMsg = err instanceof Error && err.cause instanceof Error ? err.cause.message : ""
+      if (isCertificateError(`${msg} ${causeMsg}`)) {
+        adminApi.hint = `Cannot verify the Ludus TLS certificate.${ludusTlsCertificateHint()}`
+      } else if (isConn) {
         if (adminBase.includes("127.0.0.1") || adminBase.includes("localhost")) {
           adminApi.hint =
             "This URL points at the container itself. It only works when the admin SSH tunnel is up: host SSH must succeed at container start (see Test host SSH & admin API above). Restart the container after fixing SSH, or set LUDUS_ADMIN_URL to a URL the container can reach (e.g. https://<ludus-ip>:8081 if bound on all interfaces)."
         } else {
           adminApi.hint =
-            "Check firewall, TLS, and that Ludus admin API listens on this host:port. If 8081 is loopback-only on the server, use the tunnel (127.0.0.1:18081) with working host SSH."
+            `${adminBase} refused the connection. A default Ludus install listens on 127.0.0.1:8081 only, so this container cannot open that address. LUX already forwards the server's 127.0.0.1:8081 over host SSH to https://127.0.0.1:18081. Set Admin API URL to https://127.0.0.1:18081, save, and run this test again. The host SSH test above must succeed first. To use port 8081 on the LAN instead, bind the Ludus admin API to all interfaces on the server and set this URL back to https://<ludus-host>:8081.`
         }
       }
     }
@@ -235,5 +239,5 @@ export async function POST(request: NextRequest) {
   logLuxRouteAction(request, session, {
     detail: `rootSsh=${rootSsh.ok} adminApi=${adminApi.ok}`,
   })
-  return NextResponse.json({ rootSsh, adminApi, keyProbe })
+  return finishAdminResponse(NextResponse.json({ rootSsh, adminApi, keyProbe }), admin)
 }

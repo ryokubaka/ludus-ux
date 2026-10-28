@@ -3,6 +3,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { ludusRequest } from "@/lib/ludus-client"
 import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
 import { resolveSession } from "@/lib/session"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
 import {
   effectiveUsernameFromRequest,
   logLuxUserAction,
@@ -70,25 +71,29 @@ async function handler(
   const queryString = request.nextUrl.searchParams.toString()
   const fullPath = queryString ? `${path}?${queryString}` : path
 
+  const isAdmin = await liveSessionIsAdmin(session)
+  const finish = <T extends NextResponse>(response: T) =>
+    refreshRevokedAdminCookie(response, session, isAdmin)
+
   const useAdmin = request.headers.get("X-Ludus-Admin") === "true"
-  if (useAdmin && !session.isAdmin) {
-    return NextResponse.json({ error: "Admin privileges required" }, { status: 403 })
+  if (useAdmin && !isAdmin) {
+    return finish(NextResponse.json({ error: "Admin privileges required" }, { status: 403 }))
   }
 
-  const userOverride = session.isAdmin
+  const userOverride = isAdmin
     ? request.headers.get("X-Ludus-User") || undefined
     : undefined
 
   // When an admin is impersonating another user, use the impersonated user's
   // API key so Ludus calls are scoped to that user. Both X-Impersonate-* headers
   // must be present to use the header path — see resolveAdminImpersonationFromRequest.
-  const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
+  const impersonateApiKey = (await resolveAdminImpersonationFromRequest(session, request)).apiKey
   // In Ludus v2, the ROOT API key is only for PocketBase internal operations.
   // All admin API calls (port 8081) use the logged-in admin's own API key.
   // X-Ludus-User (admin fetch-as-user) must use the admin key + X-Impersonate-User,
   // not an active dashboard impersonation vault key.
   const effectiveApiKey =
-    userOverride && session.isAdmin
+    userOverride && isAdmin
       ? session.apiKey
       : impersonateApiKey || session.apiKey
 
@@ -96,14 +101,14 @@ async function handler(
     const rawBody = await parseRequestBody(request)
     const body = applyLudusDeployVerbose(path, request.method, rawBody)
 
-    const linuxUser = resolveSessionLinuxUser(session, request)
+    const linuxUser = await resolveSessionLinuxUser(session, request)
     const basePath = path.split("?")[0]
     if (request.method === "POST" && basePath === "/range/deploy") {
       const router = await assertRouterTemplateReady(effectiveApiKey, {
         userOverride,
       })
       if (!router.ok) {
-        return NextResponse.json(
+        return finish(NextResponse.json(
           {
             error: routerTemplateBlockMessage(router),
             code: "router_template_required",
@@ -111,14 +116,14 @@ async function handler(
             reason: router.reason,
           },
           { status: 409 },
-        )
+        ))
       }
       const patches = await ensureRangeDeployHostPatches(body, { configText: router.template })
       if (!patches.ok) {
-        return NextResponse.json(
+        return finish(NextResponse.json(
           { error: patches.error, code: "deploy_host_patch" },
           { status: 503 },
-        )
+        ))
       }
     }
 
@@ -137,7 +142,9 @@ async function handler(
       const isConnectionError = result.status === 0
       const errorMessage =
         useAdmin && isConnectionError
-          ? `${result.error} — admin API (port 8081) unreachable. Set LUDUS_ADMIN_URL (or Settings → Admin API URL) to https://<ludus-host>:8081 if that port is reachable from the container, or fix host SSH so the optional tunnel to 127.0.0.1:18081 can work.`
+          // Returned as JSON, never rendered as HTML.
+          // nosemgrep: javascript.express.security.injection.raw-html-format.raw-html-format
+          ? `${result.error} — admin API refused the connection. A default Ludus install listens on 127.0.0.1:8081 only. Set Settings → Admin API URL to https://127.0.0.1:18081 (LUX forwards that to the server over host SSH). Host SSH must succeed. Use https://<ludus-host>:8081 only after the server accepts connections on that address from this container.`
           : result.error
       if (MUTATING_METHODS.has(request.method)) {
         const username = effectiveUsernameFromRequest(request, session)
@@ -153,7 +160,7 @@ async function handler(
           "failure",
         )
       }
-      return NextResponse.json({ error: errorMessage }, { status: result.status || 500 })
+      return finish(NextResponse.json({ error: errorMessage }, { status: result.status || 500 }))
     }
 
     if (MUTATING_METHODS.has(request.method)) {
@@ -175,7 +182,7 @@ async function handler(
       }
     }
 
-    return NextResponse.json(result.data, { status: result.status || 200 })
+    return finish(NextResponse.json(result.data, { status: result.status || 200 }))
   } catch (err) {
     // Log full details server-side only; don't leak exception messages to the client.
     console.error("[proxy] Unexpected error:", err instanceof Error ? err.message : String(err))
@@ -189,7 +196,7 @@ async function handler(
         "failure",
       )
     }
-    return NextResponse.json({ error: "Internal proxy error" }, { status: 500 })
+    return finish(NextResponse.json({ error: "Internal proxy error" }, { status: 500 }))
   }
 }
 

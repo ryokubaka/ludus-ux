@@ -34,6 +34,7 @@ import { isSourcePublished } from "@/lib/source-publication"
 import { shareBlueprintWithUsersAs } from "@/lib/blueprint-share"
 import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
 import { ludusRequest } from "@/lib/ludus-client"
+import { ludusFetch } from "@/lib/ludus-fetch"
 import { resolveSession } from "@/lib/session"
 import { blueprintSourcePrefix, installedBlueprintMatchesSource } from "@/lib/registered-ludus-sources"
 import {
@@ -131,7 +132,7 @@ async function importViaTarArchive(
     `${spec.name}.tar.gz`,
   )
 
-  const res = await fetch(buildLudusApiUrl("/blueprints/import"), {
+  const res = await ludusFetch(buildLudusApiUrl("/blueprints/import"), {
     method: "POST",
     headers: { "X-API-KEY": apiKey },
     body: formData,
@@ -413,7 +414,7 @@ export async function POST(request: NextRequest) {
   }
 
   const viewerApiKey =
-    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+    (await resolveAdminImpersonationFromRequest(session, request)).apiKey || session.apiKey
   const { apiKey: installApiKey, isAdminInstall } = resolveGlobalSourceBlueprintInstallApiKey(session)
   const effectiveInstallApiKey =
     isAdminInstall && installApiKey ? installApiKey : viewerApiKey

@@ -22,8 +22,23 @@ import { getSettings } from "@/lib/settings-store"
 import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
 import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
 import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
-import { readUnlinkPendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
+import { readPendingNetworkEnvelope, readUnlinkPendingNetworkSnapshot } from "@/lib/goad-pending-network-fs"
+import { ludusFetch } from "@/lib/ludus-fetch"
+import { writeAppLog } from "@/lib/app-log"
+import { sameOperator } from "@/lib/operator-name"
 import type { RangeObject } from "@/lib/types"
+
+function parseSnapshotJson(json: string | undefined): Record<string, unknown> | null {
+  if (!json?.trim()) return null
+  try {
+    const parsed: unknown = JSON.parse(json)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
 
 /** Same predicate as `isDeployActionCommand` in goad-instance-tab-utils (lib must not import components). */
 function isDeployClassGoadCommand(command: string): boolean {
@@ -46,7 +61,7 @@ async function putRangeConfigYaml(
   const formData = new FormData()
   formData.append("file", new Blob([yaml], { type: "application/x-yaml" }), "range-config.yml")
   try {
-    const res = await fetch(buildLudusUserUrl(ludusPath), {
+    const res = await ludusFetch(buildLudusUserUrl(ludusPath), {
       method: "PUT",
       headers: { "X-API-KEY": apiKey },
       body: formData,
@@ -75,6 +90,9 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
   if (status !== "completed" || exitCode !== 0) return
   if (!instanceId) return
   if (!isDeployClassGoadCommand(command)) return
+  // Rules are applied with the task owner's key, so they must be that owner's rules.
+  const taskOwner = username?.trim()
+  if (!taskOwner) return
 
   // Prefer in-memory apiKey, fall back to the persisted handoff record so
   // the workflow survives a container restart between task start and completion.
@@ -83,31 +101,36 @@ export async function runAfterGoadTaskCompleteIfNeeded(args: {
     const { resolveTaskLudusApiKey } = await import("./goad-task-store")
     key = resolveTaskLudusApiKey(taskId)
   }
-  let resolvedRangeId = getInstanceRangeLocal(instanceId)?.trim()
 
-  if (!key || !resolvedRangeId) {
-    const handoff = getHandoffByTaskId(taskId)
-    if (handoff) {
-      if (!key && handoff.networkRulesJson) {
-        // We don't store the API key in the handoff (it's in the session cookie),
-        // so if the in-memory key is gone we cannot proceed with Ludus calls.
-        // The pending-network file is already on disk from the handoff POST —
-        // it will be consumed whenever a valid key becomes available.
-      }
-      if (!resolvedRangeId) resolvedRangeId = handoff.rangeId?.trim()
-    }
-  }
+  const linked = getHandoffByTaskId(taskId)
+  const handoff = linked && sameOperator(linked.username, taskOwner) ? linked : null
+  const rangeId = handoff?.rangeId?.trim() || getInstanceRangeLocal(instanceId)?.trim()
 
   if (!key) return
-  if (!resolvedRangeId) return
-  const rangeId = resolvedRangeId
+  if (!rangeId) return
 
-  // readUnlinkPendingNetworkSnapshot is a destructive read — it deletes the
-  // snapshot file after reading it. This is intentional: both this server
-  // workflow and the [id] page wizard effect can race to consume the same
-  // snapshot. The first caller wins; the second gets null and is a no-op.
-  // Never call putRangeConfigYaml with a snapshot that was already applied.
-  const snapshot = readUnlinkPendingNetworkSnapshot(instanceId)
+  // The file read is destructive. This server workflow and the [id] page
+  // wizard effect can race for the same snapshot: the first caller wins and
+  // the second gets null. Never apply a snapshot that was already applied.
+  const envelope = readPendingNetworkEnvelope(instanceId)
+  let snapshot: Record<string, unknown> | null
+  if (envelope) {
+    readUnlinkPendingNetworkSnapshot(instanceId)
+    if (!sameOperator(envelope.username, taskOwner)) {
+      writeAppLog({
+        category: "app",
+        event: "pending_network_owner_mismatch",
+        outcome: "blocked",
+        username: taskOwner,
+        detail: `instanceId=${instanceId} taskId=${taskId} snapshotOwner=${envelope.username ?? "none"}`,
+        level: "warn",
+      })
+      return
+    }
+    snapshot = envelope.snapshot
+  } else {
+    snapshot = parseSnapshotJson(handoff?.networkRulesJson)
+  }
   if (!snapshot) return
 
   setTaskHasNetworkRules(taskId, true)

@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss"
 import path from "path"
+import tailwindcssAnimate from "tailwindcss-animate"
 
 const src = path.join(process.cwd(), "src")
 
@@ -77,6 +78,10 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      // Default xs (0.75rem) is 9.75px at the 13px root. Keep small labels near 10px.
+      fontSize: {
+        xs: ["0.8rem", { lineHeight: "1.1rem" }],
+      },
       keyframes: {
         "accordion-down": {
           from: { height: "0" },
@@ -98,6 +103,6 @@ const config: Config = {
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [tailwindcssAnimate],
 }
 export default config

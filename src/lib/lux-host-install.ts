@@ -40,6 +40,28 @@ export function renderLuxHostSudoers(template: string, user: string): string {
 }
 
 /**
+ * Helper and sudoers travel on stdin. Putting them in the remote command
+ * exceeds the single-argument limit (`/bin/bash: Argument list too long`).
+ */
+export function luxHostInstallStdin(helperB64: string, sudoersB64: string, updateKey: string): string {
+  if (!/^[0-9a-f]{64}$/.test(updateKey)) {
+    throw new Error("lux-host update key is invalid")
+  }
+  if (helperB64.includes("\n") || sudoersB64.includes("\n")) {
+    throw new Error("lux-host install payload must be a single line")
+  }
+  return `${updateKey}\n${helperB64}\n${sudoersB64}\n`
+}
+
+/** Binary refresh: the helper body is one base64 line on stdin. */
+export function luxHostBinaryInstallStdin(helperB64: string): string {
+  if (helperB64.includes("\n")) {
+    throw new Error("lux-host install payload must be a single line")
+  }
+  return `${helperB64}\n`
+}
+
+/**
  * The transmitted command is a base64 blob with no `$` and no newlines.
  */
 export function luxHostSelfUpdateStdin(script: string, key: string): string {
@@ -51,24 +73,24 @@ export function luxHostSelfUpdateStdin(script: string, key: string): string {
 }
 
 export function buildLuxHostInstallShell(
-  helperB64: string,
-  sudoersB64: string,
   mode: Exclude<LuxHostInstallMode, "self-update">,
 ): string {
   const script = [
     "set -euo pipefail",
     "umask 077",
-    "key=$(cat)",
+    "IFS= read -r key",
+    "IFS= read -r helper",
+    "IFS= read -r sudoers",
     "[[ \"$key\" =~ ^[0-9a-f]{64}$ ]]",
     "mkdir -p /usr/local/sbin /etc/sudoers.d",
-    `printf '%s' ${shellSingleQuote(helperB64)} | base64 -d > /usr/local/sbin/lux-host`,
+    "printf '%s' \"$helper\" | base64 -d > /usr/local/sbin/lux-host",
     "chown root:root /usr/local/sbin/lux-host",
     "chmod 755 /usr/local/sbin/lux-host",
     "tmp=$(mktemp)",
-    `printf '%s' ${shellSingleQuote(sudoersB64)} | base64 -d > "$tmp"`,
-    `visudo -cf "$tmp"`,
-    `install -o root -g root -m 440 "$tmp" /etc/sudoers.d/lux-host`,
-    `rm -f "$tmp"`,
+    "printf '%s' \"$sudoers\" | base64 -d > \"$tmp\"",
+    "visudo -cf \"$tmp\"",
+    "install -o root -g root -m 440 \"$tmp\" /etc/sudoers.d/lux-host",
+    "rm -f \"$tmp\"",
     "printf '%s' \"$key\" > /etc/lux-host.update-key",
     "chown root:root /etc/lux-host.update-key",
     "chmod 600 /etc/lux-host.update-key",
@@ -87,14 +109,14 @@ export function buildLuxHostInstallShell(
 }
 
 export function buildLuxHostBinaryInstallShell(
-  helperB64: string,
   mode: "root" | "sudo-n",
 ): string {
   const script = [
     "set -euo pipefail",
     "umask 077",
+    "IFS= read -r helper",
     "mkdir -p /usr/local/sbin",
-    `printf '%s' ${shellSingleQuote(helperB64)} | base64 -d > /usr/local/sbin/lux-host`,
+    "printf '%s' \"$helper\" | base64 -d > /usr/local/sbin/lux-host",
     "chown root:root /usr/local/sbin/lux-host",
     "chmod 755 /usr/local/sbin/lux-host",
   ].join("; ")

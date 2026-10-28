@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import fs from "fs"
 import path from "path"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { DATA_DIR } from "@/lib/db"
 import { detectImageType } from "@/lib/safe-filename"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -70,11 +70,9 @@ export async function HEAD() {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    if (session) logLuxRouteAction(request, session, { outcome: "failure", detail: "Admin required" })
-    return NextResponse.json({ error: "Admin required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const session = admin.session
 
   let formData: FormData
   try {
@@ -114,11 +112,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    if (session) logLuxRouteAction(request, session, { outcome: "failure", detail: "Admin required" })
-    return NextResponse.json({ error: "Admin required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const session = admin.session
 
   const logoPath = findLogo()
   if (!logoPath) {

@@ -21,6 +21,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -146,13 +147,13 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ instanceId: string }> },
 ) {
-  if (!isGoadConfigured()) {
-    return NextResponse.json({ error: "GOAD SSH not configured." }, { status: 503 })
-  }
-
   const session = await resolveSession(request)
   if (!session) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
+  if (!isGoadConfigured()) {
+    return NextResponse.json({ error: "GOAD SSH not configured." }, { status: 503 })
   }
 
   const { instanceId: rawId } = await params
@@ -161,12 +162,8 @@ export async function POST(
     return NextResponse.json({ error: "Missing instance ID" }, { status: 400 })
   }
 
-  if (!session.isAdmin) {
-    const effectiveUser = session.username
-    if (!instanceId.toLowerCase().startsWith(effectiveUser.toLowerCase() + "-")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
-  }
+  const denied = await assertGoadInstanceAccess(session, request, instanceId)
+  if (denied) return denied
 
   const body = await request.json().catch(() => ({}))
   const extensionName = typeof (body as { extensionName?: unknown }).extensionName === "string"
@@ -187,7 +184,7 @@ export async function POST(
   const encoded = Buffer.from(REMOVE_EXT_PY, "utf-8").toString("base64")
   const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(instanceId)}' '${b64(extensionName)}'`
   const safeId = instanceId.replace(/[^a-zA-Z0-9_-]/g, "")
-  const plan = workspaceSshExecPlan(
+  const plan = await workspaceSshExecPlan(
     request,
     session,
     cmd,

@@ -4,6 +4,9 @@ const nextConfig = {
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
   cacheComponents: true,
+  // Cache Components landed here before Partial Prefetching existed.
+  // false keeps that prefetch behavior. The next major enables both.
+  partialPrefetching: false,
   serverExternalPackages: ["ssh2", "better-sqlite3"],
   typescript: {
     ignoreBuildErrors: false,

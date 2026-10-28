@@ -17,6 +17,7 @@ import {
   sourceAutoSyncIntervalMs,
 } from "@/lib/source-auto-sync"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
@@ -30,22 +31,27 @@ export async function GET(request: NextRequest) {
 
   try {
     ensureSourceAutoSyncLoopStarted()
+    const isAdmin = await liveSessionIsAdmin(session)
     // Seed service key so the background auto-sync loop can run without a browser tab.
-    if (session.isAdmin && apiKey) {
+    if (isAdmin && apiKey) {
       void rememberBlueprintOperator(apiKey)
     }
 
-    const sources = await listVisibleLudusSources({ isAdmin: session.isAdmin, apiKey })
+    const sources = await listVisibleLudusSources({ isAdmin, apiKey })
     const own = sources.filter((row) => row.sharedCatalog !== true)
     // Refresh stale git trees in the background; don't block the list response.
     void ensureSourcesFresh(apiKey, own).catch((err) => {
       console.warn("[sources/list] auto-sync failed", err)
     })
-    return NextResponse.json({
-      sources,
-      available: true,
-      autoSyncIntervalMs: sourceAutoSyncIntervalMs(),
-    })
+    return refreshRevokedAdminCookie(
+      NextResponse.json({
+        sources,
+        available: true,
+        autoSyncIntervalMs: sourceAutoSyncIntervalMs(),
+      }),
+      session,
+      isAdmin,
+    )
   } catch (err) {
     if (isHttp404Error(err)) {
       return NextResponse.json({ sources: [], available: false })

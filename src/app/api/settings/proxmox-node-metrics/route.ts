@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import {
@@ -17,13 +17,8 @@ import {
 export const maxDuration = 60
 
 export async function GET(req: NextRequest) {
-  const session = await getSessionFromRequest(req)
-  if (!session) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 })
-  }
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(req)
+  if (!admin.ok) return admin.response
 
   // Root `pvesh` over SSH — use only settings/env root password or mounted key.
   // Do not use `session.sshPassword` (LUX login password); it is not root@Proxmox

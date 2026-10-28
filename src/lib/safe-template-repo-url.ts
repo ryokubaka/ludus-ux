@@ -1,8 +1,13 @@
 /**
  * Validates user-supplied GitLab HTTP API base URLs for template listing/fetch.
- * Mitigates SSRF: only https, block loopback/link-local/private/reserved IPv4 literals
- * and obvious local hostnames.
+ * Mitigates SSRF: only https, block loopback/link-local/private/reserved addresses
+ * after DNS resolution, and do not follow redirects to a different unchecked host.
  */
+
+import { lookup as dnsLookup } from "dns/promises"
+import https from "https"
+import net from "net"
+import type { Readable } from "stream"
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -73,4 +78,184 @@ export function assertSafeTemplateRepoUrl(repoUrl: string): { ok: true; apiBase:
   const pathClean = url.pathname.replace(/\/+$/, "") || ""
   const apiBase = `${url.origin}${pathClean}`.replace(/\/$/, "")
   return { ok: true, apiBase }
+}
+
+const MAX_REPO_REDIRECTS = 3
+
+export type RepoLookup = (hostname: string) => Promise<Array<{ address: string }>>
+
+export type RepoPinnedRequest = (target: URL, address: string, init?: RequestInit) => Promise<Response>
+
+export function isBlockedIpAddress(address: string): boolean {
+  if (net.isIP(address) === 4) {
+    const parts = address.split(".").map((part) => Number(part))
+    if (parts.some((part) => Number.isNaN(part))) return true
+    return isPrivateOrReservedIpv4(parts)
+  }
+  if (net.isIP(address) === 6) {
+    const lower = address.toLowerCase()
+    if (lower === "::1" || lower === "::") return true
+    if (lower.startsWith("fe80:")) return true
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower)
+    if (mapped) return isBlockedIpAddress(mapped[1])
+    return false
+  }
+  return true
+}
+
+async function defaultRepoLookup(hostname: string): Promise<Array<{ address: string }>> {
+  const records = await dnsLookup(hostname, { all: true, verbatim: true })
+  return records.map((record) => ({ address: record.address }))
+}
+
+/** Resolve the name and reject every private, loopback, or link-local address. */
+export async function assertResolvedRepoHost(hostname: string, resolve: RepoLookup = defaultRepoLookup): Promise<string> {
+  const literal = hostname.replace(/^\[|\]$/g, "")
+  if (net.isIP(literal)) {
+    if (isBlockedIpAddress(literal)) throw new Error("Private or reserved addresses are not allowed")
+    return literal
+  }
+  let records: Array<{ address: string }>
+  try {
+    records = await resolve(hostname)
+  } catch {
+    throw new Error("Hostname did not resolve")
+  }
+  if (records.length === 0) throw new Error("Hostname did not resolve")
+  for (const record of records) {
+    if (isBlockedIpAddress(record.address)) {
+      throw new Error("Hostname resolves to a private or reserved address")
+    }
+  }
+  return records[0].address
+}
+
+function headerRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {}
+  new Headers(headers).forEach((value, key) => {
+    out[key] = value
+  })
+  return out
+}
+
+export const REPO_REQUEST_TIMEOUT_MS = 30_000
+/** Repo tree and contents listings are small; a larger body is not a listing. */
+export const REPO_RESPONSE_MAX_BYTES = 10 * 1024 * 1024
+
+/** Collect a response body, failing once it passes `maxBytes`. */
+export function readCappedBody(body: Readable, maxBytes: number): Promise<Buffer<ArrayBuffer>> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    body.on("data", (chunk: Buffer) => {
+      size += chunk.length
+      if (size > maxBytes) {
+        body.destroy()
+        reject(new Error(`Template repo response is larger than ${maxBytes} bytes`))
+        return
+      }
+      chunks.push(chunk)
+    })
+    body.on("end", () => resolve(Buffer.concat(chunks)))
+    body.on("error", reject)
+  })
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError")
+}
+
+export function pinnedRepoRequest(
+  target: URL,
+  address: string,
+  init?: RequestInit,
+  limits: { timeoutMs: number; maxBytes: number } = {
+    timeoutMs: REPO_REQUEST_TIMEOUT_MS,
+    maxBytes: REPO_RESPONSE_MAX_BYTES,
+  },
+): Promise<Response> {
+  const signal = init?.signal ?? undefined
+  if (signal?.aborted) return Promise.reject(abortError(signal))
+  const headers = headerRecord(init?.headers)
+  headers.host = target.host
+  const port = target.port ? Number(target.port) : 443
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const onAbort = () => fail(abortError(signal!))
+    const finish = () => {
+      settled = true
+      signal?.removeEventListener("abort", onAbort)
+    }
+    const fail = (err: Error) => {
+      if (settled) return
+      finish()
+      req.destroy()
+      reject(err)
+    }
+    const req = https.request(
+      {
+        host: address,
+        servername: target.hostname,
+        port,
+        path: `${target.pathname}${target.search}`,
+        method: init?.method ?? "GET",
+        headers,
+      },
+      (res) => {
+        readCappedBody(res, limits.maxBytes).then(
+          (body) => {
+            if (settled) return
+            finish()
+            const responseHeaders = new Headers()
+            for (const [key, value] of Object.entries(res.headers)) {
+              if (value == null) continue
+              if (Array.isArray(value)) {
+                for (const item of value) responseHeaders.append(key, item)
+              } else {
+                responseHeaders.set(key, value)
+              }
+            }
+            resolve(new Response(body, {
+              status: res.statusCode ?? 0,
+              headers: responseHeaders,
+            }))
+          },
+          fail,
+        )
+      },
+    )
+    req.setTimeout(limits.timeoutMs, () => fail(new Error("Template repo request timed out")))
+    signal?.addEventListener("abort", onAbort, { once: true })
+    req.on("error", fail)
+    req.end()
+  })
+}
+
+export interface SafeRepoFetchDeps {
+  lookup?: RepoLookup
+  request?: RepoPinnedRequest
+}
+
+/** Fetch a template repo URL after checking every resolved address. Redirects are manual. */
+export async function safeRepoFetch(
+  url: string,
+  init?: RequestInit,
+  deps?: SafeRepoFetchDeps,
+  hops = 0,
+): Promise<Response> {
+  if (hops > MAX_REPO_REDIRECTS) throw new Error("Too many redirects")
+  const checked = assertSafeTemplateRepoUrl(url)
+  if (!checked.ok) throw new Error(checked.error)
+  const target = new URL(url)
+  const address = await assertResolvedRepoHost(target.hostname, deps?.lookup)
+  const request = deps?.request ?? pinnedRepoRequest
+  const response = await request(target, address, init)
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("location")
+    if (!location) return response
+    const nextUrl = new URL(location, target).toString()
+    return safeRepoFetch(nextUrl, init, deps, hops + 1)
+  }
+  return response
 }

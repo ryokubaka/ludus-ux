@@ -52,6 +52,7 @@ import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
 import { LuxReleasesPanel } from "@/components/settings/lux-releases-panel"
+import { SshHostKeysPanel } from "@/components/settings/ssh-host-keys-panel"
 import { cn } from "@/lib/utils"
 import { statusBadge } from "@/lib/status-colors"
 import { useResolvedSession } from "@/hooks/use-resolved-session"
@@ -77,11 +78,15 @@ interface Settings {
   ludushoundEnabled: boolean
   ludusAnsibleVerbose: boolean
   useLudusHostDns: boolean
+  /** New value typed by the admin. The server never sends the stored key. */
   rootApiKey?: string
+  rootApiKeySet?: boolean
   /** Server: non-empty LUDUS_ROOT_API_KEY env overrides SQLite for the effective key. */
   rootApiKeyOverriddenByEnv?: boolean
   proxmoxSshUser?: string
+  /** New value typed by the admin. The server never sends the stored password. */
   proxmoxSshPassword?: string
+  proxmoxSshPasswordSet?: boolean
   proxmoxSshKeyPath?: string
 }
 
@@ -136,6 +141,15 @@ interface ParsedVersion {
   title: string
   date: string
   groups: ParsedGroup[]
+}
+
+function isGitHubRepoUrl(repoUrl: string): boolean {
+  try {
+    const host = new URL(repoUrl).hostname.toLowerCase()
+    return host === "github.com" || host.endsWith(".github.com")
+  } catch {
+    return false
+  }
 }
 
 function parseChangelog(md: string): ParsedVersion[] {
@@ -616,7 +630,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
                 rel="noopener noreferrer"
                 className="hover:text-primary transition-colors"
               >
-                {repoUrl.includes("github.com") ? "GitHub" : "Repository"}
+                {isGitHubRepoUrl(repoUrl) ? "GitHub" : "Repository"}
               </a>
               <span className="text-border">·</span>
             </>
@@ -758,6 +772,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
     }
   } | null>(null)
   const [showSshPassword, setShowSshPassword] = useState(false)
+  const [confirmPassword, setConfirmPassword] = useState("")
   const [hasLogo, setHasLogo] = useState(false)
   const [logoKey, setLogoKey] = useState(0)
   const [logoUploading, setLogoUploading] = useState(false)
@@ -800,20 +815,33 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   }, [logoKey])
 
   const isDirty = draft && settings && JSON.stringify(draft) !== JSON.stringify(settings)
+  const endpointChanged = !!(
+    draft &&
+    settings &&
+    (draft.ludusUrl !== settings.ludusUrl ||
+      draft.ludusAdminUrl !== settings.ludusAdminUrl ||
+      draft.sshHost !== settings.sshHost ||
+      Number(draft.sshPort) !== Number(settings.sshPort))
+  )
 
   const handleSave = async () => {
     if (!draft) return
     setSaving(true)
     try {
+      const payload: Settings & { confirmPassword?: string } = { ...draft }
+      if (!payload.rootApiKey?.trim()) delete payload.rootApiKey
+      if (!payload.proxmoxSshPassword?.trim()) delete payload.proxmoxSshPassword
+      if (endpointChanged) payload.confirmPassword = confirmPassword
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
+        body: JSON.stringify(payload),
       })
       const data = await res.json()
       if (!res.ok) {
         toast({ variant: "destructive", title: "Error", description: data.error })
       } else {
+        setConfirmPassword("")
         setSettings(data); setDraft(data)
         if (typeof window !== "undefined") {
           window.dispatchEvent(new Event("lux-settings-updated"))
@@ -852,7 +880,8 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
         body: JSON.stringify({
           ludusUrl: draft.ludusUrl, ludusAdminUrl: draft.ludusAdminUrl,
           sshHost: draft.sshHost, sshPort: draft.sshPort,
-          proxmoxSshUser: draft.proxmoxSshUser, proxmoxSshPassword: draft.proxmoxSshPassword,
+          proxmoxSshUser: draft.proxmoxSshUser,
+          ...(draft.proxmoxSshPassword?.trim() ? { proxmoxSshPassword: draft.proxmoxSshPassword } : {}),
           proxmoxSshKeyPath: draft.proxmoxSshKeyPath,
         }),
       })
@@ -882,7 +911,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
           sshHost: draft.sshHost,
           sshPort: draft.sshPort,
           proxmoxSshUser: draft.proxmoxSshUser,
-          proxmoxSshPassword: draft.proxmoxSshPassword,
+          ...(draft.proxmoxSshPassword?.trim() ? { proxmoxSshPassword: draft.proxmoxSshPassword } : {}),
           rootPassword: luxHostRootPassword,
         }),
       })
@@ -950,6 +979,34 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
       toast({ variant: "destructive", title: "Copy failed" })
     }
   }
+
+  const renderSaveBar = (confirmId: string) => isDirty ? (
+    <div className="space-y-3">
+      {endpointChanged && (
+        <div className="space-y-1.5">
+          <Label htmlFor={confirmId}>Current SSH password</Label>
+          <Input
+            id={confirmId}
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            autoComplete="current-password"
+            className="font-mono text-xs"
+            placeholder="Required to change the Ludus URL or SSH host"
+          />
+          <p className="text-xs text-muted-foreground">
+            Re-enter the password you used to log in. This confirms the new endpoint before API keys are sent there.
+          </p>
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button onClick={handleSave} disabled={saving || (endpointChanged && !confirmPassword)} size="sm" className="gap-2">
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          Save Changes
+        </Button>
+      </div>
+    </div>
+  ) : null
 
   if (loading) {
     return (
@@ -1035,9 +1092,9 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
                   Admin API URL
                   <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUS_ADMIN_URL</span>
                 </Label>
-                <Input id="admin-url" value={draft?.ludusAdminUrl || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludusAdminUrl: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="https://your-ludus-host:8081" />
+                <Input id="admin-url" value={draft?.ludusAdminUrl || ""} onChange={(e) => setDraft((d) => d ? { ...d, ludusAdminUrl: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="https://127.0.0.1:18081" />
                 <p className="text-xs text-muted-foreground">
-                  Port 8081. Use 127.0.0.1:18081 only with the SSH tunnel.
+                  A new Ludus server listens on 127.0.0.1:8081 only. Leave this as https://127.0.0.1:18081 so LUX uses the SSH tunnel it opens at startup. Use https://&lt;ludus-host&gt;:8081 only after that port accepts connections from this container.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -1045,7 +1102,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
                   ROOT API Key
                   <span className="ml-2 text-xs text-muted-foreground font-normal">LUDUS_ROOT_API_KEY</span>
                 </Label>
-                <Input id="root-api-key" type="password" value={draft?.rootApiKey || ""} onChange={(e) => setDraft((d) => d ? { ...d, rootApiKey: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" placeholder="ROOT.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+                <Input id="root-api-key" type="password" value={draft?.rootApiKey || ""} onChange={(e) => setDraft((d) => d ? { ...d, rootApiKey: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" autoComplete="off" placeholder={draft?.rootApiKeySet ? "Configured — enter a new key to replace it" : "ROOT.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"} />
                 <p className="text-xs text-muted-foreground">
                   Required for user/group management. Found at{" "}
                   <code className="text-primary">{draft?.ludusInstallPath || "<LUDUS_INSTALL_PATH>"}/install/root-api-key</code> on the server.
@@ -1114,14 +1171,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
             </CardContent>
           </Card>
 
-          {isDirty && (
-            <div className="flex justify-end">
-              <Button onClick={handleSave} disabled={saving} size="sm" className="gap-2">
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                Save Changes
-              </Button>
-            </div>
-          )}
+          {renderSaveBar("confirm-ssh-password-general")}
         </TabsContent>
 
         {/* ── Auth ────────────────────────────────────────────────────── */}
@@ -1148,6 +1198,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
                   <Input id="ssh-port" type="number" value={draft?.sshPort || 22} onChange={(e) => setDraft((d) => d ? { ...d, sshPort: parseInt(e.target.value) || 22 } : d)} disabled={!session?.isAdmin} className="font-mono text-xs" />
                 </div>
               </div>
+              {session?.isAdmin ? <SshHostKeysPanel /> : null}
               <div className="space-y-1.5">
                 <Label htmlFor="goad-path">
                   GOAD Installation Path
@@ -1202,7 +1253,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
                       <span className="ml-2 text-xs text-muted-foreground font-normal">PROXMOX_SSH_PASSWORD</span>
                     </Label>
                     <div className="flex gap-2">
-                      <Input id="ssh-password" type={showSshPassword ? "text" : "password"} value={draft?.proxmoxSshPassword || ""} onChange={(e) => setDraft((d) => d ? { ...d, proxmoxSshPassword: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs flex-1" placeholder="Leave blank to use SSH key" />
+                      <Input id="ssh-password" type={showSshPassword ? "text" : "password"} value={draft?.proxmoxSshPassword || ""} onChange={(e) => setDraft((d) => d ? { ...d, proxmoxSshPassword: e.target.value } : d)} disabled={!session?.isAdmin} className="font-mono text-xs flex-1" autoComplete="off" placeholder={draft?.proxmoxSshPasswordSet ? "Configured — leave blank to keep the saved password" : "Leave blank to use SSH key"} />
                       <Button type="button" size="icon" variant="ghost" onClick={() => setShowSshPassword(!showSshPassword)} disabled={!session?.isAdmin}>
                         {showSshPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
@@ -1430,14 +1481,7 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
             </CardContent>
           </Card>
 
-          {isDirty && (
-            <div className="flex justify-end">
-              <Button onClick={handleSave} disabled={saving} size="sm" className="gap-2">
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                Save Changes
-              </Button>
-            </div>
-          )}
+          {renderSaveBar("confirm-ssh-password-auth")}
         </TabsContent>
 
         {/* ── Branding ────────────────────────────────────────────────── */}

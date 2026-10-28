@@ -20,11 +20,16 @@ async function extractTarGz(archive: Buffer): Promise<Map<string, string>> {
         if (name === "bundle.tar.gz") continue
         const entryRel = rel ? `${rel}/${name}` : name
         const full = path.join(tmpDir, entryRel)
-        const stat = await fs.stat(full)
-        if (stat.isDirectory()) {
-          await walk(entryRel)
-        } else {
-          entries.set(entryRel.replace(/\\/g, "/"), await fs.readFile(full, "utf8"))
+        const handle = await fs.open(full, "r")
+        try {
+          const stat = await handle.stat()
+          if (stat.isDirectory()) {
+            await walk(entryRel)
+          } else {
+            entries.set(entryRel.replace(/\\/g, "/"), await handle.readFile({ encoding: "utf8" }))
+          }
+        } finally {
+          await handle.close()
         }
       }
     }

@@ -94,3 +94,10 @@ describe("templateBlobRelativePath", () => {
     expect(templateBlobRelativePath("elsewhere", "", prefix)).toBeNull()
   })
 })
+
+describe("packerDirFromTemplatePath", () => {
+  it("drops trailing slashes and keeps the directory name", () => {
+    expect(packerDirFromTemplatePath("templates/debian13///", "fallback")).toBe("debian13")
+    expect(packerDirFromTemplatePath("templates/debian13", "fallback")).toBe("debian13")
+  })
+})

@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import { parseJsonBody } from "@/lib/require-session"
 import {
   setRangeHostProcessActive,
@@ -21,6 +22,7 @@ import {
 import { chownGoadInstance, listGoadInstances, sshExecAsWorkspaceUser, workspaceOwnerLinuxUser, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
 import { getSettings } from "@/lib/settings-store"
 
@@ -44,7 +46,7 @@ export async function POST(request: NextRequest) {
       : undefined
   const runAsOwner = (command: string) =>
     sshExecAsWorkspaceUser(request, session, command, userCreds)
-  const owner = workspaceOwnerLinuxUser(session, request)
+  const owner = await workspaceOwnerLinuxUser(session, request)
   const hostUser = effectivePrivilegedSshUser(getSettings().proxmoxSshUser)
   const owners = new Map<string, string>()
   if (instanceIds.some((id) => setRangeHostProcessActive(id))) {
@@ -59,6 +61,12 @@ export async function POST(request: NextRequest) {
   const results: { instanceId: string; ok: boolean; error?: string }[] = []
 
   for (const instanceId of instanceIds) {
+    // The wizard sends this alongside link-instance right after GOAD creates the
+    // workspace, so a workspace no task has claimed yet is allowed.
+    if (await assertGoadInstanceAccess(session, request, instanceId, { allowUnclaimed: true })) {
+      results.push({ instanceId, ok: false, error: "Forbidden" })
+      continue
+    }
     const hostProcessActive = setRangeHostProcessActive(instanceId)
     if (
       shouldDeferHostWorkspaceChown({
@@ -72,7 +80,7 @@ export async function POST(request: NextRequest) {
       continue
     }
     try {
-      if (session.isAdmin && owner && owner.toLowerCase() !== "root") {
+      if ((await liveSessionIsAdmin(session)) && owner && owner.toLowerCase() !== "root") {
         await chownGoadInstance(instanceId, owner)
       }
       await writeGoadRangeId(instanceId, rangeId, runAsOwner)

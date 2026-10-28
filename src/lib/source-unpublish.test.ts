@@ -49,7 +49,7 @@ describe("removeSourceInstalledItems", () => {
     const warnings = await removeSourceInstalledItems("key", "src-1")
 
     expect(warnings).toEqual([])
-    expect(sshExec).toHaveBeenNthCalledWith(1, buildLudusTemplateRmCliCmd(templateName, "key"))
+    expect(sshExec).toHaveBeenNthCalledWith(1, buildLudusTemplateRmCliCmd(templateName), undefined, { stdin: "key\n" })
     expect(sshExec).toHaveBeenNthCalledWith(
       2,
       buildLudusTemplateDeleteCmd("/opt/ludus", templateName),

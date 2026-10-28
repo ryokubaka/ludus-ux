@@ -12,7 +12,7 @@ import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/ra
 import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-correlate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: {
     apiKey: string
@@ -24,7 +24,7 @@ function getEffective(
     impersonationSshLogin?: string
   },
 ) {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   return {
     effectiveApiKey: imp.apiKey || session.apiKey,
     effectiveUsername:
@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       ? Math.floor(body.requestedAt)
       : Date.now()
 
-  const { effectiveApiKey, effectiveUsername, ludusUserOverride } = getEffective(request, session)
+  const { effectiveApiKey, effectiveUsername, ludusUserOverride } = await getEffective(request, session)
 
   const tagsCsv = tags.join(",")
   const runId = insertLuxDeployTagRun({

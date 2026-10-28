@@ -27,11 +27,11 @@ interface RangeData {
   [key: string]: unknown
 }
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: Parameters<typeof resolveAdminImpersonationFromRequest>[0] & { apiKey: string },
 ) {
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   return { effectiveApiKey: impersonateApiKey || session.apiKey }
 }
 
@@ -84,7 +84,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "rangeId required" }, { status: 400 })
   }
 
-  const { effectiveApiKey } = getEffective(request, session)
+  const { effectiveApiKey } = await getEffective(request, session)
   const settings = getSettings()
   const rangePath = `/range?rangeID=${encodeURIComponent(rangeId)}`
 

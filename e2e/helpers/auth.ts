@@ -1,8 +1,16 @@
 import { expect, test, type Page } from "@playwright/test"
 
-export const e2eAdminUser = process.env.E2E_ADMIN_USER || "adminuser"
-export const e2eAdminPass = process.env.E2E_ADMIN_PASSWORD || "test"
+export const e2eAdminUser = process.env.E2E_ADMIN_USER ?? ""
+export const e2eAdminPass = process.env.E2E_ADMIN_PASSWORD ?? ""
 export const e2eLudusApiKey = process.env.E2E_LUDUS_API_KEY || ""
+
+/** Credentials come only from the environment (CI variables or a gitignored .security-gate.env). */
+export function requireAdminCredentials(): { username: string; password: string } {
+  if (!e2eAdminUser || !e2eAdminPass) {
+    throw new Error("Set E2E_ADMIN_USER and E2E_ADMIN_PASSWORD (or put them in .security-gate.env) to run authenticated specs.")
+  }
+  return { username: e2eAdminUser, password: e2eAdminPass }
+}
 
 /** Header user dropdown (not sidebar range selector, which also shows the username). */
 export function headerAccountMenuTrigger(page: Page) {
@@ -14,9 +22,10 @@ export function headerAccountMenuTrigger(page: Page) {
  * Uses `next` query so post-login lands on `nextPath`.
  */
 export async function loginAsAdmin(page: Page, nextPath = "/"): Promise<void> {
+  const { username, password } = requireAdminCredentials()
   await page.goto(`/login?next=${encodeURIComponent(nextPath)}`)
-  await page.locator("#username").fill(e2eAdminUser)
-  await page.locator("#password").fill(e2eAdminPass)
+  await page.locator("#username").fill(username)
+  await page.locator("#password").fill(password)
   await page.getByRole("button", { name: /sign in/i }).click()
 
   const apiKeyHeading = page.getByRole("heading", { name: /SSH Connected/i })

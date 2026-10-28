@@ -3,15 +3,16 @@
  */
 
 import { NextRequest } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { formatAppLogLine, queryAppLogs, subscribeAppLogEvents } from "@/lib/app-log"
 
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
+  const admin = await requireAdmin(request)
+  if (!admin.ok) {
+    const status = admin.response.status
     return new Response("data: [ERROR] Admin access required\n\n", {
-      status: 403,
+      status,
       headers: { "Content-Type": "text/event-stream" },
     })
   }

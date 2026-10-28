@@ -2,6 +2,8 @@
  * GitLab and GitHub repository APIs for listing and fetching Ludus template trees.
  */
 
+import { safeRepoFetch } from "./safe-template-repo-url"
+
 export interface RepoTreeItem {
   name: string
   type: "tree" | "blob"
@@ -29,6 +31,20 @@ const FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.g
 
 /** Next.js caches `fetch` by default — source version pins must always hit the tip. */
 const NO_STORE = { cache: "no-store" as const }
+
+const GITHUB_HOSTS = new Set([
+  "api.github.com",
+  "raw.githubusercontent.com",
+  "github.com",
+  "codeload.github.com",
+])
+
+/** User-supplied repo hosts are resolved and pinned. GitHub stays on normal fetch. */
+function repoFetch(url: string, init?: RequestInit): Promise<Response> {
+  const host = new URL(url).hostname.toLowerCase()
+  if (GITHUB_HOSTS.has(host)) return fetch(url, init)
+  return safeRepoFetch(url, init)
+}
 
 export function isGitHubApiBase(apiBase: string): boolean {
   return apiBase.includes("api.github.com/repos/")
@@ -97,7 +113,7 @@ export async function resolveGitHubCommitSha(apiBase: string, ref: string): Prom
   const key = `${apiBase}\n${ref}`
   const hit = refShaCache.get(key)
   if (hit && Date.now() - hit.at < REF_SHA_TTL_MS) return hit.sha
-  const res = await fetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
+  const res = await repoFetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
     headers: FETCH_HEADERS,
     ...NO_STORE,
   })
@@ -119,7 +135,7 @@ export async function listRepoDirectory(
       ? `/${dirPath.split("/").map(encodeURIComponent).join("/")}`
       : ""
     const url = `${apiBase}/contents${segment}?ref=${encodeURIComponent(ref)}`
-    const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+    const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
     if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url}`)
     const items = (await res.json()) as GitHubContentItem | GitHubContentItem[]
     const list = Array.isArray(items) ? items : [items]
@@ -131,7 +147,7 @@ export async function listRepoDirectory(
   }
 
   const url = `${apiBase}/tree?path=${encodeURIComponent(dirPath)}&ref=${encodeURIComponent(ref)}&per_page=100`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+  const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`GitLab API ${res.status} for ${url}`)
   const items = (await res.json()) as GitLabTreeItem[]
   return items.map((item) => ({ name: item.name, path: item.path, type: item.type }))
@@ -144,7 +160,7 @@ export async function fetchAllRepoBlobs(
   ref: string,
 ): Promise<RepoTreeItem[]> {
   if (isGitHubApiBase(apiBase)) {
-    const commitRes = await fetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
+    const commitRes = await repoFetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
       headers: FETCH_HEADERS,
       ...NO_STORE,
     })
@@ -154,7 +170,7 @@ export async function fetchAllRepoBlobs(
     const commit = (await commitRes.json()) as { commit: { tree: { sha: string } } }
     const treeSha = commit.commit.tree.sha
 
-    const treeRes = await fetch(`${apiBase}/git/trees/${treeSha}?recursive=1`, {
+    const treeRes = await repoFetch(`${apiBase}/git/trees/${treeSha}?recursive=1`, {
       headers: FETCH_HEADERS,
       ...NO_STORE,
     })
@@ -177,7 +193,7 @@ export async function fetchAllRepoBlobs(
     const url =
       `${apiBase}/tree?path=${encodeURIComponent(path)}&ref=${encodeURIComponent(ref)}` +
       `&per_page=100&recursive=true&page=${page}`
-    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+    const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
     if (!res.ok) throw new Error(`Could not list template tree (HTTP ${res.status})`)
     const items = (await res.json()) as GitLabTreeItem[]
     blobs.push(...items.filter((item) => item.type === "blob"))
@@ -196,12 +212,12 @@ export async function fetchRepoRawFile(apiBase: string, path: string, ref: strin
       sha = ref
     }
     const url = githubRawFileUrl(apiBase, path, sha)
-    const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+    const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
     return res.text()
   }
   const url = `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
-  const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+  const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
   return res.text()
 }
@@ -229,7 +245,7 @@ export async function listRepoRefs(
     let page = 1
     while (page <= 10) {
       const url = `${apiBase}/branches?per_page=100&page=${page}`
-      const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+      const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
       if (!res.ok) throw new Error(`GitHub branches API ${res.status}`)
       const rows = (await res.json()) as Array<{ name?: string }>
       for (const row of rows) {
@@ -242,7 +258,7 @@ export async function listRepoRefs(
       let tagPage = 1
       while (tagPage <= 5) {
         const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
-        const res = await fetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
+        const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
         if (!res.ok) break
         const rows = (await res.json()) as Array<{ name?: string }>
         for (const row of rows) {
@@ -257,7 +273,7 @@ export async function listRepoRefs(
     let page = 1
     while (page <= 10) {
       const url = `${apiBase}/branches?per_page=100&page=${page}`
-      const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+      const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
       if (!res.ok) throw new Error(`GitLab branches API ${res.status}`)
       const rows = (await res.json()) as Array<{ name?: string }>
       for (const row of rows) {
@@ -270,7 +286,7 @@ export async function listRepoRefs(
       let tagPage = 1
       while (tagPage <= 5) {
         const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
-        const res = await fetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
+        const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
         if (!res.ok) break
         const rows = (await res.json()) as Array<{ name?: string }>
         for (const row of rows) {

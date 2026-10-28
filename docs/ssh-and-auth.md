@@ -28,14 +28,14 @@ If a console fails with `Proxmox login failed (HTTP 401)`:
 ## Admin API URL (`LUDUS_ADMIN_URL`)
 
 - **Typical:** `https://<same-host-as-LUDUS_URL>:8081` whenever Ludus listens for admin traffic on an address your **container** can reach (LAN IP or DNS name). `docker-compose.yml` defaults to that pattern.
-- **Loopback-only 8081 on the Ludus box:** LUX can start an SSH tunnel and forward `127.0.0.1:18081` → the server’s `127.0.0.1:8081`. That requires working **host SSH** (`PROXMOX_SSH_USER`) at container startup. The tunnel itself does not need root. If you set `LUDUS_ADMIN_URL` to a **non-localhost** host name, LUX **does not** overwrite it with the tunnel URL.
+- **Loopback-only 8081 on the Ludus box:** this is the default install. LUX opens an SSH tunnel and forwards `127.0.0.1:18081` in the container to the server's `127.0.0.1:8081`. Set `LUDUS_ADMIN_URL` (Settings → Admin API URL) to `https://127.0.0.1:18081`. Host SSH (`PROXMOX_SSH_USER`) must work at container startup. The tunnel does not need root. A non-localhost admin URL is left as written, so `https://<host>:8081` is used only when that port accepts connections from the container.
 - **Settings → Admin API URL** is persisted in SQLite and overrides the value from the environment until you change it again.
 
 ## Host private key for `PROXMOX_SSH_USER`
 
 Copying that account’s private key off the Ludus server is only half of SSH key authentication:
 
-- **LUX (client)** needs the **private** key file (`id_rsa`), placed at `./ssh/id_rsa`.
+- **LUX (client)** needs the **private** key file (`id_rsa`), placed at `./ssh/id_rsa`. The directory is mounted read-only. After Quickstart has authorized the public key, it runs `chown` on that file to the `LUX_UID`:`LUX_GID` pair in `.env` (default `64532:64532`) when that uid is not already a host account. A manual copy needs the same `chown`. Without it, the container entrypoint copies the key into an in-memory `/run/lux-ssh` that only the app user can read, and leaves the host file as it is. Changing the pair needs `docker compose up -d --build`.
 - **sshd on the Ludus server** needs the matching **public** key in **that account’s** `authorized_keys`.
 
 | `PROXMOX_SSH_USER` | Private key on the server | `authorized_keys` |
@@ -64,7 +64,19 @@ When the account is not root, privileged host commands need [lux-host](#lux-host
 
 ## lux-host
 
-LUX used to require `PROXMOX_SSH_USER=root` because template installs, `chown`, `pvesh`, `qm`, password changes, and `~/.bashrc` updates run as root on the Ludus host. **lux-host** is the replacement: a small root-owned program at `/usr/local/sbin/lux-host`. Passwordless sudo is granted for that path only. The program does not run a caller-supplied root shell. It accepts one named operation and checks every argument. A LUX admin whose host account is not root runs another Linux user's command through `run-as-user`: the username is an argument, and the script is on stdin. Other users run with their own SSH credentials and cannot switch accounts. The operations are listed at the top of `scripts/lux-host/lux-host`.
+LUX used to require `PROXMOX_SSH_USER=root` because template installs, `chown`, `pvesh`, `qm`, password changes, and `~/.bashrc` updates run as root on the Ludus host. **lux-host** is the replacement: a small root-owned program at `/usr/local/sbin/lux-host`. Passwordless sudo is granted for that path only. The program does not run a caller-supplied root shell. It accepts one named operation and checks every argument. A LUX admin whose host account is not root runs another Linux user's command through `run-as-user`: the username is an argument, and the script is on stdin. `run-as-user` refuses root, the `ludus` account, uids below 1000, and members of `sudo`, `wheel`, `docker`, or `adm`. Template API keys are passed on stdin, not on the command line. Other users run with their own SSH credentials and cannot switch accounts. The operations are listed at the top of `scripts/lux-host/lux-host`.
+
+The first SSH host key seen for the configured host and port is stored in SQLite. A later connection with a different key is rejected, and the error names the host, the stored fingerprint, and the one presented.
+
+When the Ludus host was rebuilt or its key was rotated, confirm the new fingerprint on the host (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), then forget the stored key under **Settings → Auth → Stored SSH host keys**. The next connection stores the new key. Only an admin can see or forget stored keys.
+
+To require one key instead, set `LUX_SSH_HOST_KEY` in `.env`. Any of these work:
+
+- The fingerprint exactly as `ssh-keygen -lf` prints it, for example `SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s`. A trailing `=` is also accepted.
+- The public key line, for example the contents of `/etc/ssh/ssh_host_ed25519_key.pub`.
+- A `known_hosts` line for the host.
+
+A pin that is none of these refuses every SSH connection, and the app log says so once.
 
 ```
 Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host

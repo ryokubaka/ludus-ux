@@ -193,10 +193,19 @@ roles:
       "mysql",
       "MANIFEST.json",
     ])
+    // community.mysql 5.x is a redirect stub, so its canary is MANIFEST.json and
+    // the mysql_user module file is checked under ansible.mysql.
     expect(vi.mocked(sshExec).mock.calls[1]?.[0]).toEqual([
       "ansible-collection-file",
       IMPERSONATED_SSH_USER,
       "community",
+      "mysql",
+      "MANIFEST.json",
+    ])
+    expect(vi.mocked(sshExec).mock.calls[2]?.[0]).toEqual([
+      "ansible-collection-file",
+      IMPERSONATED_SSH_USER,
+      "ansible",
       "mysql",
       "plugins/modules/mysql_user.py",
     ])

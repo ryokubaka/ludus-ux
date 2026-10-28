@@ -113,6 +113,11 @@ async function cachedFetch<T>(key: string, task: () => Promise<T>, apiLabel: str
 }
 
 export async function GET(request: NextRequest) {
+  const { session, apiKey } = await requireSourcesSession(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
+
   const { searchParams } = new URL(request.url)
   const source   = searchParams.get("source")   || "badsectorlabs"
   const sourceId = searchParams.get("sourceId") || ""
@@ -123,8 +128,7 @@ export async function GET(request: NextRequest) {
   // templates when switching to a custom registered source).
   if (source === "registered" && sourceId) {
     try {
-      const { session, apiKey } = await requireSourcesSession(request)
-      if (!session || !apiKey) {
+      if (!apiKey) {
         return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
       }
       const { templates, catalogSource } = await fetchRegisteredTemplateCatalog(
@@ -167,7 +171,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { apiKey } = await requireSourcesSession(request)
     if (apiKey) {
       const gitUrl =
         source === "badsectorlabs"

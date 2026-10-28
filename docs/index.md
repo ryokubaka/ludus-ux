@@ -14,6 +14,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |
 | [Persistent data](persistent-data.md) | What lives under `data/` and related paths |
 | [Development](development.md) | Local `npm run dev`, Playwright E2E |
+| [Security testing](security-testing.md) | CI checks on GitHub and GitLab, the live security suite, adding a route |
 | [API](api.md) | OpenAPI spec and Swagger UI |
 | [Screenshots](screenshots.md) | UI gallery |
 

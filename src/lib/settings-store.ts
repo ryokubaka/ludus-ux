@@ -23,6 +23,9 @@ import {
 } from "./settings-value-at-rest"
 import { goadPathFromEnv, ludusInstallPathFromEnv, ludushoundPathFromEnv } from "./install-path-env"
 
+/** Keys whose ciphertext does not match the current APP_SECRET. Logged once. */
+const undecryptableSettings = new Set<string>()
+
 export interface RuntimeSettings {
   ludusUrl: string
   ludusAdminUrl: string
@@ -149,8 +152,13 @@ function decodeSettingFromDb(key: string, value: string): { value: string; needs
       needsRewrite: false,
     }
   } catch (err) {
-    console.error(`[settings-store] Failed to decrypt ${key} from DB:`, err)
-    return { value: "", needsRewrite: false }
+    if (!undecryptableSettings.has(key)) {
+      undecryptableSettings.add(key)
+      console.error(
+        `[settings-store] Could not decrypt ${key}. APP_SECRET does not match this database, so that stored value was cleared.`,
+      )
+    }
+    return { value: "", needsRewrite: true }
   }
 }
 

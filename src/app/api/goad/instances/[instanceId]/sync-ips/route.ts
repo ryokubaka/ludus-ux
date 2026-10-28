@@ -23,6 +23,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
@@ -41,10 +42,12 @@ export async function POST(
   }
 
   const { instanceId } = await params
+  const denied = await assertGoadInstanceAccess(session, request, instanceId)
+  if (denied) return denied
   const body = await request.json().catch(() => ({}))
   const { ludusRangeId: bodyRangeId } = body as { ludusRangeId?: string }
 
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const goadPath = resolveGoadPath()

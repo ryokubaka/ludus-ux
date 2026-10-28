@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildGoadWizardInstallArgs,
+  extractGoadInstanceIdFromOutput,
   goadExecuteOutputLooksFailed,
   inferGoadLabName,
   looksLikeHybridGoadArgs,
@@ -10,6 +11,20 @@ import {
 } from "./goad-wizard-args"
 
 describe("goad-wizard-args", () => {
+  it("reads the new instance id from the create_empty log", () => {
+    const log = [
+      "[-] No instance found, change your config and use install to create a lab instance",
+      "[+] Instance e0eb21-goad-mini-ludus loaded ",
+      "│ > e0eb21-goad-mini-ludus │ GOAD-Mini │ ludus    │",
+    ].join("\n")
+    expect(extractGoadInstanceIdFromOutput(log)).toBe("e0eb21-goad-mini-ludus")
+  })
+
+  it("keeps the last loaded instance when a default is printed first", () => {
+    const log = "[+] Instance old-lab loaded\n[+] Instance new-lab loaded"
+    expect(extractGoadInstanceIdFromOutput(log)).toBe("new-lab")
+  })
+
   it("fresh no extensions → -l install", () => {
     expect(buildGoadWizardInstallArgs("GOAD-Mini", [])).toBe(
       "-l 'GOAD-Mini' -p ludus -m local -t install",

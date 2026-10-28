@@ -1,0 +1,49 @@
+rules:
+  - id: lux-request-value-in-fs-path
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      A route parameter, query value, or request body field reaches a
+      filesystem path without a sanitizer. Validate it as a single path segment
+      first (for example `assertSafeInstanceId`), or take `path.basename`.
+    paths:
+      include:
+        - "/src/app/api/**/route.ts"
+    mode: taint
+    pattern-sources:
+      - pattern: (await $CTX.params).$F
+      - patterns:
+          - pattern-inside: "const { ... } = await $CTX.params"
+          - pattern: await $CTX.params
+      - pattern: $REQ.nextUrl.searchParams.get(...)
+      - pattern: await $REQ.json()
+      - pattern: await $REQ.formData()
+    pattern-sanitizers:
+      - pattern: assertSafeInstanceId(...)
+      - pattern: sanitizeUsername(...)
+      - pattern: detectImageType(...)
+      - pattern: path.basename(...)
+      - pattern: basename(...)
+      - pattern: safeFilename(...)
+      - pattern: sanitizeFilename(...)
+      - pattern: encodeURIComponent(...)
+      - patterns:
+          - pattern: $V
+          - pattern-inside: |
+              if (!$RE.test($V)) { ... }
+              ...
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.$FN($P, ...)
+              - pattern: $FN($P, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|unlink|unlinkSync|rm|rmSync|mkdir|mkdirSync|readdir|readdirSync|createReadStream|createWriteStream|stat|statSync|existsSync|rename|renameSync|copyFile|copyFileSync)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: path.join(..., $P, ...)
+              - pattern: path.resolve(..., $P, ...)
+              - pattern: join(..., $P, ...)
+          - focus-metavariable: $P

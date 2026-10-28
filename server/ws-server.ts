@@ -16,6 +16,7 @@
 import "./logger"
 
 import { applyNodeTlsFromLudusEnv, isLudusTlsInsecure } from "../src/lib/tls-insecure-env"
+import { attachSshHostVerifier, explainSshHostKeyError } from "../src/lib/ssh-host-key"
 import { getProductionAppSecretFailureMessage } from "../src/lib/app-secret-policy"
 
 applyNodeTlsFromLudusEnv()
@@ -326,12 +327,12 @@ function startAdminTunnel(): Promise<void> {
       })
 
       conn.on("error", (err) => {
-        console.error("[admin-tunnel] SSH error:", err.message)
+        console.error("[admin-tunnel] SSH error:", explainSshHostKeyError(err.message, sshHost, sshPort))
         socket.destroy()
       })
 
       const passphrase = getSshKeyPassphrase()
-      conn.connect({
+      conn.connect(attachSshHostVerifier({
         host: sshHost,
         port: sshPort,
         username: sshUser,
@@ -342,7 +343,7 @@ function startAdminTunnel(): Promise<void> {
               privateKey: sshKey!,
               ...(passphrase ? { passphrase } : {}),
             }),
-      })
+      }))
     })
 
     server.on("error", (err) => {

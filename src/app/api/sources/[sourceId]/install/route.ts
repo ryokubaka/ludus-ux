@@ -20,6 +20,7 @@ import { ensureSourceFresh, sourceIdOf } from "@/lib/source-auto-sync"
 import { pinSourceInstallSelection } from "@/lib/source-content-pins"
 import { isSourcePublished } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import { logAndSafeError } from "@/lib/safe-client-error"
 
 export const maxDuration = 300
@@ -58,7 +59,7 @@ export async function POST(
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 })
   }
 
-  if (!session.isAdmin && isSourcePublished(sourceId)) {
+  if (!(await liveSessionIsAdmin(session)) && isSourcePublished(sourceId)) {
     return NextResponse.json(
       {
         error:
@@ -80,7 +81,7 @@ export async function POST(
 
   try {
     const viewerApiKey =
-      resolveAdminImpersonationFromRequest(session, request).apiKey || apiKey
+      (await resolveAdminImpersonationFromRequest(session, request)).apiKey || apiKey
     const { apiKey: adminInstallKey, isAdminInstall } =
       resolveGlobalSourceBlueprintInstallApiKey(session)
     const globalLookupApiKey =

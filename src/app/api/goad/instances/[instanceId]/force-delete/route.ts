@@ -17,10 +17,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
-import {
-  effectiveImpersonatedOperatorUsername,
-  resolveAdminImpersonationFromRequest,
-} from "@/lib/admin-impersonation-request"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { ludusRequest } from "@/lib/ludus-client"
 import { sshExec, sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
 import { resolveGoadPath } from "@/lib/runtime-paths"
@@ -81,15 +79,8 @@ export async function POST(
 
   const { instanceId } = await params
 
-  // Non-admins may only delete instances that belong to their own username.
-  // Instance IDs contain the username prefix (e.g. "alice-goad-mini-ludus"),
-  // so this is a lightweight ownership guard; admins bypass it.
-  if (!session.isAdmin) {
-    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
-    if (!instanceId.toLowerCase().startsWith(effectiveUser.toLowerCase() + "-")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
-  }
+  const denied = await assertGoadInstanceAccess(session, request, instanceId)
+  if (denied) return denied
   const body = await request.json().catch(() => ({}))
   const { ludusRangeId: bodyRangeId, skipRangeDeletion } = body as {
     ludusRangeId?: string
@@ -98,7 +89,7 @@ export async function POST(
     skipRangeDeletion?: boolean
   }
 
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const results: { rangeDeleted: boolean; workspaceRemoved: boolean; errors: string[] } = {

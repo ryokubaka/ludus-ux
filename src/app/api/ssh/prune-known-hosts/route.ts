@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { pruneKnownHostsEntries } from "@/lib/ssh-known-hosts"
 
@@ -8,10 +8,9 @@ import { pruneKnownHostsEntries } from "@/lib/ssh-known-hosts"
  * against the LUX server user's ~/.ssh/known_hosts (same machine as Next.js).
  */
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: unknown
   try {

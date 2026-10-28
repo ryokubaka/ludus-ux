@@ -7,6 +7,7 @@
  */
 
 import { getSettings, type RuntimeSettings } from "./settings-store"
+import { ludusFetch } from "./ludus-fetch"
 
 /** When `ludusAdminUrl` is blank, derive admin base from main Ludus URL (`:8080`→`:8081`, or default port→8081). */
 function inferAdminBaseFromLudusUrl(mainUrl: string): string {
@@ -117,7 +118,7 @@ export async function ludusRequest<T = unknown>(
       fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body)
     }
 
-    const response = await fetch(url, fetchOptions)
+    const response = await ludusFetch(url, fetchOptions)
     if (timeoutId) clearTimeout(timeoutId)
     const status = response.status
 

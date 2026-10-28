@@ -6,6 +6,9 @@ const configDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(configDir, "..")
 
 export default defineConfig({
+  // tsconfig keeps jsx "preserve" for Next. Vite cannot analyze preserved JSX
+  // when a test imports a .tsx module, so tests compile it here.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

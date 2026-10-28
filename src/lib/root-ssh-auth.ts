@@ -45,7 +45,19 @@ export function getPrivateKeySearchPathsFor(
   ].filter(Boolean) as string[]
   const defaults = ["/app/ssh/id_rsa", "/app/ssh/id_ed25519"]
   const discovered = discoverAppSshKeyPaths()
-  return [...new Set([...parts, ...defaults, ...discovered])]
+  return [...new Set([...parts, ...defaults, ...discovered].flatMap(withContainerKeyCopy))]
+}
+
+/** Entrypoint copies a key the app user cannot read; see docker/entrypoint.sh. */
+export const CONTAINER_KEY_COPY_DIR = "/run/lux-ssh"
+
+/**
+ * The copy exists only when the mounted key was unreadable, so try it first.
+ * The host file under /app/ssh is never chowned.
+ */
+function withContainerKeyCopy(p: string): string[] {
+  if (!p.startsWith("/app/ssh/")) return [p]
+  return [path.posix.join(CONTAINER_KEY_COPY_DIR, path.posix.basename(p)), p]
 }
 
 /**
@@ -312,7 +324,7 @@ export function probeSshKeyMount(
 
 /**
  * If a key file exists on a configured path but the Node process cannot read it
- * (typical: root:root 600 on host, app runs as nextjs UID 1001), return a short hint.
+ * (typical: mode 600 owned by another uid, app runs as the image user from LUX_UID).
  */
 export function describePrivateKeyPermissionIssue(
   effective?: Pick<RuntimeSettings, "proxmoxSshKeyPath"> | null,
@@ -325,10 +337,10 @@ export function describePrivateKeyPermissionIssue(
     const err = info.readError || ""
     if (/EACCES|EPERM|permission denied/i.test(err)) {
       return (
-        `Private key exists at ${p} but is not readable by the app user (nextjs, UID 1001). ` +
-        `Host files owned by root with mode 600 cannot be read inside the container. ` +
-        `Fix: use a writable ssh volume (docker-compose no longer uses :ro) and restart so the entrypoint can chown the key, ` +
-        `or on the host: chown 1001:1001 ssh/id_rsa from your ludus-ux directory.`
+        `Private key exists at ${p} but is not readable by the app user (uid from LUX_UID in .env, default 64532). ` +
+        `The ./ssh mount is read-only, so the container does not chown host keys. ` +
+        `On the host, chown the key to that uid:gid only when getent passwd does not already list the uid, ` +
+        `then rebuild if you changed LUX_UID or LUX_GID. See docs/persistent-data.md.`
       )
     }
     if (err) return `Private key at ${p} could not be read: ${err}`

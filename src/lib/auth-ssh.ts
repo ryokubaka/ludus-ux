@@ -4,6 +4,7 @@
  */
 
 import { Client as SSHClient, type ConnectConfig } from "ssh2"
+import { attachSshHostVerifier, explainSshHostKeyError } from "./ssh-host-key"
 
 const LUDUS_SSH_HOST = process.env.LUDUS_SSH_HOST || process.env.GOAD_SSH_HOST || ""
 const LUDUS_SSH_PORT = parseInt(process.env.LUDUS_SSH_PORT || process.env.GOAD_SSH_PORT || "22", 10)
@@ -75,7 +76,7 @@ export async function authenticateUser(
     })
 
     conn.on("error", (err) => {
-      const msg = err.message || String(err)
+      const msg = explainSshHostKeyError(err.message || String(err), config.host, config.port)
       const isAuthFail =
         msg.includes("Authentication") ||
         msg.includes("credentials") ||
@@ -99,7 +100,7 @@ export async function authenticateUser(
       })
     })
 
-    conn.connect(config)
+    conn.connect(attachSshHostVerifier(config))
   })
 }
 
@@ -116,18 +117,18 @@ export async function saveApiKeyToBashrc(
     return { success: false, message: "LUDUS_SSH_HOST is not configured." }
   }
 
-  // Remove old lines, then append exports via base64 decode so apiKey cannot break
-  // shell quoting or inject remote commands.
+  // Remove old lines, then append the exports from stdin. The key never enters
+  // the command string (the remote shell's argv, readable with ps), and stdin
+  // cannot break shell quoting or inject commands.
   const snippet = `export LUDUS_API_KEY=${apiKey}\nexport LUDUS_VERSION=2\n`
-  const b64 = Buffer.from(snippet, "utf8").toString("base64")
-  if (b64.length > 32_000) {
+  if (snippet.length > 24_000) {
     return { success: false, message: "API key value is too large." }
   }
 
   const command = [
     `sed -i '/\\(export \\)\\?LUDUS_API_KEY=/d' ~/.bashrc`,
     `sed -i '/\\(export \\)\\?LUDUS_VERSION=/d' ~/.bashrc`,
-    `printf '%s' '${b64}' | base64 -d >> ~/.bashrc`,
+    `cat >> ~/.bashrc`,
   ].join(" && ")
 
   return new Promise((resolve) => {
@@ -142,6 +143,8 @@ export async function saveApiKeyToBashrc(
 
         let stderr = ""
         stream.stderr.on("data", (d: Buffer) => { stderr += d.toString() })
+        // ssh2 emits "close" only after stdout has been read, even when it is empty.
+        stream.resume()
         stream.on("close", (code: number) => {
           conn.end()
           if (code === 0) {
@@ -150,20 +153,21 @@ export async function saveApiKeyToBashrc(
             resolve({ success: false, message: stderr || `Exit code ${code}` })
           }
         })
+        stream.end(snippet)
       })
     })
 
     conn.on("error", (err) => {
-      resolve({ success: false, message: err.message })
+      resolve({ success: false, message: explainSshHostKeyError(err.message, LUDUS_SSH_HOST, LUDUS_SSH_PORT) })
     })
 
-    conn.connect({
+    conn.connect(attachSshHostVerifier({
       host: LUDUS_SSH_HOST,
       port: LUDUS_SSH_PORT,
       username,
       password,
       readyTimeout: 10000,
       authHandler: ["password"],
-    })
+    }))
   })
 }

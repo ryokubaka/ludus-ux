@@ -1,4 +1,5 @@
 import { Suspense } from "react"
+import { redirect } from "next/navigation"
 import { AppShell } from "@/components/layout/app-shell"
 import { Toaster } from "@/components/ui/toaster"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -15,6 +16,7 @@ async function AuthenticatedRootInner({ children }: { children: React.ReactNode 
   let dehydratedState: Awaited<ReturnType<typeof prefetchGlobal>> | undefined
   try {
     const layout = await getLayoutSession()
+    if (layout.revoked) redirect("/api/auth/revoke")
     session = layout.session
     dehydratedState = await prefetchGlobal(layout.resolved)
   } catch (err) {

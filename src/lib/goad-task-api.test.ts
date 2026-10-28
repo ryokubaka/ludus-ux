@@ -5,7 +5,11 @@ import { assertGoadTaskAccess, toGoadTaskDetail, toPublicGoadTask } from "@/lib/
 import type { ResolvedSession } from "@/lib/session"
 
 vi.mock("@/lib/admin-impersonation-request", () => ({
-  effectiveImpersonatedOperatorUsername: (session: { username: string }) => session.username,
+  effectiveImpersonatedOperatorUsername: async (session: { username: string }) => session.username,
+}))
+
+vi.mock("@/lib/session-admin-check", () => ({
+  liveSessionIsAdmin: async (session: { isAdmin?: boolean }) => session.isAdmin === true,
 }))
 
 function baseTask(overrides: Partial<GoadTask> = {}): GoadTask {
@@ -41,22 +45,22 @@ describe("goad-task-api", () => {
     expect(detail).not.toHaveProperty("ludusApiKey")
   })
 
-  it("assertGoadTaskAccess allows owner", () => {
+  it("assertGoadTaskAccess allows owner", async () => {
     const session = { username: "alice", isAdmin: false, apiKey: "k" } as ResolvedSession
     const req = new NextRequest("http://localhost/api/goad/tasks/goad-1")
-    expect(assertGoadTaskAccess(session, req, baseTask())).toBeNull()
+    expect(await assertGoadTaskAccess(session, req, baseTask())).toBeNull()
   })
 
-  it("assertGoadTaskAccess denies non-owner", () => {
+  it("assertGoadTaskAccess denies non-owner", async () => {
     const session = { username: "bob", isAdmin: false, apiKey: "k" } as ResolvedSession
     const req = new NextRequest("http://localhost/api/goad/tasks/goad-1")
-    const denied = assertGoadTaskAccess(session, req, baseTask())
+    const denied = await assertGoadTaskAccess(session, req, baseTask())
     expect(denied?.status).toBe(404)
   })
 
-  it("assertGoadTaskAccess allows admin for any task", () => {
+  it("assertGoadTaskAccess allows admin for any task", async () => {
     const session = { username: "admin", isAdmin: true, apiKey: "k" } as ResolvedSession
     const req = new NextRequest("http://localhost/api/goad/tasks/goad-1")
-    expect(assertGoadTaskAccess(session, req, baseTask({ username: "alice" }))).toBeNull()
+    expect(await assertGoadTaskAccess(session, req, baseTask({ username: "alice" }))).toBeNull()
   })
 })

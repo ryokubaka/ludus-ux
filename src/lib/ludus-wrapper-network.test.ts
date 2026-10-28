@@ -5,9 +5,10 @@ import path from "node:path"
 import yaml from "js-yaml"
 import { describe, expect, it } from "vitest"
 import { LUDUS_WRAPPER_SH } from "./goad-ssh"
+import { lacks } from "../test-support/host-capabilities"
 
 describe("ludus range wrapper network merge", () => {
-  it("keeps snapshot rule order and evaluates rules that exist only on the file after them", () => {
+  it.skipIf(lacks("pyyaml"))("keeps snapshot rule order and evaluates rules that exist only on the file after them", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "lux-wrapper-"))
     const config = path.join(dir, "config.yml")
     writeFileSync(

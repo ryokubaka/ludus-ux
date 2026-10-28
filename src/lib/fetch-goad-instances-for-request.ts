@@ -27,7 +27,7 @@ export async function fetchGoadInstancesForRequest(
   }
 
   const { apiKey: impersonateApiKey, ludusUserId, sshLogin, ludusPrincipal } = session
-    ? resolveAdminImpersonationFromRequest(session, request)
+    ? await resolveAdminImpersonationFromRequest(session, request)
     : { apiKey: null, ludusUserId: null, sshLogin: null, ludusPrincipal: null }
 
   const creds = (!impersonateApiKey && session?.sshPassword)

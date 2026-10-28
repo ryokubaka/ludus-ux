@@ -1,80 +1,97 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { getSettings, updateSettings, type RuntimeSettings } from "@/lib/settings-store"
 import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/resolve-root-api-key"
 import { invalidateCatalogCache } from "@/lib/goad-ssh"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 import { logAppEvent } from "@/lib/app-log"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
+import {
+  endpointSettingsChanged,
+  secretsMatch,
+  toPublicSettings,
+} from "@/lib/settings-public"
+
+function nonEmptySecret(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (value.trim() === "") return undefined
+  return value
+}
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
 
   const settings = getSettings()
-
-  // Non-admins receive a restricted view — sensitive credentials are omitted.
-  if (!session.isAdmin) {
-    const {
-      proxmoxSshPassword: _p,
-      rootApiKey: _r,
-      proxmoxSshUser: _u,
-      proxmoxSshKeyPath: _k,
-      ...safeSettings
-    } = settings
-    return NextResponse.json(safeSettings)
-  }
-
-  return NextResponse.json({
-    ...settings,
-    rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
-  })
+  const isAdmin = await liveSessionIsAdmin(gate.session)
+  return refreshRevokedAdminCookie(
+    NextResponse.json(
+      toPublicSettings(settings, {
+        isAdmin,
+        rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
+      }),
+    ),
+    gate.session,
+    isAdmin,
+  )
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin only" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
 
   const body = await request.json().catch(() => null)
-  if (!body) {
+  if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 })
   }
 
+  const record = body as Record<string, unknown>
   const patch: Partial<RuntimeSettings> = {}
-  if (typeof body.ludusUrl === "string") patch.ludusUrl = body.ludusUrl.trim()
-  if (typeof body.ludusAdminUrl === "string") patch.ludusAdminUrl = body.ludusAdminUrl.trim()
-  if (typeof body.sshHost === "string") patch.sshHost = body.sshHost.trim()
-  if (typeof body.sshPort === "number") patch.sshPort = body.sshPort
-  if (typeof body.goadPath === "string") patch.goadPath = body.goadPath.trim()
-  if (typeof body.ludushoundPath === "string") patch.ludushoundPath = body.ludushoundPath.trim()
-  if (typeof body.ludusInstallPath === "string") patch.ludusInstallPath = body.ludusInstallPath.trim()
-  if (typeof body.goadEnabled === "boolean") patch.goadEnabled = body.goadEnabled
-  if (typeof body.ludushoundEnabled === "boolean") patch.ludushoundEnabled = body.ludushoundEnabled
-  if (typeof body.ludusAnsibleVerbose === "boolean") patch.ludusAnsibleVerbose = body.ludusAnsibleVerbose
-  if (typeof body.useLudusHostDns === "boolean") patch.useLudusHostDns = body.useLudusHostDns
-  if (typeof body.rootApiKey === "string") patch.rootApiKey = body.rootApiKey.trim()
-  if (typeof body.proxmoxSshUser === "string") patch.proxmoxSshUser = body.proxmoxSshUser.trim()
-  if (typeof body.proxmoxSshPassword === "string") patch.proxmoxSshPassword = body.proxmoxSshPassword
-  if (typeof body.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = body.proxmoxSshKeyPath.trim()
+  if (typeof record.ludusUrl === "string") patch.ludusUrl = record.ludusUrl.trim()
+  if (typeof record.ludusAdminUrl === "string") patch.ludusAdminUrl = record.ludusAdminUrl.trim()
+  if (typeof record.sshHost === "string") patch.sshHost = record.sshHost.trim()
+  if (typeof record.sshPort === "number") patch.sshPort = record.sshPort
+  if (typeof record.goadPath === "string") patch.goadPath = record.goadPath.trim()
+  if (typeof record.ludushoundPath === "string") patch.ludushoundPath = record.ludushoundPath.trim()
+  if (typeof record.ludusInstallPath === "string") patch.ludusInstallPath = record.ludusInstallPath.trim()
+  if (typeof record.goadEnabled === "boolean") patch.goadEnabled = record.goadEnabled
+  if (typeof record.ludushoundEnabled === "boolean") patch.ludushoundEnabled = record.ludushoundEnabled
+  if (typeof record.ludusAnsibleVerbose === "boolean") patch.ludusAnsibleVerbose = record.ludusAnsibleVerbose
+  if (typeof record.useLudusHostDns === "boolean") patch.useLudusHostDns = record.useLudusHostDns
+  const rootApiKey = nonEmptySecret(record.rootApiKey)
+  if (rootApiKey !== undefined) patch.rootApiKey = rootApiKey.trim()
+  if (typeof record.proxmoxSshUser === "string") patch.proxmoxSshUser = record.proxmoxSshUser.trim()
+  const proxmoxSshPassword = nonEmptySecret(record.proxmoxSshPassword)
+  if (proxmoxSshPassword !== undefined) patch.proxmoxSshPassword = proxmoxSshPassword
+  if (typeof record.proxmoxSshKeyPath === "string") patch.proxmoxSshKeyPath = record.proxmoxSshKeyPath.trim()
+
+  const current = getSettings()
+  if (endpointSettingsChanged(current, patch)) {
+    const confirmPassword = typeof record.confirmPassword === "string" ? record.confirmPassword : ""
+    const expected = admin.session.sshPassword ?? ""
+    if (!secretsMatch(confirmPassword, expected)) {
+      return NextResponse.json(
+        { error: "Re-enter your SSH password to change the Ludus URL or SSH host." },
+        { status: 403 },
+      )
+    }
+  }
 
   const updated = updateSettings(patch)
-  // Invalidate cached catalog if goadPath changed
   if ("goadPath" in patch) {
     invalidateCatalogCache()
   }
   logAppEvent("settings_save", "Settings updated", {
-    username: session.username,
+    username: admin.session.username,
     ip: clientIpFromRequest(request),
     outcome: "success",
   })
-  return NextResponse.json({
-    ...updated,
-    rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
-  })
+  const response = NextResponse.json(
+    toPublicSettings(updated, {
+      isAdmin: true,
+      rootApiKeyOverriddenByEnv: isLudusRootApiKeyEnvOverrideActive(),
+    }),
+  )
+  return finishAdminResponse(response, admin)
 }

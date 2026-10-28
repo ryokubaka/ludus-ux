@@ -19,7 +19,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { parseJsonBody } from "@/lib/require-session"
 import { setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
 import { buildWorkspaceSshExecPlan, chownGoadInstance, listGoadInstances, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad-ssh"
@@ -33,10 +33,9 @@ import { getSettings } from "@/lib/settings-store"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const session = admin.session
 
   const body = await parseJsonBody<{ instanceId?: string; targetUserId?: string; rangeId?: string }>(request)
 

@@ -42,7 +42,7 @@ import {
 import { readLudusRangeLogsForReconcile } from "@/lib/goad-ludus-reconcile"
 import { runTestingStartEfiEnrollPreflight } from "@/lib/proxmox-testing-stop-preflight"
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: {
     apiKey: string
@@ -54,7 +54,7 @@ function getEffective(
     impersonationSshLogin?: string
   },
 ) {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   return {
     effectiveApiKey: imp.apiKey || session.apiKey,
     effectiveUsername:
@@ -193,7 +193,7 @@ export async function GET(request: NextRequest) {
   const rangeId = request.nextUrl.searchParams.get("rangeId")
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const ctx = getEffective(request, session)
+  const ctx = await getEffective(request, session)
 
   let op = getActiveRangeOp(rangeId, ctx.effectiveUsername)
   if (op) {
@@ -214,7 +214,7 @@ export async function POST(request: NextRequest) {
   const { rangeId, opType, dismissStuckOp } = body
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const ctx = getEffective(request, session)
+  const ctx = await getEffective(request, session)
 
   if (dismissStuckOp === true) {
     const stuck = getActiveRangeOp(rangeId, ctx.effectiveUsername)

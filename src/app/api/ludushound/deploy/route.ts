@@ -12,6 +12,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "@/lib/ludus-deploy-only-roles"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { ludusFetch } from "@/lib/ludus-fetch"
 
 type DeployBody = {
   rangeId: string
@@ -87,7 +88,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(ctx.session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(ctx.session, request)
   const effectiveApiKey = impersonateApiKey || ctx.apiKey
 
   const ludusPath = `/range/config?rangeID=${encodeURIComponent(rangeId)}`
@@ -96,7 +97,7 @@ export async function POST(request: NextRequest) {
   if (body.force) formData.append("force", "true")
 
   try {
-    const cfgRes = await fetch(buildLudusUrl(ludusPath), {
+    const cfgRes = await ludusFetch(buildLudusUrl(ludusPath), {
       method: "PUT",
       headers: { "X-API-KEY": effectiveApiKey },
       body: formData,

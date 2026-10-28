@@ -16,7 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
 import {
   getPendingAllowsWithTimestamps,
@@ -29,7 +29,7 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: {
     username: string
@@ -40,7 +40,7 @@ function getEffective(
     impersonationSshLogin?: string
   },
 ) {
-  return { effectiveUsername: effectiveImpersonatedOperatorUsername(session, request) }
+  return { effectiveUsername: await effectiveImpersonatedOperatorUsername(session, request) }
 }
 
 // ── GET ──────────────────────────────────────────────────────────────────────
@@ -48,13 +48,14 @@ function getEffective(
 export async function GET(request: NextRequest) {
   try { pruneStalePendingAllows() } catch (err) { console.warn("[pending-allows] prune:", (err as Error).message) }
 
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const { effectiveUsername } = getEffective(request, session)
+  const { effectiveUsername } = await getEffective(request, session)
   const pendingTs = getPendingAllowsWithTimestamps(rangeId, effectiveUsername)
 
   if (pendingTs.adds.length === 0 && pendingTs.removes.length === 0) {
@@ -92,8 +93,9 @@ export async function GET(request: NextRequest) {
 // ── POST ─────────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: { rangeId?: string; entry?: string; opType?: string }
   try { body = await request.json() } catch { body = {} }
@@ -106,7 +108,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "opType must be 'add' or 'remove'" }, { status: 400 })
   }
 
-  const { effectiveUsername } = getEffective(request, session)
+  const { effectiveUsername } = await getEffective(request, session)
   addPendingAllow(rangeId, effectiveUsername, entry, opType as PendingAllowOpType)
   console.log(`[pending-allows] POST ${effectiveUsername}/${rangeId}: ${opType} "${entry}"`)
   logLuxRouteAction(request, session, { detail: `${opType} ${entry}` })
@@ -116,8 +118,9 @@ export async function POST(request: NextRequest) {
 // ── DELETE ───────────────────────────────────────────────────────────────────
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   let body: { rangeId?: string; entries?: string[]; opType?: string }
   try { body = await request.json() } catch { body = {} }
@@ -130,7 +133,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "opType must be 'add' or 'remove'" }, { status: 400 })
   }
 
-  const { effectiveUsername } = getEffective(request, session)
+  const { effectiveUsername } = await getEffective(request, session)
   removePendingAllows(rangeId, effectiveUsername, entries, opType as PendingAllowOpType)
   console.log(`[pending-allows] DELETE ${effectiveUsername}/${rangeId}: ${opType} [${entries.join(", ")}]`)
   logLuxRouteAction(request, session, { detail: `${opType} [${entries.join(", ")}]` })

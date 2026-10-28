@@ -103,6 +103,17 @@ echo ""
 # connection would sit forever and look like a freeze.
 # shellcheck source=scripts/lux-git-identity.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lux-git-identity.sh"
+# A lux-host SSH fallback runs a copy of this file. That copy has no sibling,
+# so the verifier is defined already when this script is concatenated after it.
+_lux_tag_helper="$(dirname "${BASH_SOURCE[0]}")/lux-verify-tag.sh"
+if [[ -f "$_lux_tag_helper" ]]; then
+  # shellcheck source=scripts/lux-verify-tag.sh
+  . "$_lux_tag_helper"
+elif ! declare -F lux_verify_signed_tag >/dev/null 2>&1; then
+  echo "Error: missing scripts/lux-verify-tag.sh." >&2
+  exit 1
+fi
+unset _lux_tag_helper
 lux_git() {
   if [[ "${LUX_UPGRADE_YES:-}" != "1" ]]; then
     "$@"
@@ -279,6 +290,9 @@ else
   lux_git git fetch "$REMOTE" "refs/tags/$TARGET:refs/tags/$TARGET" || true
   if ! git rev-parse --verify "$TARGET^{commit}" >/dev/null 2>&1; then
     echo "Error: tag '$TARGET' not found after fetch." >&2
+    exit 1
+  fi
+  if ! lux_verify_signed_tag "$TARGET"; then
     exit 1
   fi
   lux_git git checkout -f "$TARGET"

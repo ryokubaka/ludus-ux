@@ -45,7 +45,7 @@ import { buildHostProbeCmd } from "./lux-upgrade-host"
 import { SSH_UPGRADE_NEEDS_LUX_HOST_INSTALL, probeLuxUpgradeHost, startLuxUpgrade } from "./lux-upgrade-run"
 
 const signedUpgrade = luxHostSelfUpdateStdin(
-  readFileSync(path.join(process.cwd(), "scripts", "upgrade.sh"), "utf8"),
+  `${readFileSync(path.join(process.cwd(), "scripts", "lux-verify-tag.sh"), "utf8")}\n${readFileSync(path.join(process.cwd(), "scripts", "upgrade.sh"), "utf8")}`,
   UPDATE_KEY,
 )
 
@@ -66,6 +66,8 @@ describe("lux upgrade host transport", () => {
     vi.clearAllMocks()
     vi.mocked(getLuxHostUpdateKey).mockReturnValue(UPDATE_KEY)
     process.env.LUX_REPO_PATH = "/opt/ludus-ux"
+    delete process.env.LUX_UPGRADE_TRUSTED_KEY
+    delete process.env.LUX_UPGRADE_TRUSTED_FPR
   })
 
   afterEach(() => {

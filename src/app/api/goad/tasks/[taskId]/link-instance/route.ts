@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getTask, updateTaskInstance } from "@/lib/goad-task-store"
 import { assertGoadTaskAccess } from "@/lib/goad-task-api"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { resolveSession } from "@/lib/session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
@@ -36,8 +37,12 @@ export async function POST(
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }
 
-  const denied = assertGoadTaskAccess(session, request, task)
+  const denied = await assertGoadTaskAccess(session, request, task)
   if (denied) return denied
+
+  // A fresh install links its task to a workspace no task has run against yet.
+  const instanceDenied = await assertGoadInstanceAccess(session, request, instanceId, { allowUnclaimed: true })
+  if (instanceDenied) return instanceDenied
 
   const ok = updateTaskInstance(taskId, instanceId)
   if (!ok) {

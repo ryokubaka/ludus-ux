@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
 
   // Use the impersonated user's API key when an admin is impersonating; falls
   // back to the session's own key. Both apiKey and userId from cookie.
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const stream = new ReadableStream({

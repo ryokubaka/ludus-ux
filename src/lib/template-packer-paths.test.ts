@@ -56,24 +56,13 @@ describe("isLudusCliTemplateAddFailure", () => {
 })
 
 describe("buildLudusTemplateAddCmd", () => {
-  it("runs ludus templates add as root with the API key (no sudo -u)", () => {
-    const cmd = buildLudusTemplateAddCmd(
-      "/opt/ludus/packer/ubuntu-24.04-x64-server",
-      "USER.testkey123",
-    )
+  it("keeps the API key off the command line", () => {
+    const cmd = buildLudusTemplateAddCmd("/opt/ludus/packer/ubuntu-24.04-x64-server")
     expect(cmd).toEqual([
       "ludus-template-add",
       "/opt/ludus/packer/ubuntu-24.04-x64-server",
-      "USER.testkey123",
     ])
-  })
-
-  it("passes the api key as an argument, not a shell snippet", () => {
-    expect(buildLudusTemplateAddCmd("/opt/ludus/packer/t", "KEY'part")).toEqual([
-      "ludus-template-add",
-      "/opt/ludus/packer/t",
-      "KEY'part",
-    ])
+    expect(cmd.join(" ")).not.toContain("USER.testkey123")
   })
 })
 
@@ -113,12 +102,10 @@ describe("templateDirNameAliases", () => {
 })
 
 describe("buildLudusTemplateRmCliCmd", () => {
-  it("runs ludus templates rm with API key", () => {
-    expect(buildLudusTemplateRmCliCmd("securityonion-2.4-x64-template", "USER.key")).toEqual([
-      "ludus-template-rm",
-      "securityonion-2.4-x64-template",
-      "USER.key",
-    ])
+  it("keeps the API key off the command line", () => {
+    const cmd = buildLudusTemplateRmCliCmd("securityonion-2.4-x64-template")
+    expect(cmd).toEqual(["ludus-template-rm", "securityonion-2.4-x64-template"])
+    expect(cmd.join(" ")).not.toContain("USER.key")
   })
 })
 

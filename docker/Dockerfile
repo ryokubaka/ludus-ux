@@ -1,5 +1,5 @@
 # Node 24 is Active LTS (2025–2026); Next 15 engines allow >=20.
-FROM node:24-alpine AS base
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS base
 
 # Install dependencies only when needed
 FROM base AS deps
@@ -10,7 +10,9 @@ COPY package.json package-lock.json* ./
 COPY vendor/braces ./vendor/braces
 # Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
 RUN npm install -g npm@11.14.0
-RUN npm install --legacy-peer-deps
+RUN npm ci --legacy-peer-deps
+# esbuild is only an optional dev tool in the lockfile. Pin the same version the lockfile records.
+RUN npm install --no-save --no-package-lock esbuild@0.28.1
 
 # Bundle noVNC into a single browser ES module using esbuild.
 # The @novnc/novnc npm package ships CJS (core/rfb.js uses Babel-compiled require()),
@@ -18,7 +20,7 @@ RUN npm install --legacy-peer-deps
 # require() calls and outputs a single self-contained ESM file.
 RUN npm install --no-save @novnc/novnc@1.7.0 && \
     mkdir -p /app/novnc-static && \
-    npx --yes esbuild node_modules/@novnc/novnc/core/rfb.js \
+    ./node_modules/.bin/esbuild node_modules/@novnc/novnc/core/rfb.js \
         --bundle --format=esm --outfile=/app/novnc-static/rfb.js && \
     rm -rf node_modules/@novnc
 
@@ -38,7 +40,7 @@ RUN npm run build
 # Compile the custom WebSocket proxy server into a self-contained CJS bundle.
 # --external:next  keeps `next` as a runtime require() (it lives in standalone/node_modules).
 # bufferutil/utf-8-validate are optional ws native addons — exclude so ws runs in pure-JS mode.
-RUN npx esbuild server/ws-server.ts \
+RUN ./node_modules/.bin/esbuild server/ws-server.ts \
     --bundle \
     --platform=node \
     --target=node24 \
@@ -47,6 +49,7 @@ RUN npx esbuild server/ws-server.ts \
     --external:bufferutil \
     --external:utf-8-validate \
     --external:ssh2 \
+    --external:better-sqlite3 \
     --outfile=.next/standalone/ws-server.js
 
 # Production image, copy all the files and run next
@@ -56,8 +59,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Default uid/gid are outside the range typical host service accounts use.
+# docker-compose.yml passes .env LUX_UID and LUX_GID. A change needs a rebuild.
+# On the host, `getent passwd <uid>` should print nothing. A user namespace remap is safer still.
+ARG LUX_UID=64532
+ARG LUX_GID=64532
+RUN addgroup --system --gid ${LUX_GID} nodejs \
+ && adduser --system --uid ${LUX_UID} --ingroup nodejs nextjs
 
 COPY --from=builder /app/public ./public
 # noVNC files are already inside public/novnc (copied from deps stage → builder → here)

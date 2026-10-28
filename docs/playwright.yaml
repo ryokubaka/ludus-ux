@@ -6,13 +6,13 @@ With `docker compose up` and HTTPS on `https://localhost` (self-signed), first i
 # Optional if not using default https://localhost:
 # export PLAYWRIGHT_BASE_URL=https://localhost
 # If login stops at Ludus API key, or impersonation cannot auto-read ~/.bashrc:
-# export E2E_LUDUS_API_KEY='JUF3QT....'
+# export E2E_LUDUS_API_KEY='<key>'
 npm run test:e2e
 ```
 
 Playwright config path: `config/playwright.config.ts` (via `npm run test:e2e`).
 
-Credentials default to `E2E_ADMIN_USER=adminuser`, `E2E_ADMIN_PASSWORD=test`, `E2E_IMPERSONATE_USER=testuser` (override via env).
+Set `E2E_ADMIN_USER` and `E2E_ADMIN_PASSWORD` for authenticated specs; there are no defaults. `E2E_IMPERSONATE_USER` defaults to `testuser`.
 
 **Specs:** `health` + `auth-gate` + `login-ui` (no session); `navigation` + `logout` + `impersonation` (session; impersonation may need `E2E_LUDUS_API_KEY`). Shared login: `e2e/helpers/auth.ts`.
 

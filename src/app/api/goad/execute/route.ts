@@ -16,9 +16,19 @@ import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus-router-template"
 import { scheduleGoadDeployLinkage } from "@/lib/goad-deploy-link"
+import { assertGoadInstanceAccess, goadTargetInstanceIds } from "@/lib/goad-instance-access"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 
 
 export async function POST(request: NextRequest) {
+  const session = await resolveSession(request)
+  if (!session) {
+    return new Response("data: [ERROR] Not authenticated\n\n", {
+      status: 401,
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    })
+  }
+
   if (!isGoadConfigured()) {
     return new Response(
       "data: [ERROR] GOAD SSH not configured. Set LUDUS_SSH_HOST in your environment.\n\n",
@@ -64,32 +74,33 @@ export async function POST(request: NextRequest) {
     })
   }
 
-  const session = await resolveSession(request)
-
-  if (!session) {
-    return new Response("data: [ERROR] Not authenticated\n\n", {
-      status: 401,
-      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-    })
-  }
-
   // Impersonation: admin SSHes as root and runs commands via sudo.
   // Verify the caller is an admin before allowing impersonation.
-  if (impersonateAs && !session.isAdmin) {
+  const isAdmin = await liveSessionIsAdmin(session)
+  if (impersonateAs && !isAdmin) {
     return new Response("data: [ERROR] Admin session required for impersonation\n\n", {
       status: 403,
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
     })
   }
 
+  for (const target of goadTargetInstanceIds(args, instanceId)) {
+    if (await assertGoadInstanceAccess(session, request, target)) {
+      return new Response("data: [ERROR] Forbidden\n\n", {
+        status: 403,
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      })
+    }
+  }
+
   // Defense-in-depth: check whether the session cookie carries an active
   // impersonation (set by /api/auth/impersonate POST).  This is the authoritative
   // source for the impersonation API key — the body's impersonateAs.apiKey is
   // omitted now that the client no longer stores apiKey in sessionStorage.
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const sshUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
   const sessionImpersonate =
-    session.isAdmin && imp.apiKey && sshUser
+    isAdmin && imp.apiKey && sshUser
       ? { username: sshUser, apiKey: imp.apiKey }
       : null
 
@@ -111,6 +122,18 @@ export async function POST(request: NextRequest) {
       sessionImpersonate.username.trim() || impersonateAs.username.trim()
     return { username: sudoIdentity, apiKey: cookieApiKey }
   })()
+
+  // A session without its own SSH password must not fall through to host root
+  // credentials. Admin impersonation still connects as the host account.
+  if (!effectiveImpersonate && !session.sshPassword?.trim()) {
+    return new Response(
+      "data: [ERROR] Log in with your SSH password before running GOAD.\n\n",
+      {
+        status: 503,
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      },
+    )
+  }
 
   // ── Determine the rangeId to inject as LUDUS_RANGE_ID ────────────────────
   // Priority: 1) explicit in request body (client passes instance.ludusRangeId)
@@ -248,7 +271,7 @@ export async function POST(request: NextRequest) {
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
           typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
           ludusOnlyRoles.length > 0 ? ludusOnlyRoles : undefined,
-          session.isAdmin === true,
+          isAdmin,
         ).then((fn) => {
           cleanup = fn
           // Register so the /stop endpoint can kill the process even after

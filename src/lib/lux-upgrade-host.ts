@@ -333,6 +333,33 @@ export function parseHostReleaseRefs(output: string): LuxOriginRefs {
   return { url, heads: [...heads], tags: [...tags] }
 }
 
+const TRUSTED_KEY_PATH = /^\/[A-Za-z0-9._/-]+$/
+const TRUSTED_FPR = /^[A-Fa-f0-9]{40}(?:[A-Fa-f0-9]{24})?$/
+
+/** Host path and optional fingerprint for an in-app signed checkout. */
+export function luxUpgradeTrustedSwitchEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): { key: string | null; fpr: string | null } {
+  const key = (env.LUX_UPGRADE_TRUSTED_KEY ?? "").trim()
+  const fpr = (env.LUX_UPGRADE_TRUSTED_FPR ?? "").trim()
+  if (!key && !fpr) return { key: null, fpr: null }
+  if (!key || !TRUSTED_KEY_PATH.test(key) || key.includes("..")) {
+    throw new Error("LUX_UPGRADE_TRUSTED_KEY must be an absolute host path without spaces")
+  }
+  if (fpr && !TRUSTED_FPR.test(fpr)) {
+    throw new Error("LUX_UPGRADE_TRUSTED_FPR must be a hex fingerprint")
+  }
+  return { key, fpr: fpr || null }
+}
+
+export function upgradeStartArgs(repoPath: string, tag: string): string[] {
+  const args = ["upgrade-start", repoPath, tag]
+  const trusted = luxUpgradeTrustedSwitchEnv()
+  if (trusted.key) args.push(trusted.key)
+  if (trusted.fpr) args.push(trusted.fpr)
+  return args
+}
+
 export function buildStartUpgradeCmd(
   repoPath: string,
   tag: string,
@@ -352,6 +379,11 @@ export function buildStartUpgradeCmd(
     `bash "$REPO/scripts/upgrade.sh" "$TAG" >> "$LOG" 2>&1`,
     `echo "LUX_UPGRADE_EXIT:$?" >> "$LOG"`,
   ].join("; ")
+  const trusted = luxUpgradeTrustedSwitchEnv()
+  const trustedSetenv = [
+    trusted.key ? `--setenv=LUX_UPGRADE_TRUSTED_KEY=${trusted.key}` : "",
+    trusted.fpr ? `--setenv=LUX_UPGRADE_TRUSTED_FPR=${trusted.fpr}` : "",
+  ].filter(Boolean).join(" ")
   return wrapEncodedHostShellScript([
     ...hostShellScriptPreambleLines(),
     `REPO=${shellSingleQuote(repoPath)}`,
@@ -362,7 +394,7 @@ export function buildStartUpgradeCmd(
     `LOG="$DATA/lux-upgrade.log"`,
     `printf '%s\\n' "=== LUX switch to $TAG started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" > "$LOG"`,
     `command -v systemd-run >/dev/null 2>&1 || { echo "Error: systemd-run not found"; exit 1; }`,
-    `systemd-run --collect --setenv=REPO="$REPO" --setenv=TAG="$TAG" --setenv=LOG="$LOG" --setenv=LUX_UPGRADE_YES=1 /bin/bash -c ${shellSingleQuote(service)} && echo started`,
+    `systemd-run --collect --setenv=REPO="$REPO" --setenv=TAG="$TAG" --setenv=LOG="$LOG" --setenv=LUX_UPGRADE_YES=1 ${trustedSetenv} /bin/bash -c ${shellSingleQuote(service)} && echo started`,
   ])
 }
 

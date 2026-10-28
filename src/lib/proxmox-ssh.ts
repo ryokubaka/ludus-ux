@@ -8,6 +8,7 @@ import { Client as SSHClient, type ConnectConfig } from "ssh2"
 import { shellSingleQuote } from "@/lib/template-packer-paths"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
 import { asPrivilegedShell, formatLuxHost } from "./root-ssh-preflight"
+import { attachSshHostVerifier, explainSshHostKeyError } from "./ssh-host-key"
 
 export function sshLoginCommand(remote: string): string {
   return `bash -l -c ${shellSingleQuote(remote)}`
@@ -78,7 +79,7 @@ export function sshExec(
         })
       })
     })
-    conn.on("error", reject)
-    conn.connect(cfg)
+    conn.on("error", (err) => reject(new Error(explainSshHostKeyError(err.message, cfg.host, cfg.port))))
+    conn.connect(attachSshHostVerifier(cfg))
   })
 }

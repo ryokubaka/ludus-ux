@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { canAccessGoadTask } from "@/lib/goad-task-api"
 import { abortTask, completeTask } from "@/lib/goad-task-store"
 import { invokeCleanup } from "@/lib/task-cleanup-registry"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
@@ -35,11 +35,8 @@ export async function POST(
   // Enforce ownership: only the task owner (or an admin) may stop it.
   const { getTask } = await import("@/lib/goad-task-store")
   const task = getTask(taskId)
-  if (task) {
-    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
-    if (!session.isAdmin && task.username && task.username !== effectiveUser) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 })
-    }
+  if (task && !await canAccessGoadTask(session, request, task)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
 
   // Send SIGINT to the remote process via the SSH PTY cleanup function

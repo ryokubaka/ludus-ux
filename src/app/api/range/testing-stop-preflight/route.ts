@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
 
   const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1"
 
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const apiKey = imp.apiKey || session.apiKey
   const userOverride = imp.apiKey ? imp.ludusPrincipal ?? undefined : undefined
 

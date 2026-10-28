@@ -7,6 +7,7 @@ import { ludusRequest } from "@/lib/ludus-client"
 import type { UserObject } from "@/lib/types"
 import type { ResolvedSession } from "@/lib/session"
 import { extractLudusList } from "@/lib/utils"
+import { ludusFetch } from "@/lib/ludus-fetch"
 
 interface LudusUserRow {
   userID?: string
@@ -32,7 +33,7 @@ async function ludusJson<T>(
   apiKey: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const res = await fetch(buildLudusApiUrl(path), {
+  const res = await ludusFetch(buildLudusApiUrl(path), {
     ...init,
     headers: {
       "X-API-KEY": apiKey,

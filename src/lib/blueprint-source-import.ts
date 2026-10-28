@@ -4,6 +4,7 @@ import yaml from "js-yaml"
 import { buildLudusApiUrl } from "@/lib/ludus-source-client"
 import { ludusBlueprintApiPath } from "@/lib/ludus-blueprint-proxy-path"
 import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
+import { ludusFetch } from "@/lib/ludus-fetch"
 
 export interface BlueprintManifest {
   id?: string
@@ -45,7 +46,7 @@ async function ludusJson<T>(
   apiKey: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const res = await fetch(buildLudusApiUrl(path), {
+  const res = await ludusFetch(buildLudusApiUrl(path), {
     ...init,
     headers: {
       "X-API-KEY": apiKey,

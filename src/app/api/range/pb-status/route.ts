@@ -41,7 +41,7 @@ function ludusRangeListFromResponse(data: unknown): RangeObject[] {
   return []
 }
 
-function getEffectiveKeys(
+async function getEffectiveKeys(
   request: NextRequest,
   session: {
     apiKey: string
@@ -53,7 +53,7 @@ function getEffectiveKeys(
     impersonationSshLogin?: string
   },
 ) {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const impersonateApiKey = imp.apiKey
   return {
     effectiveApiKey: impersonateApiKey || session.apiKey,
@@ -72,7 +72,7 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")
-  const { effectiveApiKey, effectiveUserId } = getEffectiveKeys(request, session)
+  const { effectiveApiKey, effectiveUserId } = await getEffectiveKeys(request, session)
 
   // ── Single range ────────────────────────────────────────────────────────────
   if (rangeId) {

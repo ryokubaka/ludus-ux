@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSessionFromRequest } from "@/lib/session-edge"
+import { requestOriginAllowed } from "@/lib/request-origin"
 
 // Paths that are always public
 const PUBLIC_PREFIXES = [
@@ -83,6 +84,12 @@ function applySecurityHeaders(response: NextResponse): void {
 /** Next 16 network boundary (formerly middleware). Auth gate + security headers. */
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
+
+  if (!requestOriginAllowed(request)) {
+    const denied = NextResponse.json({ error: "Cross-origin request blocked" }, { status: 403 })
+    applySecurityHeaders(denied)
+    return denied
+  }
 
   if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     const response = NextResponse.next()

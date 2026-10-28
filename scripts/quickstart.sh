@@ -366,6 +366,63 @@ lux_openssh_pubkey_b64_from_private() {
   printf '%s\n' "$b64"
 }
 
+# The container user owns ./ssh/id_rsa after a previous run (mode 600). scp opens
+# that path for writing and fails. The directory is ours, so unlink it first.
+lux_clear_local_private_key() {
+  local dest="$KEY_DIR/id_rsa"
+  [[ -e "$dest" ]] || return 0
+  if rm -f -- "$dest"; then
+    return 0
+  fi
+  echo "[quickstart] Could not replace $dest. Remove it, then run this step again:" >&2
+  echo "  rm -f -- \"$dest\"" >&2
+  return 1
+}
+
+# ./ssh is mounted read-only. The image user comes from .env LUX_UID/LUX_GID
+# (compose build args). The entrypoint does not chown keys. After pubkey setup,
+# make id_rsa readable by that pair when the uid is not already a host account.
+lux_prepare_container_ssh_key() {
+  local key_file lux_uid lux_gid owner
+  lux_resolve_ssh_key_dir_from_env 2>/dev/null || true
+  if [[ -z "${KEY_DIR:-}" ]]; then
+    return 0
+  fi
+  key_file="$KEY_DIR/id_rsa"
+  [[ -f "$key_file" ]] || return 0
+  lux_uid="${LUX_UID:-}"
+  lux_gid="${LUX_GID:-}"
+  if [[ -z "$lux_uid" ]]; then
+    lux_uid="$(lux_read_env_kv LUX_UID)"
+  fi
+  if [[ -z "$lux_gid" ]]; then
+    lux_gid="$(lux_read_env_kv LUX_GID)"
+  fi
+  lux_uid="${lux_uid:-64532}"
+  lux_gid="${lux_gid:-64532}"
+  if [[ ! "$lux_uid" =~ ^[0-9]+$ || ! "$lux_gid" =~ ^[0-9]+$ ]]; then
+    echo "[quickstart] LUX_UID and LUX_GID must be numeric. Leaving $key_file unchanged." >&2
+    return 0
+  fi
+  if getent passwd "$lux_uid" >/dev/null 2>&1; then
+    echo "[quickstart] uid $lux_uid is already an account on this host. Leaving $key_file unchanged." >&2
+    echo "[quickstart] Set an unused LUX_UID and LUX_GID in .env, then rebuild: docker compose up -d --build" >&2
+    return 0
+  fi
+  owner="$(stat -c '%u' "$key_file" 2>/dev/null || echo "")"
+  if [[ "$owner" == "$lux_uid" ]]; then
+    return 0
+  fi
+  echo "Making $key_file readable by the LUX container user (uid $lux_uid, gid $lux_gid)."
+  if sudo chown "$lux_uid:$lux_gid" -- "$key_file" && sudo chmod 600 -- "$key_file"; then
+    echo "Key owner is uid $lux_uid, gid $lux_gid."
+    return 0
+  fi
+  echo "[quickstart] Could not change key ownership. Host key auth will fail until you run:" >&2
+  echo "  sudo chown $lux_uid:$lux_gid -- \"$key_file\" && sudo chmod 600 -- \"$key_file\"" >&2
+  return 0
+}
+
 # Ensure sshd will accept this private key: append the derived pubkey to that account's authorized_keys.
 # Tries BatchMode + -i key first; if that fails, optional one-shot SSH password + sshpass.
 lux_ssh_remote_authorized_keys_body() {
@@ -452,6 +509,7 @@ lux_action_docker_up_build() {
   if [[ -n "$cfile" ]]; then
     echo "Using COMPOSE_FILE=${cfile} from .env"
   fi
+  lux_prepare_container_ssh_key
   lux_compose up -d --build
   echo ""
   echo "Compose stack updated."
@@ -748,6 +806,7 @@ lux_configure_host_ssh() {
       remote_key="${remote_key:-$default_remote_key}"
       local -a SSH_BASE=( -o StrictHostKeyChecking=accept-new -p "$LUDUS_SSH_PORT" )
       remote_q=$(printf '%q' "$remote_key")
+      lux_clear_local_private_key || return 1
       if [[ "$scp_user" == "root" ]]; then
         echo "Running: scp -P $LUDUS_SSH_PORT ${scp_user}@${LUDUS_SSH_HOST}:${remote_key} -> $KEY_DIR/id_rsa"
         if ! scp -o StrictHostKeyChecking=accept-new -P "$LUDUS_SSH_PORT" \
@@ -833,6 +892,7 @@ lux_configure_host_ssh() {
         echo "Error: file not found: $key_path" >&2
         return 1
       fi
+      lux_clear_local_private_key || return 1
       cp "$key_path" "$KEY_DIR/id_rsa"
       chmod 600 "$KEY_DIR/id_rsa"
       lux_install_pubkey_for_root_ssh "$KEY_DIR/id_rsa" "$LUDUS_SSH_HOST" "$LUDUS_SSH_PORT" "$target"
@@ -869,6 +929,7 @@ lux_configure_host_ssh() {
       set_kv "PROXMOX_SSH_PASSWORD" "$optional_pw"
     fi
   fi
+  lux_prepare_container_ssh_key
 }
 
 lux_run_action_menu() {
@@ -965,6 +1026,16 @@ if [[ -z "$APP_SECRET" ]]; then
 fi
 set_kv "APP_SECRET" "$APP_SECRET"
 
+read -r -p "Ludus uses a self-signed certificate (LUDUS_TLS_INSECURE=true)? [Y/n] " tls_in
+tls_in="${tls_in:-y}"
+if [[ "${tls_in,,}" =~ ^n ]]; then
+  set_kv "LUDUS_TLS_INSECURE" "false"
+  echo "Certificate checks stay on. Mount the Ludus CA with NODE_EXTRA_CA_CERTS if it is not public."
+else
+  set_kv "LUDUS_TLS_INSECURE" "true"
+  echo "Only Ludus, PocketBase, and Proxmox skip certificate checks. GitHub stays verified."
+fi
+
 read -r -p "LUDUS_ROOT_API_KEY (from /opt/ludus/install/root-api-key; Enter to skip — admin features need it): " LUDUS_ROOT_API_KEY
 set_kv "LUDUS_ROOT_API_KEY" "${LUDUS_ROOT_API_KEY:-}"
 
@@ -990,6 +1061,7 @@ fi
 if ! lux_configure_host_ssh; then
   exit 1
 fi
+lux_prepare_container_ssh_key
 
 read -r -p "GOAD path on Ludus server [/opt/GOAD]: " goad_path
 goad_path="${goad_path:-/opt/GOAD}"

@@ -15,6 +15,7 @@ import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
 import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import { requireSession } from "@/lib/require-session"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import { canDeleteBlueprint } from "@/lib/blueprint-delete-authz"
 
 export async function POST(request: NextRequest) {
@@ -38,10 +39,11 @@ export async function POST(request: NextRequest) {
     ? body.aliasIds.map((id) => String(id).trim()).filter(Boolean)
     : []
 
+  const isAdmin = await liveSessionIsAdmin(session)
   const viewerKey =
-    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+    (await resolveAdminImpersonationFromRequest(session, request)).apiKey || session.apiKey
   const ownedIds = new Set<string>()
-  if (!session.isAdmin) {
+  if (!isAdmin) {
     const listed = await ludusRequest<unknown>("/blueprints", { apiKey: viewerKey })
     if (!listed.error && listed.data) {
       for (const bp of normalizeBlueprintList(listed.data)) {
@@ -51,12 +53,12 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-  const owns = (id: string) => session.isAdmin || ownedIds.has(id)
+  const owns = (id: string) => isAdmin || ownedIds.has(id)
 
   // Shared source blueprints stay unless the caller owns them or is an admin.
   if (
-    !canDeleteBlueprint(session, blueprintId, { owns: owns(blueprintId) }) ||
-    aliasIds.some((id) => !canDeleteBlueprint(session, id, { owns: owns(id) }))
+    !canDeleteBlueprint({ ...session, isAdmin }, blueprintId, { owns: owns(blueprintId) }) ||
+    aliasIds.some((id) => !canDeleteBlueprint({ ...session, isAdmin }, id, { owns: owns(id) }))
   ) {
     logLuxRouteAction(request, session, {
       outcome: "failure",

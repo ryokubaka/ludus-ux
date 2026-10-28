@@ -43,6 +43,12 @@ import { useGoadInstanceActionHandlers } from "@/hooks/use-goad-instance-action-
 import { useImpersonation } from "@/lib/impersonation-context"
 import { useRange } from "@/lib/range-context"
 import {
+  hrefForGoadRangeSwitch,
+  linkedInstanceIdForRange,
+  stepGoadRangeFollow,
+  type GoadRangeFollow,
+} from "@/lib/goad-range-switch"
+import {
   type CorrelatedHistoryEntry,
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
@@ -151,7 +157,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
     getExtraHeaders: impersonationHeaders,
   })
   const [currentAction, setCurrentAction] = useState<string | null>(null)
-  const { ranges, selectedRangeId, selectRange, refreshRanges, forgetRange } = useRange()
+  const { ranges, selectedRangeId, selectRange, refreshRanges, forgetRange, loading: rangesLoading } = useRange()
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -179,15 +185,70 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
     [],
   )
 
-  // Viewing a GOAD instance should drive the sidebar active range (and cookie).
-  // Skip a range that was just deleted: selecting it again fights the picker,
-  // which moves off a missing range, until React throws and the shell error page shows.
+  // Opening this lab aligns the sidebar to its range. A later sidebar choice
+  // leaves: a range with a GOAD lab opens that instance, any other opens Dashboard.
+  // Do not write the lab range back over that choice — that made the picker look dead.
+  const rangeFollow = useRef<GoadRangeFollow>({ alignedInstanceId: null, alignedRangeId: null })
+  // Labs from the last /api/goad/instances response. Null until that returns.
+  // A range switch uses this list so it does not wait on another host scan.
+  const listedLabs = useRef<GoadInstance[] | null>(null)
   useEffect(() => {
-    const rid = instance?.ludusRangeId?.trim()
-    if (!rid || selectedRangeId === rid) return
-    if (!ranges.some((r) => r.rangeID === rid)) return
-    selectRange(rid)
-  }, [instance?.ludusRangeId, instanceId, ranges, selectedRangeId, selectRange])
+    const loadedId = instance?.instanceId?.trim() || ""
+    // Ignore a lab record that belongs to the previous address. Aligning that
+    // record would put the sidebar back on the range the user just left.
+    const instanceRangeId = loadedId === instanceId ? instance?.ludusRangeId?.trim() || null : null
+    const step = stepGoadRangeFollow(rangeFollow.current, {
+      instanceId,
+      instanceRangeId,
+      selectedRangeId,
+      rangesReady: !rangesLoading,
+      instanceRangeListed: !!instanceRangeId && ranges.some((r) => r.rangeID === instanceRangeId),
+    })
+    rangeFollow.current = step.state
+    if (step.selectRangeId) selectRange(step.selectRangeId)
+    const leaveFor = step.leaveForRangeId
+    if (!leaveFor) return
+    const listed = listedLabs.current
+    if (listed) {
+      const href = hrefForGoadRangeSwitch(linkedInstanceIdForRange(listed, leaveFor))
+      if (href === `/goad/${encodeURIComponent(instanceId)}`) return
+      router.push(href)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      let linked: string | null = null
+      try {
+        const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(leaveFor)}`, {
+          credentials: "include",
+          headers: impersonationHeaders(),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as { instanceId?: string | null }
+          linked = typeof data.instanceId === "string" ? data.instanceId : null
+        }
+      } catch {
+        linked = null
+      }
+      if (cancelled) return
+      const href = hrefForGoadRangeSwitch(linked)
+      if (href === `/goad/${encodeURIComponent(instanceId)}`) return
+      router.push(href)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    instance?.instanceId,
+    instance?.ludusRangeId,
+    instanceId,
+    ranges,
+    rangesLoading,
+    selectedRangeId,
+    selectRange,
+    router,
+    impersonationHeaders,
+  ])
 
   const rangeLogRefreshLock = useRef(false)
   const [rangeLogRefreshBusy, setRangeLogRefreshBusy] = useState(false)
@@ -806,6 +867,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
       if (!response.ok || data.error) {
         console.warn("GOAD instances fetch error:", data.error)
       } else if (Array.isArray(data.instances)) {
+        listedLabs.current = data.instances
         const found = data.instances.find(
           (i: GoadInstance) => i.instanceId === instanceId
         ) as GoadInstance | undefined

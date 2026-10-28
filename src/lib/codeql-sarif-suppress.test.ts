@@ -1,5 +1,14 @@
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { filterSarif, idsCoveringLine } from "../../scripts/ci/codeql-apply-suppressions.mjs"
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..")
+
+function sourceLines(rel: string): string[] {
+  return readFileSync(path.join(root, rel), "utf8").split(/\n/)
+}
 
 describe("CodeQL in-source suppressions", () => {
   it("covers the next line from one comment or a run of them, and a trailing comment", () => {
@@ -24,6 +33,18 @@ describe("CodeQL in-source suppressions", () => {
   it("still reads a comment when the file uses CRLF", () => {
     const lines = ["  // codeql[js/request-forgery]\r", "  fetch(url)\r"]
     expect([...idsCoveringLine(lines, 2)]).toEqual(["js/request-forgery"])
+  })
+
+  it("covers the payload line code scanning reports, not only the call above it", () => {
+    const pending = sourceLines("src/lib/goad-pending-network-fs.ts")
+    const payload = pending.findIndex((line) => line.includes("JSON.stringify({"))
+    expect(payload).toBeGreaterThan(0)
+    expect([...idsCoveringLine(pending, payload + 1)]).toContain("js/http-to-file-access")
+
+    const docker = sourceLines("src/lib/lux-upgrade-docker.ts")
+    const options = docker.findIndex((line) => line.includes("socketPath: DOCKER_SOCKET_PATH"))
+    expect(options).toBeGreaterThan(0)
+    expect([...idsCoveringLine(docker, options)]).toContain("js/file-access-to-http")
   })
 
   it("stops at an ordinary comment, so a marker above that comment does not cover the code", () => {

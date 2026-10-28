@@ -63,12 +63,13 @@ function insecureRequest(input: string | URL, init?: RequestInit): Promise<Respo
       const req = transport.request(
         url,
         // Reached only when LUDUS_TLS_INSECURE is set (see ludusFetch below).
+        // Semgrep only honors a suppression on the line directly above this object.
         // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
-        // codeql[js/disabling-certificate-validation]
         {
           method: init?.method ?? "GET",
           headers,
-          rejectUnauthorized: false,
+          // codeql[js/disabling-certificate-validation]
+          rejectUnauthorized: false, // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
         },
         (res) => {
           const chunks: Buffer[] = []

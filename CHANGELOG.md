@@ -15,6 +15,12 @@ Each bullet uses a single tag:
 
 ---
 
+## Unreleased
+
+**LUX**
+
+- [Security] **zod** 4.6.7 — [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (memory exhaustion while validating oversized constrained collections). Dev dependency of `eslint-plugin-react-hooks` only.
+
 ## [1.5.0] - 2026-10-23
 
 **LUX**

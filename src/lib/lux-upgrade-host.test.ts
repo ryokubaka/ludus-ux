@@ -158,7 +158,7 @@ describe("lux-upgrade-host", () => {
     chmodSync(path.join(bin, "systemd-run"), 0o755)
     delete process.env.LUX_UPGRADE_TRUSTED_KEY
     delete process.env.LUX_UPGRADE_TRUSTED_FPR
-    const cmd = buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")
+    const cmd = withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))
     const started = Date.now()
     const out = execFileSync("bash", ["-c", cmd], {
       encoding: "utf8",
@@ -225,7 +225,7 @@ describe("lux-upgrade-host", () => {
       { mode: 0o755 },
     )
     chmodSync(upgradeSh, 0o755)
-    const failed = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
+    const failed = execFileSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))], {
       encoding: "utf8",
       env,
     })
@@ -239,7 +239,7 @@ describe("lux-upgrade-host", () => {
 
     writeFileSync(upgradeSh, "#!/bin/sh\nprintf '%s\\n' 'Done. Running:'\nexit 0\n", { mode: 0o755 })
     chmodSync(upgradeSh, 0o755)
-    const ok = execFileSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.4")], {
+    const ok = execFileSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.4"))], {
       encoding: "utf8",
       env,
     })
@@ -257,7 +257,7 @@ describe("lux-upgrade-host", () => {
       mode: 0o755,
     })
     writeFileSync(path.join(bin, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
-    const result = spawnSync("bash", ["-c", buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3")], {
+    const result = spawnSync("bash", ["-c", withStubsFirst(buildStartUpgradeCmd("/opt/ludus-ux", "v1.3.3"))], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, NODE_ENV: "test" },
     })
@@ -472,9 +472,9 @@ function writeProbeDockerStub(bin: string): void {
 }
 
 /**
- * The host script puts the system PATH first, so wherever /usr/bin/git exists
- * (every Linux CI image) it would run instead of the test's stub. Re-encode the
- * same script with the caller's PATH first so the stub git is the one called.
+ * The host script puts the system PATH first, so /usr/bin/git, docker, and
+ * systemd-run on a CI image run instead of the test stubs. Re-encode the same
+ * script with the caller's PATH first so those stubs are the ones called.
  */
 function withStubsFirst(command: string): string {
   const match = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d \| \/bin\/sh$/.exec(command)

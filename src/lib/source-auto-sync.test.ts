@@ -4,6 +4,7 @@ import {
   isSourceSyncStale,
   parseSourceSyncedAtMs,
   sourceIdOf,
+  startSourceAutoSyncLoop,
 } from "@/lib/source-auto-sync"
 
 describe("source-auto-sync", () => {
@@ -67,6 +68,21 @@ describe("source-auto-sync", () => {
         maxAge,
       ),
     ).toBe(false)
+  })
+
+  it("does not start the interval while next build is prerendering", () => {
+    const prevPhase = process.env.NEXT_PHASE
+    const prevEvent = process.env.npm_lifecycle_event
+    process.env.NEXT_PHASE = "phase-production-build"
+    delete process.env.npm_lifecycle_event
+    const g = globalThis as { __luxSourceAutoSyncStarted?: boolean }
+    const started = g.__luxSourceAutoSyncStarted
+    startSourceAutoSyncLoop()
+    expect(g.__luxSourceAutoSyncStarted).toBe(started)
+    if (prevPhase === undefined) delete process.env.NEXT_PHASE
+    else process.env.NEXT_PHASE = prevPhase
+    if (prevEvent === undefined) delete process.env.npm_lifecycle_event
+    else process.env.npm_lifecycle_event = prevEvent
   })
 
   it("reads source id", () => {

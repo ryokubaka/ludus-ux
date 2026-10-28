@@ -558,14 +558,9 @@ export function buildWorkspaceSshExecPlan(opts: {
     !!opts.ownerSshCreds?.password && credUser.toLowerCase() === owner.toLowerCase()
 
   const safeUser = owner.replace(/'/g, "")
+  // One statement. Joining a line that ends in `then` with `; ` is a bash syntax error (`then;`).
   const guard = opts.workspaceDir
-    ? [
-        `f='${opts.workspaceDir.replace(/'/g, "")}/instance.json'`,
-        `if [ -e "$f" ] && [ ! -w "$f" ]; then`,
-        `echo "GOAD workspace is not writable by $(id -un). $f is owned by $(stat -c '%U:%G' "$f" 2>/dev/null || echo unknown). Impersonate that user if you are an admin." >&2`,
-        `exit 13`,
-        `fi`,
-      ].join("; ") + "; "
+    ? `f='${opts.workspaceDir.replace(/'/g, "")}/instance.json'; if [ -e "$f" ] && [ ! -w "$f" ]; then echo "GOAD workspace is not writable by $(id -un). $f is owned by $(stat -c '%U:%G' "$f" 2>/dev/null || echo unknown). Impersonate that user if you are an admin." >&2; exit 13; fi; `
     : ""
   const inner = `${guard}${opts.innerCommand}`
 

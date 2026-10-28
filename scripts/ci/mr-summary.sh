@@ -25,7 +25,8 @@ lux_trust_gitlab_api
 
 mr_json="$(mktemp)"
 body_file="$(mktemp)"
-payload="$(mktemp)"
+# gitlab-api.mjs refuses a body outside this checkout, so the payload cannot live in /tmp.
+payload="$(mktemp "${root}/.gitlab-api.XXXXXX")"
 trap 'rm -f "$mr_json" "$body_file" "$payload"' EXIT
 
 node scripts/ci/gitlab-api.mjs GET "/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}" >"$mr_json"

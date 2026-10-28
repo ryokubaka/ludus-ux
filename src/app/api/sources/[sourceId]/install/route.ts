@@ -22,6 +22,7 @@ import { isSourcePublished } from "@/lib/source-publication"
 import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
 import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import { logAndSafeError } from "@/lib/safe-client-error"
+import { logError, logWarn } from "@/lib/log-safe"
 
 export const maxDuration = 300
 
@@ -127,7 +128,7 @@ export async function POST(
       const src = sources.find((s) => sourceIdOf(s).toLowerCase() === want)
       if (src) await ensureSourceFresh(installApiKey, src, { force })
     } catch (syncErr) {
-      console.warn("[sources/install] pre-install sync failed", syncErr)
+      logWarn(`[sources/install] pre-install sync failed ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`)
     }
 
     // Force re-sync defaults to noDeps so blueprint re-sync does not reinstall roles.
@@ -140,7 +141,7 @@ export async function POST(
     try {
       await pinSourceInstallSelection(installApiKey, sourceId, selection)
     } catch (pinErr) {
-      console.error("[sources/install] pin failed", pinErr)
+      logError(`[sources/install] pin failed ${pinErr instanceof Error ? pinErr.message : String(pinErr)}`)
     }
 
     const shareWarnings: string[] = []

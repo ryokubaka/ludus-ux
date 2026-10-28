@@ -47,13 +47,27 @@ export function assessConfiguredSshUser(settingsUser: string | null | undefined)
 /** Passwordless sudo target. Quickstart installs this; sudoers allows only this path. */
 export const LUX_HOST_SUDO_BIN = "/usr/local/sbin/lux-host"
 
+const LINUX_USER_NAME = /^[a-z_][a-z0-9_-]{0,31}$/
+
+/**
+ * Whether the privileged SSH account is root. The username is checked and
+ * then dropped so it is not part of the command string.
+ */
+export function isPrivilegedRoot(username: string | null | undefined): boolean {
+  const user = cleanUser(username) || "root"
+  if (!LINUX_USER_NAME.test(user)) {
+    throw new Error("Privileged SSH user is not a valid Linux username")
+  }
+  return user === "root"
+}
+
 /**
  * Run one named lux-host operation. Arguments are single-quoted so the remote
  * shell cannot reinterpret them. The helper refuses anything that is not one
  * of its operations. Root runs the binary directly. Any other account uses
  * `sudo -n` for that path only.
  */
-export function formatLuxHost(username: string, args: readonly string[]): string {
+export function formatLuxHost(isRoot: boolean, args: readonly string[]): string {
   if (args.length === 0) {
     throw new Error("lux-host needs an operation")
   }
@@ -63,8 +77,7 @@ export function formatLuxHost(username: string, args: readonly string[]): string
     }
   }
   const quoted = args.map((arg) => shellSingleQuote(arg)).join(" ")
-  const user = cleanUser(username)
-  if (user === "root" || !user) return `${LUX_HOST_SUDO_BIN} ${quoted}`
+  if (isRoot) return `${LUX_HOST_SUDO_BIN} ${quoted}`
   return `sudo -n ${LUX_HOST_SUDO_BIN} ${quoted}`
 }
 
@@ -81,8 +94,8 @@ export function wrapLuxHostStdin(remote: string): string {
  * Root may run a host command directly. A non-root account cannot pass an
  * arbitrary shell string through lux-host.
  */
-export function asPrivilegedShell(username: string, command: string): string {
-  if (cleanUser(username) === "root" || !cleanUser(username)) return command
+export function asPrivilegedShell(isRoot: boolean, command: string): string {
+  if (isRoot) return command
   throw new Error(
     "Refusing to run an arbitrary shell command through lux-host. Use a named lux-host operation.",
   )

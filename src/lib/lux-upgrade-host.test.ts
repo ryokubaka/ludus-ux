@@ -466,8 +466,12 @@ exec /bin/bash -c "$script"
 /** Stub docker so host probe tests do not pick up a real ludus-ux bind mount from the dev machine. */
 function writeProbeDockerStub(bin: string): void {
   const docker = path.join(bin, "docker")
-  if (existsSync(docker)) return
-  writeFileSync(docker, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  try {
+    writeFileSync(docker, "#!/bin/sh\nexit 0\n", { mode: 0o755, flag: "wx" })
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return
+    throw err
+  }
   chmodSync(docker, 0o755)
 }
 

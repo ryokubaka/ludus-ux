@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "crypto"
+import { scryptSync, timingSafeEqual } from "crypto"
 import type { RuntimeSettings } from "./settings-store"
 
 /** Fields any authenticated user may see. Secrets stay on the server. */
@@ -68,10 +68,13 @@ export function endpointSettingsChanged(
   return false
 }
 
+/** Fixed salt: this compares two strings, it does not store a password. */
+const SECRETS_MATCH_SALT = "ludus-ux-secrets-match"
+
 /** Constant-time string compare. Empty expected secret never matches. */
 export function secretsMatch(presented: string, expected: string): boolean {
   if (!expected) return false
-  const a = createHash("sha256").update(presented, "utf8").digest()
-  const b = createHash("sha256").update(expected, "utf8").digest()
+  const a = scryptSync(presented, SECRETS_MATCH_SALT, 32)
+  const b = scryptSync(expected, SECRETS_MATCH_SALT, 32)
   return timingSafeEqual(a, b)
 }

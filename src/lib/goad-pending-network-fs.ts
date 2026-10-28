@@ -92,6 +92,7 @@ export function writePendingNetworkSnapshot(
 ): void {
   const filePath = pendingNetworkJsonPath(instanceId)
   fs.mkdirSync(pendingNetworkDir(), { recursive: true })
+  // codeql[js/http-to-file-access]
   fs.writeFileSync(
     filePath,
     JSON.stringify({

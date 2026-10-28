@@ -4,6 +4,7 @@
 
 import { randomUUID } from "crypto"
 import { getDb } from "@/lib/db"
+import { logInfo, logWarn } from "@/lib/log-safe"
 
 export type LogCategory = "auth" | "app"
 export type LogLevel = "info" | "warn" | "error"
@@ -76,11 +77,11 @@ export function writeAppLog(input: WriteAppLogInput): AppLogRow {
       )
       .run(row)
   } catch (err) {
-    console.warn("[app-log] insert failed:", err instanceof Error ? err.message : String(err))
+    logWarn(`[app-log] insert failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 
   const line = formatAppLogLine(row)
-  console.log(line)
+  logInfo(line)
   for (const sub of subscribers) {
     try {
       sub(line)

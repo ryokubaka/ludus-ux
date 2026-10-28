@@ -143,6 +143,15 @@ interface ParsedVersion {
   groups: ParsedGroup[]
 }
 
+function isGitHubRepoUrl(repoUrl: string): boolean {
+  try {
+    const host = new URL(repoUrl).hostname.toLowerCase()
+    return host === "github.com" || host.endsWith(".github.com")
+  } catch {
+    return false
+  }
+}
+
 function parseChangelog(md: string): ParsedVersion[] {
   // Normalize newlines so `$`-anchored bullet regex matches (CRLF leaves `\r`
   // on split lines; `.` does not match `\r`, so the match fails → 0 entries).
@@ -621,7 +630,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
                 rel="noopener noreferrer"
                 className="hover:text-primary transition-colors"
               >
-                {repoUrl.includes("github.com") ? "GitHub" : "Repository"}
+                {isGitHubRepoUrl(repoUrl) ? "GitHub" : "Repository"}
               </a>
               <span className="text-border">·</span>
             </>

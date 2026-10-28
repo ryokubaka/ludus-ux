@@ -37,6 +37,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
+import { newRangeUid as createRangeUid } from "@/lib/range-uid"
 import { useToast } from "@/hooks/use-toast"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
@@ -265,7 +266,7 @@ export function NewGoadInstancePageClient({
   // Using the same UID means the range suffix visually matches the instance name suffix,
   // making it easy to see which range belongs to which instance.
   // 6 chars gives ~2 billion combinations — low collision risk per user.
-  const [newRangeUid] = useState(() => Math.random().toString(36).slice(2, 8).toUpperCase())
+  const [newRangeUid] = useState(createRangeUid)
   // True while we are deleting existing VMs before a GOAD install into an existing range
   const [clearingRange, setClearingRange] = useState(false)
   // Existing GOAD instance that lives in the currently-selected existing range (if any)

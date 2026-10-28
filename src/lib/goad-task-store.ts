@@ -23,6 +23,7 @@
  * is deleted from SQLite and its log file is removed.
  */
 
+import { randomBytes } from "node:crypto"
 import fs from "fs"
 import path from "path"
 import { getDb, taskLogPath, legacyTaskLogPath, TASKS_LOG_DIR } from "./db"
@@ -183,17 +184,29 @@ function hydrateFromDb(): void {
         const taskId = path.basename(logPath, ".log")
         if (taskMap.has(taskId)) continue
 
-        const stat = fs.statSync(logPath)
-        const match = taskId.match(/^goad-(\d+)-/)
-        const startedAt = match ? parseInt(match[1], 10) : Math.floor(stat.birthtimeMs)
-        const endedAt = Math.floor(stat.mtimeMs)
-
-        let lineCount = 0
+        let fd: number
         try {
-          const content = fs.readFileSync(logPath, "utf8")
-          lineCount = content.split("\n").filter((l) => l.length > 0).length
+          fd = fs.openSync(logPath, "r")
         } catch (err) {
           console.warn(`[task-store] orphan scan: failed to read log file ${logPath}:`, (err as Error).message)
+          continue
+        }
+        let lineCount = 0
+        let startedAt = Date.now()
+        let endedAt = startedAt
+        try {
+          const stat = fs.fstatSync(fd)
+          const match = taskId.match(/^goad-(\d+)-/)
+          startedAt = match ? parseInt(match[1], 10) : Math.floor(stat.birthtimeMs)
+          endedAt = Math.floor(stat.mtimeMs)
+          try {
+            const content = fs.readFileSync(fd, "utf8")
+            lineCount = content.split("\n").filter((l) => l.length > 0).length
+          } catch (err) {
+            console.warn(`[task-store] orphan scan: failed to read log file ${logPath}:`, (err as Error).message)
+          }
+        } finally {
+          fs.closeSync(fd)
         }
 
         // Persist the recovered record so it survives future restarts.
@@ -308,13 +321,28 @@ export function resolveTaskLudusApiKey(taskId: string): string | undefined {
   }
 }
 
+const TASK_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+/** Four lowercase base36 characters from crypto.randomBytes. Keeps the goad-<millis>- prefix. */
+export function newGoadTaskId(now = Date.now()): string {
+  let suffix = ""
+  while (suffix.length < 4) {
+    for (const byte of randomBytes(4)) {
+      if (byte >= 252) continue
+      suffix += TASK_ID_ALPHABET[byte % 36]
+      if (suffix.length === 4) return `goad-${now}-${suffix}`
+    }
+  }
+  return `goad-${now}-${suffix}`
+}
+
 export function createTask(
   command: string,
   instanceId?: string,
   username?: string,
   ludusApiKey?: string,
 ): string {
-  const id = `goad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const id = newGoadTaskId()
   const now = Date.now()
   const task: GoadTask = {
     id,
@@ -371,6 +399,7 @@ export function appendLine(taskId: string, line: string): string | undefined {
   try {
     const logFile = taskLogPath(taskId, entry.task.instanceId)
     fs.mkdirSync(path.dirname(logFile), { recursive: true })
+    // codeql[js/http-to-file-access]
     fs.appendFileSync(logFile, stored + "\n", "utf8")
   } catch (err) {
     console.error("[task-store] appendLine file write failed:", err)

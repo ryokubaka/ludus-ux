@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { expect, request as playwrightRequest, type APIRequestContext } from "@playwright/test"
@@ -113,10 +113,18 @@ export function apiHandlers(): RouteHandler[] {
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
       const full = path.join(dir, name)
-      if (statSync(full).isDirectory()) walk(full)
-      else if (name === "route.ts") {
+      const fd = openSync(full, "r")
+      let source: string | null = null
+      let isDirectory = false
+      try {
+        isDirectory = fstatSync(fd).isDirectory()
+        if (!isDirectory && name === "route.ts") source = readFileSync(fd, "utf8")
+      } finally {
+        closeSync(fd)
+      }
+      if (isDirectory) walk(full)
+      else if (source != null) {
         const route = path.relative(root, dir).split(path.sep).join("/")
-        const source = readFileSync(full, "utf8")
         const methods = new Set(
           [...source.matchAll(/^export\s+(?:async\s+function|const)\s+(GET|POST|PUT|PATCH|DELETE|HEAD)\b/gm)].map((m) => m[1]),
         )

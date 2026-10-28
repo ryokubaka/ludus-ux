@@ -3,7 +3,8 @@
 // is sent as JOB-TOKEN, which can read this project but cannot edit merge requests.
 // Exit 4: rejected token. Exit 5: 404. Exit 6: 409 already exists.
 
-import { readFileSync } from "node:fs"
+import { closeSync, fstatSync, openSync, readFileSync, realpathSync } from "node:fs"
+import path from "node:path"
 
 const [method, apiPath, bodyFile] = process.argv.slice(2)
 const base = (process.env.CI_API_V4_URL || "").replace(/\/$/, "")
@@ -23,14 +24,41 @@ if (process.env.GITLAB_TOKEN) {
   process.exit(1)
 }
 
+function readBodyFile(file) {
+  const cwd = realpathSync(process.cwd())
+  let resolved
+  try {
+    resolved = realpathSync(path.resolve(cwd, file))
+  } catch {
+    console.error("GitLab API body file could not be read")
+    process.exit(1)
+  }
+  const relative = path.relative(cwd, resolved)
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    console.error("GitLab API body file must stay inside the working directory")
+    process.exit(1)
+  }
+  const fd = openSync(resolved, "r")
+  try {
+    if (!fstatSync(fd).isFile()) {
+      console.error("GitLab API body must be a regular file")
+      process.exit(1)
+    }
+    return readFileSync(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
 let body
 if (bodyFile) {
-  body = readFileSync(bodyFile)
+  body = readBodyFile(bodyFile)
   headers["Content-Type"] = "application/json"
 }
 
 let response
 try {
+  // codeql[js/file-access-to-http]
   response = await fetch(base + apiPath, { method, headers, body, redirect: "manual" })
 } catch (err) {
   const cause = err instanceof Error ? err.cause : undefined

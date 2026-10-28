@@ -1,5 +1,5 @@
 import { Suspense } from "react"
-import { redirect } from "next/navigation"
+import { redirect, unstable_rethrow } from "next/navigation"
 import { AppShell } from "@/components/layout/app-shell"
 import { Toaster } from "@/components/ui/toaster"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -20,6 +20,9 @@ async function AuthenticatedRootInner({ children }: { children: React.ReactNode 
     session = layout.session
     dehydratedState = await prefetchGlobal(layout.resolved)
   } catch (err) {
+    // `connection()` rejects when a prerender finishes. React uses that rejection
+    // to leave the shell dynamic. Logging it looks like a session failure on every route.
+    unstable_rethrow(err)
     console.error("[layout] failed to read the session:", err instanceof Error ? err.message : err)
   }
   const initialScopeTag = session ? effectiveScopeTagFromSession(session) : "_guest|self"

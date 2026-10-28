@@ -152,6 +152,8 @@ export async function runSourceAutoSyncPass(): Promise<void> {
 
 /** Start interval loop once per Node process (Docker / long-lived Next server). */
 export function startSourceAutoSyncLoop(): void {
+  // `next build` loads this module while prerendering. The interval is for the running server.
+  if (process.env.NEXT_PHASE === "phase-production-build" || process.env.npm_lifecycle_event === "build") return
   if (!sourceAutoSyncEnabled()) return
   const g = globalThis as AutoSyncGlobal
   if (g.__luxSourceAutoSyncStarted) return

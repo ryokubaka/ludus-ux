@@ -55,6 +55,9 @@ async function readInstalledRevision(): Promise<{ revision: string | null; versi
  * later LUX releases do not need another manual install.
  */
 export async function ensureLuxHostCurrent(opts?: { force?: boolean }): Promise<LuxHostSyncResult> {
+  if (process.env.NEXT_PHASE === "phase-production-build" || process.env.npm_lifecycle_event === "build") {
+    return { ok: false, updated: false, detail: "skipped during build" }
+  }
   const want = bundledLuxHostSha256()
   if (!opts?.force && syncedHash === want) return { ok: true, updated: false, detail: "current" }
   if (!opts?.force && Date.now() < nextAttemptAt) {

@@ -140,6 +140,7 @@ export async function recordActiveDeployLogs(): Promise<void> {
 }
 
 export function startDeployLogClockLoop(): void {
+  if (process.env.NEXT_PHASE === "phase-production-build" || process.env.npm_lifecycle_event === "build") return
   const g = globalThis as RecorderGlobal
   if (g.__luxDeployLogClockStarted) return
   g.__luxDeployLogClockStarted = true

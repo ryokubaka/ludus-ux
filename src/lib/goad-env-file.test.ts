@@ -1,5 +1,5 @@
 import { spawnSync } from "child_process"
-import { readFileSync, rmSync, statSync } from "fs"
+import { closeSync, fstatSync, openSync, readFileSync, rmSync, statSync } from "fs"
 import { describe, expect, it } from "vitest"
 import { buildGoadEnvFileStep, GOAD_ENV_FILE_PATTERN, sourceGoadEnvFile } from "./goad-ssh"
 
@@ -34,8 +34,13 @@ describe("buildGoadEnvFileStep", () => {
     const file = created.stdout.trim()
     expect(file).toMatch(GOAD_ENV_FILE_PATTERN)
     try {
-      expect(statSync(file).mode & 0o777).toBe(0o600)
-      expect(readFileSync(file, "utf8")).toContain(exportLines[1])
+      const fd = openSync(file, "r")
+      try {
+        expect(fstatSync(fd).mode & 0o777).toBe(0o600)
+        expect(readFileSync(fd, "utf8")).toContain(exportLines[1])
+      } finally {
+        closeSync(fd)
+      }
       const sourced = spawnSync("bash", ["-c", `${sourceGoadEnvFile(file)}; printf '%s' "$LUDUS_API_KEY"`], {
         encoding: "utf8",
       })

@@ -18,6 +18,7 @@ import { resolveSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus-client"
 import { getSettings } from "@/lib/settings-store"
+import { logInfo, logWarn } from "@/lib/log-safe"
 
 
 interface RangeData {
@@ -96,7 +97,7 @@ export async function GET(request: NextRequest) {
     })
     domains = extractAllowedDomains(result.data)
   } catch (err) {
-    console.warn(`[allowed-domains] standard API failed for ${rangeId}:`, (err as Error).message)
+    logWarn(`[allowed-domains] standard API failed for ${rangeId}: ${(err as Error).message}`)
   }
 
   // Strategy 2: Admin API with ROOT API key (if available and strategy 1 came up empty)
@@ -109,10 +110,10 @@ export async function GET(request: NextRequest) {
       const adminDomains = extractAllowedDomains(result.data)
       if (adminDomains.length > 0) {
         domains = adminDomains
-        console.log(`[allowed-domains] standard API returned empty, admin API found ${domains.length} entries for ${rangeId}`)
+        logInfo(`[allowed-domains] standard API returned empty, admin API found ${domains.length} entries for ${rangeId}`)
       }
     } catch (err) {
-      console.warn(`[allowed-domains] admin API failed for ${rangeId}:`, (err as Error).message)
+      logWarn(`[allowed-domains] admin API failed for ${rangeId}: ${(err as Error).message}`)
     }
   }
 

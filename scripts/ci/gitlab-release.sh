@@ -19,7 +19,8 @@ source "$(dirname "$0")/gitlab-trust.sh"
 lux_trust_gitlab_api
 
 notes="$(mktemp)"
-payload="$(mktemp)"
+# gitlab-api.mjs refuses a body outside this checkout, so the payload cannot live in /tmp.
+payload="$(mktemp "${root}/.gitlab-api.XXXXXX")"
 trap 'rm -f "$notes" "$payload"' EXIT
 
 parsed="$(LUX_RELEASE_NOTES="$notes" bash scripts/changelog-release.sh)"

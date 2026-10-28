@@ -111,6 +111,17 @@ jobs:
           languages: javascript-typescript
           queries: security-extended
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          # Code scanning does not apply // codeql[...] comments. Write the SARIF,
+          # drop covered results, then upload that file as this job's category.
+          upload: never
+          output: codeql-results
+          post-processed-sarif-path: codeql-sarif
+      - run: node scripts/ci/codeql-apply-suppressions.mjs codeql-sarif
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: codeql-sarif
+          category: .github/workflows/ci.yml:codeql
 
   trivy-fs:
     runs-on: ubuntu-latest

@@ -6,6 +6,8 @@
  * even when the original SSE client has already disconnected (e.g. after the
  * user signs out and back in, then resumes the task and clicks "Stop Command").
  */
+import { logWarn } from "@/lib/log-safe"
+
 const registry = new Map<string, () => void>()
 
 export function registerCleanup(taskId: string, fn: () => void): void {
@@ -23,7 +25,7 @@ export function invokeCleanup(taskId: string): boolean {
   if (!fn) return false
   registry.delete(taskId)
   try { fn() } catch (err) {
-    console.warn(`[task-cleanup] cleanup for task ${taskId} threw:`, (err as Error).message)
+    logWarn(`[task-cleanup] cleanup for task ${taskId} threw: ${(err as Error).message}`)
   }
   return true
 }

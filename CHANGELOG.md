@@ -15,6 +15,17 @@ Each bullet uses a single tag:
 
 ---
 
+## [1.5.1] - 2026-10-28
+
+**LUX**
+
+- [Security] **Stdout logs** — Newlines and percent signs are removed before a request value is written, and an environment value whose name contains a secret marker is replaced with `[redacted]`.
+- [Security] **File reads and ids** — SSH key probes, recovered task logs, and the security route walk read through an open file descriptor. New range ids and GOAD task ids come from a CSPRNG and keep the same shape, including the `goad-<millis>-` prefix.
+- [Security] **GitHub URLs and password check** — Listing and raw reads are built from `api.github.com` and `raw.githubusercontent.com`, with each path segment encoded, and a clone URL counts as GitHub only when its hostname is `github.com`. The settings confirm check uses scrypt. The Ludus cache key stays a short SHA-256 digest.
+- [Security] **Lab requests, IP sync, and host commands** — Ludus, PocketBase, and Proxmox calls still use the configured address, including a private range, and refuse another scheme, embedded credentials, the instance metadata host, and a redirect to a different host. Inventory rewrite accepts only an IPv4 prefix and quotes the workspace path. The privileged SSH username is checked against the Linux name pattern and is not copied into the command.
+- [Security] **CodeQL lab sinks** — GitHub code scanning does not read `// codeql[js/...]` comments, so the CodeQL job drops results those comments cover before upload. Configured Ludus URLs, host commands, task logs, and the GitLab API body stay. Certificate checks for those hosts are still skipped only when `LUDUS_TLS_INSECURE` is set.
+- [Fix] **Merge request summary** — The GitLab API payload is written in the checkout. A file from `mktemp` in the system temp directory was refused, so the merge request title and the release publish never ran.
+
 ## [1.5.0] - 2026-10-28
 
 **LUX**

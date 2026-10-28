@@ -86,25 +86,25 @@ describe("parseRootSshProbe", () => {
 
 describe("asPrivilegedShell", () => {
   it("leaves root commands unchanged", () => {
-    expect(asPrivilegedShell("root", "id -u")).toBe("id -u")
+    expect(asPrivilegedShell(true, "id -u")).toBe("id -u")
   })
 
   it("refuses to wrap an arbitrary command for a non-root account", () => {
-    expect(() => asPrivilegedShell("lux-ssh-test", "id -u")).toThrow(/arbitrary shell/)
+    expect(() => asPrivilegedShell(false, "id -u")).toThrow(/arbitrary shell/)
   })
 })
 
 describe("formatLuxHost", () => {
   it("quotes each argument and does not invoke bash", () => {
-    expect(formatLuxHost("lux-ssh-test", ["pvesh", "get", "/nodes"])).toBe(
+    expect(formatLuxHost(false, ["pvesh", "get", "/nodes"])).toBe(
       "sudo -n /usr/local/sbin/lux-host 'pvesh' 'get' '/nodes'",
     )
-    expect(formatLuxHost("root", ["id"])).toBe("/usr/local/sbin/lux-host 'id'")
-    expect(formatLuxHost("lux-ssh-test", ["echo", "o'brien"])).toContain("'\\''")
+    expect(formatLuxHost(true, ["id"])).toBe("/usr/local/sbin/lux-host 'id'")
+    expect(formatLuxHost(false, ["echo", "o'brien"])).toContain("'\\''")
   })
 
   it("feeds lux-host stdin from a file so sudo does not drop the update body", () => {
-    const wrapped = wrapLuxHostStdin(formatLuxHost("lux-ssh-test", ["self-update"]))
+    const wrapped = wrapLuxHostStdin(formatLuxHost(false, ["self-update"]))
     expect(wrapped).toContain("cat > \"$f\"")
     expect(wrapped).toContain("sudo -n /usr/local/sbin/lux-host 'self-update' < \"$f\"")
     expect(wrapped).toContain("rm -f \"$f\"")

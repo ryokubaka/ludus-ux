@@ -192,6 +192,28 @@ const FINDINGS: Record<string, Finding> = {
       "src/security/upgrade-tag-pin.test.ts": ["verifies a tag only in a keyring that holds the trusted key"],
     },
   },
+  "CodeQL sinks from the v1.5.0 scan": {
+    source: "review",
+    tests: {
+      "src/lib/log-safe.test.ts": [
+        "strips newlines and percent signs and redacts a password-shaped env value",
+      ],
+      "src/lib/packer-vm-name.test.ts": ["drops trailing slashes and keeps the directory name"],
+      "src/lib/template-repo-client.test.ts": [
+        "rejects a URL whose hostname is not github.com",
+        "keeps owner and repo on api.github.com and raw.githubusercontent.com",
+      ],
+      "src/lib/sync-ip-prefix.test.ts": ["escapes an IPv4 prefix for sed and rejects a command suffix"],
+      "src/lib/settings-public.test.ts": [
+        "matches equal secrets, a one-character difference does not, and empty expected never matches",
+      ],
+      "src/lib/random-id.test.ts": ["keeps the task id and range uid charset and does not use Math.random"],
+      "src/lib/ludus-fetch.test.ts": [
+        "rejects file, userinfo, and metadata hosts and still allows a private lab URL",
+      ],
+      "src/lib/root-ssh-auth.test.ts": ["reads a regular key and a symlink the same way the probe did"],
+    },
+  },
 }
 
 function expectFocusedTests(finding: Finding) {

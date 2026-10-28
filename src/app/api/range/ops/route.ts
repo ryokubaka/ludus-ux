@@ -28,6 +28,7 @@ import {
   type RangeOpType,
 } from "@/lib/range-op-store"
 import { recordLuxTestingOpTerminal } from "@/lib/range-testing-audit"
+import { logInfo, logWarn } from "@/lib/log-safe"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 import {
   TESTING_OP_MIN_AGE_MS,
@@ -282,14 +283,14 @@ export async function POST(request: NextRequest) {
         )
       }
       if (efiEnroll.attempted) {
-        console.log(
+        logInfo(
           `[range-ops] testing-start EFI enroll rangeId=${rangeId} ` +
             `enrolled=${efiEnroll.enrolled.length}/${efiEnroll.vmids.length}`,
         )
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.warn(`[range-ops] testing-start EFI enroll threw for ${rangeId}:`, msg)
+      logWarn(`[range-ops] testing-start EFI enroll threw for ${rangeId}: ${msg}`)
       forgetTestingStopRetry(op.id)
       completeRangeOp(op.id, false)
       recordLuxTestingOpTerminal(op, false, {

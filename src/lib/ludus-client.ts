@@ -8,6 +8,7 @@
 
 import { getSettings, type RuntimeSettings } from "./settings-store"
 import { ludusFetch } from "./ludus-fetch"
+import { logWarn } from "./log-safe"
 
 /** When `ludusAdminUrl` is blank, derive admin base from main Ludus URL (`:8080`→`:8081`, or default port→8081). */
 function inferAdminBaseFromLudusUrl(mainUrl: string): string {
@@ -157,7 +158,7 @@ export async function ludusRequest<T = unknown>(
       }
     }
     const detail = describeFetchFailure(err)
-    console.warn("[ludusRequest]", method, url, detail)
+    logWarn(`[ludusRequest] ${method} ${url} ${detail}`)
     return { error: `Connection failed: ${detail}`, status: 0 }
   }
 }

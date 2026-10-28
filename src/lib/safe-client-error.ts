@@ -1,3 +1,5 @@
+import { logError } from "@/lib/log-safe"
+
 export function safeClientError(
   err: unknown,
   fallback = "Request failed",
@@ -15,6 +17,6 @@ export function logAndSafeError(
   fallback = "Request failed",
 ): string {
   const detail = err instanceof Error ? err.message : String(err)
-  console.error(`[${context}]`, detail)
+  logError(`[${context}] ${detail}`)
   return safeClientError(err, fallback)
 }

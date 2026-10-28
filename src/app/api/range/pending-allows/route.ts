@@ -26,6 +26,7 @@ import {
   type PendingAllowOpType,
 } from "@/lib/pending-allow-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { logInfo } from "@/lib/log-safe"
 
 const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -75,7 +76,7 @@ export async function GET(request: NextRequest) {
   if (timedOutAdds.length > 0) {
     removePendingAllows(rangeId, effectiveUsername, timedOutAdds, "add")
     adds = adds.filter(a => !timedOutAdds.includes(a))
-    console.log(`[pending-allows] auto-confirmed stale adds for ${effectiveUsername}/${rangeId}: ${timedOutAdds.join(", ")}`)
+    logInfo(`[pending-allows] auto-confirmed stale adds for ${effectiveUsername}/${rangeId}: ${timedOutAdds.join(", ")}`)
   }
 
   const timedOutRemoves = pendingTs.removes
@@ -84,7 +85,7 @@ export async function GET(request: NextRequest) {
   if (timedOutRemoves.length > 0) {
     removePendingAllows(rangeId, effectiveUsername, timedOutRemoves, "remove")
     removes = removes.filter(r => !timedOutRemoves.includes(r))
-    console.log(`[pending-allows] auto-confirmed stale removes for ${effectiveUsername}/${rangeId}: ${timedOutRemoves.join(", ")}`)
+    logInfo(`[pending-allows] auto-confirmed stale removes for ${effectiveUsername}/${rangeId}: ${timedOutRemoves.join(", ")}`)
   }
 
   return NextResponse.json({ adds, removes })
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
 
   const { effectiveUsername } = await getEffective(request, session)
   addPendingAllow(rangeId, effectiveUsername, entry, opType as PendingAllowOpType)
-  console.log(`[pending-allows] POST ${effectiveUsername}/${rangeId}: ${opType} "${entry}"`)
+  logInfo(`[pending-allows] POST ${effectiveUsername}/${rangeId}: ${opType} "${entry}"`)
   logLuxRouteAction(request, session, { detail: `${opType} ${entry}` })
   return NextResponse.json({ ok: true }, { status: 201 })
 }
@@ -135,7 +136,7 @@ export async function DELETE(request: NextRequest) {
 
   const { effectiveUsername } = await getEffective(request, session)
   removePendingAllows(rangeId, effectiveUsername, entries, opType as PendingAllowOpType)
-  console.log(`[pending-allows] DELETE ${effectiveUsername}/${rangeId}: ${opType} [${entries.join(", ")}]`)
+  logInfo(`[pending-allows] DELETE ${effectiveUsername}/${rangeId}: ${opType} [${entries.join(", ")}]`)
   logLuxRouteAction(request, session, { detail: `${opType} [${entries.join(", ")}]` })
   return NextResponse.json({ ok: true })
 }

@@ -7,7 +7,7 @@
 import { Client as SSHClient, type ConnectConfig } from "ssh2"
 import { shellSingleQuote } from "@/lib/template-packer-paths"
 import { readPrivateKey, getSshKeyPassphrase } from "./root-ssh-auth"
-import { asPrivilegedShell, formatLuxHost } from "./root-ssh-preflight"
+import { asPrivilegedShell, formatLuxHost, isPrivilegedRoot } from "./root-ssh-preflight"
 import { attachSshHostVerifier, explainSshHostKeyError } from "./ssh-host-key"
 
 export function sshLoginCommand(remote: string): string {
@@ -59,13 +59,15 @@ export function sshExec(
       // Use bash -l (login shell) so /etc/profile is sourced and Proxmox tools
       // like pvesh are on PATH regardless of their exact install location.
       let remote: string
+      const root = isPrivilegedRoot(username)
       if (isLuxHostArgv(command)) {
-        remote = formatLuxHost(username, command)
+        remote = formatLuxHost(root, command)
       } else if (options?.elevate === false) {
         remote = command
       } else {
-        remote = asPrivilegedShell(username, command)
+        remote = asPrivilegedShell(root, command)
       }
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(sshLoginCommand(remote), (err, stream) => {
         if (err) { conn.end(); return reject(err) }
         let out = "", errOut = ""

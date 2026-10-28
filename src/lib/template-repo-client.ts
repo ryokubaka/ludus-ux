@@ -32,29 +32,107 @@ const FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.g
 /** Next.js caches `fetch` by default — source version pins must always hit the tip. */
 const NO_STORE = { cache: "no-store" as const }
 
-const GITHUB_HOSTS = new Set([
-  "api.github.com",
-  "raw.githubusercontent.com",
-  "github.com",
-  "codeload.github.com",
-])
+const GITHUB_API = "https://api.github.com"
+const GITHUB_RAW = "https://raw.githubusercontent.com"
+const GITHUB_ORIGINS: Record<string, string> = {
+  "api.github.com": GITHUB_API,
+  "raw.githubusercontent.com": GITHUB_RAW,
+  "github.com": "https://github.com",
+  "codeload.github.com": "https://codeload.github.com",
+}
+
+export interface GitHubRepo {
+  owner: string
+  repo: string
+}
+
+function decodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return null
+  }
+}
+
+/** Constant GitHub host plus one encodeURIComponent per path and query segment. */
+export function rebuildGitHubUrl(input: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(input)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null
+  const origin = GITHUB_ORIGINS[parsed.hostname.toLowerCase()]
+  if (!origin) return null
+  const segments: string[] = []
+  for (const segment of parsed.pathname.split("/")) {
+    if (!segment) continue
+    const decoded = decodePathSegment(segment)
+    if (decoded == null) return null
+    segments.push(encodeURIComponent(decoded))
+  }
+  const query = [...parsed.searchParams]
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&")
+  return `${origin}/${segments.join("/")}${query ? `?${query}` : ""}`
+}
 
 /** User-supplied repo hosts are resolved and pinned. GitHub stays on normal fetch. */
 function repoFetch(url: string, init?: RequestInit): Promise<Response> {
-  const host = new URL(url).hostname.toLowerCase()
-  if (GITHUB_HOSTS.has(host)) return fetch(url, init)
+  const github = rebuildGitHubUrl(url)
+  if (github) return fetch(github, init)
   return safeRepoFetch(url, init)
 }
 
+export function githubRepoFromApiBase(apiBase: string): GitHubRepo | null {
+  let parsed: URL
+  try {
+    parsed = new URL(apiBase)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null
+  if (parsed.hostname.toLowerCase() !== "api.github.com") return null
+  const parts = parsed.pathname.split("/").filter(Boolean)
+  if (parts[0] !== "repos" || !parts[1] || !parts[2]) return null
+  const owner = decodePathSegment(parts[1])
+  const repo = decodePathSegment(parts[2])
+  if (!owner || !repo) return null
+  return { owner, repo }
+}
+
 export function isGitHubApiBase(apiBase: string): boolean {
-  return apiBase.includes("api.github.com/repos/")
+  return githubRepoFromApiBase(apiBase) !== null
+}
+
+export function githubApiPath(repo: GitHubRepo, ...segments: string[]): string {
+  const path = ["repos", repo.owner, repo.repo, ...segments].map((segment) => encodeURIComponent(segment)).join("/")
+  return `${GITHUB_API}/${path}`
+}
+
+export function parseGitHubCloneUrl(gitUrl: string): GitHubRepo | null {
+  let parsed: URL
+  try {
+    parsed = new URL(gitUrl.trim().replace(/\.git$/, ""))
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null
+  if (parsed.hostname.toLowerCase() !== "github.com") return null
+  const [owner, repo] = parsed.pathname.split("/").filter(Boolean)
+  if (!owner || !repo) return null
+  const decodedOwner = decodePathSegment(owner)
+  const decodedRepo = decodePathSegment(repo)
+  if (!decodedOwner || !decodedRepo) return null
+  return { owner: decodedOwner, repo: decodedRepo }
 }
 
 /** Map a repository API base URL to a git clone URL for Ludus Sources registration. */
 export function apiBaseToGitUrl(apiBase: string): string | null {
-  if (isGitHubApiBase(apiBase)) {
-    const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)
-    if (match) return `https://github.com/${match[1]}`
+  const github = githubRepoFromApiBase(apiBase)
+  if (github) {
+    return `https://github.com/${encodeURIComponent(github.owner)}/${encodeURIComponent(github.repo)}`
   }
   const gitlabMatch = /^(https:\/\/[^/]+)\/api\/v4\/projects\/(.+)$/.exec(apiBase.trim())
   if (gitlabMatch) {
@@ -72,8 +150,8 @@ export function gitUrlToRepoApiBase(gitUrl: string): string | null {
   const normalized = gitUrl.trim().replace(/\.git$/, "").replace(/\/+$/, "")
   if (!normalized) return null
 
-  const gh = normalized.match(/github\.com\/([^/]+\/[^/]+)/i)
-  if (gh) return `https://api.github.com/repos/${gh[1]}`
+  const gh = parseGitHubCloneUrl(normalized)
+  if (gh) return githubApiPath(gh)
 
   const glBrowse = normalized.match(
     /^(https:\/\/[^/]*gitlab[^/]*)\/([^/]+\/[^/]+?)(?:\/-\/.*)?$/i,
@@ -92,12 +170,13 @@ export function gitUrlToRepoApiBase(gitUrl: string): string | null {
 
 /** Raw file URL for GitHub repos (apiBase = https://api.github.com/repos/owner/repo). */
 export function githubRawFileUrl(apiBase: string, path: string, ref: string): string {
-  const match = /api\.github\.com\/repos\/([^/]+\/[^/]+)/.exec(apiBase)
-  if (!match) throw new Error("Invalid GitHub apiBase")
+  const repo = githubRepoFromApiBase(apiBase)
+  if (!repo) throw new Error("Invalid GitHub apiBase")
   // Keep slashes in branch names (feat/securityonion-3.3.0). Callers that need a
   // fresh tip should pass a commit SHA; branch URLs are cached by GitHub.
-  const encodedRef = ref.split("/").map(encodeURIComponent).join("/")
-  return `https://raw.githubusercontent.com/${match[1]}/${encodedRef}/${path}`
+  const encodedRef = ref.split("/").filter(Boolean).map(encodeURIComponent).join("/")
+  const encodedPath = path.split("/").filter(Boolean).map(encodeURIComponent).join("/")
+  return `${GITHUB_RAW}/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${encodedRef}/${encodedPath}`
 }
 
 const refShaCache = new Map<string, { sha: string; at: number }>()
@@ -113,7 +192,9 @@ export async function resolveGitHubCommitSha(apiBase: string, ref: string): Prom
   const key = `${apiBase}\n${ref}`
   const hit = refShaCache.get(key)
   if (hit && Date.now() - hit.at < REF_SHA_TTL_MS) return hit.sha
-  const res = await repoFetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
+  const repo = githubRepoFromApiBase(apiBase)
+  if (!repo) throw new Error("Invalid GitHub apiBase")
+  const res = await repoFetch(`${githubApiPath(repo, "commits", ref)}`, {
     headers: FETCH_HEADERS,
     ...NO_STORE,
   })
@@ -131,10 +212,10 @@ export async function listRepoDirectory(
   ref: string,
 ): Promise<RepoTreeItem[]> {
   if (isGitHubApiBase(apiBase)) {
-    const segment = dirPath
-      ? `/${dirPath.split("/").map(encodeURIComponent).join("/")}`
-      : ""
-    const url = `${apiBase}/contents${segment}?ref=${encodeURIComponent(ref)}`
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) throw new Error("Invalid GitHub apiBase")
+    const segments = dirPath.split("/").filter(Boolean)
+    const url = `${githubApiPath(repo, "contents", ...segments)}?ref=${encodeURIComponent(ref)}`
     const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
     if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url}`)
     const items = (await res.json()) as GitHubContentItem | GitHubContentItem[]
@@ -160,7 +241,9 @@ export async function fetchAllRepoBlobs(
   ref: string,
 ): Promise<RepoTreeItem[]> {
   if (isGitHubApiBase(apiBase)) {
-    const commitRes = await repoFetch(`${apiBase}/commits/${encodeURIComponent(ref)}`, {
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) throw new Error("Invalid GitHub apiBase")
+    const commitRes = await repoFetch(`${githubApiPath(repo, "commits", ref)}`, {
       headers: FETCH_HEADERS,
       ...NO_STORE,
     })
@@ -170,7 +253,7 @@ export async function fetchAllRepoBlobs(
     const commit = (await commitRes.json()) as { commit: { tree: { sha: string } } }
     const treeSha = commit.commit.tree.sha
 
-    const treeRes = await repoFetch(`${apiBase}/git/trees/${treeSha}?recursive=1`, {
+    const treeRes = await repoFetch(`${githubApiPath(repo, "git", "trees", treeSha)}?recursive=1`, {
       headers: FETCH_HEADERS,
       ...NO_STORE,
     })
@@ -242,9 +325,11 @@ export async function listRepoRefs(
   const refs: RepoRef[] = []
 
   if (isGitHubApiBase(apiBase)) {
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) throw new Error("Invalid GitHub apiBase")
     let page = 1
     while (page <= 10) {
-      const url = `${apiBase}/branches?per_page=100&page=${page}`
+      const url = `${githubApiPath(repo, "branches")}?per_page=100&page=${encodeURIComponent(String(page))}`
       const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
       if (!res.ok) throw new Error(`GitHub branches API ${res.status}`)
       const rows = (await res.json()) as Array<{ name?: string }>
@@ -257,7 +342,7 @@ export async function listRepoRefs(
     if (opts?.includeTags) {
       let tagPage = 1
       while (tagPage <= 5) {
-        const url = `${apiBase}/tags?per_page=100&page=${tagPage}`
+        const url = `${githubApiPath(repo, "tags")}?per_page=100&page=${encodeURIComponent(String(tagPage))}`
         const res = await repoFetch(url, { headers: FETCH_HEADERS, ...NO_STORE })
         if (!res.ok) break
         const rows = (await res.json()) as Array<{ name?: string }>

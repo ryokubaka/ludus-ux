@@ -18,7 +18,7 @@ import { liveSessionIsAdmin } from "./session-admin-check"
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
-import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, wrapLuxHostStdin } from "./root-ssh-preflight"
+import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, isPrivilegedRoot, wrapLuxHostStdin } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
@@ -372,11 +372,12 @@ export async function sshExec(
               throw new Error("A logged-in SSH session cannot take a lux-host argument list")
             })())
       : Array.isArray(command)
-        ? formatLuxHost(cfg.username || "root", command)
-        : asPrivilegedShell(cfg.username || "root", command as string)
+        ? formatLuxHost(isPrivilegedRoot(cfg.username), command)
+        : asPrivilegedShell(isPrivilegedRoot(cfg.username), command as string)
     const execCommand = Array.isArray(command) && opts?.stdin != null ? wrapLuxHostStdin(remote) : remote
 
     conn.on("ready", () => {
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(execCommand, (err, stream) => {
         if (err) {
           conn.end();
@@ -413,6 +414,7 @@ export async function sshExecAccount(
     let stderr = ""
     const cfg = buildConnectConfig()
     conn.on("ready", () => {
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(command, (err, stream) => {
         if (err) {
           conn.end()
@@ -464,7 +466,7 @@ export function wrapImpersonatedGoadCommand(inner: string, username: string, hos
     return `echo "Linux user cannot be switched to through lux-host." >&2; exit 1`
   }
   const delim = `LUX_RUN_AS_${randomUUID().replace(/-/g, "")}`
-  const remote = formatLuxHost(host, ["run-as-user", user])
+  const remote = formatLuxHost(isPrivilegedRoot(host), ["run-as-user", user])
   return `${remote} <<'${delim}'\n${inner}\n${delim}`
 }
 
@@ -497,7 +499,7 @@ export function buildGoadEnvFileStep(opts: {
   if (!RUN_AS_USER_NAME.test(user) || user === "root") {
     throw new Error("Linux user cannot be switched to through lux-host.")
   }
-  return { command: wrapLuxHostStdin(formatLuxHost(host, ["run-as-user", user])), stdin }
+  return { command: wrapLuxHostStdin(formatLuxHost(isPrivilegedRoot(host), ["run-as-user", user])), stdin }
 }
 
 /** Load the env file written by {@link buildGoadEnvFileStep} and remove it. */

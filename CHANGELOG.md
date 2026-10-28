@@ -20,6 +20,7 @@ Each bullet uses a single tag:
 **LUX**
 
 - [Security] **CodeQL sinks** — The pending-network snapshot write and the Docker socket request are marked on the lines code scanning reports. A marker on the call above those lines did not cover them, so those two alerts stayed open.
+- [Security] **Bash syntax check** — The test that syntax-checks a shell script writes it to a file and runs `bash -n` on that path. Paths from the environment are no longer a `bash -c` argument.
 - [Improve] **Build log** — Prerendering no longer prints a session failure for every page. `connection()` still opts those routes out of the static shell, and the source-sync loop and lux-host SSH stay off until the server is running.
 
 **GOAD**

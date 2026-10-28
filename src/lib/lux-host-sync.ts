@@ -1,6 +1,7 @@
 import { sshExec, sshExecAccount } from "@/lib/goad-ssh"
 import {
   buildLuxHostBinaryInstallShell,
+  luxHostBinaryInstallStdin,
   bundledLuxHostSha256,
   loadLuxHostScriptText,
   luxHostSelfUpdateStdin,
@@ -98,8 +99,8 @@ async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {
   const script = loadLuxHostScriptText()
   const helperB64 = Buffer.from(script).toString("base64")
   if (mode === "root" || mode === "sudo-n") {
-    const shell = buildLuxHostBinaryInstallShell(helperB64, mode)
-    const written = await sshExecAccount(shell)
+    const shell = buildLuxHostBinaryInstallShell(mode)
+    const written = await sshExecAccount(shell, { stdin: luxHostBinaryInstallStdin(helperB64) })
     if (written.code !== 0) {
       return { ok: false, updated: false, detail: written.stderr.trim() || "lux-host install failed" }
     }

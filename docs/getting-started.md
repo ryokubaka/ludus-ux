@@ -62,7 +62,7 @@ cd ludus-ux
 bash scripts/quickstart.sh
 ```
 
-> The script **exits early** if `docker` or docker compose is missing, with hints for Linux and Windows installation.
+> The script **exits early** if `docker` or docker compose is missing, with hints for Linux and Windows installation. It asks whether Ludus uses a self-signed certificate and, by default, sets `LUDUS_TLS_INSECURE=true` for Ludus, PocketBase, and Proxmox only. After the host key is authorized, it runs `chown` on `./ssh/id_rsa` to the `LUX_UID`:`LUX_GID` pair in `.env` (default 64532:64532) when that uid is not already a local account, because the container mount is read-only and the app no longer changes the key's owner.
 
 ## Manual setup
 
@@ -80,7 +80,8 @@ cp .env.example .env
    | `LUDUS_SSH_HOST` | Ludus server hostname or IP (SSH, GOAD, and default Ludus API URLs) |
    | `APP_SECRET` | Long random secret for session encryption (`openssl rand -hex 32`) |
    | `LUDUS_ROOT_API_KEY` | Ludus v2 root API key (admin users/ranges) — from `/opt/ludus/install/root-api-key` on the server |
-   | Host SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** `PROXMOX_SSH_PASSWORD`, for `PROXMOX_SSH_USER`. See [SSH and authentication](ssh-and-auth.md). In-browser noVNC uses the logged-in user's PAM password separately. |
+   | Host SSH | Private key under `SSH_KEY_PATH` (default `./ssh/id_rsa`) **or** `PROXMOX_SSH_PASSWORD`, for `PROXMOX_SSH_USER`. The key must be readable by container uid `LUX_UID` (default **64532**). See [SSH and authentication](ssh-and-auth.md). In-browser noVNC uses the logged-in user's PAM password separately. |
+   | `LUDUS_TLS_INSECURE` | Set `true` when Ludus or Proxmox uses a self-signed certificate. Only those hosts skip verification. When the key is missing, certificates are verified. |
 
 > As of **0.9.5**, the `PROXMOX_SSH_PASSWORD` value saved through Settings is encrypted in SQLite with `APP_SECRET`. Environment variables are still environment variables; protect `.env`, backups, and Docker host access accordingly.
 
@@ -119,6 +120,14 @@ chmod 600 ssh/id_rsa
 scp -P 22 ludus@<ludus-host>:/home/ludus/.ssh/id_rsa ssh/id_rsa
 chmod 600 ssh/id_rsa
 ```
+
+   `./ssh` is mounted read-only. The container runs as `LUX_UID`:`LUX_GID` from `.env` (default **64532**:**64532**) and does not change the key's owner. After the copy, if `getent passwd 64532` prints nothing:
+
+```bash
+sudo chown 64532:64532 ssh/id_rsa
+```
+
+   Use the uid and gid from `.env` in that command. Quickstart does this after it has used the key to install the public half. If that uid is already an account on the LUX host, do not give it the key. Set another `LUX_UID` and `LUX_GID` in `.env` and rebuild with `docker compose up -d --build`.
 
 4. (Optional) Add your own TLS cert + key for the **nginx** edge proxy: place `cert.pem` and `key.pem` in **`docker/nginx/certificates/`** before the first start. If missing, the nginx container generates a self-signed pair on first boot:
 
@@ -167,6 +176,11 @@ Use this when you already have a **git clone** of the repo on the Docker host. T
 5. Runs `docker compose up -d --build` (or `docker-compose` if that is what you use).
 
 **Requirements:** `git`, `docker`, and Docker Compose on `PATH`.
+
+**Upgrading from 1.4.5 or earlier to 1.5.0**
+
+- `LUDUS_TLS_INSECURE`: before 1.5.0 a `.env` without this key skipped certificate checks for Ludus, PocketBase, and Proxmox. It now verifies them. If Ludus still uses its default self-signed certificate, add `LUDUS_TLS_INSECURE=true` to `.env` and run `docker compose up -d`. Until then, login reports that the key is not set.
+- SSH key owner: the image user moved from uid 1001 to `LUX_UID` (default 64532). A key that user cannot read is copied at start into an in-memory `/run/lux-ssh`, so key auth keeps working and the host file is not changed. To use the mounted file directly, `chown` it to `LUX_UID`:`LUX_GID` as in step 3 of the install.
 
 ```bash
 cd ludus-ux

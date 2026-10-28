@@ -38,9 +38,12 @@ export async function installLudushoundCollectionFromTarball(opts: {
   const tarball = `${root}/Collections/${LUDUSHOUND_COLLECTION_TARBALL}`
   const user = (opts.linuxUser || opts.creds?.username || "").trim()
 
+  // The key arrives on stdin. In the command string it would be the remote
+  // shell's argv, readable by any host user with ps.
   const inner = [
     `test -f ${shellQuote(tarball)} || { echo "MISSING_TARBALL ${tarball}"; exit 2; }`,
-    `export LUDUS_API_KEY=${shellQuote(opts.apiKey)}`,
+    `IFS= read -r LUDUS_API_KEY`,
+    `export LUDUS_API_KEY`,
     `ludus ansible collection add ${shellQuote(tarball)}`,
     `echo INSTALL_OK`,
   ].join(" && ")
@@ -50,7 +53,9 @@ export async function installLudushoundCollectionFromTarball(opts: {
     : inner
 
   // Prefer root SSH so sudo -u works when admin impersonates
-  const { stdout, stderr, code } = await sshExec(cmd, user ? undefined : opts.creds)
+  const { stdout, stderr, code } = await sshExec(cmd, user ? undefined : opts.creds, {
+    stdin: `${opts.apiKey}\n`,
+  })
 
   if (code !== 0 || !stdout.includes("INSTALL_OK")) {
     if (/already installed/i.test(stdout + stderr)) {

@@ -10,6 +10,7 @@ import { resolveGlobalBlueprintServiceApiKey } from "@/lib/blueprint-global-inst
 import { ludusRequest } from "@/lib/ludus-client"
 import type { ResolvedSession } from "@/lib/session"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 import type { NextRequest } from "next/server"
 
 export interface BlueprintDeleteAttempt {
@@ -80,17 +81,18 @@ export async function deleteBlueprintsOnLudus(
   blueprintId: string,
   aliasIds: string[] = [],
 ): Promise<{ attempts: BlueprintDeleteAttempt[]; anyOk: boolean }> {
+  const isAdmin = await liveSessionIsAdmin(session)
   const viewerKey =
-    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+    (await resolveAdminImpersonationFromRequest(session, request)).apiKey || session.apiKey
   const serviceKey = resolveGlobalBlueprintServiceApiKey(session)
   const isSource = isSourceCatalogBlueprintId(blueprintId)
   const fallbackKeys =
-    session.isAdmin && isSource && serviceKey
+    isAdmin && isSource && serviceKey
       ? uniqueIds([serviceKey, session.apiKey])
       : []
 
   let targetIds = uniqueIds([blueprintId, ...aliasIds])
-  if (session.isAdmin && isSource) {
+  if (isAdmin && isSource) {
     const slug = blueprintTypeKey({ id: blueprintId, blueprintID: blueprintId })
     if (slug && serviceKey) {
       const discovered = await listBlueprintIdsForSlug(serviceKey, slug)

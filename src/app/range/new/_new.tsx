@@ -34,6 +34,7 @@ import {
   Shield,
   Package,
   RotateCcw,
+  Terminal,
 } from "lucide-react"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
@@ -71,17 +72,16 @@ import {
   resolveDeployOnlyRoles,
 } from "@/lib/ludus-deploy-only-roles"
 import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
+import { NewGoadInstancePageClient } from "@/app/goad/new/_new"
 
-// ── Step arrays ────────────────────────────────────────────────────────────────
-// The step indicator switches between these two arrays the moment the user picks
-// their config method, making the divergent paths immediately obvious.
-const WIZARD_STEPS = ["Select Range", "Config Method", "Configure VMs", "Domain Setup", "Network Rules", "Review & Deploy"]
-const YAML_STEPS   = ["Select Range", "Config Method", "YAML Config", "Review & Deploy"]
-const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "Review & Deploy"]
+// Config Method is first. Target Range follows for Wizard, YAML, and Blueprint.
+// From GOAD keeps the GOAD wizard's own steps, including its range choice.
+const WIZARD_STEPS = ["Config Method", "Select Range", "Configure VMs", "Domain Setup", "Network Rules", "Review & Deploy"]
+const YAML_STEPS   = ["Config Method", "Select Range", "YAML Config", "Review & Deploy"]
+const BLUEPRINT_STEPS = ["Config Method", "Select Range", "Choose Blueprint", "Review & Deploy"]
 
-// ── Step → path mapping ────────────────────────────────────────────────────────
-// step 0 : Select Range          (shared)
-// step 1 : Config Method         (shared — user picks Wizard or YAML)
+// step 0 : Config Method
+// step 1 : Target Range (Wizard, YAML, Blueprint)
 //
 // Wizard path:
 // step 2 : Configure VMs
@@ -92,6 +92,12 @@ const BLUEPRINT_STEPS = ["Select Range", "Config Method", "Choose Blueprint", "R
 // YAML path:
 // step 2 : YAML Config
 // step 3 : Review & Deploy
+//
+// Blueprint path:
+// step 2 : Choose Blueprint
+// step 3 : Review & Deploy
+//
+// GOAD path: the embedded wizard owns Select Lab, Extensions, Range, Network, Review.
 
 export function NewRangePageClient() {
   const router = useRouter()
@@ -108,15 +114,24 @@ export function NewRangePageClient() {
     select: (data) => (data ? data.result || data.version || "" : ""),
     staleTime: STALE.long,
   })
+  const { data: goadEnabled = true } = useQuery({
+    queryKey: ["settings", "goadEnabled", scopeTag],
+    queryFn: async () => {
+      const res = await fetch("/api/settings")
+      if (!res.ok) return true
+      const body = (await res.json()) as { goadEnabled?: boolean }
+      return body.goadEnabled !== false
+    },
+    staleTime: STALE.long,
+  })
   const [step, setStep] = useState(0)
   const [showAllBlueprints, setShowAllBlueprints] = useState(false)
   const [showAllTemplates, setShowAllTemplates] = useState(false)
 
-  // ── Config method (chosen on step 1) ────────────────────────────────────────
-  // null = not yet chosen; "wizard" or "yaml" after step 1 is committed.
-  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | "blueprint" | null>(null)
+  // ── Config method (chosen on step 0) ────────────────────────────────────────
+  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | "blueprint" | "goad" | null>(null)
 
-  // ── Step 0: Range selection ──────────────────────────────────────────────────
+  // ── Step 1: Range selection ──────────────────────────────────────────────────
   const [mode, setMode] = useState<"existing" | "new">("existing")
   const [rangeName, setRangeName] = useState("")
   const [rangeId, setRangeId] = useState("")
@@ -384,7 +399,7 @@ export function NewRangePageClient() {
       console.warn("[range-new] failed to load existing config:", (err as Error).message)
     }
     setLoadingExistingConfig(false)
-    setStep(1)
+    setStep(2)
   }
 
   const handleCreateRange = async () => {
@@ -408,19 +423,21 @@ export function NewRangePageClient() {
       setRangeCreated(true)
       await refreshRanges()
       toast({ title: "Range created", description: `Range ${rangeId} created successfully` })
-      setStep(1)
+      setStep(2)
     } catch (err) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" })
     }
     setCreating(false)
   }
 
-  // ── Step 1 → Step 2: config method picker ────────────────────────────────────
-
-  const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint") => {
+  const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint" | "goad") => {
     setConfigMethod(method)
     setShowAdvancedDeployOptions(false)
-    setStep(2)
+    if (method === "goad") {
+      setStep(0)
+      return
+    }
+    setStep(1)
   }
 
   const goToWizardReview = () => {
@@ -747,7 +764,14 @@ export function NewRangePageClient() {
         </div>
       </div>
 
-      {/* Step indicator — updates immediately when configMethod is chosen */}
+      {configMethod === "goad" ? (
+        <div className="flex items-center gap-2">
+          <div className="flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold bg-status-success/20 text-status-success border border-green-500/40">
+            <Check className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-sm text-muted-foreground">Config Method</span>
+        </div>
+      ) : (
       <div className="flex items-center gap-2 flex-wrap">
         {displaySteps.map((s, i) => (
           <div key={s} className="flex items-center gap-2">
@@ -764,9 +788,20 @@ export function NewRangePageClient() {
           </div>
         ))}
       </div>
+      )}
 
-      {/* ── Step 0: Select or Create Range ──────────────────────────────────── */}
-      {step === 0 && (
+      {configMethod === "goad" && (
+        <NewGoadInstancePageClient
+          embedded
+          onBack={() => {
+            setConfigMethod(null)
+            setStep(0)
+          }}
+        />
+      )}
+
+      {/* ── Step 1: Select or Create Range ──────────────────────────────────── */}
+      {configMethod !== "goad" && step === 1 && (
         <Card>
           <CardHeader><CardTitle className="text-sm">Target Range</CardTitle></CardHeader>
           <CardContent className="space-y-4">
@@ -831,7 +866,10 @@ export function NewRangePageClient() {
                     })}
                   </div>
                 )}
-                <div className="flex justify-end">
+                <div className="flex justify-between">
+                  <Button variant="ghost" onClick={() => setStep(0)}>
+                    <ChevronLeft className="h-4 w-4" /> Back
+                  </Button>
                   <Button onClick={handleUseExisting} disabled={!selectedExistingRange || loadingExistingConfig}>
                     {loadingExistingConfig
                       ? <><Loader2 className="h-4 w-4 animate-spin" /> Loading config…</>
@@ -891,9 +929,12 @@ export function NewRangePageClient() {
                     )}
                   </div>
                 )}
-                <div className="flex justify-end">
+                <div className="flex justify-between">
+                  <Button variant="ghost" onClick={() => setStep(0)} disabled={creating}>
+                    <ChevronLeft className="h-4 w-4" /> Back
+                  </Button>
                   {rangeCreated ? (
-                    <Button onClick={() => setStep(1)}>
+                    <Button onClick={() => setStep(2)}>
                       Next <ChevronRight className="h-4 w-4" />
                     </Button>
                   ) : (
@@ -909,15 +950,14 @@ export function NewRangePageClient() {
         </Card>
       )}
 
-      {/* ── Step 1: Config Method ─────────────────────────────────────────────── */}
-      {step === 1 && (
+      {/* ── Step 0: Config Method ─────────────────────────────────────────────── */}
+      {step === 0 && configMethod !== "goad" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            How would you like to configure{" "}
-            <code className="font-mono text-primary text-xs">{effectiveRangeId || "your range"}</code>?
+            How do you want to configure this range?
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className={cn("grid grid-cols-1 gap-4", goadEnabled ? "md:grid-cols-2 xl:grid-cols-4" : "md:grid-cols-3")}>
             {/* Wizard option */}
             <button
               onClick={() => pickConfigMethod("wizard")}
@@ -945,9 +985,7 @@ export function NewRangePageClient() {
                 </div>
                 <div>
                   <p className="font-semibold text-sm">YAML Config</p>
-                  <p className="text-xs text-muted-foreground">
-                    {mode === "existing" && selectedExistingRange ? "Current config is loaded" : "Paste YAML"}
-                  </p>
+                  <p className="text-xs text-muted-foreground">Paste or edit the range YAML</p>
                 </div>
               </div>
             </button>
@@ -967,12 +1005,23 @@ export function NewRangePageClient() {
                 </div>
               </div>
             </button>
-          </div>
-
-          <div className="flex justify-start">
-            <Button variant="ghost" onClick={() => setStep(0)}>
-              <ChevronLeft className="h-4 w-4" /> Back
-            </Button>
+            {goadEnabled && (
+            <button
+              type="button"
+              onClick={() => pickConfigMethod("goad")}
+              className="text-left p-5 rounded-xl border-2 border-border hover:border-amber-500/60 hover:bg-amber-500/5 transition-all space-y-3 group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-amber-500/20 transition-colors">
+                  <Terminal className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">From GOAD</p>
+                  <p className="text-xs text-muted-foreground">Deploy a Game of Active Directory lab</p>
+                </div>
+              </div>
+            </button>
+            )}
           </div>
         </div>
       )}

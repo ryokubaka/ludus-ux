@@ -7,8 +7,8 @@ const gate = vi.hoisted(() => ({
   plans: [] as { owner?: string; callerIsAdmin?: boolean; hostSshUser?: string }[],
 }))
 
-vi.mock("@/lib/session", () => ({
-  getSessionFromRequest: vi.fn(),
+vi.mock("@/lib/require-admin", () => ({
+  requireAdmin: vi.fn(),
 }))
 
 vi.mock("@/lib/goad-task-store", () => ({
@@ -80,7 +80,7 @@ vi.mock("@/lib/ludus-user-from-profile", () => ({
 }))
 
 import { POST } from "./route"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad-ssh"
 import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
 
@@ -100,7 +100,7 @@ beforeEach(() => {
   gate.plans = []
   vi.clearAllMocks()
   delete process.env.GOAD_SSH_USER
-  vi.mocked(getSessionFromRequest).mockResolvedValue({ isAdmin: true, username: "alice" } as never)
+  vi.mocked(requireAdmin).mockResolvedValue({ ok: true, session: { isAdmin: true, username: "alice" } } as never)
   vi.mocked(listGoadInstances).mockResolvedValue([
     { instanceId: "inst-1", ownerUserId: "ludus" },
   ] as never)
@@ -175,7 +175,10 @@ describe("POST /api/goad/instances/reassign", () => {
 
   it("rejects a non-admin before any chown", async () => {
     gate.tasks = []
-    vi.mocked(getSessionFromRequest).mockResolvedValue({ isAdmin: false, username: "bob" } as never)
+    vi.mocked(requireAdmin).mockResolvedValue({
+      ok: false,
+      response: Response.json({ error: "Admin access required" }, { status: 403 }),
+    } as never)
     const res = await POST(post({ instanceId: "inst-1", targetUserId: "alice", rangeId: "alice-range" }))
     expect(res.status).toBe(403)
     expect(chownGoadInstance).not.toHaveBeenCalled()

@@ -141,7 +141,7 @@ export async function shareBlueprintOnLudus(
   groupNames: string[] = [],
 ): Promise<BlueprintShareOutcome> {
   const viewerKey =
-    resolveAdminImpersonationFromRequest(session, request).apiKey || session.apiKey
+    (await resolveAdminImpersonationFromRequest(session, request)).apiKey || session.apiKey
   const serviceKey = resolveGlobalBlueprintServiceApiKey(session)
   const users = uniqueIds(userIDs)
   const groups = uniqueNames(groupNames)

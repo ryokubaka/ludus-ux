@@ -5,10 +5,10 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { pruneLuxRangeLogMarkers, listLuxTestingEvents, listLuxDeployTagRuns } from "@/lib/range-log-markers-store"
 
-function getEffective(
+async function getEffective(
   request: NextRequest,
   session: {
     username: string
@@ -19,7 +19,7 @@ function getEffective(
     impersonationSshLogin?: string
   },
 ) {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   return {
     effectiveUsername:
       imp.apiKey
@@ -35,13 +35,14 @@ export async function GET(request: NextRequest) {
     console.warn("[log-enrichment] pruneLuxRangeLogMarkers:", (err as Error).message)
   }
 
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")
   if (!rangeId?.trim()) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const { effectiveUsername } = getEffective(request, session)
+  const { effectiveUsername } = await getEffective(request, session)
 
   const testingEvents = listLuxTestingEvents(rangeId.trim(), effectiveUsername, 120)
   const deployTagRuns = listLuxDeployTagRuns(rangeId.trim(), effectiveUsername, 200)

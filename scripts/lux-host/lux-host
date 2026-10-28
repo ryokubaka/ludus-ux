@@ -974,9 +974,13 @@ case "$op" in
     ;;
   run-as-user)
     [[ $# -eq 1 ]] || die "run-as-user"
-    is_login "$1" || die "bad user"
-    [[ "$1" != "root" ]] || die "refusing root"
-    id -u "$1" >/dev/null 2>&1 || die "no such user"
+    reject_privileged_account "$1"
+    groups=$(id -nG "$1" 2>/dev/null || true)
+    for group in $groups; do
+      case "$group" in
+        sudo|wheel|docker|adm) die "refusing privileged group $group" ;;
+      esac
+    done
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' EXIT
     head -c 524289 > "$tmp"
@@ -1200,16 +1204,20 @@ case "$op" in
     rm -f "/tmp/lux-host-b64/$1"
     ;;
   ludus-template-add)
-    [[ $# -eq 2 ]] || die "template-add"
+    [[ $# -eq 1 ]] || die "template-add"
     assert_packer_path "$1"
-    [[ "$2" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
-    env LUDUS_VERSION=2 LUDUS_API_KEY="$2" ludus templates add -d "$1"
+    IFS= read -r key || die "api key"
+    key="${key//$'\r'/}"
+    [[ "$key" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
+    LUDUS_VERSION=2 LUDUS_API_KEY="$key" ludus templates add -d "$1"
     ;;
   ludus-template-rm)
-    [[ $# -eq 2 ]] || die "template-rm"
+    [[ $# -eq 1 ]] || die "template-rm"
     [[ "$1" =~ ^[A-Za-z0-9._+-]{1,128}$ ]] || die "name"
-    [[ "$2" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
-    env LUDUS_VERSION=2 LUDUS_API_KEY="$2" ludus templates rm -n "$1" || true
+    IFS= read -r key || die "api key"
+    key="${key//$'\r'/}"
+    [[ "$key" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
+    LUDUS_VERSION=2 LUDUS_API_KEY="$key" ludus templates rm -n "$1" || true
     ;;
   template-purge)
     [[ $# -ge 1 && $# -le 8 ]] || die "name"
@@ -1634,10 +1642,23 @@ PY
     list_origin_release_refs "$1"
     ;;
   upgrade-start)
-    [[ $# -eq 2 ]] || die "upgrade-start"
+    [[ $# -eq 2 || $# -eq 3 || $# -eq 4 ]] || die "upgrade-start"
     is_abs_path "$1" || die "repo"
     [[ "$2" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || die "tag"
     [[ -f "$1/scripts/upgrade.sh" && -f "$1/docker-compose.yml" ]] || die "not a lux checkout"
+    trusted_key=""
+    trusted_fpr=""
+    if [[ $# -ge 3 ]]; then
+      trusted_key="$3"
+      [[ "$trusted_key" =~ ^/[A-Za-z0-9._/-]+$ && "$trusted_key" != *..* ]] || die "trusted key"
+    fi
+    if [[ $# -eq 4 ]]; then
+      trusted_fpr="$4"
+      [[ "$trusted_fpr" =~ ^[A-Fa-f0-9]{40}([A-Fa-f0-9]{24})?$ ]] || die "fingerprint"
+    fi
+    trusted_env=""
+    [[ -n "$trusted_key" ]] && trusted_env="$trusted_env --setenv=LUX_UPGRADE_TRUSTED_KEY=$trusted_key"
+    [[ -n "$trusted_fpr" ]] && trusted_env="$trusted_env --setenv=LUX_UPGRADE_TRUSTED_FPR=$trusted_fpr"
     select_upgrade_script "$1"
     repo="$1"
     tag="$2"
@@ -1648,10 +1669,12 @@ PY
     printf '%s\n' "=== LUX switch to $tag started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" >"$log"
     command -v systemd-run >/dev/null 2>&1 || die "systemd-run not found"
     if [[ "$UPGRADE_SCRIPT_IS_TEMP" -eq 1 ]]; then
-      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 --setenv=LUX_UPGRADE_SCRIPT="$UPGRADE_SCRIPT" \
+      # shellcheck disable=SC2086
+      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 --setenv=LUX_UPGRADE_SCRIPT="$UPGRADE_SCRIPT" $trusted_env \
         /bin/bash -c "bash \"\$LUX_UPGRADE_SCRIPT\" \"\$TAG\" >> \"\$LOG\" 2>&1; ec=\$?; rm -f \"\$LUX_UPGRADE_SCRIPT\"; echo \"LUX_UPGRADE_EXIT:\$ec\" >> \"\$LOG\""
     else
-      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 \
+      # shellcheck disable=SC2086
+      systemd-run --collect --setenv=REPO="$repo" --setenv=TAG="$tag" --setenv=LOG="$log" --setenv=LUX_UPGRADE_YES=1 $trusted_env \
         /bin/bash -c "bash \"\$REPO/scripts/upgrade.sh\" \"\$TAG\" >> \"\$LOG\" 2>&1; echo \"LUX_UPGRADE_EXIT:\$?\" >> \"\$LOG\""
     fi
     echo started

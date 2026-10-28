@@ -16,12 +16,13 @@
  */
 
 import { getSettings } from "./settings-store"
+import { ludusFetch } from "./ludus-fetch"
 import type { RangeObject, UserObject, RangeState } from "./types"
 
 const PB_EMAIL = "root@ludus.internal"
 
 function ludusHttpsFetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  return fetch(input, init)
+  return ludusFetch(input, init)
 }
 
 /**

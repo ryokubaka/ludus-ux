@@ -14,10 +14,11 @@ import { randomUUID } from "crypto"
 import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
 import type { GoadInstance, GoadCatalog } from "./types"
 import { resolveAdminImpersonationFromRequest } from "./admin-impersonation-request"
+import { liveSessionIsAdmin } from "./session-admin-check"
 import type { SessionData } from "./session"
 import { getSettings } from "./settings-store"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "./root-ssh-auth"
-import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, wrapLuxHostStdin } from "./root-ssh-preflight"
+import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, isPrivilegedRoot, wrapLuxHostStdin } from "./root-ssh-preflight"
 import { filterLudusDeployTags } from "./ludus-deploy-tags"
 import { ensureUserDefinedRolesTag } from "./ludus-deploy-only-roles"
 import { stripAnsi } from "./strip-ansi"
@@ -30,6 +31,8 @@ import { ensureAnsibleHomeLayoutAsRoot } from "./ansible-home-repair"
 import { resolveGoadPath, resolveLudusInstallPath } from "./runtime-paths"
 import { stripLuxGoadArgsMeta } from "./lux-goad-args-meta"
 import { goadLogShowsFailure, goadLogShowsInterrupt } from "./goad-task-outcome"
+import { attachSshHostVerifier, explainSshHostKeyError } from "./ssh-host-key"
+import { extractGoadInstanceIdFromOutput } from "./goad-wizard-args"
 
 // ── ludus CLI wrapper script (decoded on the remote host) ─────────────────
 //
@@ -369,11 +372,12 @@ export async function sshExec(
               throw new Error("A logged-in SSH session cannot take a lux-host argument list")
             })())
       : Array.isArray(command)
-        ? formatLuxHost(cfg.username || "root", command)
-        : asPrivilegedShell(cfg.username || "root", command as string)
+        ? formatLuxHost(isPrivilegedRoot(cfg.username), command)
+        : asPrivilegedShell(isPrivilegedRoot(cfg.username), command as string)
     const execCommand = Array.isArray(command) && opts?.stdin != null ? wrapLuxHostStdin(remote) : remote
 
     conn.on("ready", () => {
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(execCommand, (err, stream) => {
         if (err) {
           conn.end();
@@ -392,10 +396,10 @@ export async function sshExec(
     });
 
     conn.on("error", (err) => {
-      reject(new Error(`SSH connection error: ${err.message}`));
+      reject(new Error(`SSH connection error: ${explainSshHostKeyError(err.message, cfg.host, cfg.port)}`));
     });
 
-    conn.connect(cfg);
+    conn.connect(attachSshHostVerifier(cfg));
   });
 }
 
@@ -410,6 +414,7 @@ export async function sshExecAccount(
     let stderr = ""
     const cfg = buildConnectConfig()
     conn.on("ready", () => {
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(command, (err, stream) => {
         if (err) {
           conn.end()
@@ -425,9 +430,9 @@ export async function sshExecAccount(
       })
     })
     conn.on("error", (err) => {
-      reject(new Error(`SSH connection error: ${err.message}`))
+      reject(new Error(`SSH connection error: ${explainSshHostKeyError(err.message, cfg.host, cfg.port)}`))
     })
-    conn.connect(cfg)
+    conn.connect(attachSshHostVerifier(cfg))
   })
 }
 
@@ -461,23 +466,61 @@ export function wrapImpersonatedGoadCommand(inner: string, username: string, hos
     return `echo "Linux user cannot be switched to through lux-host." >&2; exit 1`
   }
   const delim = `LUX_RUN_AS_${randomUUID().replace(/-/g, "")}`
-  const remote = formatLuxHost(host, ["run-as-user", user])
+  const remote = formatLuxHost(isPrivilegedRoot(host), ["run-as-user", user])
   return `${remote} <<'${delim}'\n${inner}\n${delim}`
+}
+
+export const GOAD_ENV_FILE_PATTERN = /^\/tmp\/lux-goad-env\.[A-Za-z0-9]+$/
+
+/**
+ * Write `export ...` lines to a fresh 0600 file owned by the user GOAD runs as,
+ * and print its path. The lines travel on stdin: a command string is the argv
+ * of the remote shell, which any user on the Ludus host can read with ps.
+ */
+export function buildGoadEnvFileStep(opts: {
+  exportLines: readonly string[]
+  impersonateAs?: string
+  hostUser: string
+}): { command: string; stdin: string } {
+  const delim = `LUX_ENV_${randomUUID().replace(/-/g, "")}`
+  const stdin = [
+    "umask 077",
+    "f=$(mktemp /tmp/lux-goad-env.XXXXXXXX) || exit 1",
+    `cat > "$f" <<'${delim}'`,
+    ...opts.exportLines,
+    delim,
+    `printf '%s\\n' "$f"`,
+    "",
+  ].join("\n")
+  const user = opts.impersonateAs?.trim()
+  if (!user) return { command: "bash -s", stdin }
+  const host = opts.hostUser.trim() || "root"
+  if (host === "root") return { command: `sudo -H -u '${user.replace(/'/g, "")}' bash -s`, stdin }
+  if (!RUN_AS_USER_NAME.test(user) || user === "root") {
+    throw new Error("Linux user cannot be switched to through lux-host.")
+  }
+  return { command: wrapLuxHostStdin(formatLuxHost(isPrivilegedRoot(host), ["run-as-user", user])), stdin }
+}
+
+/** Load the env file written by {@link buildGoadEnvFileStep} and remove it. */
+export function sourceGoadEnvFile(file: string): string {
+  if (!GOAD_ENV_FILE_PATTERN.test(file)) throw new Error("Unexpected GOAD env file path")
+  return `. '${file}'; rm -f '${file}'`
 }
 
 /**
  * Linux account that owns `workspace/<instance>/`. Impersonation wins.
  * The host SSH account (PROXMOX_SSH_USER) is not this user after the move off root.
  */
-export function workspaceOwnerLinuxUser(
+export async function workspaceOwnerLinuxUser(
   session: Pick<
     SessionData,
-    "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
-  > & { impersonationApiKey?: string },
+    "sessionId" | "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+  > & { apiKey?: string; impersonationApiKey?: string },
   request: NextRequest,
-): string | null {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
-  if (session.isAdmin && imp.apiKey) {
+): Promise<string | null> {
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
+  if (imp.apiKey) {
     const asUser = (imp.sshLogin || imp.ludusPrincipal || "").trim()
     if (asUser) return asUser
   }
@@ -581,20 +624,21 @@ export function buildWorkspaceSshExecPlan(opts: {
  * Files there are owned by the current Ludus user, or the impersonated user.
  * Do not run the script as PROXMOX_SSH_USER.
  */
-export function workspaceSshExecPlan(
+export async function workspaceSshExecPlan(
   request: NextRequest,
   session: Pick<
     SessionData,
-    "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+    "sessionId" | "isAdmin" | "username" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
   > & {
+    apiKey?: string
     sshPassword?: string
     impersonationApiKey?: string
   },
   innerCommand: string,
   userCreds: SSHCreds | undefined,
   workspaceDir?: string,
-): WorkspaceSshPlan {
-  const owner = workspaceOwnerLinuxUser(session, request)
+): Promise<WorkspaceSshPlan> {
+  const owner = await workspaceOwnerLinuxUser(session, request)
   if (!owner) {
     return {
       ok: false,
@@ -613,7 +657,7 @@ export function workspaceSshExecPlan(
     innerCommand,
     ownerSshCreds,
     privilegedSshConfigured: isRootProxmoxSshConfigured(settings),
-    callerIsAdmin: session.isAdmin === true,
+    callerIsAdmin: await liveSessionIsAdmin(session),
     hostSshUser: effectivePrivilegedSshUser(settings.proxmoxSshUser),
     workspaceDir,
   })
@@ -633,15 +677,12 @@ export async function sshExecAsWorkspaceUser(
   userCreds: SSHCreds | undefined,
   workspaceDir?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const plan = workspaceSshExecPlan(request, session, command, userCreds, workspaceDir)
+  const plan = await workspaceSshExecPlan(request, session, command, userCreds, workspaceDir)
   if (!plan.ok) {
     throw new Error(plan.error)
   }
   return runWorkspaceSshPlan(plan)
 }
-
-/** GOAD prints this after create_empty / load_instance. */
-const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
 
 type ReplExtensionSplit = {
   phase1Parts: string[]
@@ -713,24 +754,6 @@ function extractUseInstanceIdFromReplParts(parts: string[]): string | null {
     if (m) return m[1]
   }
   return null
-}
-
-/** Prefer last `[+] Instance … loaded` — phase 1 often prints default first, then the new instance. */
-function extractInstanceIdFromGoadOutput(blob: string): string | null {
-  const re = new RegExp(GOAD_INSTANCE_LOADED_RE.source, "g")
-  let lastLoaded: string | null = null
-  let m: RegExpExecArray | null
-  while ((m = re.exec(blob)) !== null) {
-    if (m[1]) lastLoaded = m[1]
-  }
-  if (lastLoaded) return lastLoaded
-
-  const rowRe = /\|\s*>\s*([a-f0-9]+-[\w-]+-ludus)\s*\|/gi
-  let lastRow: string | null = null
-  for (const row of blob.matchAll(rowRe)) {
-    if (row[1]) lastRow = row[1]
-  }
-  return lastRow
 }
 
 /**
@@ -890,7 +913,6 @@ export async function streamGoadCommand(
       : []),
     ...proxmoxEnvExports,
   ]
-  const pyEnv = pyEnvParts.join(" ")
 
   // ── Pre-flight: ensure workspace is writable (as root, separate SSH) ────────
   //
@@ -1032,23 +1054,28 @@ export async function streamGoadCommand(
     ...(ludusWrapSetup ? [ludusWrapSetup] : []),
   ].join("; ");
 
-  // ── pyEnv as export statements ───────────────────────────────────────────────
+  // ── pyEnv as an exported env file ────────────────────────────────────────────
   //
   // The pyEnv vars are needed by goad.sh, python3 goad.py, and all subprocesses
-  // (including the ludus CLI called by GOAD's provide command).
+  // (including the ludus CLI called by GOAD's provide command). They are
+  // exported before the pipeline, because `VAR=value printf ... | bash goad.sh`
+  // would set them only for printf.
   //
-  // For the non-REPL path `${pyEnv} bash goad.sh` works fine — env var prefixes
-  // are inherited by the named command and all its children.
-  //
-  // For the REPL path the command is `${pyEnv} printf '...' | bash goad.sh`.
-  // In bash, `VAR=value cmd1 | cmd2` only sets VAR for cmd1 (printf) — NOT for
-  // cmd2 (bash goad.sh).  printf doesn't use these vars, so GOAD never sees
-  // LUDUS_API_KEY and falls back to its config file (which may be stale/wrong).
-  //
-  // Solution: export the vars into the shell's environment BEFORE the pipeline
-  // runs.  Exported vars are inherited by every subsequent command including the
-  // right-hand side of pipes.
-  const pyEnvExports = pyEnvParts.map((kv) => `export ${kv}`).join("; ")
+  // LUDUS_API_KEY and the Proxmox token must not appear in the pty command:
+  // that string is the remote shell's argv, readable with ps for the whole
+  // deploy. A non-pty exec first writes them to a 0600 file from stdin, and
+  // the pty command sources and removes that file.
+  let envFileStep: { command: string; stdin: string }
+  try {
+    envFileStep = buildGoadEnvFileStep({
+      exportLines: pyEnvParts.map((kv) => `export ${kv}`),
+      impersonateAs: impersonateAs?.username,
+      hostUser: effectivePrivilegedSshUser(getSettings().proxmoxSshUser),
+    })
+  } catch (err) {
+    onError(err instanceof Error ? err : new Error(String(err)))
+    return () => {}
+  }
 
   // Preserve goad.sh exit status — cleanup/`|| true` must not wipe failures (EXIT 0 bug).
   const wizardCleanupCmd = luxWizardConfigPath
@@ -1090,15 +1117,15 @@ export async function streamGoadCommand(
   // Phase 2 runs only when phase 1 exits 0 (gates Install Extension Ansible on
   // successful provide without a second LUX task).
   let replSplitTail: { extensionLines: string[]; allParts: string[] } | null = null
-  let innerCommand: string
+  let buildInnerCommand: (envFile: string) => string
   if (goadArgs.startsWith("--repl ")) {
     const rawCmds = goadArgs.slice(7).replace(/^"|"$/g, "")
     const split = trySplitReplForExtensionProvision(rawCmds)
     if (split) {
       const esc1 = [...split.phase1Parts, "exit"].join("\n").replace(/'/g, "'\\''")
-      innerCommand = [
+      buildInnerCommand = (envFile) => [
         setupPreamble,
-        pyEnvExports,
+        sourceGoadEnvFile(envFile),
         `cd ${goadPath}`,
         afterGoad(`printf '${esc1}\n' | bash '${goadPath}/goad.sh'`, { cleanup: false }),
       ].join("; ")
@@ -1106,21 +1133,21 @@ export async function streamGoadCommand(
     } else {
       const stdinCmds = rawCmds.split(";").join("\n")
       const escaped = stdinCmds.replace(/'/g, "'\\''")
-      innerCommand = [
+      buildInnerCommand = (envFile) => [
         setupPreamble,
-        pyEnvExports,
+        sourceGoadEnvFile(envFile),
         `cd ${goadPath}`,
         afterGoad(`printf '${escaped}\nexit\n' | bash '${goadPath}/goad.sh'`),
       ].join("; ")
     }
   } else {
-    const goadInvoke = pyEnv
-      ? `${pyEnv} bash '${goadPath}/goad.sh' ${goadArgs}`
-      : `bash '${goadPath}/goad.sh' ${goadArgs}`
-    innerCommand = [setupPreamble, `cd ${goadPath}`, afterGoad(goadInvoke)].join("; ")
+    buildInnerCommand = (envFile) => [
+      setupPreamble,
+      sourceGoadEnvFile(envFile),
+      `cd ${goadPath}`,
+      afterGoad(`bash '${goadPath}/goad.sh' ${goadArgs}`),
+    ].join("; ")
   }
-
-  const command = wrapInnerForSudo(innerCommand)
 
   // Captured once the exec channel is open; used to send Ctrl+C on abort.
   let channelStream: ClientChannel | null = null
@@ -1180,9 +1207,33 @@ export async function streamGoadCommand(
       })
     }
 
+    const writeEnvFile = (onReady: (envFile: string) => void) => {
+      conn.exec(envFileStep.command, (err, stream) => {
+        if (err) {
+          conn.end()
+          onError(err)
+          return
+        }
+        let out = ""
+        let errOut = ""
+        stream.on("data", (data: Buffer) => { out += data.toString() })
+        stream.stderr.on("data", (data: Buffer) => { errOut += data.toString() })
+        stream.on("close", (code: number) => {
+          const envFile = out.trim().split("\n").pop()?.trim() ?? ""
+          if (code !== 0 || !GOAD_ENV_FILE_PATTERN.test(envFile)) {
+            conn.end()
+            onError(new Error(`Could not prepare the GOAD environment on the Ludus host: ${errOut.trim() || `exit ${code}`}`))
+            return
+          }
+          onReady(envFile)
+        })
+        stream.end(envFileStep.stdin)
+      })
+    }
+
     if (replSplitTail) {
       const captured: string[] = []
-      runPtySession(command, { captureStrippedLines: captured }, (code1) => {
+      writeEnvFile((envFile) => runPtySession(wrapInnerForSudo(buildInnerCommand(envFile)), { captureStrippedLines: captured }, (code1) => {
         const phase1Text = captured.join("\n")
         // A PTY close often reports exit 0 after Ctrl+C. Do not start the
         // extension phase on a killed or failed provide.
@@ -1193,7 +1244,7 @@ export async function streamGoadCommand(
         }
         const id =
           extractUseInstanceIdFromReplParts(replSplitTail.allParts) ??
-          extractInstanceIdFromGoadOutput(captured.join("\n"))
+          extractGoadInstanceIdFromOutput(captured.join("\n"))
         if (!id) {
           onData(
             "[ERROR] LUX: could not resolve GOAD instance id after provide/provision_lab; extension phase skipped.",
@@ -1205,34 +1256,36 @@ export async function streamGoadCommand(
         const esc2 = ["unload", "use " + id, ...replSplitTail.extensionLines, "exit"]
           .join("\n")
           .replace(/'/g, "'\\''")
-        const inner2 = [
-            setupPreamble,
-            pyEnvExports,
-            `cd ${goadPath}`,
-            afterGoad(`printf '${esc2}\n' | bash '${goadPath}/goad.sh'`),
-          ].join("; ")
-        const cmd2 = wrapInnerForSudo(inner2)
         const captured2: string[] = []
-        runPtySession(cmd2, { captureStrippedLines: captured2 }, (code2) => {
-          const failed = goadLogShowsFailure(captured2.join("\n"))
-          conn.end()
-          onClose(failed && code2 === 0 ? 1 : code2)
+        writeEnvFile((envFile2) => {
+          const inner2 = [
+              setupPreamble,
+              sourceGoadEnvFile(envFile2),
+              `cd ${goadPath}`,
+              afterGoad(`printf '${esc2}\n' | bash '${goadPath}/goad.sh'`),
+            ].join("; ")
+          runPtySession(wrapInnerForSudo(inner2), { captureStrippedLines: captured2 }, (code2) => {
+            const failed = goadLogShowsFailure(captured2.join("\n"))
+            conn.end()
+            onClose(failed && code2 === 0 ? 1 : code2)
+          })
         })
-      })
+      }))
     } else {
-      runPtySession(command, {}, (code) => {
+      writeEnvFile((envFile) => runPtySession(wrapInnerForSudo(buildInnerCommand(envFile)), {}, (code) => {
         conn.end()
         onClose(code)
-      })
+      }))
     }
   })
 
+  const connectConfig = buildConnectConfig(effectiveCreds)
   conn.on("error", (err) => {
-    onError(new Error(`SSH connection error: ${err.message}`));
+    onError(new Error(`SSH connection error: ${explainSshHostKeyError(err.message, connectConfig.host, connectConfig.port)}`));
   });
 
   // When impersonating, connect as root (effectiveCreds = undefined → root fallback).
-  conn.connect(buildConnectConfig(effectiveCreds));
+  conn.connect(attachSshHostVerifier(connectConfig));
 
   // ansible-playbook explicitly ignores SIGHUP (which is what conn.end() triggers via
   // the SSH daemon). We must send Ctrl+C (\x03) to the PTY instead — this delivers

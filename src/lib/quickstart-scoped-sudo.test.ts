@@ -6,6 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { decryptSettingsValueAtRest } from "./settings-value-at-rest"
+import { lacks } from "../test-support/host-capabilities"
 
 const quickstart = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/quickstart.sh")
 
@@ -134,7 +135,7 @@ describe("lux_offer_scoped_host_sudo", () => {
     expect(result.calls).not.toContain("lux-host 'id -u'")
   })
 
-  it("writes the update key and stores it for Settings when the root install runs", () => {
+  it.skipIf(lacks("userns"))("writes the update key and stores it for Settings when the root install runs", () => {
     const result = offerInstall(true, false, true)
     expect(result.status, result.output).toBe(0)
     expect(result.output).toContain("Installed.")
@@ -249,32 +250,5 @@ printf 'USER=%s\\n' "$(lux_read_env_kv PROXMOX_SSH_USER)"
     expect(result.output).toContain("USER=ludus")
     expect(result.output).toContain("sudo -n /usr/local/sbin/lux-host")
     expect(result.output).toContain("Skipped.")
-  })
-})
-
-describe("lux_offer_scoped_host_sudo", () => {
-  it("does not report success when the root install fails", () => {
-    const result = offerInstall(true)
-    expect(result.status).toBe(1)
-    expect(result.output).not.toContain("Installed.")
-    expect(result.output).toContain("sudoers install failed")
-    expect(result.calls).not.toContain("lux-host 'id -u'")
-  })
-
-  it("does not report success when the passwordless sudo install fails", () => {
-    const result = offerInstall(false)
-    expect(result.status).toBe(1)
-    expect(result.output).not.toContain("Installed.")
-    expect(result.output).toContain("sudoers install failed")
-    expect(result.calls).not.toContain("lux-host 'id -u'")
-  })
-
-  it("refreshes the helper through lux-host when sudo -n true is denied", () => {
-    const result = offerInstall(false, true)
-    expect(result.status).toBe(0)
-    expect(result.output).toContain("Installed.")
-    expect(result.calls).toContain("sudo -n /usr/local/sbin/lux-host ")
-    expect(result.calls).not.toContain("sudo -n bash")
-    expect(result.calls).not.toContain("sudo -n true")
   })
 })

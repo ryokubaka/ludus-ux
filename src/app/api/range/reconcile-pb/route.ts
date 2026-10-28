@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
   const rangeId = typeof body.rangeId === "string" ? body.rangeId.trim() : ""
   if (!rangeId) return NextResponse.json({ error: "rangeId required" }, { status: 400 })
 
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const ludusUserApiKey = imp.apiKey || session.apiKey
 
   const result = await reconcilePbAfterFollowOnLudusDeploy(rangeId, ludusUserApiKey)

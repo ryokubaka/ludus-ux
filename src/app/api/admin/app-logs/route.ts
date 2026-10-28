@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { queryAppLogs, formatAppLogLine, type LogCategory } from "@/lib/app-log"
 
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
 
   const categoryParam = request.nextUrl.searchParams.get("category")
   const category =

@@ -8,6 +8,8 @@
  * Proxmox self-signed certificates, or use NODE_EXTRA_CA_CERTS with your CA bundle.
  */
 
+import { ludusFetch } from "@/lib/ludus-fetch"
+
 export interface ProxmoxAuth {
   /** PVEAuthCookie value (must be sent as Cookie header on subsequent calls) */
   cookie: string
@@ -25,7 +27,7 @@ export async function proxmoxLogin(
     password,
   })
 
-  const res = await fetch(`https://${host}:8006/api2/json/access/ticket`, {
+  const res = await ludusFetch(`https://${host}:8006/api2/json/access/ticket`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -46,7 +48,7 @@ export async function proxmoxLogin(
 }
 
 export async function proxmoxGetFirstNode(host: string, auth: ProxmoxAuth): Promise<string> {
-  const res = await fetch(`https://${host}:8006/api2/json/nodes`, {
+  const res = await ludusFetch(`https://${host}:8006/api2/json/nodes`, {
     headers: {
       Cookie: `PVEAuthCookie=${auth.cookie}`,
       CSRFPreventionToken: auth.csrf,
@@ -64,7 +66,7 @@ export async function proxmoxGetNodeForVmid(
   auth: ProxmoxAuth,
   vmid: string,
 ): Promise<string> {
-  const res = await fetch(`https://${host}:8006/api2/json/cluster/resources?type=vm`, {
+  const res = await ludusFetch(`https://${host}:8006/api2/json/cluster/resources?type=vm`, {
     headers: {
       Cookie: `PVEAuthCookie=${auth.cookie}`,
       CSRFPreventionToken: auth.csrf,
@@ -112,7 +114,7 @@ export async function proxmoxCreateSpiceProxy(
   node: string,
   vmid: string,
 ): Promise<SpiceProxyInfo> {
-  const res = await fetch(
+  const res = await ludusFetch(
     `https://${host}:8006/api2/json/nodes/${node}/qemu/${vmid}/spiceproxy`,
     {
       method: "POST",
@@ -140,7 +142,7 @@ export async function proxmoxCreateVncProxy(
   options?: { websocket?: boolean },
 ): Promise<VncProxyInfo> {
   const websocket = options?.websocket !== false
-  const res = await fetch(
+  const res = await ludusFetch(
     `https://${host}:8006/api2/json/nodes/${node}/qemu/${vmid}/vncproxy`,
     {
       method: "POST",

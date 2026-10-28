@@ -37,6 +37,7 @@ import type {
 import { extractArray, parseLudusGroupList } from "@/lib/utils"
 
 function apiKeyDigest(apiKey: string): string {
+  // codeql[js/insufficient-password-hash] cache partition, not a stored password
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 16)
 }
 

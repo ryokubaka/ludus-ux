@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { listDeployLogClocks, pruneDeployLogClocks } from "@/lib/deploy-log-clock-store"
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
 
   const rangeId = request.nextUrl.searchParams.get("rangeId")?.trim() ?? ""
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(rangeId)) {

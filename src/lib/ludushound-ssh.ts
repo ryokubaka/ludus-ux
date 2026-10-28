@@ -333,12 +333,12 @@ export async function probeNeo4jFromHost(
     `BODY=$(echo ${shellQuote(b64)} | base64 -d)`,
     `curl -sS -m 15 -o /tmp/lux-lh-neo4j.json -w '%{http_code}' ` +
       `-H 'Content-Type: application/json' ` +
-      `-H ${shellQuote(`Authorization: Basic ${auth}`)} ` +
+      `-H @- ` +
       `-d "$BODY" ${shellQuote(url)}`,
   ].join("; ")
 
   try {
-    const { stdout, stderr, code } = await sshExec(cmd, creds)
+    const { stdout, stderr, code } = await sshExec(cmd, creds, { stdin: `Authorization: Basic ${auth}\n` })
     const httpCode = stdout.trim().slice(-3)
     const ok = code === 0 && (httpCode === "200" || httpCode === "201")
     const detail = ok

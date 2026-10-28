@@ -16,7 +16,9 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 
 | Variable | Description | Default |
 |---|---|---|
-| `SSH_KEY_PATH` | **Host** directory for the `PROXMOX_SSH_USER` private key copied from the Ludus server. Mounted at **`/app/ssh`** in the container. Who that account is: [SSH and authentication](ssh-and-auth.md). | `./ssh` |
+| `SSH_KEY_PATH` | **Host** directory for the `PROXMOX_SSH_USER` private key copied from the Ludus server. Mounted **read-only** at **`/app/ssh`**. A key `LUX_UID` cannot read is copied at start to an in-memory `/run/lux-ssh`, see [Persistent data](persistent-data.md). Who that account is: [SSH and authentication](ssh-and-auth.md). | `./ssh` |
+| `LUX_UID` | Image user id. Passed into the Dockerfile as a build arg. Use a uid that `getent passwd` does not list on this host. A change applies on the next `docker compose up -d --build`. | `64532` |
+| `LUX_GID` | Image group id. Passed into the Dockerfile as a build arg, same rebuild rule as `LUX_UID`. | `64532` |
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
 | `LUX_REPO_PATH` | Optional override for the host git clone used by Settings → About. LUX auto-detects the Compose project directory and the host path of the `./data` → `/app/data` bind mount when the Docker socket is mounted. | unset |
 | `GITHUB_TOKEN` / `LUX_GITHUB_TOKEN` | Optional GitHub PAT. Used only when this clone's remote is GitHub, to attach release notes. The version list itself comes from `git ls-remote` on that remote. | unset |
@@ -25,7 +27,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 
 | Variable | Description |
 |---|---|
-| `LUDUS_ADMIN_URL` | Admin API base URL (port **8081**). Compose default uses `LUDUS_SSH_HOST` with `:8081` (override in `.env` if needed). Prefer `https://<ludus-host>:8081` when reachable from the container. SSH tunnel to `127.0.0.1:18081` is optional when 8081 is loopback-only; remote URLs are not overwritten by the tunnel. |
+| `LUDUS_ADMIN_URL` | Admin API base URL. Compose defaults to `https://` + `LUDUS_SSH_HOST` + `:8081`. A default Ludus install binds 8081 to 127.0.0.1, so that address is refused from the container. Set this to `https://127.0.0.1:18081` to use the SSH tunnel LUX opens at startup (`127.0.0.1:18081` → the server's `127.0.0.1:8081`). Host SSH must work. Use `https://<ludus-host>:8081` only after the server listens on that address. A non-localhost URL is not replaced by the tunnel. |
 | `LUDUS_ROOT_API_KEY` | Root API key (from `<LUDUS_INSTALL_PATH>/install/root-api-key` on the server) |
 | `PROXMOX_SSH_USER` | SSH account for server-side host commands. Root, or any other user who can run `sudo -n /usr/local/sbin/lux-host`. That helper is the only passwordless sudo command. Quickstart or Settings → Auth can install it. Not the LUX login user unless that account can elevate. See [lux-host](ssh-and-auth.md#lux-host). |
 | `PROXMOX_SSH_PASSWORD` | Optional for server-side host SSH if using key auth. In-browser noVNC and SPICE / VNC `.vv` downloads use the logged-in user's PAM password from the LUX session, not this key. |
@@ -63,7 +65,10 @@ Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go w
 | `DISABLE_HTTPS` | When `true`, Node does not terminate TLS (normal with bundled nginx). |
 | `TRUST_PROXY_TLS` | When `true`, treat the deployment as HTTPS for cookies/HSTS while Node listens on HTTP (required behind nginx). |
 | `TLS_HOSTNAME` | Optional CN/SAN hint when nginx auto-generates the edge certificate |
-| `LUDUS_TLS_INSECURE` | When `true`, Node accepts invalid TLS certificates for outbound HTTPS/WSS to Ludus, PocketBase, and Proxmox (typical lab self-signed). Compose defaults to `true`; set `LUDUS_TLS_INSECURE=false` in `.env` for self-signed Ludus/PVE lab installs. |
+| `LUDUS_TLS_INSECURE` | When `true`, HTTPS and WSS to Ludus, PocketBase, and Proxmox skip certificate checks. Other HTTPS stays verified. When the key is missing from `.env`, certificates are verified. Before 1.5.0 a missing key meant `true`, so an upgraded `.env` written by an older quickstart needs `LUDUS_TLS_INSECURE=true` added for Ludus's default self-signed certificate; login says so when the check fails. Or mount the CA with `NODE_EXTRA_CA_CERTS`. |
+| `LUX_SSH_HOST_KEY` | Optional pin for the Ludus SSH host key. Accepts the fingerprint exactly as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints it (`SHA256:...`, trailing `=` optional), a public key line (`ssh-ed25519 AAAA... [comment]`), or a `known_hosts` line. A value that is none of those refuses every connection. When unset, the first key seen for that host and port is stored in SQLite and a different key is rejected; an admin can forget a stored key in **Settings → Auth**. |
+| `LUX_UPGRADE_TRUSTED_KEY` | Absolute path on the Docker host to a public key file. When set, an in-app upgrade verifies the tag in a keyring that contains only that key and refuses anything else, including a key already in the host keyring. A value that is not a file is an error. |
+| `LUX_UPGRADE_TRUSTED_FPR` | Optional primary-key fingerprint (40 or 64 hex digits). The tag's signature must match it. A signing subkey still matches its primary key. |
 
 **Production:** set a strong **`APP_SECRET`** (32+ random characters, not a placeholder). The app refuses to start in `NODE_ENV=production` if `APP_SECRET` is missing, too short, or matches documented example values.
 

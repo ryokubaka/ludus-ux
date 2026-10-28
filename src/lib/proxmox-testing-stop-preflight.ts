@@ -21,6 +21,7 @@ import {
   setTestingStopEfiCache,
 } from "@/lib/testing-stop-efi-cache"
 import type { RangeObject, VMObject } from "@/lib/types"
+import { logWarn } from "@/lib/log-safe"
 
 /** Snapshot name Ludus creates on testing start (Ansible `snapshot-management.yml`). */
 export const LUDUS_TESTING_CLEAN_SNAPSHOT = "ludus_automated_clean_snapshot"
@@ -434,7 +435,7 @@ export async function runTestingStartEfiEnrollPreflight(opts: {
     // No candidates known (e.g. Proxmox SSH unset) — do not block start.
     // When candidates exist we require SSH below and abort on enroll failure.
     const msg = preview.error || "EFI disk probe failed"
-    console.warn(`[testing-start-efi] skip for ${opts.rangeId}: ${msg}`)
+    logWarn(`[testing-start-efi] skip for ${opts.rangeId}: ${msg}`)
     return empty({ skippedReason: msg, errors: [msg] })
   }
 

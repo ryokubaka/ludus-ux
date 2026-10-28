@@ -1,10 +1,13 @@
 import type { NextRequest } from "next/server"
-import type { SessionData } from "@/lib/session"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
+import type { ResolvedSession, SessionData } from "@/lib/session"
 
 type SessionImpersonationPick = Pick<
   SessionData,
-  "isAdmin" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
+  "username" | "isAdmin" | "impersonationUserId" | "impersonationLudusUserId" | "impersonationSshLogin"
 > & {
+  sessionId?: string
+  apiKey?: string
   impersonationApiKey?: string
 }
 
@@ -17,7 +20,16 @@ export type ResolvedAdminImpersonation = {
   sshLogin: string | null
 }
 
-function cookieTriple(session: SessionImpersonationPick): ResolvedAdminImpersonation {
+const NO_IMPERSONATION: ResolvedAdminImpersonation = {
+  apiKey: null,
+  ludusPrincipal: null,
+  ludusUserId: null,
+  sshLogin: null,
+}
+
+/** Cookie impersonation fields. Trusts the cookie's admin flag; logs use this. */
+export function cookieImpersonation(session: SessionImpersonationPick): ResolvedAdminImpersonation {
+  if (!session.isAdmin) return NO_IMPERSONATION
   const principal = session.impersonationUserId?.trim() || null
   const ludusUserId =
     session.impersonationLudusUserId?.trim() || principal
@@ -46,16 +58,16 @@ function cookieTriple(session: SessionImpersonationPick): ResolvedAdminImpersona
  * field `name`). `impersonationLudusUserId` / `impersonationSshLogin` disambiguate
  * range ownership vs POSIX login when those differ from the principal string.
  */
-export function resolveAdminImpersonationFromRequest(
+export async function resolveAdminImpersonationFromRequest(
   session: SessionImpersonationPick,
   request: NextRequest,
-): ResolvedAdminImpersonation {
-  if (!session.isAdmin) {
-    return { apiKey: null, ludusPrincipal: null, ludusUserId: null, sshLogin: null }
+): Promise<ResolvedAdminImpersonation> {
+  if (!(await liveSessionIsAdmin(session as ResolvedSession))) {
+    return NO_IMPERSONATION
   }
   const hKey = request.headers.get("X-Impersonate-Apikey")
   const hAs = request.headers.get("X-Impersonate-As")
-  const fromCookie = cookieTriple(session)
+  const fromCookie = cookieImpersonation(session)
 
   if (hKey && hAs) {
     const principal = hAs.trim()
@@ -68,18 +80,18 @@ export function resolveAdminImpersonationFromRequest(
   }
 
   if (!fromCookie.apiKey || !fromCookie.ludusPrincipal) {
-    return { apiKey: null, ludusPrincipal: null, ludusUserId: null, sshLogin: null }
+    return NO_IMPERSONATION
   }
   return fromCookie
 }
 
 /** Task list / POSIX-scoped handlers: prefer SSH login when impersonating. */
-export function effectiveImpersonatedOperatorUsername(
+export async function effectiveImpersonatedOperatorUsername(
   session: { username: string; isAdmin: boolean } & SessionImpersonationPick,
   request: NextRequest,
-): string {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
-  if (session.isAdmin && imp.apiKey) {
+): Promise<string> {
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
+  if (imp.apiKey) {
     return (imp.sshLogin || imp.ludusPrincipal || "").trim()
   }
   return session.username

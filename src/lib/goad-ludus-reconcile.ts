@@ -35,6 +35,7 @@ import { readGoadRangeId } from "./goad-ssh"
 import { sshExec } from "./proxmox-ssh"
 import { isRootProxmoxSshConfigured, rootPasswordCredsIfSet } from "./root-ssh-auth"
 import { splitLeadingWallTimestamp } from "./log-line-timestamp"
+import { logWarn } from "./log-safe"
 
 const reconciledTaskIds = new Set<string>()
 const lastAttemptAt = new Map<string, number>()
@@ -58,7 +59,7 @@ function diagThrottled(key: string, msg: string, minIntervalMs: number) {
   const t = Date.now()
   if (t - (diagLastAt.get(key) ?? 0) < minIntervalMs) return
   diagLastAt.set(key, t)
-  console.warn(`[goad-ludus-reconcile] ${msg}`)
+  logWarn(`[goad-ludus-reconcile] ${msg}`)
 }
 
 function lineBodyForRecap(line: string): string {

@@ -3,14 +3,17 @@ import { discoverGoadCatalog, invalidateCatalogCache, isGoadConfigured } from "@
 import { resolveSession } from "@/lib/session"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
-async function getCreds(request: NextRequest) {
-  const session = await resolveSession(request)
-  return session?.sshPassword
+function sessionCreds(session: { username: string; sshPassword?: string }) {
+  return session.sshPassword
     ? { username: session.username, password: session.sshPassword }
     : undefined
 }
 
 export async function GET(request: NextRequest) {
+  const session = await resolveSession(request)
+  if (!session) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  }
   if (!isGoadConfigured()) {
     return NextResponse.json({
       configured: false,
@@ -22,7 +25,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const catalog = await discoverGoadCatalog(await getCreds(request))
+    const catalog = await discoverGoadCatalog(sessionCreds(session))
     return NextResponse.json(catalog)
   } catch (err) {
     return NextResponse.json(
@@ -53,7 +56,7 @@ export async function POST(request: NextRequest) {
   invalidateCatalogCache()
 
   try {
-    const catalog = await discoverGoadCatalog(await getCreds(request))
+    const catalog = await discoverGoadCatalog(sessionCreds(session))
     logLuxRouteAction(request, session)
     return NextResponse.json(catalog)
   } catch (err) {

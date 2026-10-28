@@ -1,0 +1,204 @@
+# Included from /.gitlab-ci.yml. GitLab only auto-reads that root path, so the
+# pointer stays there and the pipeline lives here, next to the merge request template.
+#
+# Each check is a script in scripts/ci/, so .github/workflows/ci.yml and a
+# developer machine run exactly the same commands. Job names match GitHub.
+#
+# Runner tags:
+#   docker   - a runner that allows privileged Docker-in-Docker (smoke)
+#   lux-lab  - a runner that can reach the lab Ludus server (security-live)
+# Jobs with a tag stay pending until such a runner is registered.
+# See docs/security-testing.md. No host or credential belongs in this file;
+# they come from protected, masked CI/CD variables.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+stages: [check, build, live]
+
+variables:
+  # Trixie, not Bookworm. Bookworm apt aborts in libgcrypt when the runner
+  # kernel is in FIPS mode. Apt 2.7.2 and later turn that mode off before hashing.
+  NODE_IMAGE: node:24-trixie@sha256:6a8fbc20300f595dbd27ed241f8878bf110f30281011d029535308583115c72e
+  npm_config_cache: $CI_PROJECT_DIR/.npm
+
+default:
+  interruptible: true
+
+.node:
+  stage: check
+  image: $NODE_IMAGE
+  cache:
+    key:
+      files: [package-lock.json]
+    paths: [.npm/]
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+    # unit adds PyYAML and sudo. Other jobs leave this empty.
+    EXTRA_APT: ""
+  before_script:
+    # A hidden apt-get looks like a stuck job: no log until it finishes, and a
+    # debconf prompt or an unreachable IPv6 mirror waits out the project timeout.
+    - echo "Installing OS packages"
+    - |
+      printf '%s\n' \
+        'Acquire::ForceIPv4 "true";' \
+        'Acquire::Retries "3";' \
+        'Acquire::http::Timeout "30";' \
+        'Acquire::https::Timeout "30";' \
+        > /etc/apt/apt.conf.d/99ci
+      apt-get update
+      apt-get install -y python3 make g++ $EXTRA_APT
+
+unit:
+  extends: .node
+  variables:
+    # Jobs run as root in the container, so the user namespace and non-root
+    # tests skip; the rest must run.
+    LUX_TEST_REQUIRE_CAPS: pyyaml,visudo
+    EXTRA_APT: python3-yaml sudo
+  script:
+    - bash scripts/ci/unit.sh
+
+security:
+  extends: .node
+  script:
+    - bash scripts/ci/security.sh
+
+hygiene:
+  extends: .node
+  before_script: []
+  script:
+    - bash scripts/ci/hygiene.sh
+
+changelog:
+  extends: .node
+  before_script: []
+  script:
+    - bash scripts/ci/changelog.sh
+
+npm-audit:
+  extends: .node
+  script:
+    - bash scripts/ci/npm-audit.sh
+
+secrets:
+  stage: check
+  image:
+    name: zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - bash scripts/ci/secrets.sh
+
+sast:
+  stage: check
+  image:
+    name: semgrep/semgrep:1.181.1@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2
+    entrypoint: [""]
+  script:
+    - bash scripts/ci/sast.sh
+
+# Same executor arguments as scripts/ci/image.sh; the Kaniko image has no bash.
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e
+    entrypoint: [""]
+  needs: []
+  script:
+    - /kaniko/executor --context "$CI_PROJECT_DIR" --dockerfile "$CI_PROJECT_DIR/docker/Dockerfile" --no-push --destination ludus-ux:ci
+
+smoke:
+  stage: build
+  tags: [docker]
+  image: docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
+  services:
+    # This runner already owns the hostname "docker", so the daemon never got
+    # that alias and never shared /certs/client. Cleartext stays on the job
+    # network; dockerd is not published on the host.
+    - name: docker:27-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+      alias: dind
+      entrypoint: ["env", "-u", "DOCKER_TLS_CERTDIR", "dockerd-entrypoint.sh"]
+      command:
+        - "--host=unix:///var/run/docker.sock"
+        - "--host=tcp://0.0.0.0:2375"
+        - "--tls=false"
+  variables:
+    DOCKER_HOST: tcp://dind:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_TLS_VERIFY: ""
+    DOCKER_CERT_PATH: ""
+    # Published ports land on the dind service, not on localhost.
+    LUX_CI_SMOKE_HOST: dind
+  needs: [build-image]
+  before_script:
+    - echo "Installing smoke packages"
+    - apk add --no-cache bash curl
+    # docker:27-cli sets DOCKER_TLS_CERTDIR=/certs and aborts when ca.pem is missing.
+    # An empty CI variable does not always override that image default.
+    - unset DOCKER_TLS_CERTDIR DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+    - export DOCKER_HOST=tcp://dind:2375
+  script:
+    - bash scripts/ci/smoke.sh
+
+# Opt-in: set LUX_LIVE_SECURITY=1 and register a lux-lab runner. Variables
+# (protected and masked): PLAYWRIGHT_BASE_URL, E2E_ADMIN_USER,
+# E2E_ADMIN_PASSWORD, and optionally GITHUB_TOKEN to mirror the status to GitHub.
+security-live:
+  stage: live
+  tags: [lux-lab]
+  image: mcr.microsoft.com/playwright:v1.59.1-noble
+  needs: []
+  rules:
+    - if: $LUX_LIVE_SECURITY == "1"
+  cache:
+    key:
+      files: [package-lock.json]
+    paths: [.npm/]
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    - echo "Installing OS packages"
+    - |
+      printf '%s\n' \
+        'Acquire::ForceIPv4 "true";' \
+        'Acquire::Retries "3";' \
+        'Acquire::http::Timeout "30";' \
+        'Acquire::https::Timeout "30";' \
+        > /etc/apt/apt.conf.d/99ci
+      apt-get update
+      apt-get install -y python3 make g++
+  script:
+    - bash scripts/ci/live-security.sh
+  artifacts:
+    when: on_failure
+    expire_in: 7 days
+    paths: [test-results/, playwright-report/]
+
+# Same changelog text as .github/workflows/pr-summary.yml. GITLAB_TOKEN is a
+# Maintainer project access token with the api scope, masked and not protected.
+mr-summary:
+  stage: check
+  image: $NODE_IMAGE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID
+  script:
+    - bash scripts/ci/mr-summary.sh
+
+# Same tag and notes as .github/workflows/release.yml, when the default branch updates.
+publish-release:
+  stage: check
+  image: $NODE_IMAGE
+  resource_group: lux-release
+  interruptible: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - bash scripts/ci/gitlab-release.sh

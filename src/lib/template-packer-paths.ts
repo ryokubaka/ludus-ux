@@ -69,8 +69,8 @@ export function shellSingleQuote(value: string): string {
  * The command itself does not switch users. When PROXMOX_SSH_USER is not root,
  * the SSH helper runs it with `sudo -n /usr/local/sbin/lux-host`.
  */
-export function buildLudusTemplateAddCmd(destDir: string, ludusApiKey: string): readonly string[] {
-  return ["ludus-template-add", destDir, ludusApiKey]
+export function buildLudusTemplateAddCmd(destDir: string): readonly string[] {
+  return ["ludus-template-add", destDir]
 }
 
 /** Ludus DELETE /template/{name} returns HTTP 200 but refuses to remove shared packer dirs. */
@@ -104,8 +104,8 @@ export function templateDirNameAliases(templateName: string): string[] {
 }
 
 /** Unregister template via Ludus CLI (needed when API soft-refuses shared packer). */
-export function buildLudusTemplateRmCliCmd(templateName: string, ludusApiKey: string): readonly string[] {
-  return ["ludus-template-rm", templateName, ludusApiKey]
+export function buildLudusTemplateRmCliCmd(templateName: string): readonly string[] {
+  return ["ludus-template-rm", templateName]
 }
 
 /**

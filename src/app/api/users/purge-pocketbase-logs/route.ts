@@ -6,17 +6,15 @@
  * DELETE /user/{id} can succeed (deploy log history holds a required relation to users).
  */
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { deletePbLogsForLudusUser } from "@/lib/pocketbase-client"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin privileges required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const session = admin.session
 
   const body = await request.json().catch(() => ({})) as { userId?: string }
   const userId = body.userId?.trim()

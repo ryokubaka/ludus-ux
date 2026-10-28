@@ -209,21 +209,42 @@ if [ -S /var/run/docker.sock ]; then
     fi
 fi
 
-# ---------------------------------------------------------------------------
-# SSH private keys under /app/ssh (bind-mounted from the host).
-# Docker Desktop on Windows often shows them as mode 777 inside the container
-# even when the host file is 644 — normalize so permissions look sane and match
-# typical OpenSSH expectations. Ignore errors on exotic mounts.
-# ---------------------------------------------------------------------------
-for KEY in /app/ssh/id_rsa /app/ssh/id_ed25519; do
-    if [ -f "$KEY" ]; then
-        chmod 600 "$KEY" 2>/dev/null || true
-        chown nextjs:nodejs "$KEY" 2>/dev/null || true
-    fi
-done
+# SSH keys are a read-only bind mount. Do not chown them: that would make the
+# container uid the owner of the host private key. A key the app user cannot
+# read (for example one still owned by the uid from before 1.5.0) is copied
+# into /run/lux-ssh, a tmpfs from docker-compose.yml, readable only by that
+# user. The app tries that copy first. Root cannot read the key under rootless
+# Docker, a user namespace remap, or NFS root_squash; then the warning stays.
+KEY_COPY_DIR=/run/lux-ssh
+if [ -d /app/ssh ]; then
+    lux_uid=$(id -u nextjs 2>/dev/null || echo 64532)
+    lux_gid=$(id -g nextjs 2>/dev/null || echo 64532)
+    for KEY in /app/ssh/*; do
+        [ -f "$KEY" ] || continue
+        name=$(basename "$KEY")
+        case "$name" in
+            .*|*.pub|known_hosts*|authorized_keys*|*\'*) continue ;;
+        esac
+        if su -s /bin/sh nextjs -c "test -r '$KEY'"; then
+            continue
+        fi
+        if [ -r "$KEY" ] \
+            && mkdir -p "$KEY_COPY_DIR" \
+            && chown nextjs:nodejs "$KEY_COPY_DIR" \
+            && chmod 700 "$KEY_COPY_DIR" \
+            && (umask 077 && cp "$KEY" "$KEY_COPY_DIR/$name") \
+            && chown nextjs:nodejs "$KEY_COPY_DIR/$name"; then
+            echo "[entrypoint] $KEY is not readable by uid ${lux_uid}. Using a private copy in $KEY_COPY_DIR; the host file is unchanged."
+            continue
+        fi
+        echo "[entrypoint] $KEY is not readable by the nextjs user, and it could not be copied." >&2
+        echo "[entrypoint] Host SSH key auth will fail until the key is readable by that uid." >&2
+        echo "[entrypoint] On the host, chown the key to ${lux_uid}:${lux_gid} (LUX_UID and LUX_GID in .env) only when getent passwd does not already list that uid." >&2
+    done
+fi
 
 # ---------------------------------------------------------------------------
-# Drop privileges: run the app as the nextjs user (uid 1001).
+# Drop privileges: run the app as the nextjs user.
 # The entrypoint itself runs as root (so it can write /etc/hosts above).
 # ---------------------------------------------------------------------------
 exec su -s /bin/sh nextjs -c 'exec node ws-server.js'

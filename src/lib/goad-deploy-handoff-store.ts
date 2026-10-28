@@ -83,10 +83,24 @@ export function linkHandoffToTask(handoffId: string, taskId: string): void {
     .run(taskId, Date.now(), handoffId)
 }
 
-/** Look up a handoff by taskId — used by the pending-network workflow on task complete. */
+export function getHandoffById(handoffId: string): DeployHandoff | null {
+  const row = getDb()
+    .prepare(`SELECT * FROM deploy_handoffs WHERE id = ?`)
+    .get(handoffId) as HandoffRow | undefined
+  return row ? rowToHandoff(row) : null
+}
+
+/**
+ * Look up a handoff by taskId — used by the pending-network workflow on task complete.
+ * /api/goad/execute links its own handoff to the same task, so the wizard's
+ * handoff (the one carrying network rules) wins.
+ */
 export function getHandoffByTaskId(taskId: string): DeployHandoff | null {
   const row = getDb()
-    .prepare(`SELECT * FROM deploy_handoffs WHERE task_id = ? LIMIT 1`)
+    .prepare(
+      `SELECT * FROM deploy_handoffs WHERE task_id = ?
+       ORDER BY (network_rules_json IS NOT NULL) DESC, created_at DESC LIMIT 1`
+    )
     .get(taskId) as HandoffRow | undefined
   return row ? rowToHandoff(row) : null
 }

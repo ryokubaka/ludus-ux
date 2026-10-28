@@ -14,7 +14,7 @@ import {
   buildRangeVmInventoryRows,
   mapWithConcurrency,
 } from "@/lib/range-vm-inventory"
-import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 
 async function fetchRangeConfigYaml(apiKey: string, rangeId: string): Promise<string> {
   const res = await ludusRequest<{ result?: string }>(
@@ -26,10 +26,9 @@ async function fetchRangeConfigYaml(apiKey: string, rangeId: string): Promise<st
 }
 
 export async function GET(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   const apiKey = session.apiKey?.trim()
   if (!apiKey) {
@@ -65,11 +64,14 @@ export async function GET(request: NextRequest) {
       return { vms, ts: Date.now() }
     })
 
-    return NextResponse.json(payload)
+    return finishAdminResponse(NextResponse.json(payload), admin)
   } catch (err) {
-    return NextResponse.json(
-      { error: logAndSafeError("admin/range-vms", err, "Failed to load range VMs") },
-      { status: 500 },
+    return finishAdminResponse(
+      NextResponse.json(
+        { error: logAndSafeError("admin/range-vms", err, "Failed to load range VMs") },
+        { status: 500 },
+      ),
+      admin,
     )
   }
 }

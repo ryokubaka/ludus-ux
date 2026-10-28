@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
 
   // Resolve effective API key — cookie-backed impersonation takes precedence
   // over the explicit bodyApiKey so admin impersonation is always respected.
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = bodyApiKey || impersonateApiKey || session.apiKey
 
   // ── 1. Kill any in-flight GOAD task for this range ────────────────────────

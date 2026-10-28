@@ -45,7 +45,19 @@ export function getPrivateKeySearchPathsFor(
   ].filter(Boolean) as string[]
   const defaults = ["/app/ssh/id_rsa", "/app/ssh/id_ed25519"]
   const discovered = discoverAppSshKeyPaths()
-  return [...new Set([...parts, ...defaults, ...discovered])]
+  return [...new Set([...parts, ...defaults, ...discovered].flatMap(withContainerKeyCopy))]
+}
+
+/** Entrypoint copies a key the app user cannot read; see docker/entrypoint.sh. */
+export const CONTAINER_KEY_COPY_DIR = "/run/lux-ssh"
+
+/**
+ * The copy exists only when the mounted key was unreadable, so try it first.
+ * The host file under /app/ssh is never chowned.
+ */
+function withContainerKeyCopy(p: string): string[] {
+  if (!p.startsWith("/app/ssh/")) return [p]
+  return [path.posix.join(CONTAINER_KEY_COPY_DIR, path.posix.basename(p)), p]
 }
 
 /**
@@ -75,9 +87,33 @@ function errnoCode(e: unknown): string {
   return e instanceof Error && "code" in e ? String((e as NodeJS.ErrnoException).code) : ""
 }
 
+type OpenedKey =
+  | { ok: true; buf: Buffer; stat: fs.Stats }
+  | { ok: false; code: string; error: unknown }
+
+/** Open, fstat, and read one descriptor so the path is not checked and then used. */
+function readKeyDescriptor(p: string, flags: number): OpenedKey {
+  let fd: number
+  try {
+    fd = fs.openSync(p, flags)
+  } catch (e) {
+    return { ok: false, code: errnoCode(e), error: e }
+  }
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile()) return { ok: true, buf: Buffer.alloc(0), stat }
+    return { ok: true, buf: fs.readFileSync(fd), stat }
+  } catch (e) {
+    return { ok: false, code: errnoCode(e), error: e }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 /**
- * Inspect one key path using lstat first (then follow for non-links).
- * Symlinks, permission errors, and non-files are surfaced in probe output.
+ * Inspect one key path. A regular file is opened with O_NOFOLLOW. A symlink
+ * (ELOOP) is read by following it on a second open. Probe output still names
+ * symlinks, permission errors, and non-files.
  */
 function inspectKeyPath(p: string): {
   path: string
@@ -91,25 +127,13 @@ function inspectKeyPath(p: string): {
   readable: boolean
   readError?: string
 } {
-  let lst: fs.Stats
-  try {
-    lst = fs.lstatSync(p)
-  } catch (e) {
-    if (errnoCode(e) === "ENOENT") {
-      return { path: p, exists: false, isSymlink: false, isFile: false, size: 0, readable: false }
-    }
-    return {
-      path: p,
-      exists: false,
-      isSymlink: false,
-      isFile: false,
-      size: 0,
-      readable: false,
-      readError: e instanceof Error ? e.message : String(e),
-    }
+  // O_NOFOLLOW is absent on Windows; production images are Linux and reject a swapped symlink.
+  const noFollow = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)
+  const direct = readKeyDescriptor(p, noFollow)
+  if (!direct.ok && direct.code === "ENOENT") {
+    return { path: p, exists: false, isSymlink: false, isFile: false, size: 0, readable: false }
   }
-
-  if (lst.isSymbolicLink()) {
+  if (!direct.ok && direct.code === "ELOOP") {
     let target = ""
     try {
       target = fs.readlinkSync(p)
@@ -124,25 +148,36 @@ function inspectKeyPath(p: string): {
         readError: e instanceof Error ? e.message : String(e),
       }
     }
-    let st: fs.Stats
-    try {
-      st = fs.statSync(p)
-    } catch {
+    const followed = readKeyDescriptor(p, fs.constants.O_RDONLY)
+    if (!followed.ok) {
+      const message = followed.error instanceof Error ? followed.error.message : String(followed.error)
+      if (followed.code === "ENOENT" || followed.code === "ENOTDIR" || followed.code === "ELOOP") {
+        return {
+          path: p,
+          exists: true,
+          isSymlink: true,
+          linkTarget: target,
+          danglingSymlink: true,
+          isFile: false,
+          size: 0,
+          readable: false,
+          readError:
+            `Dangling symlink → ${target}: target does not resolve inside this container. ` +
+            `Replace with a real file in your SSH mount (cp the key, do not use ln -s to a path that only exists on another host).`,
+        }
+      }
       return {
         path: p,
         exists: true,
         isSymlink: true,
         linkTarget: target,
-        danglingSymlink: true,
-        isFile: false,
+        isFile: true,
         size: 0,
         readable: false,
-        readError:
-          `Dangling symlink → ${target}: target does not resolve inside this container. ` +
-          `Replace with a real file in your SSH mount (cp the key, do not use ln -s to a path that only exists on another host).`,
+        readError: message,
       }
     }
-    if (!st.isFile()) {
+    if (!followed.stat.isFile()) {
       return {
         path: p,
         exists: true,
@@ -154,44 +189,40 @@ function inspectKeyPath(p: string): {
         readError: "Symlink does not point to a regular file",
       }
     }
-    try {
-      const buf = fs.readFileSync(p)
-      if (buf.length === 0) {
-        return {
-          path: p,
-          exists: true,
-          isSymlink: true,
-          linkTarget: target,
-          isFile: true,
-          size: st.size,
-          readable: false,
-          readError: "File is empty",
-        }
-      }
+    if (followed.buf.length === 0) {
       return {
         path: p,
         exists: true,
         isSymlink: true,
         linkTarget: target,
         isFile: true,
-        size: st.size,
-        readable: true,
-      }
-    } catch (e) {
-      return {
-        path: p,
-        exists: true,
-        isSymlink: true,
-        linkTarget: target,
-        isFile: true,
-        size: st.size,
+        size: followed.stat.size,
         readable: false,
-        readError: e instanceof Error ? e.message : String(e),
+        readError: "File is empty",
       }
     }
+    return {
+      path: p,
+      exists: true,
+      isSymlink: true,
+      linkTarget: target,
+      isFile: true,
+      size: followed.stat.size,
+      readable: true,
+    }
   }
-
-  if (!lst.isFile()) {
+  if (!direct.ok) {
+    return {
+      path: p,
+      exists: true,
+      isSymlink: false,
+      isFile: true,
+      size: 0,
+      readable: false,
+      readError: direct.error instanceof Error ? direct.error.message : String(direct.error),
+    }
+  }
+  if (!direct.stat.isFile()) {
     return {
       path: p,
       exists: true,
@@ -199,35 +230,21 @@ function inspectKeyPath(p: string): {
       isFile: false,
       size: 0,
       readable: false,
-      readError: lst.isDirectory() ? "Path is a directory, not a key file" : "Not a regular file",
+      readError: direct.stat.isDirectory() ? "Path is a directory, not a key file" : "Not a regular file",
     }
   }
-
-  try {
-    const buf = fs.readFileSync(p)
-    if (buf.length === 0) {
-      return {
-        path: p,
-        exists: true,
-        isSymlink: false,
-        isFile: true,
-        size: lst.size,
-        readable: false,
-        readError: "File is empty",
-      }
-    }
-    return { path: p, exists: true, isSymlink: false, isFile: true, size: lst.size, readable: true }
-  } catch (e) {
+  if (direct.buf.length === 0) {
     return {
       path: p,
       exists: true,
       isSymlink: false,
       isFile: true,
-      size: lst.size,
+      size: direct.stat.size,
       readable: false,
-      readError: e instanceof Error ? e.message : String(e),
+      readError: "File is empty",
     }
   }
+  return { path: p, exists: true, isSymlink: false, isFile: true, size: direct.stat.size, readable: true }
 }
 
 /** Admin diagnostics: what the Node process actually sees for keys and /app/ssh. */
@@ -312,7 +329,7 @@ export function probeSshKeyMount(
 
 /**
  * If a key file exists on a configured path but the Node process cannot read it
- * (typical: root:root 600 on host, app runs as nextjs UID 1001), return a short hint.
+ * (typical: mode 600 owned by another uid, app runs as the image user from LUX_UID).
  */
 export function describePrivateKeyPermissionIssue(
   effective?: Pick<RuntimeSettings, "proxmoxSshKeyPath"> | null,
@@ -325,10 +342,10 @@ export function describePrivateKeyPermissionIssue(
     const err = info.readError || ""
     if (/EACCES|EPERM|permission denied/i.test(err)) {
       return (
-        `Private key exists at ${p} but is not readable by the app user (nextjs, UID 1001). ` +
-        `Host files owned by root with mode 600 cannot be read inside the container. ` +
-        `Fix: use a writable ssh volume (docker-compose no longer uses :ro) and restart so the entrypoint can chown the key, ` +
-        `or on the host: chown 1001:1001 ssh/id_rsa from your ludus-ux directory.`
+        `Private key exists at ${p} but is not readable by the app user (uid from LUX_UID in .env, default 64532). ` +
+        `The ./ssh mount is read-only, so the container does not chown host keys. ` +
+        `On the host, chown the key to that uid:gid only when getent passwd does not already list the uid, ` +
+        `then rebuild if you changed LUX_UID or LUX_GID. See docs/persistent-data.md.`
       )
     }
     if (err) return `Private key at ${p} could not be read: ${err}`

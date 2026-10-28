@@ -59,7 +59,7 @@ export async function removeSourceInstalledItems(
       if (removed.error && removed.status !== 404) {
         warnings.push(`Template ${name}: ${removed.error}`)
       }
-      await sshExec(buildLudusTemplateRmCliCmd(name, apiKey)).catch(() => undefined)
+      await sshExec(buildLudusTemplateRmCliCmd(name), undefined, { stdin: `${apiKey}\n` }).catch(() => undefined)
       const purged = await sshExec(buildLudusTemplateDeleteCmd(ludusRoot, name)).catch(() => null)
       if (!purged || purged.code !== 0) {
         warnings.push(`Template ${name}: install directory is still on the Ludus host`)

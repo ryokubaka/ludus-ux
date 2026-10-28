@@ -20,7 +20,7 @@ export async function GET(
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }
 
-  const denied = assertGoadTaskAccess(session, request, task)
+  const denied = await assertGoadTaskAccess(session, request, task)
   if (denied) return denied
 
   return NextResponse.json(toGoadTaskDetail(task))
@@ -42,7 +42,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Task not found" }, { status: 404 })
   }
 
-  const denied = assertGoadTaskAccess(session, request, task)
+  const denied = await assertGoadTaskAccess(session, request, task)
   if (denied) return denied
 
   const body = (await request.json().catch(() => ({}))) as {

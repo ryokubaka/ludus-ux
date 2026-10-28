@@ -41,7 +41,8 @@ import {
 import { logAndSafeError } from "@/lib/safe-client-error"
 import { sshExec } from "@/lib/goad-ssh"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
+import type { ResolvedSession } from "@/lib/session"
 import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
 import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
 import { combineTemplateFailure } from "@/lib/template-add-errors"
@@ -184,8 +185,8 @@ async function addTemplate(
     // Non-fatal if the ludus user doesn't exist under that name.
   })
 
-  const addCmd = buildLudusTemplateAddCmd(destDir, ctx.ludusApiKey)
-  const addResult = await sshExec(addCmd)
+  const addCmd = buildLudusTemplateAddCmd(destDir)
+  const addResult = await sshExec(addCmd, undefined, { stdin: `${ctx.ludusApiKey}\n` })
   const rawMsg = (addResult.stdout + addResult.stderr).trim()
 
   if (isLudusCliTemplateAddFailure(rawMsg, addResult.code)) {
@@ -277,11 +278,11 @@ async function resolveTemplateSpecName(spec: TemplateSpec): Promise<TemplateSpec
   return { ...spec, name }
 }
 
-function resolveTemplateAddContext(
-  session: NonNullable<Awaited<ReturnType<typeof resolveSession>>>,
+async function resolveTemplateAddContext(
+  session: ResolvedSession,
   request: NextRequest,
-): TemplateAddContext {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+): Promise<TemplateAddContext> {
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const ludusApiKey = (imp.apiKey || session.apiKey || "").trim()
   const linuxUser = (imp.sshLogin || imp.ludusPrincipal || session.username || "").trim().toLowerCase()
   if (!ludusApiKey) {
@@ -294,17 +295,13 @@ function resolveTemplateAddContext(
 }
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   let addCtx: TemplateAddContext
   try {
-    addCtx = resolveTemplateAddContext(session, request)
+    addCtx = await resolveTemplateAddContext(session, request)
   } catch (err) {
     return NextResponse.json(
       { error: (err as Error).message },
@@ -384,5 +381,5 @@ export async function POST(request: NextRequest) {
     outcome: allOk ? "success" : "failure",
     detail: `templates=${resolvedTemplates.map((t) => t.name).join(",")}`,
   })
-  return NextResponse.json({ results: mapped })
+  return finishAdminResponse(NextResponse.json({ results: mapped }), admin)
 }

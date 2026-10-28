@@ -5,7 +5,7 @@
  * DELETE /api/profile/avatar        — remove current user's avatar
  */
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { DATA_DIR } from "@/lib/db"
 import { detectImageType, sanitizeUsername } from "@/lib/safe-filename"
 import fs from "fs"
@@ -31,8 +31,9 @@ function findAvatar(username: string): { filePath: string; contentType: string }
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   const rawUser = request.nextUrl.searchParams.get("u") ?? session.username
   const username = sanitizeUsername(rawUser)
@@ -51,8 +52,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   const safeUser = sanitizeUsername(session.username)
   if (!safeUser) return NextResponse.json({ error: "Invalid session username" }, { status: 400 })
@@ -86,8 +88,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const gate = await requireSession(request)
+  if (!gate.ok) return gate.response
+  const session = gate.session
 
   const safeUser = sanitizeUsername(session.username)
   if (!safeUser) return NextResponse.json({ error: "Invalid session username" }, { status: 400 })

@@ -220,7 +220,7 @@ const YAML_DUMP_OPTS = {
  */
 export function sanitizeNetworkIpOctetsInYaml(yamlText: string): string {
   return yamlText.replace(
-    /^(\s*ip_last_octet_(?:src|dst):\s*)(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/gm,
+    /^(\s*(?:-\s+)?ip_last_octet_(?:src|dst):\s*)(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/gm,
     (_m, prefix: string, dq?: string, sq?: string, bare?: string) => {
       const raw = dq ?? sq ?? bare ?? ""
       const out = octetForYaml(raw)

@@ -3,13 +3,16 @@ import "server-only"
 import yaml from "js-yaml"
 import { parseGalaxyCollectionFqcn } from "@/lib/ansible-collection-fqcn"
 import {
+  githubApiPath,
   githubRawFileUrl,
+  githubRepoFromApiBase,
   listRepoDirectory,
   fetchRepoRawFile,
+  parseGitHubCloneUrl,
   type RepoTreeItem,
 } from "@/lib/template-repo-client"
 import { DEFAULT_SOURCE_GIT_REF } from "@/lib/ludus-source-ref"
-import { ludusTemplateInstallName } from "@/lib/packer-vm-name"
+import { ludusTemplateInstallName, trimTrailingSlashes } from "@/lib/packer-vm-name"
 import { sourceBlueprintInstallId } from "@/lib/registered-ludus-sources"
 
 const GITHUB_FETCH_HEADERS = { "User-Agent": "ludus-ux/1.0", Accept: "application/vnd.github+json" }
@@ -32,20 +35,25 @@ export function gitCatalogEntryNames(items: RepoTreeItem[], dirPath: string): st
 }
 
 export function gitUrlToGithubApiBase(gitUrl: string): string | null {
-  const normalized = gitUrl.trim().replace(/\.git$/, "")
-  const m = normalized.match(/github\.com\/([^/]+\/[^/]+)/i)
-  if (!m) return null
-  return `https://api.github.com/repos/${m[1]}`
+  const repo = parseGitHubCloneUrl(gitUrl)
+  if (!repo) return null
+  return githubApiPath(repo)
 }
 
 async function fetchGalaxyFqcnFromRepo(repo: string, ref: string): Promise<string | null> {
   // Only the Sources-tab ref — never silently fall back to main/master (wrong branch content).
   const branch = gitRefOrDefault(ref)
+  const [owner, name] = repo.split("/")
+  if (!owner || !name || name.includes("/")) return null
+  const encodedRef = branch.split("/").filter(Boolean).map((segment) => encodeURIComponent(segment)).join("/")
   try {
-    const res = await fetch(`https://raw.githubusercontent.com/${repo}/${branch}/galaxy.yml`, {
-      headers: GITHUB_FETCH_HEADERS,
-      cache: "no-store",
-    })
+    const res = await fetch(
+      `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${encodedRef}/galaxy.yml`,
+      {
+        headers: GITHUB_FETCH_HEADERS,
+        cache: "no-store",
+      },
+    )
     if (!res.ok) return null
     return parseGalaxyCollectionFqcn(await res.text())
   } catch {
@@ -72,13 +80,15 @@ export async function resolveGitCollectionFqcn(
   }
 
   try {
-    const url = `${apiBase}/contents/ansible/collections/${encodeURIComponent(dirName)}?ref=${encodeURIComponent(branch)}`
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) return dirName
+    const url = `${githubApiPath(repo, "contents", "ansible", "collections", dirName)}?ref=${encodeURIComponent(branch)}`
     const res = await fetch(url, { headers: GITHUB_FETCH_HEADERS, cache: "no-store" })
     if (res.ok) {
       const item = (await res.json()) as GitHubContentEntry
-      const repo = item.git_url?.match(/repos\/([^/]+\/[^/]+)\/git/)?.[1]
-      if (repo) {
-        const fqcn = await fetchGalaxyFqcnFromRepo(repo, branch)
+      const submodule = item.git_url?.match(/repos\/([^/]+\/[^/]+)\/git/)?.[1]
+      if (submodule) {
+        const fqcn = await fetchGalaxyFqcnFromRepo(submodule, branch)
         if (fqcn) return fqcn
       }
     }
@@ -153,7 +163,7 @@ export async function resolveGitTemplateInstallName(
   templatePath?: string,
 ): Promise<string> {
   const branch = gitRefOrDefault(ref)
-  const dirPath = (templatePath || `templates/${dirName}`).replace(/\/+$/, "")
+  const dirPath = trimTrailingSlashes(templatePath || `templates/${dirName}`)
   const listed = fileNames?.find((f) => f.endsWith(".pkr.hcl") || f.endsWith(".pkr.json"))
   const candidates = listed
     ? [`${dirPath}/${listed}`]

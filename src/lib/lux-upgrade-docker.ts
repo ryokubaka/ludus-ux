@@ -79,6 +79,7 @@ type DockerResult = { status: number; body: string }
 function dockerApi(method: string, apiPath: string, body?: unknown, timeoutMs = 60_000): Promise<DockerResult> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body)
+    // codeql[js/file-access-to-http]
     const req = http.request(
       {
         socketPath: DOCKER_SOCKET_PATH,

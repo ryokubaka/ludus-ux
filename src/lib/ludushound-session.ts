@@ -7,7 +7,7 @@ export async function resolveLudushoundSession(request: NextRequest) {
   const session = await resolveSession(request)
   if (!session) return null
 
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = await resolveAdminImpersonationFromRequest(session, request)
   const apiKey = imp.apiKey || session.apiKey
   const impersonating = !!(session.isAdmin && imp.apiKey)
 

@@ -53,6 +53,11 @@
 }
 
 @layer base {
+  /* rem is the app scale. 13px is what 80% browser zoom looked like at the 16px default. */
+  html {
+    font-size: 13px;
+  }
+
   * {
     @apply border-border;
     scrollbar-width: thin;

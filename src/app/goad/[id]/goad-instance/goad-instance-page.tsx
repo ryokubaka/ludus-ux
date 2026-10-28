@@ -151,7 +151,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
     getExtraHeaders: impersonationHeaders,
   })
   const [currentAction, setCurrentAction] = useState<string | null>(null)
-  const { selectedRangeId, selectRange, refreshRanges, forgetRange } = useRange()
+  const { ranges, selectedRangeId, selectRange, refreshRanges, forgetRange } = useRange()
   const {
     lines: rangeLogLines,
     isStreaming: isRangeStreaming,
@@ -180,11 +180,14 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
   )
 
   // Viewing a GOAD instance should drive the sidebar active range (and cookie).
+  // Skip a range that was just deleted: selecting it again fights the picker,
+  // which moves off a missing range, until React throws and the shell error page shows.
   useEffect(() => {
     const rid = instance?.ludusRangeId?.trim()
     if (!rid || selectedRangeId === rid) return
+    if (!ranges.some((r) => r.rangeID === rid)) return
     selectRange(rid)
-  }, [instance?.ludusRangeId, instanceId, selectedRangeId, selectRange])
+  }, [instance?.ludusRangeId, instanceId, ranges, selectedRangeId, selectRange])
 
   const rangeLogRefreshLock = useRef(false)
   const [rangeLogRefreshBusy, setRangeLogRefreshBusy] = useState(false)
@@ -811,7 +814,9 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
             ? new URLSearchParams(window.location.search).get("rangeId")?.trim() ?? ""
             : ""
         if (!found) {
-          const rangeId = selectedRangeId?.trim() || rangeFromUrl
+          // Later polls use only the URL's range: deleting this lab moves the range
+          // picker to another range, whose lab must not replace this page.
+          const rangeId = isInitial ? selectedRangeId?.trim() || rangeFromUrl : rangeFromUrl
           if (rangeId) {
             const byRes = await fetch(
               `/api/goad/by-range?rangeId=${encodeURIComponent(rangeId)}`,

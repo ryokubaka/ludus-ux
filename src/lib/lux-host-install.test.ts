@@ -8,12 +8,15 @@ import { decryptSettingsValueAtRest } from "./settings-value-at-rest"
 import {
   buildLuxHostInstallShell,
   explainLuxHostInstallFailure,
+  loadLuxHostInstallPayload,
+  luxHostInstallStdin,
   luxHostSelfUpdateStdin,
   luxHostSudoUsernameError,
   renderLuxHostSudoers,
   selectLuxHostInstallMode,
 } from "./lux-host-install"
 import { luxHostManualInstallCommand } from "./lux-host-manual-command"
+import { lacks } from "../test-support/host-capabilities"
 
 const TEMPLATE = "# comment\n__LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST\n"
 
@@ -31,7 +34,7 @@ describe("lux-host-install", () => {
   })
 
   it("builds a visudo install with no shell expansions in the transmitted command", () => {
-    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "sudo-s")
+    const cmd = buildLuxHostInstallShell("sudo-s")
     expect(cmd).not.toContain("\n")
     expect(cmd).not.toMatch(/\$/)
     expect(cmd).not.toContain("secret-password")
@@ -41,8 +44,9 @@ describe("lux-host-install", () => {
     const script = Buffer.from(/printf '%s' '([^']+)'/.exec(wrapper)?.[1] ?? "", "base64").toString("utf8")
     expect(script).toContain("visudo -cf")
     expect(script).toContain("mkdir -p /usr/local/sbin")
-    expect(script).toContain("aGVscGVy")
+    expect(script).toContain("IFS= read -r helper")
     expect(script).toContain("pipefail; umask 077")
+    expect(cmd.length).toBeLessThan(131072)
   })
 
   it("prefers self-update once the helper can replace itself", () => {
@@ -77,7 +81,7 @@ describe("lux-host-install", () => {
       `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(argsFile)}\nif [ "$1" = "-n" ] && [ "$2" = "/usr/local/sbin/lux-host" ]; then exit 0; fi\nexit 19\n`,
       { mode: 0o755 },
     )
-    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "helper")
+    const cmd = buildLuxHostInstallShell("helper")
     const result = spawnSync("bash", ["-c", cmd], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
@@ -116,7 +120,7 @@ describe("lux-host-install", () => {
   it("returns the installer status when sudo fails and deletes the temp script", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "lux-host-install-"))
     writeFileSync(path.join(dir, "sudo"), "#!/bin/sh\nexit 17\n", { mode: 0o755 })
-    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "sudo-n")
+    const cmd = buildLuxHostInstallShell("sudo-n")
     const wrapped = `bash -c ${JSON.stringify(cmd)}`
     const result = spawnSync("sh", ["-c", wrapped], {
       encoding: "utf8",
@@ -128,11 +132,7 @@ describe("lux-host-install", () => {
   })
 
   it("returns non-zero when the root installer cannot write the helper", () => {
-    const cmd = buildLuxHostInstallShell(
-      Buffer.from("#!/bin/sh\n").toString("base64"),
-      Buffer.from("user ALL=(root) NOPASSWD: /usr/local/sbin/lux-host\n").toString("base64"),
-      "root",
-    )
+    const cmd = buildLuxHostInstallShell("root")
     const result = spawnSync("bash", ["-c", cmd], { encoding: "utf8" })
     expect(result.status).not.toBe(0)
     expect(existsSync("/tmp/lux-host-install.sh")).toBe(false)
@@ -169,7 +169,7 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
 
   it("reads the update key from stdin and does not print it", () => {
     const key = "cd".repeat(32)
-    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "root")
+    const cmd = buildLuxHostInstallShell("root")
     expect(cmd).not.toContain(key)
     const result = spawnSync("bash", ["-c", cmd], { encoding: "utf8", input: key })
     expect(result.status).not.toBe(0)
@@ -194,8 +194,17 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
     expect(decryptSettingsValueAtRest(row.value, secret)).toBe(key)
   })
 
+  it("keeps the real helper off the remote command line", () => {
+    const payload = loadLuxHostInstallPayload("admin")
+    const cmd = buildLuxHostInstallShell("root")
+    const stdin = luxHostInstallStdin(payload.helperB64, payload.sudoersB64, "ab".repeat(32))
+    expect(cmd.length).toBeLessThan(131072)
+    expect(cmd).not.toContain(payload.helperB64.slice(0, 40))
+    expect(stdin.split("\n")[1]).toBe(payload.helperB64)
+  })
+
   it("omits sudo when the SSH account is already root", () => {
-    const cmd = buildLuxHostInstallShell("aGVscGVy", "c3Vkb2Vycw==", "root")
+    const cmd = buildLuxHostInstallShell("root")
     expect(cmd.startsWith("printf ")).toBe(true)
     expect(cmd).not.toContain("sudo")
   })
@@ -219,7 +228,7 @@ describe("luxHostManualInstallCommand", () => {
     expect(() => luxHostManualInstallCommand("user;rm", "#!/bin/bash\n")).toThrow(/plain Linux/)
   })
 
-  it("installs the helper and sudoers rule from one pasted root shell", () => {
+  it.skipIf(lacks("visudo"))("installs the helper and sudoers rule from one pasted root shell", () => {
     const helper = "#!/bin/bash\necho manual-helper\n"
     const command = luxHostManualInstallCommand("testuser", helper)
     expect(command).toContain("#!/bin/bash")
@@ -236,7 +245,7 @@ describe("luxHostManualInstallCommand", () => {
     expect(rule).not.toContain("__LUX_SSH_USER__")
   })
 
-  it("embeds the bundled helper so the paste does not need another file", () => {
+  it.skipIf(lacks("visudo"))("embeds the bundled helper so the paste does not need another file", () => {
     const helper = readFileSync(path.join(process.cwd(), "scripts/lux-host/lux-host"), "utf8")
     const command = luxHostManualInstallCommand("testuser", helper)
     const dir = mkdtempSync(path.join(tmpdir(), "lux-host-manual-bundled-"))

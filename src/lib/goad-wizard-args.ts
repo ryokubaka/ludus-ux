@@ -7,6 +7,27 @@ export function shellQuoteGoadArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
+/** GOAD prints this after create_empty / load_instance. */
+const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
+
+/** Prefer the last `[+] Instance … loaded`. A fresh install prints that before the workspace list includes it. */
+export function extractGoadInstanceIdFromOutput(blob: string): string | null {
+  const re = new RegExp(GOAD_INSTANCE_LOADED_RE.source, "g")
+  let lastLoaded: string | null = null
+  let match: RegExpExecArray | null
+  while ((match = re.exec(blob)) !== null) {
+    if (match[1]) lastLoaded = match[1]
+  }
+  if (lastLoaded) return lastLoaded
+
+  const rowRe = /\|\s*>\s*([a-f0-9]+-[\w-]+-ludus)\s*\|/gi
+  let lastRow: string | null = null
+  for (const row of blob.matchAll(rowRe)) {
+    if (row[1]) lastRow = row[1]
+  }
+  return lastRow
+}
+
 export type GoadWizardInstallMode =
   | { kind: "fresh" }
   | { kind: "existing"; instanceId: string; useDecomposedExtensionProvisioning: boolean }

@@ -37,6 +37,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/comp
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
+import { newRangeUid as createRangeUid } from "@/lib/range-uid"
 import { useToast } from "@/hooks/use-toast"
 import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
 import { goadChainDebug } from "@/lib/goad-chain-debug"
@@ -61,7 +62,7 @@ import {
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
 } from "@/lib/goad-preview-config"
-import { buildGoadWizardInstallArgs } from "@/lib/goad-wizard-args"
+import { buildGoadWizardInstallArgs, extractGoadInstanceIdFromOutput } from "@/lib/goad-wizard-args"
 import {
   extensionAnsibleDepsReady,
   extensionMissingAnsibleRoles,
@@ -188,7 +189,13 @@ function extensionSetsEqual(instanceExtensions: string[] | undefined, wizard: st
   return a.every((v, i) => v === b[i])
 }
 
-export function NewGoadInstancePageClient() {
+export function NewGoadInstancePageClient({
+  embedded = false,
+  onBack,
+}: {
+  embedded?: boolean
+  onBack?: () => void
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const scopeTag = useEffectiveScopeTag()
@@ -259,7 +266,7 @@ export function NewGoadInstancePageClient() {
   // Using the same UID means the range suffix visually matches the instance name suffix,
   // making it easy to see which range belongs to which instance.
   // 6 chars gives ~2 billion combinations — low collision risk per user.
-  const [newRangeUid] = useState(() => Math.random().toString(36).slice(2, 8).toUpperCase())
+  const [newRangeUid] = useState(createRangeUid)
   // True while we are deleting existing VMs before a GOAD install into an existing range
   const [clearingRange, setClearingRange] = useState(false)
   // Existing GOAD instance that lives in the currently-selected existing range (if any)
@@ -337,6 +344,68 @@ export function NewGoadInstancePageClient() {
   // a stale closure — same pattern as goad/[id]/page.tsx.
   const goadTaskIdRef = useRef<string | null>(null)
   goadTaskIdRef.current = goadTaskId
+  const freshDeployRef = useRef<{
+    redirected: boolean
+    before: Set<string>
+    rangeId: string | null
+    handoffId: string | null
+    networkRulesJson?: string
+  } | null>(null)
+
+  const redirectToFreshInstance = useCallback((newId: string) => {
+    const ctx = freshDeployRef.current
+    if (!ctx || ctx.redirected || !newId || ctx.before.has(newId)) return
+    ctx.redirected = true
+    const taskId = goadTaskIdRef.current
+    if (ctx.handoffId && taskId) {
+      fetch("/api/goad/deploy-handoff", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        body: JSON.stringify({ handoffId: ctx.handoffId, taskId }),
+      }).catch(() => {})
+    }
+    if (ctx.rangeId) {
+      fetch("/api/goad/instances/set-range", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        body: JSON.stringify({ rangeId: ctx.rangeId, instanceIds: [newId] }),
+      }).catch(() => {})
+    }
+    if (taskId) {
+      fetch(`/api/goad/tasks/${taskId}/link-instance`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        body: JSON.stringify({ instanceId: newId }),
+      }).catch(() => {})
+    }
+    if (ctx.networkRulesJson) {
+      fetch(`/api/goad/instances/${encodeURIComponent(newId)}/pending-network`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: ctx.networkRulesJson,
+      }).catch(() => {})
+    }
+    if (ctx.rangeId) selectRange(ctx.rangeId)
+    void refreshRanges()
+    const taskQ = new URLSearchParams({ tab: "deploy" })
+    if (taskId) taskQ.set("goadTaskId", taskId)
+    if (ctx.rangeId) taskQ.set("rangeId", ctx.rangeId)
+    router.push(`/goad/${encodeURIComponent(newId)}?${taskQ.toString()}`)
+  }, [refreshRanges, router, selectRange])
+
+  // The workspace list stays empty until SSH can see instance.json. The deploy
+  // log already prints the id, so leave this page as soon as that line arrives.
+  useEffect(() => {
+    const ctx = freshDeployRef.current
+    if (!ctx || ctx.redirected) return
+    const id = extractGoadInstanceIdFromOutput(lines.join("\n"))
+    if (!id) return
+    redirectToFreshInstance(id)
+  }, [lines, redirectToFreshInstance])
 
   /** Wait for execute SSE to emit [TASKID] so redirect can pass ?goadTaskId= for log resume. */
   const waitForGoadTaskId = async (maxMs = 5_000): Promise<string | null> => {
@@ -945,94 +1014,52 @@ export function NewGoadInstancePageClient() {
         ludusOnlyRolesOpt,
       )
 
-      // Poll until GOAD creates the new workspace directory, then redirect.
-      // GOAD writes instance.json early in the install flow (within ~30–60 s).
-      // [P1] Poll every 3 s (was 10 s) and limit to 5 min (was 30 min) since
-      //      the instance appears almost immediately after GOAD's init phase.
-      const capturedRangeId = rangeId
-      const capturedHandoffId = handoffId
-      const capturedBefore = new Set(instanceIdsBefore)
-      let redirected = false
+      // Redirect from the deploy log as soon as GOAD names the instance.
+      // The workspace list is a fallback: it was still empty at the moment the log printed the id.
+      freshDeployRef.current = {
+        redirected: false,
+        before: new Set(instanceIdsBefore),
+        rangeId,
+        handoffId,
+        networkRulesJson,
+      }
+      const idFromLog = extractGoadInstanceIdFromOutput(lines.join("\n"))
+      if (idFromLog) redirectToFreshInstance(idFromLog)
 
       const pollForInstance = async () => {
         const deadline = Date.now() + 5 * 60 * 1000
-        while (Date.now() < deadline && !redirected) {
+        while (Date.now() < deadline && !freshDeployRef.current?.redirected) {
           await new Promise((r) => setTimeout(r, 3_000))
           try {
             const curHeaders = getImpersonationHeaders()
             const res = await fetch("/api/goad/instances", {
               credentials: "include",
               headers: curHeaders,
+              cache: "no-store",
             })
             if (!res.ok) continue
             const data = await res.json()
+            const known = freshDeployRef.current?.before ?? new Set<string>()
             let newInst = (data.instances ?? []).find(
-              (i: { instanceId: string }) => !capturedBefore.has(i.instanceId)
+              (i: { instanceId: string }) => !known.has(i.instanceId)
             )
-            // Fallback admin-view when impersonating
             if (!newInst && Object.keys(curHeaders).length > 0) {
               try {
-                const adminRes = await fetch("/api/goad/instances", { credentials: "include" })
+                const adminRes = await fetch("/api/goad/instances", { credentials: "include", cache: "no-store" })
                 if (adminRes.ok) {
                   const adminData = await adminRes.json()
                   newInst = (adminData.instances ?? []).find(
-                    (i: { instanceId: string }) => !capturedBefore.has(i.instanceId)
+                    (i: { instanceId: string }) => !known.has(i.instanceId)
                   )
                 }
               } catch { /* best-effort */ }
             }
-            if (newInst && !redirected) {
-              redirected = true
-              const newId = newInst.instanceId as string
-              const taskId = goadTaskIdRef.current
-
-              // [P6] Fire-and-forget all linkage calls before redirect.
-              // The handoff already persisted the rangeId on the server, so these
-              // are metadata updates that don't block the navigation.
-              if (capturedHandoffId && taskId) {
-                fetch("/api/goad/deploy-handoff", {
-                  method: "PATCH",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
-                  body: JSON.stringify({ handoffId: capturedHandoffId, taskId }),
-                }).catch(() => {})
-              }
-              if (capturedRangeId) {
-                fetch("/api/goad/instances/set-range", {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
-                  body: JSON.stringify({ rangeId: capturedRangeId, instanceIds: [newId] }),
-                }).catch(() => {})
-              }
-              if (taskId) {
-                fetch(`/api/goad/tasks/${taskId}/link-instance`, {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
-                  body: JSON.stringify({ instanceId: newId }),
-                }).catch(() => {})
-              }
-              if (networkRulesJson) {
-                fetch(`/api/goad/instances/${encodeURIComponent(newId)}/pending-network`, {
-                  method: "POST",
-                  credentials: "include",
-                  headers: { "Content-Type": "application/json" },
-                  body: networkRulesJson,
-                }).catch(() => {})
-              }
-              if (capturedRangeId) selectRange(capturedRangeId)
-              void refreshRanges()
-              const taskQ = new URLSearchParams({ tab: "deploy" })
-              if (taskId) taskQ.set("goadTaskId", taskId)
-              if (capturedRangeId) taskQ.set("rangeId", capturedRangeId)
-              router.push(`/goad/${encodeURIComponent(newId)}?${taskQ.toString()}`)
-            }
+            if (newInst?.instanceId) redirectToFreshInstance(newInst.instanceId as string)
           } catch { /* retry */ }
         }
       }
 
-      pollForInstance()
+      void pollForInstance()
     }
   }
 
@@ -1062,8 +1089,17 @@ export function NewGoadInstancePageClient() {
     <div className={cn(
       showTerminal
         ? "flex flex-col flex-1 min-h-0 gap-3 w-full"
-        : "w-full max-w-7xl 2xl:max-w-[min(90rem,96vw)] mx-auto space-y-6 px-1 sm:px-0",
+        : embedded
+          ? "w-full space-y-6"
+          : "w-full max-w-7xl 2xl:max-w-[min(90rem,96vw)] mx-auto space-y-6 px-1 sm:px-0",
     )}>
+      {embedded ? (
+        <div className="flex justify-start flex-shrink-0">
+          <Button variant="ghost" onClick={onBack}>
+            <ChevronLeft className="h-4 w-4" /> Back
+          </Button>
+        </div>
+      ) : (
       <div className="flex items-center gap-3 flex-shrink-0">
         <Button variant="ghost" size="icon-sm" asChild>
           <Link href="/goad">
@@ -1075,6 +1111,7 @@ export function NewGoadInstancePageClient() {
           <p className="text-xs text-muted-foreground">Install a Game of Active Directory instance on your Ludus server</p>
         </div>
       </div>
+      )}
 
       {/* Step indicator */}
       <div className="flex items-center gap-2 flex-wrap">

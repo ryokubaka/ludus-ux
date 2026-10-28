@@ -39,19 +39,20 @@ export async function repairAnsibleHomeAsRoot(linuxUser: string): Promise<void> 
   return ensureAnsibleHomeLayoutAsRoot(linuxUser)
 }
 
-export function resolveSessionLinuxUser(
+export async function resolveSessionLinuxUser(
   session: Pick<
     SessionData,
+    | "sessionId"
     | "username"
     | "isAdmin"
     | "impersonationUserId"
     | "impersonationSshLogin"
     | "impersonationLudusUserId"
-  >,
+  > & { apiKey?: string; impersonationApiKey?: string },
   request?: NextRequest,
-): string {
+): Promise<string> {
   if (request) {
-    const imp = resolveAdminImpersonationFromRequest(session, request)
+    const imp = await resolveAdminImpersonationFromRequest(session, request)
     const fromImp = (imp.sshLogin || imp.ludusPrincipal || "").trim()
     if (fromImp) return fromImp.toLowerCase()
   }

@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireAdmin } from "@/lib/require-admin"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 
@@ -25,10 +25,8 @@ export interface SharedAdminVM {
 }
 
 export async function GET(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
 
   // Proxmox pvesh must use PROXMOX_SSH_* / mounted key only — never the browser session's Ludus SSH password.
   const ssh = requireProxmoxSsh()

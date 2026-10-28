@@ -11,7 +11,7 @@ import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
 import { syncSource } from "@/lib/ludus-source-client"
 import { setSourcePublished } from "@/lib/source-publication"
 import { removeSourceInstalledItems } from "@/lib/source-unpublish"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 
 export const maxDuration = 300
 
@@ -25,13 +25,10 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ sourceId: string }> },
 ) {
-  const { session, apiKey } = await requireSourcesSession(request)
-  if (!session || !apiKey) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  }
-  if (!session.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
+  const apiKey = session.apiKey
 
   const { sourceId } = await params
   const id = sourceId?.trim()
@@ -57,7 +54,7 @@ export async function POST(
       outcome: "success",
       detail: `publish-source=${id} published=false`,
     })
-    return NextResponse.json({ published: false, warnings })
+    return finishAdminResponse(NextResponse.json({ published: false, warnings }), admin)
   }
 
   setSourcePublished(id, true)
@@ -88,5 +85,5 @@ export async function POST(
     outcome: warnings.length > 0 ? "failure" : "success",
     detail: `publish-source=${id} published=${published}`,
   })
-  return NextResponse.json({ published, warnings })
+  return finishAdminResponse(NextResponse.json({ published, warnings }), admin)
 }

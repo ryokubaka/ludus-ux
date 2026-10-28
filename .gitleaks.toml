@@ -1,0 +1,33 @@
+# gitleaks: the default rules, plus the e2e and security-gate credentials,
+# which must only ever come from CI variables or a gitignored .security-gate.env.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "lux-e2e-credential"
+description = "E2E or security-gate credential written as a literal"
+regex = '''(?i)\b(E2E_ADMIN_PASSWORD|E2E_LUDUS_API_KEY|GITLAB_TOKEN|LUX_GATE_\w*TOKEN)\s*[:=]\s*["']?([^\s"'$<.?{}-][^\s"'$]{3,})'''
+secretGroup = 2
+keywords = ["e2e_admin_password", "e2e_ludus_api_key", "gitlab_token", "lux_gate_"]
+
+[[rules]]
+id = "lux-ludus-api-key"
+description = "Ludus API key (userID.secret)"
+regex = '''\b(LUDUS_API_KEY|ludusApiKey|apiKey)\s*[:=]\s*["']([A-Za-z0-9]{2,20}\.[A-Za-z0-9+/_-]{24,})["']'''
+secretGroup = 2
+keywords = ["ludus_api_key", "ludusapikey", "apikey"]
+
+[allowlist]
+description = "Example env files, lockfile integrity hashes, and documented placeholders"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.security-gate\.env\.example$''',
+  '''(^|/)package-lock\.json$''',
+]
+regexTarget = "line"
+regexes = [
+  # Throwaway secret for the compose smoke test, which has no Ludus server.
+  '''APP_SECRET=ci-smoke-test-secret-min-32-chars-ok\s*$''',
+  '''E2E_LUDUS_API_KEY='\.\.\.'\s*$''',
+]

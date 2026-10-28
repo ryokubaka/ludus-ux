@@ -26,6 +26,7 @@ import {
   installedBlueprintMatchesSource,
 } from "@/lib/registered-ludus-sources"
 import { extractLudusList } from "@/lib/utils"
+import { ludusFetch } from "@/lib/ludus-fetch"
 
 const BADSL_GIT_URL = "https://github.com/badsectorlabs/ludus-source-bsl"
 
@@ -154,7 +155,7 @@ async function ludusJson<T>(
   apiKey: string,
   init?: RequestInit,
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const res = await fetch(buildLudusApiUrl(path), {
+  const res = await ludusFetch(buildLudusApiUrl(path), {
     ...init,
     headers: {
       "X-API-KEY": apiKey,

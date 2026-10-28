@@ -15,6 +15,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
+import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
 import { getSettings } from "@/lib/settings-store"
 import { goadCommandRunsAsHostAccount, setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
@@ -45,6 +47,8 @@ export async function POST(
   }
 
   const { instanceId } = await params
+  const denied = await assertGoadInstanceAccess(session, request, instanceId)
+  if (denied) return denied
   const settings = getSettings()
 
   const userCreds =
@@ -55,7 +59,7 @@ export async function POST(
     sshExecAsWorkspaceUser(request, session, command, userCreds)
 
   const { apiKey: impersonateApiKey, ludusPrincipal, ludusUserId: impLudusUid, sshLogin } =
-    resolveAdminImpersonationFromRequest(session, request)
+    await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
   const ludusHint = ((impersonateApiKey ? ludusPrincipal : null) || session.username).trim()
   const sshForSlug = (impersonateApiKey ? sshLogin || ludusPrincipal || "" : session.username).trim()
@@ -143,7 +147,7 @@ export async function POST(
   const ownerLinux = sshForSlug.trim()
   const runsAsHost = goadCommandRunsAsHostAccount({
     sshPassword: session.sshPassword,
-    impersonating: session.isAdmin === true && !!impersonateApiKey,
+    impersonating: (await liveSessionIsAdmin(session)) && !!impersonateApiKey,
   })
   const taskActive = setRangeHostProcessActive(instanceId)
   let directoryOwner = ""
@@ -172,7 +176,7 @@ export async function POST(
     logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} rangeId=${rangeId} created` })
     return NextResponse.json({ rangeId, created: true })
   }
-  if (session.isAdmin && ownerLinux && ownerLinux.toLowerCase() !== "root") {
+  if ((await liveSessionIsAdmin(session)) && ownerLinux && ownerLinux.toLowerCase() !== "root") {
     try {
       await chownGoadInstance(instanceId, ownerLinux)
     } catch (err) {

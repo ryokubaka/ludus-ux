@@ -1,0 +1,3 @@
+# GitLab reads this path by default. The pipeline is .gitlab/ci.yml.
+include:
+  - local: .gitlab/ci.yml

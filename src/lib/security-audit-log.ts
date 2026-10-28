@@ -5,13 +5,8 @@ export type AuditEvent = "login" | "logout" | "rate_limit"
 
 export type AuditOutcome = "success" | "failure" | "blocked"
 
-/** Client IP from reverse-proxy headers (nginx sets X-Real-IP / X-Forwarded-For). */
+/** Client IP recorded by nginx. The first X-Forwarded-For value is client-controlled. */
 export function clientIpFromRequest(request: NextRequest): string {
-  const forwarded = request.headers.get("x-forwarded-for")
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim()
-    if (first) return first
-  }
   const realIp = request.headers.get("x-real-ip")?.trim()
   if (realIp) return realIp
   return "unknown"

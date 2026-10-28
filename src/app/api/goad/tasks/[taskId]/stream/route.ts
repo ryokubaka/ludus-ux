@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server"
 import { subscribeToTask, getTask } from "@/lib/goad-task-store"
 import { resolveSession } from "@/lib/session"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { canAccessGoadTask } from "@/lib/goad-task-api"
+import { liveSessionIsAdmin } from "@/lib/session-admin-check"
 
 
 /**
@@ -25,14 +26,13 @@ export async function GET(
   // Enforce ownership before opening the stream.
   const task = getTask(taskId)
   if (task) {
-    const effectiveUser = effectiveImpersonatedOperatorUsername(session, request)
-    if (!session.isAdmin && task.username && task.username !== effectiveUser) {
+    if (!await canAccessGoadTask(session, request, task)) {
       return new Response("data: [ERROR] Not found\n\n", {
         status: 404,
         headers: { "Content-Type": "text/event-stream" },
       })
     }
-  } else if (!session.isAdmin) {
+  } else if (!(await liveSessionIsAdmin(session))) {
     // Task not in memory (e.g. server restarted) — non-admin users must not be
     // able to subscribe to arbitrary task IDs without an ownership check.
     return new Response("data: [ERROR] Not found\n\n", {

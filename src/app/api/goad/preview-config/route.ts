@@ -9,10 +9,14 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session"
 import { sshExec, isGoadConfigured } from "@/lib/goad-ssh"
 import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad-preview-config-py"
-import { getSettings } from "@/lib/settings-store"
 import { resolveGoadPath } from "@/lib/runtime-paths"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+
+const GOAD_CATALOG_NAME = /^[A-Za-z0-9_-]{1,64}$/
+
+function isGoadCatalogName(value: string): boolean {
+  return GOAD_CATALOG_NAME.test(value)
+}
 
 export async function POST(request: NextRequest) {
   const session = await resolveSession(request)
@@ -41,19 +45,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "extensions array is required" }, { status: 400 })
   }
 
-  const goadPath = resolveGoadPath()
+  const labName = lab.trim()
   const providerName = (provider || "ludus").trim() || "ludus"
-  const settings = getSettings()
-  const rootCreds = rootPasswordCredsIfSet(settings)
-  const userCreds =
+  if (!isGoadCatalogName(labName) || !isGoadCatalogName(providerName)) {
+    return NextResponse.json({ error: "lab and provider must be a single catalog name" }, { status: 400 })
+  }
+  if (!extensions.every((ext) => typeof ext === "string" && isGoadCatalogName(ext))) {
+    return NextResponse.json({ error: "each extension must be a single catalog name" }, { status: 400 })
+  }
+
+  const goadPath = resolveGoadPath()
+  const creds =
     session.sshPassword && session.username
       ? { username: session.username, password: session.sshPassword }
       : undefined
-  const creds = rootCreds ?? userCreds
 
   if (!creds) {
     return NextResponse.json(
-      { error: "No SSH credentials available (set PROXMOX_SSH_PASSWORD or log in with your SSH password)." },
+      { error: "Log in with your SSH password to preview a GOAD config." },
       { status: 503 },
     )
   }
@@ -65,7 +74,7 @@ export async function POST(request: NextRequest) {
 
   const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64")
   const encoded = Buffer.from(GOAD_PREVIEW_CONFIG_PY, "utf-8").toString("base64")
-  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(lab.trim())}' '${b64(JSON.stringify(extensions))}' '${b64(providerName)}' '${b64(effectiveIpRange)}' '${b64(effectiveRangeId)}'`
+  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(labName)}' '${b64(JSON.stringify(extensions))}' '${b64(providerName)}' '${b64(effectiveIpRange)}' '${b64(effectiveRangeId)}'`
 
   try {
     const { stdout, stderr, code } = await sshExec(cmd, creds)

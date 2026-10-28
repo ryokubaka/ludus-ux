@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
   }
 
-  const myUsername = effectiveImpersonatedOperatorUsername(session, request)
+  const myUsername = await effectiveImpersonatedOperatorUsername(session, request)
 
   const all = listTasks()
   // Show only the current user's tasks (always filtered — never return all tasks).

@@ -11,7 +11,6 @@
  * Returns: { newKey: string, bashrcUpdated: boolean, bashrcError?: string }
  */
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { getSettings } from "@/lib/settings-store"
 import { sshExec } from "@/lib/proxmox-ssh"
@@ -20,6 +19,7 @@ import { ludusGet, ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { isValidLudusSshUsername } from "@/lib/user-bashrc-apikey"
 import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
 
 export const maxDuration = 600
@@ -48,18 +48,15 @@ function extractKey(data: unknown): string {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getSessionFromRequest(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const adminSession = admin.session
 
   const body = await request.json().catch(() => ({})) as { userId?: string }
   const userId = body.userId?.trim()
   if (!userId) return NextResponse.json({ error: "userId is required" }, { status: 400 })
 
   const settings = getSettings()
-
-  const admin = await requireAdmin(request)
-  if (!admin.ok) return admin.response
-  const adminSession = admin.session
 
   // ── Step 1: Reset the key via Ludus API ─────────────────────────────────────
   // GET /user/apikey?userID=USERID on port 8080.
@@ -113,13 +110,15 @@ export async function POST(request: NextRequest) {
         // fallback to userID
       }
 
+      if (!isValidLudusSshUsername(linuxUser)) {
+        bashrcError = "Invalid Linux username"
+      } else {
       let homeDir = ""
       for (let attempt = 0; attempt < 8; attempt++) {
         try {
           homeDir = await sshExec(
             settings.sshHost, settings.sshPort, sshUser, sshPw,
-            `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`,
-            { elevate: false },
+            ["getent-home", linuxUser],
           )
         } catch {
           homeDir = ""
@@ -152,6 +151,7 @@ export async function POST(request: NextRequest) {
       } else {
         bashrcError =
           `Linux user "${linuxUser}" has no home yet after waiting — Ludus may still be provisioning. Use Roll API key again in a minute.`
+      }
       }
     } catch (err) {
       bashrcError = (err as Error).message

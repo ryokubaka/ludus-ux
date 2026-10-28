@@ -1,5 +1,5 @@
-# Node
-node_modules/
+# Node (no trailing slash: a symlink is a file, and `node_modules/` ignores only a directory)
+node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -38,6 +38,9 @@ data/
 
 # Live validation harness (keys, databases, local binaries)
 .lux-live/
+
+# Live security gate credentials (scripts/ci/live-security.sh)
+.security-gate.env
 
 # Playwright
 /test-results/

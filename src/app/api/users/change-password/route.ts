@@ -11,13 +11,14 @@
  */
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { resolveSession } from "@/lib/session"
+import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import { ludusRequest } from "@/lib/ludus-client"
 import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
 import type { UserObject } from "@/lib/types"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { isValidLudusSshUsername } from "@/lib/user-bashrc-apikey"
 
 export const maxDuration = 600
 
@@ -27,9 +28,9 @@ function sleep(ms: number) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
-  if (!session.isAdmin) return NextResponse.json({ error: "Admin required" }, { status: 403 })
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
+  const { session } = admin
 
   const body = await request.json().catch(() => ({})) as { userId?: string; newPassword?: string }
   const { userId, newPassword } = body
@@ -61,6 +62,10 @@ export async function POST(request: NextRequest) {
     // fallback to userID
   }
 
+  if (!isValidLudusSshUsername(linuxUser)) {
+    return NextResponse.json({ error: "Invalid Linux username" }, { status: 400 })
+  }
+
   // Verify the Linux user exists
   let homeDir = ""
 
@@ -70,8 +75,7 @@ export async function POST(request: NextRequest) {
         homeDir = await sshExec(
           sshHost, sshPort,
           sshUser, sshPass,
-          `getent passwd "${linuxUser}" 2>/dev/null | cut -d: -f6 || true`,
-          { elevate: false },
+          ["getent-home", linuxUser],
         )
       } catch {
         homeDir = ""
@@ -106,5 +110,5 @@ export async function POST(request: NextRequest) {
   }
 
   logLuxRouteAction(request, session, { detail: `userId=${userId}` })
-  return NextResponse.json({ success: true })
+  return finishAdminResponse(NextResponse.json({ success: true }), admin)
 }

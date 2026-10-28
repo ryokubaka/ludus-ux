@@ -4,6 +4,7 @@ import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-
 import { resolveSession } from "@/lib/session"
 import { getSettings } from "@/lib/settings-store"
 import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { ludusFetch } from "@/lib/ludus-fetch"
 import { sanitizeNetworkRulesYaml } from "@/lib/network-rules"
 
 export const maxDuration = 120
@@ -36,12 +37,12 @@ export async function GET(request: NextRequest) {
   const rangeId = request.nextUrl.searchParams.get("rangeID")
   const ludusPath = rangeId ? `/range/config?rangeID=${encodeURIComponent(rangeId)}` : "/range/config"
 
-  const { apiKey: impersonateApiKey } = resolveAdminImpersonationFromRequest(session, request)
+  const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   try {
     const settings = getSettings()
-    const res = await fetch(buildLudusUrl(ludusPath, false), {
+    const res = await ludusFetch(buildLudusUrl(ludusPath, false), {
       method: "GET",
       headers: {
         "X-API-KEY": effectiveApiKey,
@@ -76,7 +77,7 @@ export async function PUT(request: NextRequest) {
   const config = sanitizeNetworkRulesYaml(rawConfig)
   const ludusPath = rangeId ? `/range/config?rangeID=${encodeURIComponent(rangeId)}` : "/range/config"
 
-  const impersonateApiKey = resolveAdminImpersonationFromRequest(session, request).apiKey
+  const impersonateApiKey = (await resolveAdminImpersonationFromRequest(session, request)).apiKey
   const effectiveApiKey = impersonateApiKey || session.apiKey
 
   const formData = new FormData()
@@ -86,7 +87,7 @@ export async function PUT(request: NextRequest) {
 
   try {
     const settings = getSettings()
-    const res = await fetch(buildLudusUrl(ludusPath, false), {
+    const res = await ludusFetch(buildLudusUrl(ludusPath, false), {
       method: "PUT",
       headers: {
         "X-API-KEY": effectiveApiKey,

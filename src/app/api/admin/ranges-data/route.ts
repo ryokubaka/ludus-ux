@@ -21,7 +21,6 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/safe-client-error"
-import { resolveSession } from "@/lib/session"
 import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
 import { ludusRequest } from "@/lib/ludus-client"
 import { setOwnership, removeOwnership } from "@/lib/range-ownership-store"
@@ -32,18 +31,19 @@ import { logLuxRouteAction } from "@/lib/lux-api-audit"
 // ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  const session = await resolveSession(request)
-  if (!session?.isAdmin) {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 })
-  }
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return admin.response
 
   try {
-    const data = await getAdminData(session.apiKey)
-    return NextResponse.json(data)
+    const data = await getAdminData(admin.session.apiKey)
+    return finishAdminResponse(NextResponse.json(data), admin)
   } catch (err) {
-    return NextResponse.json(
-      { error: (err as Error).message || "Failed to fetch admin data" },
-      { status: 500 },
+    return finishAdminResponse(
+      NextResponse.json(
+        { error: (err as Error).message || "Failed to fetch admin data" },
+        { status: 500 },
+      ),
+      admin,
     )
   }
 }

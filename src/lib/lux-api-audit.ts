@@ -4,7 +4,7 @@
 
 import type { NextRequest } from "next/server"
 import { logAppEvent, type LogOutcome } from "@/lib/app-log"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
+import { cookieImpersonation } from "@/lib/admin-impersonation-request"
 import { clientIpFromRequest } from "@/lib/security-audit-log"
 
 const SKIP_LOG_PATH_PREFIXES = [
@@ -18,6 +18,7 @@ const SKIP_LOG_PATH_PREFIXES = [
 ]
 
 type SessionLike = {
+  sessionId?: string
   username: string
   apiKey?: string
   isAdmin: boolean
@@ -31,7 +32,7 @@ export function effectiveUsernameFromRequest(
   request: NextRequest,
   session: SessionLike,
 ): string {
-  const imp = resolveAdminImpersonationFromRequest(session, request)
+  const imp = cookieImpersonation(session)
   if (imp.apiKey) {
     return (imp.sshLogin || imp.ludusPrincipal || session.username).trim()
   }

@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session"
+import { requireSession } from "@/lib/require-session"
 import { sshExec } from "@/lib/proxmox-ssh"
 import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
 import { parseClusterResourceNodes, type NodeResourceSample } from "@/lib/proxmox-node-metrics-parse"
@@ -24,10 +24,8 @@ type HostResourcesBody = {
 let cached: { at: number; body: HostResourcesBody } | null = null
 
 export async function GET(req: NextRequest) {
-  const session = await getSessionFromRequest(req)
-  if (!session) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 })
-  }
+  const gate = await requireSession(req)
+  if (!gate.ok) return gate.response
 
   const now = Date.now()
   if (cached && now - cached.at < CACHE_MS) {

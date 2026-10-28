@@ -377,8 +377,7 @@ export async function sshExec(
     const execCommand = Array.isArray(command) && opts?.stdin != null ? wrapLuxHostStdin(remote) : remote
 
     conn.on("ready", () => {
-      // codeql[js/command-line-injection]
-      // codeql[js/indirect-command-line-injection]
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(execCommand, (err, stream) => {
         if (err) {
           conn.end();
@@ -415,8 +414,7 @@ export async function sshExecAccount(
     let stderr = ""
     const cfg = buildConnectConfig()
     conn.on("ready", () => {
-      // codeql[js/command-line-injection]
-      // codeql[js/indirect-command-line-injection]
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(command, (err, stream) => {
         if (err) {
           conn.end()

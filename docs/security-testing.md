@@ -75,6 +75,8 @@ bash scripts/ci/live-security.sh
 
 `.github/workflows/ci.yml` runs every job except the live suite, which public runners cannot reach. Protect `main` and require: `unit`, `security`, `hygiene`, `changelog`, `secrets`, `sast`, `npm-audit`, `codeql`, and `security-gate/live`.
 
+The `codeql` job runs the `security-extended` suite, then drops a result when a `// codeql[js/...]` comment on that line, or on the comment lines immediately above it, names the rule. GitHub code scanning does not read those comments itself. An ordinary comment between the marker and the code breaks the cover.
+
 ## GitLab
 
 `.gitlab/ci.yml` runs on merge requests and on the default branch, with the same job names. The root `.gitlab-ci.yml` only includes that file, because GitLab's default config path is the repository root. Protect `main` and turn on **Pipelines must succeed**.

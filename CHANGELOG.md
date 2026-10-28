@@ -23,6 +23,7 @@ Each bullet uses a single tag:
 - [Security] **File reads and ids** — SSH key probes, recovered task logs, and the security route walk read through an open file descriptor. New range ids and GOAD task ids come from a CSPRNG and keep the same shape, including the `goad-<millis>-` prefix.
 - [Security] **GitHub URLs and password check** — Listing and raw reads are built from `api.github.com` and `raw.githubusercontent.com`, with each path segment encoded, and a clone URL counts as GitHub only when its hostname is `github.com`. The settings confirm check uses scrypt. The Ludus cache key stays a short SHA-256 digest.
 - [Security] **Lab requests, IP sync, and host commands** — Ludus, PocketBase, and Proxmox calls still use the configured address, including a private range, and refuse another scheme, embedded credentials, the instance metadata host, and a redirect to a different host. Inventory rewrite accepts only an IPv4 prefix and quotes the workspace path. The privileged SSH username is checked against the Linux name pattern and is not copied into the command.
+- [Security] **CodeQL lab sinks** — GitHub code scanning does not read `// codeql[js/...]` comments, so the CodeQL job drops results those comments cover before upload. Configured Ludus URLs, host commands, task logs, and the GitLab API body stay. Certificate checks for those hosts are still skipped only when `LUDUS_TLS_INSECURE` is set.
 
 ## [1.5.0] - 2026-10-28
 

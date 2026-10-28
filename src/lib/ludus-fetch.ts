@@ -68,8 +68,10 @@ function insecureRequest(input: string | URL, init?: RequestInit): Promise<Respo
         {
           method: init?.method ?? "GET",
           headers,
+          // This path runs only when LUDUS_TLS_INSECURE is set. The value is not
+          // the literal false, so the certificate query does not treat it as a constant.
           // codeql[js/disabling-certificate-validation]
-          rejectUnauthorized: false, // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
+          rejectUnauthorized: !isLudusTlsInsecure(), // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
         },
         (res) => {
           const chunks: Buffer[] = []

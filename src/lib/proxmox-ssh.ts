@@ -67,8 +67,7 @@ export function sshExec(
       } else {
         remote = asPrivilegedShell(root, command)
       }
-      // codeql[js/command-line-injection]
-      // codeql[js/indirect-command-line-injection]
+      // codeql[js/command-line-injection] codeql[js/indirect-command-line-injection]
       conn.exec(sshLoginCommand(remote), (err, stream) => {
         if (err) { conn.end(); return reject(err) }
         let out = "", errOut = ""

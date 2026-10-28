@@ -15,13 +15,7 @@ Each bullet uses a single tag:
 
 ---
 
-## Unreleased
-
-**LUX**
-
-- [Security] **zod** 4.6.7 — [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (memory exhaustion while validating oversized constrained collections). Dev dependency of `eslint-plugin-react-hooks` only.
-
-## [1.5.0] - 2026-10-23
+## [1.5.0] - 2026-10-28
 
 **LUX**
 
@@ -40,6 +34,7 @@ Each bullet uses a single tag:
 - [Security] **Signed upgrade key** — Tag verification uses a keyring that contains only `LUX_UPGRADE_TRUSTED_KEY`. A tag signed by any other key is refused. `LUX_UPGRADE_TRUSTED_FPR` pins the primary fingerprint. Settings → About passes both through to the host switch.
 - [Security] **Next.js** 16.4.2 — [GHSA-673q-mjm6-r5xr](https://github.com/advisories/GHSA-673q-mjm6-r5xr) (unauthenticated RCE when a `use cache` function returns typed arrays), [GHSA-2464-fhr4-w9xw](https://github.com/advisories/GHSA-2464-fhr4-w9xw) (image-optimization RCE when SVG files are used), and [GHSA-p3m5-59mp-jv5r](https://github.com/advisories/GHSA-p3m5-59mp-jv5r) (Server Actions denial of service). 16.3.8 is in the affected range. `eslint-config-next` is 16.4.2. `sharp` stays at 0.35.5. `partialPrefetching` is false so existing Cache Components keep their current prefetch behavior.
 - [Security] **Vitest** 4.1.12 — [GHSA-qxg6-89mg-rqv8](https://github.com/advisories/GHSA-qxg6-89mg-rqv8) (code injection via unauthenticated manual mock registration) and [GHSA-xp26-3454-mjgp](https://github.com/advisories/GHSA-xp26-3454-mjgp) (Windows backslash traversal in `@vitest/mocker`). Dev dependency only.
+- [Security] **zod** 4.6.7 — [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (memory exhaustion while validating oversized constrained collections). Dev dependency of `eslint-plugin-react-hooks` only.
 - [Add] **Security checks before merge** — GitHub and GitLab CI run the same `scripts/ci` checks: unit tests and types, an audit of every API route for a session gate, an owner check, and GET side effects, a scan for secrets in command lines, a catalog of the advisory's regressions, repo hygiene, gitleaks, Semgrep, npm audit, and a changelog lint. GitHub also runs CodeQL. `scripts/ci/live-security.sh` tests a lab with a throwaway non-admin user and posts the result as a commit status. See `docs/security-testing.md`. GitLab check jobs print the apt install, give up on a mirror after 30 seconds, and use the Debian 13 Node image, because Debian 12 apt aborts in libgcrypt when the runner kernel is in FIPS mode. The smoke job talks to Docker-in-Docker on the job network without TLS.
 - [Add] **GitLab merge request and release** — A merge request pipeline sets the title and description from the changelog, the same way GitHub does. A push to the default branch tags that version and publishes the changelog section. Those jobs trust `CI_SERVER_TLS_CA_FILE` when the pipeline provides it. Otherwise a File variable `NODE_EXTRA_CA_CERTS` holds the CA that signed GitLab.
 - [Fix] **Admin API on a new Ludus server** — Port 8081 listens on 127.0.0.1 only, so `https://<ludus-host>:8081` is refused from the container. The error now says to set Admin API URL to `https://127.0.0.1:18081`, the SSH tunnel LUX already opens.

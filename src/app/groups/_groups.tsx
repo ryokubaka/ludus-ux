@@ -2,8 +2,8 @@
 
 import { useState, useMemo, useCallback } from "react"
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -31,14 +31,14 @@ import {
   User,
   Power,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
-import type { GroupObject, UserObject, RangeObject } from "@/lib/types"
+import { ludusApi } from "@/lib/ui/api"
+import type { GroupObject, UserObject, RangeObject } from "@/lib/core/types"
 import { useToast } from "@/hooks/use-toast"
-import { cn, parseLudusGroupList } from "@/lib/utils"
-import { useRange } from "@/lib/range-context"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { findLudusRangeRouterVm, isLudusVmRunning } from "@/lib/ludus-range-router-vm"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { cn, parseLudusGroupList } from "@/lib/core/utils"
+import { useRange } from "@/lib/range/range-context"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { findLudusRangeRouterVm, isLudusVmRunning } from "@/lib/ludus/ludus-range-router-vm"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 
 /** GET /groups only returns counts — members/ranges come from sub-resources ([Ludus API](https://api-docs.ludus.cloud/list-all-groups-24252024e0)). */
 type GroupDetail = { members: string[]; ranges: string[] }

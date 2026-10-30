@@ -3,9 +3,9 @@
 import { useState, useMemo, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -37,13 +37,13 @@ import {
   Lock,
   Terminal,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
-import { formatLudusUserDeleteError } from "@/lib/user-delete-errors"
-import type { UserObject, RangeObject } from "@/lib/types"
+import { ludusApi } from "@/lib/ui/api"
+import { formatLudusUserDeleteError } from "@/lib/users/user-delete-errors"
+import type { UserObject, RangeObject } from "@/lib/core/types"
 import { useToast } from "@/hooks/use-toast"
-import { cn, downloadTextFile } from "@/lib/utils"
-import { saveImpersonation } from "@/lib/impersonation-context"
-import { ludusImpersonationFields } from "@/lib/ludus-user-from-profile"
+import { cn, downloadTextFile } from "@/lib/core/utils"
+import { saveImpersonation } from "@/lib/session/impersonation-context"
+import { ludusImpersonationFields } from "@/lib/ludus/ludus-user-from-profile"
 
 export function UsersPageClient() {
   const { toast } = useToast()

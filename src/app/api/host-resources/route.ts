@@ -7,10 +7,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
-import { parseClusterResourceNodes, type NodeResourceSample } from "@/lib/proxmox-node-metrics-parse"
+import { requireSession } from "@/lib/session/require-session"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
+import { parseClusterResourceNodes, type NodeResourceSample } from "@/lib/proxmox/proxmox-node-metrics-parse"
 
 export const maxDuration = 60
 

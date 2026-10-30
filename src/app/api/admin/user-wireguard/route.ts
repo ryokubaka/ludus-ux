@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { ludusRequest } from "@/lib/ludus-client"
-import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { readUserApiKeyFromBashrc } from "@/lib/users/user-bashrc-apikey"
 
 
 /**

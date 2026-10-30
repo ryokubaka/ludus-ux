@@ -5,15 +5,15 @@ const gate = vi.hoisted(() => ({
   tasks: [] as { status: string; instanceId?: string }[],
 }))
 
-vi.mock("@/lib/session", () => ({
+vi.mock("@/lib/session/session", () => ({
   resolveSession: vi.fn(),
 }))
 
-vi.mock("@/lib/admin-impersonation-request", () => ({
+vi.mock("@/lib/admin/admin-impersonation-request", () => ({
   resolveAdminImpersonationFromRequest: vi.fn(() => ({})),
 }))
 
-vi.mock("@/lib/goad-task-store", () => ({
+vi.mock("@/lib/goad/goad-task-store", () => ({
   getRunningTasksForInstance: (instanceId: string) =>
     gate.tasks.filter((task) => task.status === "running" && task.instanceId === instanceId),
   listTasks: () => gate.tasks,
@@ -21,7 +21,7 @@ vi.mock("@/lib/goad-task-store", () => ({
   updateTaskInstance: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => []),
   chownGoadInstance: vi.fn(async () => {}),
   writeGoadRangeId: vi.fn(async () => {}),
@@ -29,11 +29,11 @@ vi.mock("@/lib/goad-ssh", () => ({
   sshExecAsWorkspaceUser: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }))
 
-vi.mock("@/lib/settings-store", () => ({
+vi.mock("@/lib/settings/settings-store", () => ({
   getSettings: vi.fn(() => ({ proxmoxSshUser: "ludus", rootApiKey: "root-key" })),
 }))
 
-vi.mock("@/lib/ludus-client", () => ({
+vi.mock("@/lib/ludus/ludus-client", () => ({
   ludusRequest: vi.fn(async (path: string) => {
     if (path === "/user") return { status: 200, data: { userID: "uid-alice" }, error: null }
     return { status: 201, data: {}, error: null }
@@ -41,38 +41,38 @@ vi.mock("@/lib/ludus-client", () => ({
   ludusRangeCreateApiKey: vi.fn(() => "root-key"),
 }))
 
-vi.mock("@/lib/ludus-user-from-profile", () => ({
+vi.mock("@/lib/ludus/ludus-user-from-profile", () => ({
   ludusCallerFromGetUser: vi.fn(() => ({ userId: "uid-alice", username: "alice" })),
 }))
 
-vi.mock("@/lib/admin-data", () => ({
+vi.mock("@/lib/admin/admin-data", () => ({
   bustAdminCache: vi.fn(),
 }))
 
-vi.mock("@/lib/range-ownership-store", () => ({
+vi.mock("@/lib/range/range-ownership-store", () => ({
   setOwnership: vi.fn(),
 }))
 
-vi.mock("@/lib/lux-api-audit", () => ({
+vi.mock("@/lib/lux/lux-api-audit", () => ({
   logLuxRouteAction: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-deploy-handoff-store", () => ({
+vi.mock("@/lib/goad/goad-deploy-handoff-store", () => ({
   createDeployHandoff: vi.fn(),
   linkHandoffToTask: vi.fn(),
 }))
 
-vi.mock("@/lib/root-ssh-auth", () => ({
+vi.mock("@/lib/ssh/root-ssh-auth", () => ({
   rootPasswordCredsIfSet: vi.fn(() => undefined),
 }))
 
-vi.mock("@/lib/goad-instance-range-store", () => ({
+vi.mock("@/lib/goad/goad-instance-range-store", () => ({
   setInstanceRangeLocal: vi.fn(),
 }))
 
 import { POST } from "./route"
-import { resolveSession } from "@/lib/session"
-import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad-ssh"
+import { resolveSession } from "@/lib/session/session"
+import { chownGoadInstance, listGoadInstances, writeGoadRangeId } from "@/lib/goad/goad-ssh"
 
 const originalGoadSshUser = process.env.GOAD_SSH_USER
 

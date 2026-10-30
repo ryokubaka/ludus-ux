@@ -12,37 +12,37 @@ const gate = vi.hoisted(() => ({
   tasks: [] as { instanceId?: string; username?: string }[],
 }))
 
-vi.mock("@/lib/require-session", () => ({
+vi.mock("@/lib/session/require-session", () => ({
   requireSession: vi.fn(),
 }))
 
-vi.mock("@/lib/lux-api-audit", () => ({
+vi.mock("@/lib/lux/lux-api-audit", () => ({
   logLuxRouteAction: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => gate.instances),
 }))
 
-vi.mock("@/lib/goad-task-store", () => ({
+vi.mock("@/lib/goad/goad-task-store", () => ({
   listTasks: () => gate.tasks,
 }))
 
-vi.mock("@/lib/settings-store", () => ({
+vi.mock("@/lib/settings/settings-store", () => ({
   getSettings: () => ({ proxmoxSshUser: "ludus" }),
 }))
 
-vi.mock("@/lib/app-log", () => ({
+vi.mock("@/lib/logs/app-log", () => ({
   writeAppLog: vi.fn(),
 }))
 
-import { requireSession } from "@/lib/require-session"
+import { requireSession } from "@/lib/session/require-session"
 import {
   InvalidInstanceIdError,
   pendingNetworkJsonPath,
   readPendingNetworkEnvelope,
   writePendingNetworkSnapshot,
-} from "@/lib/goad-pending-network-fs"
+} from "@/lib/goad/goad-pending-network-fs"
 import { DELETE, GET, POST } from "./route"
 
 afterAll(() => {

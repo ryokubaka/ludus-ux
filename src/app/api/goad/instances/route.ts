@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-request"
+import { resolveSession } from "@/lib/session/session"
+import { fetchGoadInstancesForRequest } from "@/lib/goad/fetch-goad-instances-for-request"
 
 // Must be dynamic: reads env vars + SSH at runtime.
 // Without this Next.js pre-renders at build time (when LUDUS_SSH_HOST is unset)

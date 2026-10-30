@@ -1,23 +1,23 @@
 import { NextRequest } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { streamGoadCommand, isGoadConfigured, readGoadRangeId, listGoadInstances, sshExecAsWorkspaceUser } from "@/lib/goad-ssh"
-import { createTask, appendLine, completeTask, getTask } from "@/lib/goad-task-store"
-import { goadLogShowsFailure } from "@/lib/goad-task-outcome"
-import { resolveSession } from "@/lib/session"
-import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/task-cleanup-registry"
-import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
-import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
-import { clientIpFromRequest } from "@/lib/security-audit-log"
-import { logAppEvent } from "@/lib/app-log"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { streamGoadCommand, isGoadConfigured, readGoadRangeId, listGoadInstances, sshExecAsWorkspaceUser } from "@/lib/goad/goad-ssh"
+import { createTask, appendLine, completeTask, getTask } from "@/lib/goad/goad-task-store"
+import { goadLogShowsFailure } from "@/lib/goad/goad-task-outcome"
+import { resolveSession } from "@/lib/session/session"
+import { registerCleanup, deregisterCleanup, invokeCleanup } from "@/lib/core/task-cleanup-registry"
+import { refreshLudusWallClockFromSsh } from "@/lib/ludus/ludus-wall-clock"
+import { filterLudusDeployTags } from "@/lib/ludus/ludus-deploy-tags"
+import { clientIpFromRequest } from "@/lib/session/security-audit-log"
+import { logAppEvent } from "@/lib/logs/app-log"
 import {
   assertRouterTemplateReady,
-} from "@/lib/ludus-router-template-assert"
+} from "@/lib/ludus/ludus-router-template-assert"
 import {
   routerTemplateBlockMessage,
-} from "@/lib/ludus-router-template"
-import { scheduleGoadDeployLinkage } from "@/lib/goad-deploy-link"
-import { assertGoadInstanceAccess, goadTargetInstanceIds } from "@/lib/goad-instance-access"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
+} from "@/lib/ludus/ludus-router-template"
+import { scheduleGoadDeployLinkage } from "@/lib/goad/goad-deploy-link"
+import { assertGoadInstanceAccess, goadTargetInstanceIds } from "@/lib/goad/goad-instance-access"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 
 
 export async function POST(request: NextRequest) {

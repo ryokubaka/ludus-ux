@@ -16,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Plus, Trash2, ChevronDown, ChevronRight, Info, Shield, GripVertical } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import {
   type NetworkRule,
   type VlanValue,
@@ -24,7 +24,7 @@ import {
   type RuleAction,
   blankRule,
   normalizeIpLastOctet,
-} from "@/lib/network-rules"
+} from "@/lib/range/network-rules"
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 

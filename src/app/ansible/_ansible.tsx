@@ -2,9 +2,9 @@
 
 import { useState, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -27,18 +27,18 @@ import {
   Package,
   BookOpen,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { ludusApi } from "@/lib/ui/api"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import {
   ansibleMessageSummary,
   collectionRemoveUnavailableMessage,
   isCollectionRemoveMisroute,
   ludusSupportsCollectionRemove,
-} from "@/lib/ludus-version"
+} from "@/lib/ludus/ludus-version"
 import { AnsibleAddFromSourcePanel } from "./add-from-source-panel"
-import { ansibleInventoryByKind } from "@/lib/ansible-inventory"
+import { ansibleInventoryByKind } from "@/lib/ansible/ansible-inventory"
 import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
 import {
   SourceRepoLink,

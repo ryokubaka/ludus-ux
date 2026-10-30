@@ -11,7 +11,7 @@ import {
   MAX_APP_LOG_LOADED_LINES,
   parseAppLogLineTs,
   prependAppLogHistoryLines,
-} from "@/lib/log-buffer"
+} from "@/lib/logs/log-buffer"
 import { Loader2 } from "lucide-react"
 
 type LogFilter = "all" | "auth" | "app"

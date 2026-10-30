@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { listDeployLogClocks, pruneDeployLogClocks } from "@/lib/deploy-log-clock-store"
+import { requireSession } from "@/lib/session/require-session"
+import { listDeployLogClocks, pruneDeployLogClocks } from "@/lib/logs/deploy-log-clock-store"
 
 export async function GET(request: NextRequest) {
   const gate = await requireSession(request)

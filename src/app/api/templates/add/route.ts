@@ -30,23 +30,23 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
 import {
   ensureGitSource,
   installSourceTemplates,
   isHttp404Error,
-} from "@/lib/ludus-source-client"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { sshExec } from "@/lib/goad-ssh"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import type { ResolvedSession } from "@/lib/session"
-import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
-import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
-import { combineTemplateFailure } from "@/lib/template-add-errors"
-import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+} from "@/lib/sources/ludus-source-client"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { sshExec } from "@/lib/goad/goad-ssh"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import type { ResolvedSession } from "@/lib/session/session"
+import { assertSafeTemplateRepoUrl } from "@/lib/templates/safe-template-repo-url"
+import { apiBaseToGitUrl, fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/templates/template-repo-client"
+import { combineTemplateFailure } from "@/lib/templates/template-add-errors"
+import { resolveLudusInstallPath } from "@/lib/core/runtime-paths"
 import {
   buildLudusTemplateAddCmd,
   derivePackerRootFromPkrPath,
@@ -54,10 +54,10 @@ import {
   isLudusTemplateAlreadyRegistered,
   packerRootCandidates,
   shellSingleQuote,
-} from "@/lib/template-packer-paths"
-import { packerDirFromTemplatePath, templateBlobRelativePath } from "@/lib/packer-vm-name"
-import { resolveGitTemplateInstallName } from "@/lib/source-git-catalog"
-import { writeRemoteFileViaSsh } from "@/lib/template-remote-write"
+} from "@/lib/templates/template-packer-paths"
+import { packerDirFromTemplatePath, templateBlobRelativePath } from "@/lib/templates/packer-vm-name"
+import { resolveGitTemplateInstallName } from "@/lib/sources/source-git-catalog"
+import { writeRemoteFileViaSsh } from "@/lib/templates/template-remote-write"
 
 
 interface TemplateSpec {

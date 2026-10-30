@@ -1,9 +1,9 @@
-import type { GoadExtensionDef, GoadInstance, GoadLabDef, LogHistoryEntry } from "@/lib/types"
-import type { AnsibleInstalledSets } from "@/lib/goad-dependency-service"
-import type { InstanceInventoryFile } from "@/lib/goad-ssh"
-import type { CorrelatedHistoryEntry, GoadTaskForCorrelation } from "@/lib/goad-deploy-history-correlation"
-import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
-import type { GoadProvisionMode } from "@/lib/goad-provision-target"
+import type { GoadExtensionDef, GoadInstance, GoadLabDef, LogHistoryEntry } from "@/lib/core/types"
+import type { AnsibleInstalledSets } from "@/lib/goad/goad-dependency-service"
+import type { InstanceInventoryFile } from "@/lib/goad/goad-ssh"
+import type { CorrelatedHistoryEntry, GoadTaskForCorrelation } from "@/lib/goad/goad-deploy-history-correlation"
+import type { RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
+import type { GoadProvisionMode } from "@/lib/goad/goad-provision-target"
 
 export type GoadPostProcessingStep = "idle" | "network-pending" | "network-deploying"
 

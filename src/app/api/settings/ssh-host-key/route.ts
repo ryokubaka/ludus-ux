@@ -7,10 +7,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { parseJsonBody } from "@/lib/require-session"
-import { forgetSshHostKey, listStoredSshHostKeys } from "@/lib/ssh-host-key"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { parseJsonBody } from "@/lib/session/require-session"
+import { forgetSshHostKey, listStoredSshHostKeys } from "@/lib/ssh/ssh-host-key"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request)

@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
-import { clearLuxClientAuthState } from "@/lib/client-auth-state"
+import { clearLuxClientAuthState } from "@/lib/session/client-auth-state"
 import Link from "next/link"
 import Image from "next/image"
 import { Button } from "@/components/ui/button"
@@ -16,12 +16,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { User, Shield, LogOut, ChevronDown, Settings } from "lucide-react"
-import { useSidebar } from "@/lib/sidebar-context"
+import { useSidebar } from "@/lib/ui/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
-import { fetchSharedSession } from "@/lib/session-fetch"
-import { cn } from "@/lib/utils"
-import { resolvePageInfo } from "@/lib/page-titles"
-import { useNavPending } from "@/lib/nav-pending-context"
+import { fetchSharedSession } from "@/lib/session/session-fetch"
+import { cn } from "@/lib/core/utils"
+import { resolvePageInfo } from "@/lib/ui/page-titles"
+import { useNavPending } from "@/lib/ui/nav-pending-context"
 
 interface SessionInfo {
   username: string

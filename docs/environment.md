@@ -11,6 +11,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUS_SERVER_IP` | Optional IP when `LUDUS_SSH_HOST` is not resolvable inside the container | — |
 | `LUDUS_URL` | Ludus API URL (port **8080**) | Compose default: `https://` + `LUDUS_SSH_HOST` + `:8080`; override in `.env` if needed |
 | `APP_SECRET` | Session encryption key (32+ chars). Also encrypts sensitive Settings values stored in SQLite, including `proxmoxSshPassword`; changing it invalidates those encrypted values. | — |
+| `SESSION_MAX_AGE_HOURS` | Session cookie lifetime in hours, capped at 8. A non-numeric or non-positive value falls back to the cap. | `8` |
 
 ## Docker Compose (host → container)
 
@@ -22,6 +23,9 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `DATA_DIR` | **Host** directory for SQLite, uploads, GOAD task logs (`/app/data` in the container) | `./data` |
 | `LUX_REPO_PATH` | Optional override for the host git clone used by Settings → About. LUX auto-detects the Compose project directory and the host path of the `./data` → `/app/data` bind mount when the Docker socket is mounted. | unset |
 | `GITHUB_TOKEN` / `LUX_GITHUB_TOKEN` | Optional GitHub PAT. Used only when this clone's remote is GitHub, to attach release notes. The version list itself comes from `git ls-remote` on that remote. | unset |
+| `DOCKER_SOCKET_PATH` | Path to the host Docker socket inside the app container. Used by Settings → About to switch releases and to find this container's image. | `/var/run/docker.sock` |
+| `LUX_HOST_EXEC_IMAGE` | Image used to run host commands with `nsenter` when the running container's image cannot be resolved from the Docker socket. It must include `nsenter`. | this container's image |
+| `LUX_DOCKER_API_VERSION` | Docker Engine API version for socket calls (`v1.43` if no `v` prefix). Raise it only if the host daemon refuses the default. | `v1.43` |
 
 ## Admin / user management
 
@@ -33,6 +37,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `PROXMOX_SSH_PASSWORD` | Optional for server-side host SSH if using key auth. In-browser noVNC and SPICE / VNC `.vv` downloads use the logged-in user's PAM password from the LUX session, not this key. |
 | `PROXMOX_SSH_KEY_PATH` | Private key path **inside** the container; must match the file under `SSH_KEY_PATH` on the host (default `/app/ssh/id_rsa`) |
 | `PROXMOX_SSH_KEY_PASSPHRASE` | Optional passphrase for the key |
+| `LUX_LUDUS_BLUEPRINT_OPERATOR_API_KEY` | Fallback for the blueprint operator API key when Settings has none. Used for global blueprint installs that run as the operator. |
 
 ## GOAD
 
@@ -44,6 +49,7 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). Settings UI hides that warning when the connected server reports ≥2.2.4. | `true` |
 | `LUX_USE_LUDUS_HOST_DNS` | Before a deploy, rewrite `AdGuardHome.yaml.j2` so upstream and bootstrap DNS are `192.0.2.254` (`true` to enable). Also toggleable in Settings. A Ludus update extracts a fresh template; the next deploy puts the host resolver back. | `false` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
+| `GOAD_SSH_HOST`, `GOAD_SSH_PORT`, `GOAD_SSH_USER`, `GOAD_SSH_PASSWORD`, `GOAD_SSH_KEY_PASSPHRASE` | Legacy aliases. Each is read only when the matching `LUDUS_SSH_*` or `PROXMOX_SSH_*` value and the saved Settings value are empty. | unset |
 
 ## LudusHound
 
@@ -65,6 +71,8 @@ Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go w
 | `DISABLE_HTTPS` | When `true`, Node does not terminate TLS (normal with bundled nginx). |
 | `TRUST_PROXY_TLS` | When `true`, treat the deployment as HTTPS for cookies/HSTS while Node listens on HTTP (required behind nginx). |
 | `TLS_HOSTNAME` | Optional CN/SAN hint when nginx auto-generates the edge certificate |
+| `TLS_CERT_PATH` | Certificate path for the app's own HTTPS listener, used only when `DISABLE_HTTPS` is not `true`. Default `/app/certificates/cert.pem`. |
+| `TLS_KEY_PATH` | Private key path for the app's own HTTPS listener, used only when `DISABLE_HTTPS` is not `true`. Default `/app/certificates/key.pem`. |
 | `LUDUS_TLS_INSECURE` | When `true`, HTTPS and WSS to Ludus, PocketBase, and Proxmox skip certificate checks. Other HTTPS stays verified. When the key is missing from `.env`, certificates are verified. Before 1.5.0 a missing key meant `true`, so an upgraded `.env` written by an older quickstart needs `LUDUS_TLS_INSECURE=true` added for Ludus's default self-signed certificate; login says so when the check fails. Or mount the CA with `NODE_EXTRA_CA_CERTS`. |
 | `LUX_SSH_HOST_KEY` | Optional pin for the Ludus SSH host key. Accepts the fingerprint exactly as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` prints it (`SHA256:...`, trailing `=` optional), a public key line (`ssh-ed25519 AAAA... [comment]`), or a `known_hosts` line. A value that is none of those refuses every connection. When unset, the first key seen for that host and port is stored in SQLite and a different key is rejected; an admin can forget a stored key in **Settings → Auth**. |
 | `LUX_UPGRADE_TRUSTED_KEY` | Absolute path on the Docker host to a public key file. When set, an in-app upgrade verifies the tag in a keyring that contains only that key and refuses anything else, including a key already in the host keyring. A value that is not a file is an error. |
@@ -79,3 +87,16 @@ Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go w
 ## DNS resolution
 
 If `LUDUS_SSH_HOST` is a hostname, set `LUDUS_SERVER_IP` to the server's IP. On start the container pins that name in `/etc/hosts`, including when DNS answers at startup and later returns `EAI_AGAIN`. Rebuild and recreate the app container after changing the entrypoint or this value.
+
+## Tuning and diagnostics
+
+These have working defaults. Set them only when the default does not fit the deployment.
+
+| Variable | Description | Default |
+|---|---|---|
+| `LOGIN_RATE_LIMIT_MAX` | Failed login attempts allowed per window per client IP. | `10` |
+| `LOGIN_RATE_LIMIT_WINDOW_MS` | Login rate-limit window in milliseconds. | `60000` |
+| `GALAXY_SEARCH_RATE_LIMIT_MAX` | Ansible Galaxy search requests allowed per window per client IP. | `30` |
+| `GALAXY_SEARCH_RATE_LIMIT_WINDOW_MS` | Galaxy search rate-limit window in milliseconds. | `60000` |
+| `LUX_GOAD_CHAIN_DEBUG` | Set to `1` to print Ludus → GOAD → extension trace lines to the server console. `NEXT_PUBLIC_LUX_GOAD_CHAIN_DEBUG=1` does the same in the browser console. | unset |
+

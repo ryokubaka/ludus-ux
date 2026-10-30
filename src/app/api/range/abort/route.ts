@@ -33,15 +33,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { ludusRequest } from "@/lib/ludus-client"
-import { getSettings } from "@/lib/settings-store"
-import { invokeCleanup } from "@/lib/task-cleanup-registry"
-import { abortTask, getRunningTasksForInstance } from "@/lib/goad-task-store"
-import { setPbRangeState } from "@/lib/pocketbase-client"
-import type { RangeObject } from "@/lib/types"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { getSettings } from "@/lib/settings/settings-store"
+import { invokeCleanup } from "@/lib/core/task-cleanup-registry"
+import { abortTask, getRunningTasksForInstance } from "@/lib/goad/goad-task-store"
+import { setPbRangeState } from "@/lib/core/pocketbase-client"
+import type { RangeObject } from "@/lib/core/types"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 /** Terminal Ludus range states — reaching any of these means the abort landed. */

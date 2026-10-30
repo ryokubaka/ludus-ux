@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
-import { probeNeo4jFromHost } from "@/lib/ludushound-ssh"
-import { DEFAULT_NEO4J_PASS, DEFAULT_NEO4J_USER } from "@/lib/ludushound-wizard-args"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
+import { probeNeo4jFromHost } from "@/lib/ludushound/ludushound-ssh"
+import { DEFAULT_NEO4J_PASS, DEFAULT_NEO4J_USER } from "@/lib/ludushound/ludushound-wizard-args"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 export async function POST(request: NextRequest) {
   const ctx = await resolveLudushoundSession(request)

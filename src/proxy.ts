@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSessionFromRequest } from "@/lib/session-edge"
-import { requestOriginAllowed } from "@/lib/request-origin"
+import { getSessionFromRequest } from "@/lib/session/session-edge"
+import { requestOriginAllowed } from "@/lib/core/request-origin"
 
 // Paths that are always public
 const PUBLIC_PREFIXES = [

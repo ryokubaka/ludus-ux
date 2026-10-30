@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { randomUUID } from "crypto"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
 import {
   buildLudushoundBinary,
   ensureLudushoundWorkspace,
@@ -9,21 +9,21 @@ import {
   runLudushoundGenerate,
   writeLudushoundRangeId,
   writeRemoteTextFile,
-} from "@/lib/ludushound-ssh"
+} from "@/lib/ludushound/ludushound-ssh"
 import {
   buildLudushoundRequiredTemplates,
   auditTemplates,
-} from "@/lib/ludushound-templates"
-import { assertLudushoundTemplatesReady } from "@/lib/ludushound-template-assert"
+} from "@/lib/templates/ludushound-templates"
+import { assertLudushoundTemplatesReady } from "@/lib/templates/ludushound-template-assert"
 import {
   validateLudushoundArgs,
   type LudushoundGenerateArgs,
   DEFAULT_NEO4J_PASS,
   DEFAULT_NEO4J_USER,
-} from "@/lib/ludushound-wizard-args"
-import { resolveLudushoundPath } from "@/lib/runtime-paths"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { ludusRequest } from "@/lib/ludus-client"
+} from "@/lib/ludushound/ludushound-wizard-args"
+import { resolveLudushoundPath } from "@/lib/core/runtime-paths"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
 
 type GenerateBody = {
   mode: "full" | "attackpath"

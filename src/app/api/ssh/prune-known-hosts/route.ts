@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { pruneKnownHostsEntries } from "@/lib/ssh-known-hosts"
+import { requireSession } from "@/lib/session/require-session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { pruneKnownHostsEntries } from "@/lib/ssh/ssh-known-hosts"
 
 /**
  * POST { hosts: string[] } — runs `ssh-keygen -R <host>` for each distinct host/IP

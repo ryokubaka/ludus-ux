@@ -2,7 +2,7 @@
 import {
   type ResolveRouterTemplateOptions,
   withRouterTemplateRequired,
-} from "@/lib/ludus-router-template"
+} from "@/lib/ludus/ludus-router-template"
 
 export const DEPLOY_TAB_ACTIONS = new Set(["provide", "install", "install-extension", "provision-lab"])
 export const TERMINAL_TAB_ACTIONS = new Set(["provision-extension"])

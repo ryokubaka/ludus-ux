@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { getInstanceIdForRange } from "@/lib/goad-instance-range-store"
-import { fetchGoadInstancesForRequest } from "@/lib/fetch-goad-instances-for-request"
+import { resolveSession } from "@/lib/session/session"
+import { getInstanceIdForRange } from "@/lib/goad/goad-instance-range-store"
+import { fetchGoadInstancesForRequest } from "@/lib/goad/fetch-goad-instances-for-request"
 
 
 /**

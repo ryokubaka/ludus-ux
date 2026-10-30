@@ -10,13 +10,13 @@
 import { useState, useEffect } from "react"
 import { QueryClientProvider, dehydrate, useQueryClient } from "@tanstack/react-query"
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools"
-import { makeQueryClient } from "@/lib/query-client"
-import { LEGACY_LUX_QUERY_CACHE_KEY, readClientEffectiveScopeTagSync } from "@/lib/effective-scope"
-import { isVolatileQueryKey } from "@/lib/query-keys"
+import { makeQueryClient } from "@/lib/ui/query-client"
+import { LEGACY_LUX_QUERY_CACHE_KEY, readClientEffectiveScopeTagSync } from "@/lib/session/effective-scope"
+import { isVolatileQueryKey } from "@/lib/ui/query-keys"
 import {
   EffectiveScopeProvider,
   useEffectiveScopeTag,
-} from "@/lib/effective-scope-context"
+} from "@/lib/session/effective-scope-context"
 import { ShellSessionProvider, type ShellSessionSnapshot } from "@/components/providers/shell-session-provider"
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000 // 24 h

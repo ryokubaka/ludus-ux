@@ -3,13 +3,13 @@
 import { usePathname } from "next/navigation"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
-import { ImpersonationProvider, useImpersonation } from "@/lib/impersonation-context"
-import { RangeProvider } from "@/lib/range-context"
-import { SidebarProvider, useSidebar } from "@/lib/sidebar-context"
-import { NavPendingProvider } from "@/lib/nav-pending-context"
-import { DeployLogProvider } from "@/lib/deploy-log-context"
+import { ImpersonationProvider, useImpersonation } from "@/lib/session/impersonation-context"
+import { RangeProvider } from "@/lib/range/range-context"
+import { SidebarProvider, useSidebar } from "@/lib/ui/sidebar-context"
+import { NavPendingProvider } from "@/lib/ui/nav-pending-context"
+import { DeployLogProvider } from "@/lib/logs/deploy-log-context"
 import { UserCheck, LogOut, Loader2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 /**
  * Global impersonation banner — shown across all pages when an admin is

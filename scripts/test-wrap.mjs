@@ -1,5 +1,5 @@
-import { runHostScriptViaDocker } from "../src/lib/lux-upgrade-docker.ts"
-import { wrapEncodedHostShellScript } from "../src/lib/lux-upgrade-host.ts"
+import { runHostScriptViaDocker } from "../src/lib/lux/lux-upgrade-docker.ts"
+import { wrapEncodedHostShellScript } from "../src/lib/lux/lux-upgrade-host.ts"
 
 const out = await runHostScriptViaDocker(
   wrapEncodedHostShellScript([

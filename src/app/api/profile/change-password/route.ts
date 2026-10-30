@@ -7,14 +7,14 @@
  * then uses root SSH + chpasswd to apply the change.
  */
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { resolveSession } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
-import { ludusRequest } from "@/lib/ludus-client"
-import type { UserObject } from "@/lib/types"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { resolveSession } from "@/lib/session/session"
+import { getSettings } from "@/lib/settings/settings-store"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import type { UserObject } from "@/lib/core/types"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {

@@ -1,20 +1,20 @@
 import { NextRequest } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { ludusGet } from "@/lib/ludus-client"
-import { getSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
-import { refreshLudusWallClockFromSsh } from "@/lib/ludus-wall-clock"
-import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus-wall-clock-bridge"
-import { createDeployLogDedupe } from "@/lib/deploy-log-sse-dedupe"
-import { readLudusAnsibleLogMtimeMs } from "@/lib/goad-ludus-reconcile"
+import { resolveSession } from "@/lib/session/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { ludusGet } from "@/lib/ludus/ludus-client"
+import { getSettings } from "@/lib/settings/settings-store"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
+import { refreshLudusWallClockFromSsh } from "@/lib/ludus/ludus-wall-clock"
+import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus/ludus-wall-clock-bridge"
+import { createDeployLogDedupe } from "@/lib/logs/deploy-log-sse-dedupe"
+import { readLudusAnsibleLogMtimeMs } from "@/lib/goad/goad-ludus-reconcile"
 import {
   deployLogLineHasLeadingWallTimestamp,
   omitBlankLogLines,
-} from "@/lib/log-line-timestamp"
-import { safeClientError } from "@/lib/safe-client-error"
-import { splitLogText } from "@/lib/strip-ansi"
+} from "@/lib/logs/log-line-timestamp"
+import { safeClientError } from "@/lib/ui/safe-client-error"
+import { splitLogText } from "@/lib/logs/strip-ansi"
 
 
 /** Read the GOAD ansible log (SSH-based). Returns new lines since lastLineCount. */

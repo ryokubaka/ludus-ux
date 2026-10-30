@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { authenticateUser, saveApiKeyToBashrc } from "@/lib/auth-ssh"
+import { authenticateUser, saveApiKeyToBashrc } from "@/lib/ssh/auth-ssh"
 
-import { establishSession } from "@/lib/session"
+import { establishSession } from "@/lib/session/session"
 
-import { checkLudusUser } from "@/lib/login-ludus-check"
+import { checkLudusUser } from "@/lib/session/login-ludus-check"
 
 import {
 
@@ -12,13 +12,13 @@ import {
 
   createLoginContinuation,
 
-} from "@/lib/login-continuation-store"
+} from "@/lib/session/login-continuation-store"
 
-import { checkRateLimit } from "@/lib/rate-limit"
+import { checkRateLimit } from "@/lib/core/rate-limit"
 
-import { clientIpFromRequest, logSecurityAudit } from "@/lib/security-audit-log"
+import { clientIpFromRequest, logSecurityAudit } from "@/lib/session/security-audit-log"
 
-import { safeClientError } from "@/lib/safe-client-error"
+import { safeClientError } from "@/lib/ui/safe-client-error"
 
 
 
@@ -35,7 +35,7 @@ async function finishLogin(
 ): Promise<NextResponse> {
   logSecurityAudit("login", "success", { user: args.username, ip })
   if (args.isAdmin && args.apiKey.trim()) {
-    const { rememberBlueprintOperator } = await import("@/lib/blueprint-global-install")
+    const { rememberBlueprintOperator } = await import("@/lib/blueprints/blueprint-global-install")
     await rememberBlueprintOperator(args.apiKey.trim()).catch((err) => {
       console.warn("rememberBlueprintOperator failed:", err instanceof Error ? err.message : err)
     })

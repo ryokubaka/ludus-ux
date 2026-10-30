@@ -21,12 +21,12 @@ import {
 import {
   aggregateDeployStatuses,
   correlateHistoryEntries,
-} from "@/lib/goad-deploy-history-correlation"
+} from "@/lib/goad/goad-deploy-history-correlation"
 import {
   formatDuration,
   formatTaskInstant,
 } from "@/components/goad/goad-instance-tab-utils"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import type { GoadHistoryTabProps } from "./types"
 
 const GoadTerminal = dynamic(

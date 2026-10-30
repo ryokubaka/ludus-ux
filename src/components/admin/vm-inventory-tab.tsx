@@ -4,25 +4,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { useRange } from "@/lib/range-context"
-import { saveImpersonation } from "@/lib/impersonation-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { useRange } from "@/lib/range/range-context"
+import { saveImpersonation } from "@/lib/session/impersonation-context"
 import {
   navigateToRangeDashboard,
   persistSelectedRange,
   type ImpersonationFields,
-} from "@/lib/navigate-to-range-dashboard"
-import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
-import type { UserObject } from "@/lib/types"
+} from "@/lib/ui/navigate-to-range-dashboard"
+import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/ui/api"
+import type { UserObject } from "@/lib/core/types"
 import {
   groupInventoryRowsByRange,
   vmMatchesTemplateFilter,
   type RangeVmInventoryRow,
-} from "@/lib/range-vm-inventory"
-import { waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+} from "@/lib/range/range-vm-inventory"
+import { waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -59,7 +59,7 @@ import {
   Terminal,
   X,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 const ALL = "__all__"
 

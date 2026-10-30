@@ -3,15 +3,15 @@
 import { Suspense, useEffect, useRef, useState, useCallback, useMemo } from "react"
 import { useSearchParams } from "next/navigation"
 import Link from "next/link"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import {
   clearVmPartialListStreak,
   dedupeVMs,
   resolveVmListForRangeQuery,
-} from "@/lib/dashboard-vm-merge"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { useRange } from "@/lib/range-context"
-import type { RangeObject, VMObject } from "@/lib/types"
+} from "@/lib/ui/dashboard-vm-merge"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { useRange } from "@/lib/range/range-context"
+import type { RangeObject, VMObject } from "@/lib/core/types"
 import {
   Monitor,
   ChevronDown,
@@ -22,7 +22,7 @@ import {
   Download,
   ExternalLink,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 interface FlatVM extends VMObject {
   rangeID: string

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { requireAdmin } from "@/lib/require-admin"
-import { insertVmOperation, listVmOperations } from "@/lib/vm-operation-log"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { requireSession } from "@/lib/session/require-session"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { insertVmOperation, listVmOperations } from "@/lib/logs/vm-operation-log"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin/admin-impersonation-request"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 /**

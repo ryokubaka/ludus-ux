@@ -16,10 +16,10 @@
  */
 import fs from "fs"
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
+import { requireSession } from "@/lib/session/require-session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin/admin-impersonation-request"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
 import {
   InvalidInstanceIdError,
   assertSafeInstanceId,
@@ -28,9 +28,9 @@ import {
   readPendingNetworkEnvelope,
   readUnlinkPendingNetworkSnapshot,
   writePendingNetworkSnapshot,
-} from "@/lib/goad-pending-network-fs"
-import type { ResolvedSession } from "@/lib/session"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+} from "@/lib/goad/goad-pending-network-fs"
+import type { ResolvedSession } from "@/lib/session/session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 const LUX_CONSUME_PENDING_BODY_KEY = "__luxConsumePendingNetwork"

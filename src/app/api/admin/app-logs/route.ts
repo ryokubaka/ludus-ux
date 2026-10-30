@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireAdmin } from "@/lib/require-admin"
-import { queryAppLogs, formatAppLogLine, type LogCategory } from "@/lib/app-log"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { queryAppLogs, formatAppLogLine, type LogCategory } from "@/lib/logs/app-log"
 
 
 export async function GET(request: NextRequest) {

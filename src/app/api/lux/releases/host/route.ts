@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { probeLuxUpgradeHost } from "@/lib/lux-upgrade-run"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { probeLuxUpgradeHost } from "@/lib/lux/lux-upgrade-run"
 
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request)

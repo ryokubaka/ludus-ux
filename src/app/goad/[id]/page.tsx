@@ -1,5 +1,5 @@
 import { Suspense } from "react"
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
 import { RouteSegmentLoading } from "@/components/route-segment-loading"
 
 const GoadInstancePageClient = dynamicPageClient(

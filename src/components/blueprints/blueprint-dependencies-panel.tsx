@@ -6,7 +6,7 @@ import {
   checkBlueprintDependencies,
   installBlueprintDependencies,
   refreshBlueprintDependencyCheck,
-} from "@/lib/blueprint-dependency-service"
+} from "@/lib/blueprints/blueprint-dependency-service"
 import { Package } from "lucide-react"
 
 interface BlueprintDependenciesPanelProps {

@@ -5,7 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TabsContent } from "@/components/ui/tabs"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import type { GoadInventoriesTabProps } from "./types"
 
 export function GoadInventoriesTab({

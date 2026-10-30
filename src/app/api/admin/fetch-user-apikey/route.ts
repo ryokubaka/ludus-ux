@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { markRouteDynamic } from "@/lib/mark-route-dynamic"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { readUserApiKeyFromBashrc } from "@/lib/user-bashrc-apikey"
+import { markRouteDynamic } from "@/lib/core/mark-route-dynamic"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { readUserApiKeyFromBashrc } from "@/lib/users/user-bashrc-apikey"
 
 
 /**

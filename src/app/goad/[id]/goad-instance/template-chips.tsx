@@ -2,7 +2,7 @@
 
 import { Check, CircleAlert, PackageX } from "lucide-react"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 export function TemplateChips({
   required,

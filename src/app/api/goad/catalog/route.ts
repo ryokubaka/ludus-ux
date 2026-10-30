@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { discoverGoadCatalog, invalidateCatalogCache, isGoadConfigured } from "@/lib/goad-ssh"
-import { resolveSession } from "@/lib/session"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { discoverGoadCatalog, invalidateCatalogCache, isGoadConfigured } from "@/lib/goad/goad-ssh"
+import { resolveSession } from "@/lib/session/session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 function sessionCreds(session: { username: string; sshPassword?: string }) {
   return session.sshPassword

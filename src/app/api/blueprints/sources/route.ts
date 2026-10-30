@@ -10,16 +10,16 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
+import { assertSafeTemplateRepoUrl } from "@/lib/templates/safe-template-repo-url"
 import {
   fetchLudusBlueprintCatalog,
   fetchLudusBlueprintCatalogBySourceId,
   enrichBlueprintCatalogEntries,
   resolveBadslCatalogMeta,
-} from "@/lib/ludus-source-catalog"
-import { catalogReadApiKey } from "@/lib/source-publication"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
-import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/template-repo-client"
+} from "@/lib/sources/ludus-source-catalog"
+import { catalogReadApiKey } from "@/lib/sources/source-publication"
+import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
+import { isGitHubApiBase, listRepoDirectory, apiBaseToGitUrl } from "@/lib/templates/template-repo-client"
 
 const BADSL_REF = "main"
 const BADSL_BASE = "https://api.github.com/repos/badsectorlabs/ludus-source-bsl"

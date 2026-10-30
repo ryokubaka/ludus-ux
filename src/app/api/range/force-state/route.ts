@@ -10,8 +10,8 @@
  */
 
 import { NextRequest } from "next/server"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { requireSession } from "@/lib/require-session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { requireSession } from "@/lib/session/require-session"
 import { POST as abortPost } from "../abort/route"
 
 

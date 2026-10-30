@@ -12,26 +12,26 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
+import { requireSession } from "@/lib/session/require-session"
 import {
   effectiveImpersonatedOperatorUsername,
   resolveAdminImpersonationFromRequest,
-} from "@/lib/admin-impersonation-request"
+} from "@/lib/admin/admin-impersonation-request"
 import {
   createDeployHandoff,
   getHandoffById,
   linkHandoffToTask,
   pruneOldHandoffs,
-} from "@/lib/goad-deploy-handoff-store"
-import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { sameOperator } from "@/lib/operator-name"
-import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
-import { writePendingNetworkSnapshot, InvalidInstanceIdError, assertSafeInstanceId } from "@/lib/goad-pending-network-fs"
-import { assertGoadTaskAccess } from "@/lib/goad-task-api"
-import { getTask } from "@/lib/goad-task-store"
-import { ludusRequest } from "@/lib/ludus-client"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+} from "@/lib/goad/goad-deploy-handoff-store"
+import { setInstanceRangeLocal } from "@/lib/goad/goad-instance-range-store"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { sameOperator } from "@/lib/users/operator-name"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
+import { writePendingNetworkSnapshot, InvalidInstanceIdError, assertSafeInstanceId } from "@/lib/goad/goad-pending-network-fs"
+import { assertGoadTaskAccess } from "@/lib/goad/goad-task-api"
+import { getTask } from "@/lib/goad/goad-task-store"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {

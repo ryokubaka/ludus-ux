@@ -19,17 +19,17 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { requireAdmin } from "@/lib/require-admin"
-import { parseJsonBody } from "@/lib/require-session"
-import { setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
-import { buildWorkspaceSshExecPlan, chownGoadInstance, listGoadInstances, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad-ssh"
-import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { setPbRangeOwner } from "@/lib/pocketbase-client"
-import { bustAdminCache } from "@/lib/admin-data"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
-import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
-import { getSettings } from "@/lib/settings-store"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { parseJsonBody } from "@/lib/session/require-session"
+import { setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad/goad-deploy-link"
+import { buildWorkspaceSshExecPlan, chownGoadInstance, listGoadInstances, runWorkspaceSshPlan, writeGoadRangeId } from "@/lib/goad/goad-ssh"
+import { setInstanceRangeLocal } from "@/lib/goad/goad-instance-range-store"
+import { setPbRangeOwner } from "@/lib/core/pocketbase-client"
+import { bustAdminCache } from "@/lib/admin/admin-data"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
+import { effectivePrivilegedSshUser } from "@/lib/ssh/root-ssh-preflight"
+import { getSettings } from "@/lib/settings/settings-store"
 
 
 export async function POST(request: NextRequest) {

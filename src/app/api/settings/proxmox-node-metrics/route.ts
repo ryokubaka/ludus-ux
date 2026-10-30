@@ -5,14 +5,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { requireAdmin } from "@/lib/require-admin"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
 import {
   parseClusterResourceNodes,
   parseNodeList,
   parseNodeStatusLoad,
-} from "@/lib/proxmox-node-metrics-parse"
+} from "@/lib/proxmox/proxmox-node-metrics-parse"
 
 export const maxDuration = 60
 

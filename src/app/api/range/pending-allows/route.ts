@@ -16,17 +16,17 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { requireSession } from "@/lib/session/require-session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin/admin-impersonation-request"
 import {
   getPendingAllowsWithTimestamps,
   addPendingAllow,
   removePendingAllows,
   pruneStalePendingAllows,
   type PendingAllowOpType,
-} from "@/lib/pending-allow-store"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { logInfo } from "@/lib/log-safe"
+} from "@/lib/range/pending-allow-store"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { logInfo } from "@/lib/logs/log-safe"
 
 const PENDING_ADD_TIMEOUT_MS = 5 * 60 * 1000
 

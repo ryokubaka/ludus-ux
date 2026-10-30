@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings, updateSettings, type RuntimeSettings } from "@/lib/settings-store"
-import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/resolve-root-api-key"
-import { invalidateCatalogCache } from "@/lib/goad-ssh"
-import { clientIpFromRequest } from "@/lib/security-audit-log"
-import { logAppEvent } from "@/lib/app-log"
-import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
+import { requireSession } from "@/lib/session/require-session"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { getSettings, updateSettings, type RuntimeSettings } from "@/lib/settings/settings-store"
+import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/users/resolve-root-api-key"
+import { invalidateCatalogCache } from "@/lib/goad/goad-ssh"
+import { clientIpFromRequest } from "@/lib/session/security-audit-log"
+import { logAppEvent } from "@/lib/logs/app-log"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
 import {
   endpointSettingsChanged,
   secretsMatch,
   toPublicSettings,
-} from "@/lib/settings-public"
+} from "@/lib/settings/settings-public"
 
 function nonEmptySecret(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined

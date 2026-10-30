@@ -4,7 +4,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { forwardRef, useCallback, useRef, type ComponentProps } from "react"
 import type { UrlObject } from "url"
-import { useNavPending } from "@/lib/nav-pending-context"
+import { useNavPending } from "@/lib/ui/nav-pending-context"
 
 type AppNavLinkProps = Omit<ComponentProps<typeof Link>, "prefetch"> & {
   prefetch?: boolean | "auto" | null

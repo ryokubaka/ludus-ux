@@ -9,24 +9,24 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings, type RuntimeSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { resolveLudusAdminApiBase } from "@/lib/ludus-client"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { getSettings, type RuntimeSettings } from "@/lib/settings/settings-store"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { resolveLudusAdminApiBase } from "@/lib/ludus/ludus-client"
 import {
   describePrivateKeyPermissionIssue,
   getResolvedPrivateKeyPath,
   probeSshKeyMount,
-} from "@/lib/root-ssh-auth"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { ludusFetch } from "@/lib/ludus-fetch"
-import { isCertificateError, ludusTlsCertificateHint } from "@/lib/tls-insecure-env"
-import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+} from "@/lib/ssh/root-ssh-auth"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { ludusFetch } from "@/lib/ludus/ludus-fetch"
+import { isCertificateError, ludusTlsCertificateHint } from "@/lib/settings/tls-insecure-env"
+import { resolveLudusInstallPath } from "@/lib/core/runtime-paths"
 import {
   buildRootSshProbeCommand,
   parseRootSshProbe,
   rootSshProbeProblem,
-} from "@/lib/root-ssh-preflight"
+} from "@/lib/ssh/root-ssh-preflight"
 
 
 type Body = Partial<{

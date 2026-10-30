@@ -16,18 +16,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { ludusRequest } from "@/lib/ludus-client"
-import { sshExec, sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
-import { resolveGoadPath } from "@/lib/runtime-paths"
-import { getDb } from "@/lib/db"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import type { RangeObject } from "@/lib/types"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
-import { invalidateInProcessLudusCachesAfterMutation } from "@/lib/ludus-swr-invalidate"
+import { resolveSession } from "@/lib/session/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { sshExec, sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad/goad-ssh"
+import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { getDb } from "@/lib/core/db"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import type { RangeObject } from "@/lib/core/types"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
+import { invalidateInProcessLudusCachesAfterMutation } from "@/lib/ludus/ludus-swr-invalidate"
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

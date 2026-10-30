@@ -32,51 +32,51 @@ import {
   BookOpen,
 } from "lucide-react"
 import Link from "next/link"
-import type { GoadLabDef, GoadExtensionDef, GoadCatalog, GoadInstance, TemplateObject } from "@/lib/types"
+import type { GoadLabDef, GoadExtensionDef, GoadCatalog, GoadInstance, TemplateObject } from "@/lib/core/types"
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
-import { cn } from "@/lib/utils"
-import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/api"
-import { newRangeUid as createRangeUid } from "@/lib/range-uid"
+import { cn } from "@/lib/core/utils"
+import { ludusApi, getImpersonationHeaders, pruneKnownHosts } from "@/lib/ui/api"
+import { newRangeUid as createRangeUid } from "@/lib/range/range-uid"
 import { useToast } from "@/hooks/use-toast"
-import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
-import { goadChainDebug } from "@/lib/goad-chain-debug"
-import { useDeployLogContext } from "@/lib/deploy-log-context"
-import { useRange } from "@/lib/range-context"
-import { useImpersonation } from "@/lib/impersonation-context"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range/range-deploy-elapsed-anchor"
+import { goadChainDebug } from "@/lib/goad/goad-chain-debug"
+import { useDeployLogContext } from "@/lib/logs/deploy-log-context"
+import { useRange } from "@/lib/range/range-context"
+import { useImpersonation } from "@/lib/session/impersonation-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, injectNetworkRules, extractNetworkSection, extractNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
-import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
+import { type NetworkRule, injectNetworkRules, extractNetworkSection, extractNetworkRules, extractVlansFromConfig } from "@/lib/range/network-rules"
+import { filterLudusDeployTags } from "@/lib/ludus/ludus-deploy-tags"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
-} from "@/lib/ludus-deploy-only-roles"
+} from "@/lib/ludus/ludus-deploy-only-roles"
 import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
-import { clearRangeVmsAndWait } from "@/lib/wait-range-vms-cleared"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { clearRangeVmsAndWait } from "@/lib/range/wait-range-vms-cleared"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { GoadAnsibleDependenciesPanel } from "@/components/goad/goad-ansible-dependencies-panel"
 import {
   combineWizardNetworkRules,
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
-} from "@/lib/goad-preview-config"
-import { buildGoadWizardInstallArgs, extractGoadInstanceIdFromOutput } from "@/lib/goad-wizard-args"
+} from "@/lib/goad/goad-preview-config"
+import { buildGoadWizardInstallArgs, extractGoadInstanceIdFromOutput } from "@/lib/goad/goad-wizard-args"
 import {
   extensionAnsibleDepsReady,
   extensionMissingAnsibleRoles,
   parseAnsibleInstalledSets,
-} from "@/lib/goad-dependency-service"
+} from "@/lib/goad/goad-dependency-service"
 import {
   type ResolveRouterTemplateOptions,
   isRouterTemplateReadyForDeploy,
   requiredRouterTemplateName,
   withRouterTemplateRequired,
-} from "@/lib/ludus-router-template"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+} from "@/lib/ludus/ludus-router-template"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 
 // ── Template readiness helpers ────────────────────────────────────────────────
 

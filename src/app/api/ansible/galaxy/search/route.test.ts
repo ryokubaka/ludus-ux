@@ -1,17 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from "vitest"
 
-vi.mock("@/lib/session", () => ({ resolveSession: vi.fn() }))
-vi.mock("@/lib/rate-limit", () => ({ checkRateLimit: vi.fn() }))
-vi.mock("@/lib/security-audit-log", () => ({ clientIpFromRequest: () => "1.2.3.4" }))
-vi.mock("@/lib/ansible-galaxy-api", () => ({
+vi.mock("@/lib/session/session", () => ({ resolveSession: vi.fn() }))
+vi.mock("@/lib/core/rate-limit", () => ({ checkRateLimit: vi.fn() }))
+vi.mock("@/lib/session/security-audit-log", () => ({ clientIpFromRequest: () => "1.2.3.4" }))
+vi.mock("@/lib/ansible/ansible-galaxy-api", () => ({
   searchGalaxyRoles: vi.fn(),
   searchGalaxyCollections: vi.fn(),
 }))
 
 import { GET } from "./route"
-import { resolveSession } from "@/lib/session"
-import { checkRateLimit } from "@/lib/rate-limit"
-import { searchGalaxyRoles } from "@/lib/ansible-galaxy-api"
+import { resolveSession } from "@/lib/session/session"
+import { checkRateLimit } from "@/lib/core/rate-limit"
+import { searchGalaxyRoles } from "@/lib/ansible/ansible-galaxy-api"
 
 const req = (q = "docker") =>
   ({ url: `http://localhost/api/ansible/galaxy/search?q=${q}&type=role` }) as unknown as Parameters<

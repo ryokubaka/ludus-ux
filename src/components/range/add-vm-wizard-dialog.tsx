@@ -4,12 +4,12 @@ import { useCallback, useEffect, useState } from "react"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { ludusApi } from "@/lib/api"
-import { extractArray } from "@/lib/utils"
-import type { TemplateObject } from "@/lib/types"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { ludusApi } from "@/lib/ui/api"
+import { extractArray } from "@/lib/core/utils"
+import type { TemplateObject } from "@/lib/core/types"
 import {
   appendVmsToRangeConfig,
   defaultVlanFromConfig,
@@ -17,7 +17,7 @@ import {
   inferOS,
   suggestIpLastOctetForVlan,
   type VMEntry,
-} from "@/lib/range-vm-wizard"
+} from "@/lib/range/range-vm-wizard"
 import {
   Dialog,
   DialogContent,

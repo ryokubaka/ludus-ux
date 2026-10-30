@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { searchGalaxyCollections, searchGalaxyRoles } from "@/lib/ansible-galaxy-api"
-import type { GalaxySearchHit } from "@/lib/ansible-galaxy-search"
-import { resolveSession } from "@/lib/session"
-import { checkRateLimit } from "@/lib/rate-limit"
-import { clientIpFromRequest } from "@/lib/security-audit-log"
+import { searchGalaxyCollections, searchGalaxyRoles } from "@/lib/ansible/ansible-galaxy-api"
+import type { GalaxySearchHit } from "@/lib/ansible/ansible-galaxy-search"
+import { resolveSession } from "@/lib/session/session"
+import { checkRateLimit } from "@/lib/core/rate-limit"
+import { clientIpFromRequest } from "@/lib/session/security-audit-log"
 
 const GALAXY_RATE_MAX = Number(process.env.GALAXY_SEARCH_RATE_LIMIT_MAX ?? "30")
 const GALAXY_RATE_WINDOW_MS = Number(

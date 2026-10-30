@@ -6,8 +6,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { RefreshCw, Clock, Loader2, ScrollText, Puzzle, Server, ChevronLeft, ChevronRight } from "lucide-react"
-import { cn, extractArray, timeAgo } from "@/lib/utils"
-import type { LogHistoryEntry } from "@/lib/types"
+import { cn, extractArray, timeAgo } from "@/lib/core/utils"
+import type { LogHistoryEntry } from "@/lib/core/types"
 import { useElapsed } from "@/hooks/use-elapsed"
 import {
   type CorrelatedHistoryEntry,
@@ -16,9 +16,9 @@ import {
   correlateHistoryEntries,
   goadIntegratedRowTitle,
   integratedHistoryBadge,
-} from "@/lib/goad-deploy-history-correlation"
-import { rangeLogHistoryListPrimary } from "@/lib/range-log-history-label"
-import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+} from "@/lib/goad/goad-deploy-history-correlation"
+import { rangeLogHistoryListPrimary } from "@/lib/logs/range-log-history-label"
+import type { RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
 
 function statusVariant(status: string) {
   switch (status.toLowerCase()) {

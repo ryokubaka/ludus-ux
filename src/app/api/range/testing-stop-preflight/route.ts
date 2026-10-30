@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { resolveSession } from "@/lib/session/session"
 import {
   formatTestingStopEfiShutdownNotice,
   listTestingStopEfiEnrollCandidates,
-} from "@/lib/proxmox-testing-stop-preflight"
+} from "@/lib/proxmox/proxmox-testing-stop-preflight"
 
 /**
  * GET /api/range/testing-stop-preflight?rangeId=

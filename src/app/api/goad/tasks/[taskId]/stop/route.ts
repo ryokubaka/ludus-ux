@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { canAccessGoadTask } from "@/lib/goad-task-api"
-import { abortTask, completeTask } from "@/lib/goad-task-store"
-import { invokeCleanup } from "@/lib/task-cleanup-registry"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { canAccessGoadTask } from "@/lib/goad/goad-task-api"
+import { abortTask, completeTask } from "@/lib/goad/goad-task-store"
+import { invokeCleanup } from "@/lib/core/task-cleanup-registry"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 /**
@@ -33,7 +33,7 @@ export async function POST(
   }
 
   // Enforce ownership: only the task owner (or an admin) may stop it.
-  const { getTask } = await import("@/lib/goad-task-store")
+  const { getTask } = await import("@/lib/goad/goad-task-store")
   const task = getTask(taskId)
   if (task && !await canAccessGoadTask(session, request, task)) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })

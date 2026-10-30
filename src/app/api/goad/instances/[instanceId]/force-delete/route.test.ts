@@ -5,28 +5,28 @@ const gate = vi.hoisted(() => ({
   instances: [] as { instanceId: string; ownerUserId: string }[],
 }))
 
-vi.mock("@/lib/session", () => ({ resolveSession: vi.fn() }))
-vi.mock("@/lib/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
-vi.mock("@/lib/app-log", () => ({ writeAppLog: vi.fn() }))
-vi.mock("@/lib/settings-store", () => ({ getSettings: () => ({ proxmoxSshUser: "ludus" }) }))
-vi.mock("@/lib/goad-task-store", () => ({ listTasks: () => [] }))
-vi.mock("@/lib/ludus-client", () => ({ ludusRequest: vi.fn(async () => ({ status: 404 })) }))
-vi.mock("@/lib/runtime-paths", () => ({ resolveGoadPath: () => "/opt/GOAD" }))
-vi.mock("@/lib/db", () => ({ getDb: () => ({ prepare: () => ({ run: vi.fn() }) }) }))
-vi.mock("@/lib/ludus-cache-revalidate", () => ({
+vi.mock("@/lib/session/session", () => ({ resolveSession: vi.fn() }))
+vi.mock("@/lib/lux/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
+vi.mock("@/lib/logs/app-log", () => ({ writeAppLog: vi.fn() }))
+vi.mock("@/lib/settings/settings-store", () => ({ getSettings: () => ({ proxmoxSshUser: "ludus" }) }))
+vi.mock("@/lib/goad/goad-task-store", () => ({ listTasks: () => [] }))
+vi.mock("@/lib/ludus/ludus-client", () => ({ ludusRequest: vi.fn(async () => ({ status: 404 })) }))
+vi.mock("@/lib/core/runtime-paths", () => ({ resolveGoadPath: () => "/opt/GOAD" }))
+vi.mock("@/lib/core/db", () => ({ getDb: () => ({ prepare: () => ({ run: vi.fn() }) }) }))
+vi.mock("@/lib/ludus/ludus-cache-revalidate", () => ({
   revalidateLudusResource: vi.fn(),
   revalidateLudusScopeResource: vi.fn(),
 }))
-vi.mock("@/lib/ludus-swr-invalidate", () => ({ invalidateInProcessLudusCachesAfterMutation: vi.fn() }))
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/ludus/ludus-swr-invalidate", () => ({ invalidateInProcessLudusCachesAfterMutation: vi.fn() }))
+vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => gate.instances),
   readGoadRangeId: vi.fn(async () => null),
   sshExec: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
   sshExecAsWorkspaceUser: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }))
 
-import { resolveSession } from "@/lib/session"
-import { sshExec, sshExecAsWorkspaceUser } from "@/lib/goad-ssh"
+import { resolveSession } from "@/lib/session/session"
+import { sshExec, sshExecAsWorkspaceUser } from "@/lib/goad/goad-ssh"
 import { POST } from "./route"
 
 function forceDelete(instanceId: string) {

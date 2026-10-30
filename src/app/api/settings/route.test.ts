@@ -1,42 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
-import type { RuntimeSettings } from "@/lib/settings-store"
-import { PUBLIC_SETTINGS_KEYS } from "@/lib/settings-public"
+import type { RuntimeSettings } from "@/lib/settings/settings-store"
+import { PUBLIC_SETTINGS_KEYS } from "@/lib/settings/settings-public"
 
-vi.mock("@/lib/require-session", () => ({
+vi.mock("@/lib/session/require-session", () => ({
   requireSession: vi.fn(),
 }))
 
-vi.mock("@/lib/require-admin", () => ({
+vi.mock("@/lib/session/require-admin", () => ({
   requireAdmin: vi.fn(),
   finishAdminResponse: vi.fn(async (response: Response) => response),
 }))
 
-vi.mock("@/lib/settings-store", () => ({
+vi.mock("@/lib/settings/settings-store", () => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }))
 
-vi.mock("@/lib/resolve-root-api-key", () => ({
+vi.mock("@/lib/users/resolve-root-api-key", () => ({
   isLudusRootApiKeyEnvOverrideActive: vi.fn(() => false),
 }))
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   invalidateCatalogCache: vi.fn(),
 }))
 
-vi.mock("@/lib/security-audit-log", () => ({
+vi.mock("@/lib/session/security-audit-log", () => ({
   clientIpFromRequest: vi.fn(() => "203.0.113.5"),
 }))
 
-vi.mock("@/lib/app-log", () => ({
+vi.mock("@/lib/logs/app-log", () => ({
   logAppEvent: vi.fn(),
 }))
 
 import { GET, POST } from "./route"
-import { requireSession } from "@/lib/require-session"
-import { requireAdmin } from "@/lib/require-admin"
-import { getSettings, updateSettings } from "@/lib/settings-store"
+import { requireSession } from "@/lib/session/require-session"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { getSettings, updateSettings } from "@/lib/settings/settings-store"
 
 const stored: RuntimeSettings = {
   ludusUrl: "https://ludus.example:8080",

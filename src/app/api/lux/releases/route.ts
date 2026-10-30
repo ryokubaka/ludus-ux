@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { markRouteDynamic } from "@/lib/mark-route-dynamic"
-import { requireSession } from "@/lib/require-session"
-import { requireAdmin } from "@/lib/require-admin"
-import { clearLuxReleasesCache, getLuxReleasesSnapshot } from "@/lib/lux-releases"
-import { readLuxUpgradeLogTail } from "@/lib/lux-upgrade-host"
+import { markRouteDynamic } from "@/lib/core/mark-route-dynamic"
+import { requireSession } from "@/lib/session/require-session"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { clearLuxReleasesCache, getLuxReleasesSnapshot } from "@/lib/lux/lux-releases"
+import { readLuxUpgradeLogTail } from "@/lib/lux/lux-upgrade-host"
 
 export async function GET(request: NextRequest) {
   await markRouteDynamic()

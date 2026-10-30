@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { shareBlueprintOnLudus } from "@/lib/blueprint-share"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { requireSession } from "@/lib/require-session"
+import { shareBlueprintOnLudus } from "@/lib/blueprints/blueprint-share"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { requireSession } from "@/lib/session/require-session"
 
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request)

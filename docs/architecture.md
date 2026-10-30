@@ -4,13 +4,14 @@
 
 | Layer | Technology |
 |---|---|
-| Framework | Next.js 15 (App Router, React 18) |
+| Framework | Next.js 16 (App Router, React 19) |
 | UI | Tailwind CSS, Radix UI (shadcn-style), Lucide |
 | Code editor | Monaco (YAML) |
 | Terminal/console | noVNC (esbuild bundle) |
 | SSH | `ssh2` (server-side only) |
 | Database | `better-sqlite3` |
 | WebSockets | nginx → Next.js `ws-server.ts` (VNC proxy); TLS at nginx edge |
+| Session gate | `src/proxy.ts` (Next.js 16 uses this file, not `middleware.ts`) |
 
 ## Request flow
 

@@ -1,7 +1,7 @@
 import { HydrationBoundary } from "@tanstack/react-query"
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
-import { getLayoutSession } from "@/lib/session-layout"
-import { prefetchRangeConfigData } from "@/lib/server-prefetch"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
+import { getLayoutSession } from "@/lib/session/session-layout"
+import { prefetchRangeConfigData } from "@/lib/core/server-prefetch"
 
 const RangeConfigPageClient = dynamicPageClient(
   () => import("./_config"),

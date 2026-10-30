@@ -11,16 +11,16 @@
  * Returns: { newKey: string, bashrcUpdated: boolean, bashrcError?: string }
  */
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { isRootProxmoxSshConfigured } from "@/lib/root-ssh-auth"
-import { ludusGet, ludusRequest } from "@/lib/ludus-client"
-import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
-import type { UserObject } from "@/lib/types"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { isValidLudusSshUsername } from "@/lib/user-bashrc-apikey"
-import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible-home-repair"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { getSettings } from "@/lib/settings/settings-store"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
+import { ludusGet, ludusRequest } from "@/lib/ludus/ludus-client"
+import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/lux/proxy-ludus-timeout"
+import type { UserObject } from "@/lib/core/types"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { isValidLudusSshUsername } from "@/lib/users/user-bashrc-apikey"
+import { ensureAnsibleHomeLayoutAsRoot } from "@/lib/ansible/ansible-home-repair"
 
 export const maxDuration = 600
 

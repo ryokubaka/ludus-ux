@@ -10,15 +10,15 @@
  * a direct getent passwd lookup by userID if the API call fails.
  */
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
-import { ludusRequest } from "@/lib/ludus-client"
-import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/proxy-ludus-timeout"
-import type { UserObject } from "@/lib/types"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { isValidLudusSshUsername } from "@/lib/user-bashrc-apikey"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { LUDUS_USER_PROVISION_TIMEOUT_MS } from "@/lib/lux/proxy-ludus-timeout"
+import type { UserObject } from "@/lib/core/types"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { isValidLudusSshUsername } from "@/lib/users/user-bashrc-apikey"
 
 export const maxDuration = 600
 

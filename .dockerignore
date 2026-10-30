@@ -29,6 +29,8 @@ yarn-error.log*
 .idea
 e2e/
 ci/
+# Local release plans (not shipped documentation)
+docs/plans/
 
 # Large / unused in image (docs + CHANGELOG are COPY'd — keep them)
 images/

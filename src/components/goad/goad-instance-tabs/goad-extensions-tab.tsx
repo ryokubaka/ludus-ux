@@ -14,8 +14,8 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useQueryClient } from "@tanstack/react-query"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { queryKeys } from "@/lib/query-keys"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
 import {
   extensionAnsibleState,
   extensionMissingAnsibleRoles,
@@ -23,10 +23,10 @@ import {
   requirementsFromExtensionRoleRefs,
   withInstalling,
   withoutInstalling,
-} from "@/lib/goad-dependency-service"
-import { findMissingFromInstalled } from "@/lib/ansible-requirements-service"
+} from "@/lib/goad/goad-dependency-service"
+import { findMissingFromInstalled } from "@/lib/ansible/ansible-requirements-service"
 import { useToast } from "@/hooks/use-toast"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -34,9 +34,9 @@ import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { TabsContent } from "@/components/ui/tabs"
 import { TemplateChips } from "@/app/goad/[id]/goad-instance/template-chips"
 import { checkTemplates } from "@/components/goad/goad-instance-tab-utils"
-import { extensionIsProvisionOnly } from "@/lib/goad-catalog-capabilities"
-import { cn } from "@/lib/utils"
-import type { GoadExtensionDef } from "@/lib/types"
+import { extensionIsProvisionOnly } from "@/lib/goad/goad-catalog-capabilities"
+import { cn } from "@/lib/core/utils"
+import type { GoadExtensionDef } from "@/lib/core/types"
 import type { GoadExtensionsTabProps } from "./types"
 
 export function GoadExtensionsTab({

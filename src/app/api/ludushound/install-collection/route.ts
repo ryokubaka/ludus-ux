@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
-import { buildLudushoundBinary, probeLudushoundHost } from "@/lib/ludushound-ssh"
-import { installLudushoundCollectionFromTarball } from "@/lib/ludushound-ansible-requirements"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
+import { buildLudushoundBinary, probeLudushoundHost } from "@/lib/ludushound/ludushound-ssh"
+import { installLudushoundCollectionFromTarball } from "@/lib/ludushound/ludushound-ansible-requirements"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 export async function POST(request: NextRequest) {
   const ctx = await resolveLudushoundSession(request)

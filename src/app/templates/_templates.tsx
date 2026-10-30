@@ -5,14 +5,14 @@ import Link from "next/link"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { useRouter } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { LogViewerCompound } from "@/components/range/log-viewer"
-import { splitLogText } from "@/lib/strip-ansi"
+import { splitLogText } from "@/lib/logs/strip-ansi"
 import {
   BookTemplate,
   RefreshCw,
@@ -36,14 +36,14 @@ import {
   History,
   ArrowLeft,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import { LogHistoryList } from "@/components/range/log-history-list"
-import type { TemplateObject, LogHistoryEntry } from "@/lib/types"
-import { cn, extractArray } from "@/lib/utils"
+import type { TemplateObject, LogHistoryEntry } from "@/lib/core/types"
+import { cn, extractArray } from "@/lib/core/utils"
 import { useToast } from "@/hooks/use-toast"
 import { ToastAction } from "@/components/ui/toast"
-import type { TemplateDeleteErrorCode } from "@/lib/template-delete-errors"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import type { TemplateDeleteErrorCode } from "@/lib/templates/template-delete-errors"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
@@ -51,7 +51,7 @@ import {
   getCatalogTemplatePresence,
   resolveInstalledTemplateName,
   type CatalogTemplatePresence,
-} from "@/lib/template-install-match"
+} from "@/lib/templates/template-install-match"
 import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
 import {
   SourceRepoLink,
@@ -63,7 +63,7 @@ import {
   pickDefaultRegisteredSource,
   registeredSourceOptionLabel,
   type RegisteredLudusSource,
-} from "@/lib/registered-ludus-sources"
+} from "@/lib/sources/registered-ludus-sources"
 
 // ── Template source types ─────────────────────────────────────────────────────
 

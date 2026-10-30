@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import fs from "fs"
 import path from "path"
-import { requireAdmin } from "@/lib/require-admin"
-import { DATA_DIR } from "@/lib/db"
-import { detectImageType } from "@/lib/safe-filename"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { DATA_DIR } from "@/lib/core/db"
+import { detectImageType } from "@/lib/core/safe-filename"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads")
 const LOGO_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"]

@@ -6,19 +6,19 @@ const gate = vi.hoisted(() => ({
   tasks: [] as { id: string; instanceId?: string; username?: string }[],
 }))
 
-vi.mock("@/lib/session", () => ({ resolveSession: vi.fn() }))
-vi.mock("@/lib/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
-vi.mock("@/lib/app-log", () => ({ writeAppLog: vi.fn() }))
-vi.mock("@/lib/settings-store", () => ({ getSettings: () => ({ proxmoxSshUser: "ludus" }) }))
-vi.mock("@/lib/goad-ssh", () => ({ listGoadInstances: vi.fn(async () => gate.instances) }))
-vi.mock("@/lib/goad-task-store", () => ({
+vi.mock("@/lib/session/session", () => ({ resolveSession: vi.fn() }))
+vi.mock("@/lib/lux/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
+vi.mock("@/lib/logs/app-log", () => ({ writeAppLog: vi.fn() }))
+vi.mock("@/lib/settings/settings-store", () => ({ getSettings: () => ({ proxmoxSshUser: "ludus" }) }))
+vi.mock("@/lib/goad/goad-ssh", () => ({ listGoadInstances: vi.fn(async () => gate.instances) }))
+vi.mock("@/lib/goad/goad-task-store", () => ({
   listTasks: () => gate.tasks,
   getTask: (taskId: string) => gate.tasks.find((task) => task.id === taskId) ?? null,
   updateTaskInstance: vi.fn(() => true),
 }))
 
-import { resolveSession } from "@/lib/session"
-import { updateTaskInstance } from "@/lib/goad-task-store"
+import { resolveSession } from "@/lib/session/session"
+import { updateTaskInstance } from "@/lib/goad/goad-task-store"
 import { POST } from "./route"
 
 function link(taskId: string, instanceId: string) {

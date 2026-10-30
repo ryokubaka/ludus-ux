@@ -2,7 +2,7 @@
 
 import type { LucideIcon } from "lucide-react"
 import { ChevronDown, ChevronRight } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 interface ExpandableCardTriggerProps {
   open: boolean

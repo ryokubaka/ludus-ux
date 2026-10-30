@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import {
   parseSelectableDeployLimitHosts,
   selectableLimitHostsFromRangeVms,
-} from "@/lib/ludus-deploy-limit"
+} from "@/lib/ludus/ludus-deploy-limit"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { Filter, Loader2, RefreshCw } from "lucide-react"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 

@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 
-vi.mock("@/lib/session-credential-store", () => ({
+vi.mock("@/lib/session/session-credential-store", () => ({
   getSessionCredentials: vi.fn(),
   createSessionCredentials: vi.fn(),
   deleteSessionCredentials: vi.fn(),
   updateSessionCredentials: vi.fn(),
 }))
 
-import { deleteSessionCredentials, getSessionCredentials } from "@/lib/session-credential-store"
-import { SESSION_COOKIE, encryptSession } from "@/lib/session-edge"
+import { deleteSessionCredentials, getSessionCredentials } from "@/lib/session/session-credential-store"
+import { SESSION_COOKIE, encryptSession } from "@/lib/session/session-edge"
 import { GET } from "./route"
 
 async function revokeWithCookie(): Promise<Response> {

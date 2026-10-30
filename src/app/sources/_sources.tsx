@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import Link from "next/link"
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -41,23 +41,23 @@ import {
   Check,
   type LucideIcon,
 } from "lucide-react"
-import { sourceOwnerLabel, suggestedLudusSourceId } from "@/lib/ludus-source-ref"
+import { sourceOwnerLabel, suggestedLudusSourceId } from "@/lib/sources/ludus-source-ref"
 import { useToast } from "@/hooks/use-toast"
-import { cn, extractArray } from "@/lib/utils"
+import { cn, extractArray } from "@/lib/core/utils"
 import { LUDUS_SOURCES_DOCS_URL } from "@/components/sources/source-catalog-banner"
 import {
   fetchSourceCatalog,
   sourceCatalogItems,
-} from "@/lib/source-catalog-client"
-import { sourceBlueprintInstallId } from "@/lib/registered-ludus-sources"
-import { ludusApi } from "@/lib/api"
-import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
+} from "@/lib/sources/source-catalog-client"
+import { sourceBlueprintInstallId } from "@/lib/sources/registered-ludus-sources"
+import { ludusApi } from "@/lib/ui/api"
+import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
 import { useInstalledBlueprintVersions } from "@/hooks/use-installed-blueprint-versions"
-import type { TemplateObject } from "@/lib/types"
+import type { TemplateObject } from "@/lib/core/types"
 import {
   buildCatalogTemplatePresenceMap,
   getCatalogTemplatePresence,
-} from "@/lib/template-install-match"
+} from "@/lib/templates/template-install-match"
 import {
   buildInstalledAnsibleNames,
   buildInstalledAnsibleVersions,
@@ -77,10 +77,10 @@ import {
   siblingRefForInstalledVersion,
   sourceCatalogBlueprintInstallState,
   sourceCatalogTemplateInstallState,
-} from "@/lib/source-catalog-presence"
-import { postSourceInstall } from "@/lib/source-install-client"
+} from "@/lib/sources/source-catalog-presence"
+import { postSourceInstall } from "@/lib/sources/source-install-client"
 import { ShowAllBar } from "@/components/ui/show-all-bar"
-import type { SourceInstallSelection } from "@/lib/ludus-source-client"
+import type { SourceInstallSelection } from "@/lib/sources/ludus-source-client"
 
 interface LudusSource {
   id?: string

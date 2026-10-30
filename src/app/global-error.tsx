@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { reloadDocument, reloadDocumentOnce } from "@/lib/document-reload"
+import { reloadDocument, reloadDocumentOnce } from "@/lib/ui/document-reload"
 
 export default function GlobalError({
   error,

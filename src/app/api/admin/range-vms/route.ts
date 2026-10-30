@@ -6,15 +6,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { getAdminData } from "@/lib/admin-data"
-import { getRangeVmsCache, bustRangeVmsCache } from "@/lib/admin-range-vms-cache"
-import { ludusRequest } from "@/lib/ludus-client"
-import { logAndSafeError } from "@/lib/safe-client-error"
+import { getAdminData } from "@/lib/admin/admin-data"
+import { getRangeVmsCache, bustRangeVmsCache } from "@/lib/admin/admin-range-vms-cache"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
 import {
   buildRangeVmInventoryRows,
   mapWithConcurrency,
-} from "@/lib/range-vm-inventory"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
+} from "@/lib/range/range-vm-inventory"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
 
 async function fetchRangeConfigYaml(apiKey: string, rangeId: string): Promise<string> {
   const res = await ludusRequest<{ result?: string }>(

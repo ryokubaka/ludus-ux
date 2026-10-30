@@ -1,8 +1,8 @@
 import { HydrationBoundary } from "@tanstack/react-query"
-import { requireAdminPage } from "@/lib/require-admin-page"
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
-import { getLayoutSession } from "@/lib/session-layout"
-import { prefetchUsersData } from "@/lib/server-prefetch"
+import { requireAdminPage } from "@/lib/session/require-admin-page"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
+import { getLayoutSession } from "@/lib/session/session-layout"
+import { prefetchUsersData } from "@/lib/core/server-prefetch"
 
 const UsersPageClient = dynamicPageClient(
   () => import("./_users"),

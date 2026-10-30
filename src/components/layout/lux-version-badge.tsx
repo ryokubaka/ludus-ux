@@ -1,4 +1,4 @@
-import { getCachedLuxVersion } from "@/lib/cached-lux-version"
+import { getCachedLuxVersion } from "@/lib/lux/cached-lux-version"
 
 /** Cached server component — static semver for settings/about chrome. */
 export async function LuxVersionBadge({ className }: { className?: string }) {

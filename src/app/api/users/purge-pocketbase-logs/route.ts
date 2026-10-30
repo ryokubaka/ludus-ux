@@ -6,9 +6,9 @@
  * DELETE /user/{id} can succeed (deploy log history holds a required relation to users).
  */
 import { NextRequest, NextResponse } from "next/server"
-import { requireAdmin } from "@/lib/require-admin"
-import { deletePbLogsForLudusUser } from "@/lib/pocketbase-client"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { deletePbLogsForLudusUser } from "@/lib/core/pocketbase-client"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 export async function POST(request: NextRequest) {

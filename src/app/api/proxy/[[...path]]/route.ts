@@ -1,30 +1,30 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { ludusRequest } from "@/lib/ludus-client"
-import { getProxyLudusTimeoutMs } from "@/lib/proxy-ludus-timeout"
-import { resolveSession } from "@/lib/session"
-import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { getProxyLudusTimeoutMs } from "@/lib/lux/proxy-ludus-timeout"
+import { resolveSession } from "@/lib/session/session"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
 import {
   effectiveUsernameFromRequest,
   logLuxUserAction,
   ludusProxyEvent,
-} from "@/lib/lux-api-audit"
-import { revalidateAfterLudusProxyMutation } from "@/lib/ludus-proxy-cache-invalidate"
+} from "@/lib/lux/lux-api-audit"
+import { revalidateAfterLudusProxyMutation } from "@/lib/ludus/ludus-proxy-cache-invalidate"
 import {
   ensureAnsibleHomeLayoutAsRoot,
   resolveSessionLinuxUser,
-} from "@/lib/ansible-home-repair"
-import { formatAnsibleHomeRepairLogLine } from "@/lib/ludus-ansible-preflight"
-import { shouldRepairAnsibleHomeAfterProxyMutation } from "@/lib/ludus-proxy-ansible-repair"
-import { normalizeLudusProxyPath } from "@/lib/ludus-blueprint-proxy-path"
-import { getSettings } from "@/lib/settings-store"
+} from "@/lib/ansible/ansible-home-repair"
+import { formatAnsibleHomeRepairLogLine } from "@/lib/ludus/ludus-ansible-preflight"
+import { shouldRepairAnsibleHomeAfterProxyMutation } from "@/lib/ludus/ludus-proxy-ansible-repair"
+import { normalizeLudusProxyPath } from "@/lib/ludus/ludus-blueprint-proxy-path"
+import { getSettings } from "@/lib/settings/settings-store"
 import {
   assertRouterTemplateReady,
-} from "@/lib/ludus-router-template-assert"
+} from "@/lib/ludus/ludus-router-template-assert"
 import {
   routerTemplateBlockMessage,
-} from "@/lib/ludus-router-template"
-import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
+} from "@/lib/ludus/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/range/range-deploy-host-patches"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 

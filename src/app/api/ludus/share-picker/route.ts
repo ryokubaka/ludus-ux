@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { fetchSharePickerDirectory } from "@/lib/ludus-share-picker-server"
-import { requireSession } from "@/lib/require-session"
+import { fetchSharePickerDirectory } from "@/lib/ludus/ludus-share-picker-server"
+import { requireSession } from "@/lib/session/require-session"
 
 /** GET /api/ludus/share-picker — Ludus users + groups for share dialogs (any authenticated user). */
 export async function GET(request: NextRequest) {

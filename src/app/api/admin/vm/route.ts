@@ -9,11 +9,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 /** PUT ?proxmoxId=<id>&action=start|stop  — power control via pvesh */

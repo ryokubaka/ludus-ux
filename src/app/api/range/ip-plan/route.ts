@@ -14,10 +14,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
-import { ludusRequest } from "@/lib/ludus-client"
-import type { RangeObject } from "@/lib/types"
+import { resolveSession } from "@/lib/session/session"
+import { getSettings } from "@/lib/settings/settings-store"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import type { RangeObject } from "@/lib/core/types"
 
 
 function ludusRangeListFromResponse(data: unknown): RangeObject[] {

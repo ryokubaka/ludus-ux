@@ -30,7 +30,7 @@ Leave product docs and `CHANGELOG.md` updated when behavior a user can see chang
 
 - `src/app/` — App Router pages and `src/app/api/` route handlers
 - `src/components/` — UI. Range log UI is `src/components/range/`
-- `src/lib/` — server logic, Ludus client, SSH, SQLite, prefetch
+- `src/lib/` — server logic, grouped by domain (`ludus/`, `goad/`, `ssh/`, `session/`, `range/`, `logs/`, …)
 - `src/proxy.ts` — session gate and security headers. Next.js 16 uses this file, not `middleware.ts`
 - `config/` — Next, Vitest, Playwright
 - `docker/` — image and nginx. TLS is on nginx `:443`; the app listens on HTTP `:3000`
@@ -72,15 +72,15 @@ export default async function SomePage() {
 }
 ```
 
-Prefetch lives in `src/lib/server-prefetch.ts`. Query keys include `effectiveScopeTag` (`login|view`) so an impersonation session does not reuse another user's cache.
+Prefetch lives in `src/lib/core/server-prefetch.ts`. Query keys include `effectiveScopeTag` (`login|view`) so an impersonation session does not reuse another user's cache.
 
-Ludus list payloads are wrapped (`{ result }`, `{ groups }`, …). Parse them with `extractArray` or `parseLudusGroupList` from `src/lib/utils.ts`.
+Ludus list payloads are wrapped (`{ result }`, `{ groups }`, …). Parse them with `extractArray` or `parseLudusGroupList` from `src/lib/core/utils.ts`.
 
 Cache invalidation after a successful `/api/proxy` mutation goes through `ludus-cache-revalidate.ts`. Do not pass a raw API key into a `"use cache"` function. Partition with `ludusCachePartition()` and scope tags.
 
 ## Host SSH
 
-Server-side SSH uses `getSettings()` and `src/lib/proxmox-ssh.ts`. Root may run a host command directly. Any other account may run only `sudo -n /usr/local/sbin/lux-host <operation> <args>`. The helper's operations are fixed in `scripts/lux-host/lux-host`. It does not run a shell string. A normal shell `sudo` is denied. Quote the full remote path. `shellQuote(dir) + "/file"` breaks on spaces.
+Server-side SSH uses `getSettings()` and `src/lib/ssh/proxmox-ssh.ts`. Root may run a host command directly. Any other account may run only `sudo -n /usr/local/sbin/lux-host <operation> <args>`. The helper's operations are fixed in `scripts/lux-host/lux-host`. It does not run a shell string. A normal shell `sudo` is denied. Quote the full remote path. `shellQuote(dir) + "/file"` breaks on spaces.
 
 `/opt/ludus` playbooks and `group_vars` belong to Ludus. LUX does not install files there. User range files live at `/opt/ludus/ranges/<id>/range-config.yml`. Syncing a source blueprint does not rewrite that file. VM `ansible_groups` are stored on the Proxmox description at clone time and stay until the VM is cloned again.
 
@@ -88,7 +88,7 @@ Do not print SSH passwords, API keys, or `APP_SECRET`. Settings secrets in SQLit
 
 ## Logs
 
-Deploy logs are an SSE stream from `src/app/api/logs/stream/route.ts` into `src/lib/deploy-log-context.tsx`. Ansible prints a blank line between tasks. Drop those blanks before they are stamped or shown (`isBlankDeployLogLine`). Prefer `LogViewerCompound` (`Root`, `Toolbar`, `Search`, `Body`) for new log panes.
+Deploy logs are an SSE stream from `src/app/api/logs/stream/route.ts` into `src/lib/logs/deploy-log-context.tsx`. Ansible prints a blank line between tasks. Drop those blanks before they are stamped or shown (`isBlankDeployLogLine`). Prefer `LogViewerCompound` (`Root`, `Toolbar`, `Search`, `Body`) for new log panes.
 
 ## GOAD instance page
 

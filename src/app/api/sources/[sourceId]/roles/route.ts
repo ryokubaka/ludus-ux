@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
-import { isHttp404Error } from "@/lib/ludus-source-client"
-import { sourceCatalogJsonResponse } from "@/lib/source-catalog-route"
-import { resolveSourceRoles } from "@/lib/source-catalog-resolver"
-import { catalogReadApiKey } from "@/lib/source-publication"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
-import { logAndSafeError } from "@/lib/safe-client-error"
+import { isHttp404Error } from "@/lib/sources/ludus-source-client"
+import { sourceCatalogJsonResponse } from "@/lib/sources/source-catalog-route"
+import { resolveSourceRoles } from "@/lib/sources/source-catalog-resolver"
+import { catalogReadApiKey } from "@/lib/sources/source-publication"
+import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
 
 export async function GET(
   request: NextRequest,

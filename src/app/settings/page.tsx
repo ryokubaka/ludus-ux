@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { Suspense } from "react"
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
 import { LuxVersionHeader } from "./lux-version-header"
 
 const SettingsPageClient = dynamicPageClient(

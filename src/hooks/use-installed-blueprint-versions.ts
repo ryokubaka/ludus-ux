@@ -2,15 +2,15 @@
 
 import { useMemo } from "react"
 import { useQueries } from "@tanstack/react-query"
-import { ludusApi } from "@/lib/api"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
+import { ludusApi } from "@/lib/ui/api"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
 import {
   buildInstalledBlueprintVersions,
   isMissingOrUnknownVersion,
-} from "@/lib/source-catalog-presence"
-import type { BlueprintListItem } from "@/lib/types"
+} from "@/lib/sources/source-catalog-presence"
+import type { BlueprintListItem } from "@/lib/core/types"
 
 function aliasKeysForBlueprintId(id: string): string[] {
   const keys = [id]

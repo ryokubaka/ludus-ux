@@ -1,9 +1,9 @@
 "use client"
 
 import { useState, useRef, useCallback, useEffect } from "react"
-import { ludusApi } from "@/lib/api"
-import { appendStreamLines } from "@/lib/log-buffer"
-import { formatStreamWallHms } from "@/lib/log-line-timestamp"
+import { ludusApi } from "@/lib/ui/api"
+import { appendStreamLines } from "@/lib/logs/log-buffer"
+import { formatStreamWallHms } from "@/lib/logs/log-line-timestamp"
 
 const POLL_INTERVAL_MS = 5000
 

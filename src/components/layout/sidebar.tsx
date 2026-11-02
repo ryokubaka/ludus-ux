@@ -3,8 +3,8 @@
 import { usePathname } from "next/navigation"
 import { useEffect, useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { cn } from "@/lib/utils"
-import { fetchSharedSession } from "@/lib/session-fetch"
+import { cn } from "@/lib/core/utils"
+import { fetchSharedSession } from "@/lib/session/session-fetch"
 import {
   LayoutDashboard,
   FileCode2,
@@ -38,18 +38,18 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { useRange } from "@/lib/range-context"
-import { useSidebar } from "@/lib/sidebar-context"
+import { useRange } from "@/lib/range/range-context"
+import { useSidebar } from "@/lib/ui/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
-import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { ludusApi } from "@/lib/api"
-import { ludusSupportsSources } from "@/lib/ludus-version"
+import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/core/changelog"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { ludusApi } from "@/lib/ui/api"
+import { ludusSupportsSources } from "@/lib/ludus/ludus-version"
 import { AppNavLink } from "@/components/layout/app-nav-link"
-import { navHrefMatches } from "@/lib/nav-href"
-import { useNavPending } from "@/lib/nav-pending-context"
+import { navHrefMatches } from "@/lib/ui/nav-href"
+import { useNavPending } from "@/lib/ui/nav-pending-context"
 
 interface NavItem {
   href: string

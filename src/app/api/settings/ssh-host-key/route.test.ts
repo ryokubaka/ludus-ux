@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest, NextResponse } from "next/server"
 
-vi.mock("@/lib/require-admin", () => ({
+vi.mock("@/lib/session/require-admin", () => ({
   requireAdmin: vi.fn(),
   finishAdminResponse: vi.fn(async (response: NextResponse) => response),
 }))
-vi.mock("@/lib/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
-vi.mock("@/lib/ssh-host-key", () => ({
+vi.mock("@/lib/lux/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
+vi.mock("@/lib/ssh/ssh-host-key", () => ({
   forgetSshHostKey: vi.fn(() => true),
   listStoredSshHostKeys: vi.fn(() => [{ host: "ludus.example", port: 22, fingerprint: "SHA256:abc=" }]),
 }))
 
-import { requireAdmin } from "@/lib/require-admin"
-import { forgetSshHostKey } from "@/lib/ssh-host-key"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { forgetSshHostKey } from "@/lib/ssh/ssh-host-key"
 import { DELETE, GET } from "./route"
 
 function forget(body: Record<string, unknown>) {

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { isHttp404Error, listSources } from "@/lib/ludus-source-client"
-import { catalogReadApiKey } from "@/lib/source-publication"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { listRepoRefs } from "@/lib/template-repo-client"
+import { isHttp404Error, listSources } from "@/lib/sources/ludus-source-client"
+import { catalogReadApiKey } from "@/lib/sources/source-publication"
+import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { listRepoRefs } from "@/lib/templates/template-repo-client"
 
 export const maxDuration = 60
 

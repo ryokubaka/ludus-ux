@@ -10,12 +10,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Monitor, Power, PowerOff, Circle, Download, MonitorPlay, Loader2, ExternalLink, Trash2 } from "lucide-react"
-import { vmIdentityKey } from "@/lib/dashboard-vm-merge"
-import type { VMObject } from "@/lib/types"
-import { cn } from "@/lib/utils"
-import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
-import { vmDisplayName, waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { vmIdentityKey } from "@/lib/ui/dashboard-vm-merge"
+import type { VMObject } from "@/lib/core/types"
+import { cn } from "@/lib/core/utils"
+import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/ui/api"
+import { vmDisplayName, waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 
 interface VMTableProps {

@@ -10,9 +10,9 @@
  */
 
 import { NextRequest } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { getTask, subscribeToTaskStatusEvents } from "@/lib/goad-task-store"
-import { canAccessGoadTask } from "@/lib/goad-task-api"
+import { resolveSession } from "@/lib/session/session"
+import { getTask, subscribeToTaskStatusEvents } from "@/lib/goad/goad-task-store"
+import { canAccessGoadTask } from "@/lib/goad/goad-task-api"
 
 
 export async function GET(request: NextRequest) {

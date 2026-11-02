@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -34,26 +34,26 @@ import {
   MapPin,
   AlertTriangle,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import {
   buildSnapshotsViewData,
   emptySnapshotsViewData,
   type SnapshotsNameGroup,
   type SnapshotsViewData,
   type SnapshotsVmGroup,
-} from "@/lib/snapshots-view-data"
-import { snapshotTargetProxmoxIdsExcludingRouter } from "@/lib/ludus-range-router-vm"
-import type { LudusSnapshotMutationResult, SnapshotInfo } from "@/lib/types"
+} from "@/lib/range/snapshots-view-data"
+import { snapshotTargetProxmoxIdsExcludingRouter } from "@/lib/ludus/ludus-range-router-vm"
+import type { LudusSnapshotMutationResult, SnapshotInfo } from "@/lib/core/types"
 import {
   classifySnapshotMutation,
   firstSnapshotMutationErrorMessage,
-} from "@/lib/ludus-snapshot-payload"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+} from "@/lib/ludus/ludus-snapshot-payload"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { useRange } from "@/lib/range-context"
+import { useRange } from "@/lib/range/range-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 const PAGE_SIZE = 20

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getTask, updateTaskPhase, setTaskHasNetworkRules } from "@/lib/goad-task-store"
-import { assertGoadTaskAccess, toGoadTaskDetail } from "@/lib/goad-task-api"
-import { resolveSession } from "@/lib/session"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { getTask, updateTaskPhase, setTaskHasNetworkRules } from "@/lib/goad/goad-task-store"
+import { assertGoadTaskAccess, toGoadTaskDetail } from "@/lib/goad/goad-task-api"
+import { resolveSession } from "@/lib/session/session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 export async function GET(

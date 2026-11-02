@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
-import { listLudushoundWorkspaces } from "@/lib/ludushound-ssh"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
+import { listLudushoundWorkspaces } from "@/lib/ludushound/ludushound-ssh"
 
 export async function GET(request: NextRequest) {
   const ctx = await resolveLudushoundSession(request)

@@ -7,16 +7,16 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { deleteBlueprintsOnLudus } from "@/lib/blueprint-delete"
-import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
-import { ludusRequest } from "@/lib/ludus-client"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { requireSession } from "@/lib/require-session"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
-import { canDeleteBlueprint } from "@/lib/blueprint-delete-authz"
+import { deleteBlueprintsOnLudus } from "@/lib/blueprints/blueprint-delete"
+import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { requireSession } from "@/lib/session/require-session"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
+import { canDeleteBlueprint } from "@/lib/blueprints/blueprint-delete-authz"
 
 export async function POST(request: NextRequest) {
   const auth = await requireSession(request)

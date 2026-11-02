@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
-import { listTasks } from "@/lib/goad-task-store"
-import { toPublicGoadTask } from "@/lib/goad-task-api"
-import { resolveSession } from "@/lib/session"
-import { effectiveImpersonatedOperatorUsername } from "@/lib/admin-impersonation-request"
+import { listTasks } from "@/lib/goad/goad-task-store"
+import { toPublicGoadTask } from "@/lib/goad/goad-task-api"
+import { resolveSession } from "@/lib/session/session"
+import { effectiveImpersonatedOperatorUsername } from "@/lib/admin/admin-impersonation-request"
 
 
 export async function GET(request: NextRequest) {

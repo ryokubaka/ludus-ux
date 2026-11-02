@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -16,20 +16,20 @@ import {
   mapRegisteredSources,
   pickDefaultRegisteredSource,
   registeredSourceOptionLabel,
-} from "@/lib/registered-ludus-sources"
+} from "@/lib/sources/registered-ludus-sources"
 import {
   fetchSourceCatalog,
   sourceCatalogItems,
-} from "@/lib/source-catalog-client"
+} from "@/lib/sources/source-catalog-client"
 import { useToast } from "@/hooks/use-toast"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import {
   buildInstalledAnsibleNames,
   sourceCatalogAnsibleInstallState,
-} from "@/lib/source-catalog-presence"
-import { postSourceInstall } from "@/lib/source-install-client"
+} from "@/lib/sources/source-catalog-presence"
+import { postSourceInstall } from "@/lib/sources/source-install-client"
 import { Download, GitBranch, ChevronDown, ChevronRight, Loader2, Package, Search, Zap } from "lucide-react"
-import { groupGalaxySearchHits } from "@/lib/ansible-galaxy-search"
+import { groupGalaxySearchHits } from "@/lib/ansible/ansible-galaxy-search"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 
 interface SourceRole {

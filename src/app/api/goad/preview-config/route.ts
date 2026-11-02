@@ -6,11 +6,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { sshExec, isGoadConfigured } from "@/lib/goad-ssh"
-import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad-preview-config-py"
-import { resolveGoadPath } from "@/lib/runtime-paths"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { sshExec, isGoadConfigured } from "@/lib/goad/goad-ssh"
+import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad/goad-preview-config-py"
+import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 const GOAD_CATALOG_NAME = /^[A-Za-z0-9_-]{1,64}$/
 

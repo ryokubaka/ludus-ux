@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getInstanceInventories, isGoadConfigured } from "@/lib/goad-ssh"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { resolveSession } from "@/lib/session"
+import { getInstanceInventories, isGoadConfigured } from "@/lib/goad/goad-ssh"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { resolveSession } from "@/lib/session/session"
 
 
 export async function GET(

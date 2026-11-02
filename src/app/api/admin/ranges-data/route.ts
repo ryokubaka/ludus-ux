@@ -20,12 +20,12 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { ludusRequest } from "@/lib/ludus-client"
-import { setOwnership, removeOwnership } from "@/lib/range-ownership-store"
-import { getAdminData, bustAdminCache } from "@/lib/admin-data"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { setOwnership, removeOwnership } from "@/lib/range/range-ownership-store"
+import { getAdminData, bustAdminCache } from "@/lib/admin/admin-data"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 // ── GET ──────────────────────────────────────────────────────────────────────

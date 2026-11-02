@@ -3,8 +3,8 @@
  */
 
 import { NextRequest } from "next/server"
-import { requireAdmin } from "@/lib/require-admin"
-import { formatAppLogLine, queryAppLogs, subscribeAppLogEvents } from "@/lib/app-log"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { formatAppLogLine, queryAppLogs, subscribeAppLogEvents } from "@/lib/logs/app-log"
 
 
 export async function GET(request: NextRequest) {

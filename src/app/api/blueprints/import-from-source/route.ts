@@ -11,32 +11,32 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { buildBlueprintTarGz } from "@/lib/blueprint-bundle"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { buildBlueprintTarGz } from "@/lib/blueprints/blueprint-bundle"
 import {
   createBlueprintFromRangeBundle,
   createBlueprintFromRepoBundle,
   isHttp404Error,
   loadBlueprintRepoBundle,
-} from "@/lib/blueprint-source-import"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { blueprintInstallNameFromFields, isBlueprintInstallName } from "@/lib/blueprint-api-path"
+} from "@/lib/blueprints/blueprint-source-import"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { blueprintInstallNameFromFields, isBlueprintInstallName } from "@/lib/blueprints/blueprint-api-path"
 import {
   finalizeGlobalSourceBlueprintInstall,
   rememberBlueprintOperator,
   resolveExistingSourceBlueprintInstall,
   resolveGlobalBlueprintServiceApiKey,
   resolveGlobalSourceBlueprintInstallApiKey,
-} from "@/lib/blueprint-global-install"
-import { isSourcePublished } from "@/lib/source-publication"
-import { shareBlueprintWithUsersAs } from "@/lib/blueprint-share"
-import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
-import { ludusRequest } from "@/lib/ludus-client"
-import { ludusFetch } from "@/lib/ludus-fetch"
-import { resolveSession } from "@/lib/session"
-import { blueprintSourcePrefix, installedBlueprintMatchesSource } from "@/lib/registered-ludus-sources"
+} from "@/lib/blueprints/blueprint-global-install"
+import { isSourcePublished } from "@/lib/sources/source-publication"
+import { shareBlueprintWithUsersAs } from "@/lib/blueprints/blueprint-share"
+import { ludusCallerFromGetUser } from "@/lib/ludus/ludus-user-from-profile"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { ludusFetch } from "@/lib/ludus/ludus-fetch"
+import { resolveSession } from "@/lib/session/session"
+import { blueprintSourcePrefix, installedBlueprintMatchesSource } from "@/lib/sources/registered-ludus-sources"
 import {
   buildLudusApiUrl,
   ensureGitSource,
@@ -45,8 +45,8 @@ import {
   installSourceBlueprints,
   listSources,
   sourceGitUrlById,
-} from "@/lib/ludus-source-client"
-import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/template-repo-client"
+} from "@/lib/sources/ludus-source-client"
+import { fetchAllRepoBlobs, fetchRepoRawFile } from "@/lib/templates/template-repo-client"
 
 export const maxDuration = 300
 

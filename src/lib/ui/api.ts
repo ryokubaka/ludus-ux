@@ -1,0 +1,746 @@
+/**
+ * Client-side API helper — calls Next.js proxy routes at /api/proxy/[...path].
+ * Paths match Ludus Server v2.x API (the proxy adds the /api/v2 prefix server-side).
+ *
+ * sessionStorage notes: this module reads impersonation state from sessionStorage
+ * (browser only). On the server the sessionStorage branches degrade to no-ops;
+ * only the non-storage helpers are safe to call server-side.
+ *
+ * Security: only X-Impersonate-As (username) is sent as a header. The impersonation
+ * API key stays in the encrypted httpOnly session cookie and is never exposed to JS.
+ * Server routes read it via resolveAdminImpersonationFromRequest.
+ */
+
+import {
+  ludusSnapshotByNameBody,
+  ludusSnapshotCreateBody,
+  snapshotsRangeQuery,
+} from "@/lib/ludus/ludus-snapshot-payload"
+import { ludusBlueprintPath } from "@/lib/blueprints/blueprint-api-path"
+import {
+  readImpersonationHeadersFromSessionStorage,
+} from "@/lib/session/impersonation-headers"
+import { ludusCallerFromGetUser } from "@/lib/ludus/ludus-user-from-profile"
+
+/**
+ * Read active impersonation state from sessionStorage (browser only).
+ * Returns X-Impersonate-As when impersonating; empty object otherwise.
+ * The API key is NOT included — it lives in the httpOnly session cookie.
+ */
+export function getImpersonationHeaders(): Record<string, string> {
+  return readImpersonationHeadersFromSessionStorage()
+}
+
+export interface VmOperationLogEntry {
+  id: string
+  ts: number
+  username: string
+  kind: "destroy_vm" | "remove_extension"
+  rangeId: string | null
+  instanceId: string | null
+  vmId: number | null
+  vmName: string | null
+  extensionName: string | null
+  status: "ok" | "error"
+  detail: string | null
+}
+
+/**
+ * Read LUX-local VM operation log (destroy_vm / remove_extension), newest first.
+ * Non-admin sessions are scoped server-side to their own username.
+ */
+export async function getVmOperationLog(params: {
+  rangeId?: string
+  instanceId?: string
+  limit?: number
+} = {}): Promise<{ entries: VmOperationLogEntry[]; error?: string }> {
+  const qs = new URLSearchParams()
+  if (params.rangeId) qs.set("rangeId", params.rangeId)
+  if (params.instanceId) qs.set("instanceId", params.instanceId)
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  try {
+    const res = await fetch(
+      `/api/vm-operation-log${qs.toString() ? `?${qs}` : ""}`,
+      { headers: { ...getImpersonationHeaders() } },
+    )
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string }
+      return { entries: [], error: d.error ?? `HTTP ${res.status}` }
+    }
+    const data = (await res.json()) as { entries?: VmOperationLogEntry[] }
+    return { entries: data.entries ?? [] }
+  } catch (err) {
+    return { entries: [], error: (err as Error).message }
+  }
+}
+
+/** Best-effort append to LUX local `vm_operation_log` (SQLite) for VM / extension removals. */
+export async function postVmOperationAudit(payload: {
+  kind: "destroy_vm" | "remove_extension"
+  rangeId?: string
+  instanceId?: string
+  vmId?: number
+  vmName?: string
+  extensionName?: string
+  status: "ok" | "error"
+  detail?: string
+}): Promise<void> {
+  try {
+    await fetch("/api/vm-operation-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+      body: JSON.stringify(payload),
+    })
+    // Notify any mounted list view (Dashboard / Range Logs) to refetch without
+    // needing the writer to hold a queryClient reference.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("vm-operation-log-updated"))
+    }
+  } catch {
+    /* ignore — audit must not break primary flow */
+  }
+}
+
+/** After Ludus destroys VMs, drop matching keys from the LUX host `~/.ssh/known_hosts` (avoids MITM warnings on recycle). */
+export async function pruneKnownHosts(hosts: string[]): Promise<void> {
+  const uniq = [...new Set(hosts.map((h) => h.trim()).filter(Boolean))]
+  if (uniq.length === 0) return
+  try {
+    await fetch("/api/ssh/prune-known-hosts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hosts: uniq }),
+      credentials: "include",
+    })
+  } catch {
+    /* non-fatal */
+  }
+}
+
+export type GoadWorkspaceCleanup = {
+  instanceId: string | null
+  workspaceRemoved: boolean
+  errors: string[]
+}
+
+/**
+ * After Ludus removes a range, delete the linked GOAD workspace folder on the GOAD
+ * SSH host (`<goadPath>/workspace/<instanceId>`) when this Ludus range was tied to a GOAD instance.
+ * Resolves instance via `/api/goad/by-range` (SQLite + SSH enrichment), then POST force-delete
+ * with `skipRangeDeletion` because Ludus already dropped the range.
+ */
+export async function cleanupGoadWorkspaceAfterRangeDelete(
+  rangeId: string,
+  options?: { adminGlobalInstances?: boolean },
+): Promise<GoadWorkspaceCleanup> {
+  const rid = rangeId?.trim()
+  if (!rid) return { instanceId: null, workspaceRemoved: false, errors: [] }
+  const imp = getImpersonationHeaders()
+  const qs = new URLSearchParams({ rangeId: rid })
+  if (options?.adminGlobalInstances) qs.set("adminView", "1")
+  try {
+    let instanceId: string | null = null
+    const byRes = await fetch(`/api/goad/by-range?${qs}`, {
+      credentials: "include",
+      headers: imp,
+    })
+    if (byRes.ok) {
+      const data = (await byRes.json()) as { instanceId?: string | null }
+      if (data.instanceId && typeof data.instanceId === "string") {
+        instanceId = data.instanceId.trim() || null
+      }
+    }
+    if (!instanceId) {
+      const instUrl =
+        "/api/goad/instances" + (options?.adminGlobalInstances ? "?adminView=1" : "")
+      const instRes = await fetch(instUrl, { credentials: "include", headers: imp })
+      if (instRes.ok) {
+        const instData = (await instRes.json()) as {
+          instances?: { instanceId: string; ludusRangeId?: string }[]
+        }
+        instanceId =
+          instData.instances?.find((i) => i.ludusRangeId === rid)?.instanceId ?? null
+      }
+    }
+    if (!instanceId) return { instanceId: null, workspaceRemoved: false, errors: [] }
+    const res = await fetch(`/api/goad/instances/${encodeURIComponent(instanceId)}/force-delete`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...imp },
+      body: JSON.stringify({ ludusRangeId: rid, skipRangeDeletion: true }),
+    })
+    const data = (await res.json().catch(() => ({}))) as {
+      workspaceRemoved?: boolean
+      errors?: string[]
+    }
+    const errors = Array.isArray(data.errors) ? data.errors.filter((e) => typeof e === "string") : []
+    if (!res.ok && errors.length === 0) errors.push(`HTTP ${res.status}`)
+    return { instanceId, workspaceRemoved: data.workspaceRemoved === true, errors }
+  } catch (err) {
+    return {
+      instanceId: null,
+      workspaceRemoved: false,
+      errors: [err instanceof Error ? err.message : "GOAD workspace cleanup failed"],
+    }
+  }
+}
+
+export async function apiRequest<T = unknown>(
+  path: string,
+  options: {
+    method?: string
+    body?: unknown
+    useAdmin?: boolean
+    userOverride?: string
+  } = {}
+): Promise<{ data?: T; error?: string; status: number }> {
+  const { method = "GET", body, useAdmin, userOverride } = options
+
+  // Remove leading slash for the proxy path; empty string → /api/proxy/ (root)
+  const proxyPath = path === "/" ? "" : (path.startsWith("/") ? path.slice(1) : path)
+  const url = `/api/proxy/${proxyPath}`
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+  if (useAdmin) headers["X-Ludus-Admin"] = "true"
+  if (userOverride) headers["X-Ludus-User"] = userOverride
+
+  // Inject both impersonation headers so every server-side route can determine
+  // the effective API key (X-Impersonate-Apikey) AND effective username
+  // (X-Impersonate-As) without requiring per-call configuration.
+  Object.assign(headers, getImpersonationHeaders())
+
+  try {
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+
+    const status = response.status
+    if (status === 204) return { status }
+
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      return { error: data?.error || `HTTP ${status}`, status }
+    }
+    return { data: data as T, status }
+  } catch (err) {
+    return { error: (err as Error).message, status: 0 }
+  }
+}
+
+export const get = <T>(path: string, opts?: Parameters<typeof apiRequest>[1]) =>
+  apiRequest<T>(path, { ...opts, method: "GET" })
+
+export const post = <T>(path: string, body?: unknown, opts?: Parameters<typeof apiRequest>[1]) =>
+  apiRequest<T>(path, { ...opts, method: "POST", body })
+
+export const put = <T>(path: string, body?: unknown, opts?: Parameters<typeof apiRequest>[1]) =>
+  apiRequest<T>(path, { ...opts, method: "PUT", body })
+
+export const del = <T>(path: string, body?: unknown, opts?: Parameters<typeof apiRequest>[1]) =>
+  apiRequest<T>(path, { ...opts, method: "DELETE", body })
+
+// ── Ludus API wrappers (Ludus Server v2.x paths) ─────────────────────────────
+
+type LudusEnvelope<T = unknown> = { data?: T; error?: string; status: number }
+
+async function postBlueprintShare(
+  blueprintId: string,
+  body: { userIDs?: string[]; groupNames?: string[] },
+): Promise<LudusEnvelope<{
+  ok?: boolean
+  success?: string[]
+  errors?: Array<{ item: string; reason: string }>
+  httpError?: string
+}>> {
+  try {
+    const response = await fetch("/api/blueprints/share", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+      body: JSON.stringify({
+        blueprintId,
+        userIDs: body.userIDs ?? [],
+        groupNames: body.groupNames ?? [],
+      }),
+    })
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean
+      success?: string[]
+      errors?: Array<{ item: string; reason: string }>
+      error?: string
+      httpError?: string
+    } | null
+    if (!response.ok) {
+      return { error: data?.error || `HTTP ${response.status}`, status: response.status, data: data ?? undefined }
+    }
+    return { data: data ?? undefined, status: response.status }
+  } catch (err) {
+    return { error: (err as Error).message, status: 0 }
+  }
+}
+
+export const ludusApi = {
+  // Version — GET /
+  getVersion: () => get<{ result: string; version?: string }>("/"),
+
+  // Current user info — GET /user (returns array)
+  whoami: () => get<import("@/lib/core/types").UserObject[]>("/user"),
+
+  // Own user info — GET /user
+  listUsers: (opts?: { useAdmin?: boolean }) =>
+    get<import("@/lib/core/types").UserObject[]>("/user", opts),
+
+  // All users — GET /user/all (admin only)
+  listAllUsers: () =>
+    get<import("@/lib/core/types").UserObject[]>("/user/all"),
+
+  /** Ludus user + group directory for share pickers (server uses admin/operator key when needed). */
+  fetchSharePickerDirectory: async (): Promise<
+    LudusEnvelope<{ users: import("@/lib/core/types").UserObject[]; groups: string[] }>
+  > => {
+    try {
+      const response = await fetch("/api/ludus/share-picker", {
+        credentials: "include",
+        headers: { ...getImpersonationHeaders() },
+      })
+      const data = (await response.json().catch(() => null)) as {
+        users?: import("@/lib/core/types").UserObject[]
+        groups?: string[]
+        error?: string
+      } | null
+      if (!response.ok) {
+        return { error: data?.error || `HTTP ${response.status}`, status: response.status }
+      }
+      return {
+        data: {
+          users: Array.isArray(data?.users) ? data.users : [],
+          groups: Array.isArray(data?.groups) ? data.groups : [],
+        },
+        status: response.status,
+      }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+
+  // Range — GET /range?rangeID=…  (bare GET /range returns 404 on several Ludus v2 builds)
+  getRangeStatus: (rangeId?: string): Promise<LudusEnvelope<import("@/lib/core/types").RangeObject>> => {
+    const id = rangeId?.trim()
+    // Avoid synthetic HTTP 400 — callers during range transitions may race with empty id;
+    // treat as "no data" like a disabled query (dashboard already handles !result.data).
+    if (!id) {
+      return Promise.resolve({ status: 204, data: undefined })
+    }
+    return get<import("@/lib/core/types").RangeObject>(`/range?rangeID=${encodeURIComponent(id)}`)
+  },
+
+  // All ranges (admin) — GET /range/all
+  listAllRanges: () =>
+    get<import("@/lib/core/types").RangeObject[]>("/range/all"),
+
+  /**
+   * Returns ALL ranges across all users (admin only, uses /range/all).
+   * For regular users, falls back to GET /ranges/accessible (GET /range without rangeID is not reliable).
+   */
+  getRanges: async (): Promise<{ data?: import("@/lib/core/types").RangeObject[]; error?: string; status: number }> => {
+    const all = await get<import("@/lib/core/types").RangeObject[]>("/range/all")
+    if (!all.error && Array.isArray(all.data)) return all
+    const acc = await get<import("@/lib/core/types").RangeAccessEntry[]>("/ranges/accessible")
+    if (acc.error || !acc.data) return { error: acc.error || all.error, status: acc.status || all.status }
+    const list = Array.isArray(acc.data) ? acc.data : []
+    const data: import("@/lib/core/types").RangeObject[] = list.map((e) => ({
+      rangeID: e.rangeID,
+      rangeNumber: e.rangeNumber,
+      name: e.rangeID,
+      rangeState: "NEVER DEPLOYED",
+      VMs: [],
+    }))
+    return { data, status: acc.status }
+  },
+
+  /**
+   * Ranges for the current API key — uses GET /ranges/accessible (GET /range without rangeID is not reliable).
+   */
+  getRangesForUser: async (): Promise<{ data?: import("@/lib/core/types").RangeObject[]; error?: string; status: number }> => {
+    const result = await get<import("@/lib/core/types").RangeAccessEntry[]>("/ranges/accessible")
+    if (!result.data || result.error) return { error: result.error, status: result.status }
+    const list = Array.isArray(result.data) ? result.data : []
+    const data: import("@/lib/core/types").RangeObject[] = list.map((e) => ({
+      rangeID: e.rangeID,
+      rangeNumber: e.rangeNumber,
+      name: e.rangeID,
+      rangeState: "NEVER DEPLOYED",
+      VMs: [],
+    }))
+    return { data, status: result.status }
+  },
+
+  // Range config — GET /range/config → {"result":"yaml..."}
+  getRangeConfig: (rangeId?: string): Promise<LudusEnvelope<{ result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ result: string }>(`/range/config?rangeID=${encodeURIComponent(id)}`)
+  },
+
+  // Upload range config YAML (routed through dedicated endpoint that sends multipart/form-data)
+  setRangeConfig: async (yaml: string, rangeId?: string, force?: boolean): Promise<{ data?: { result: string }; error?: string; status: number }> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    Object.assign(headers, getImpersonationHeaders())
+    try {
+      const res = await fetch("/api/range/config", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ config: yaml, rangeId, force }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) return { error: data?.error || `HTTP ${res.status}`, status: res.status }
+      return { data, status: res.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+
+  // Delete a range — destroys all VMs, removes Proxmox pool, removes PocketBase record.
+  // force=true is required to delete even when VMs still exist.
+  deleteRange: (rangeId: string) =>
+    del(`/range?rangeID=${encodeURIComponent(rangeId)}&force=true`),
+
+  // Stop and delete all VMs in a range WITHOUT removing the range object itself.
+  // DELETE /range/{rangeID}/vms — returns 201 when destroy is in progress.
+  deleteRangeVMs: (rangeId: string) =>
+    del(`/range/${encodeURIComponent(rangeId)}/vms`),
+
+  /** Halt and destroy a single VM (Proxmox VMID). */
+  destroyVm: (vmId: string | number, rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
+    return del<{ result: string }>(`/vm/${encodeURIComponent(String(vmId))}${q}`)
+  },
+
+  // Deployment
+  // Ludus expects tags as a comma-separated string (not an array).  Sending
+  // an array causes Go JSON to silently fail to unmarshal the field, leaving
+  // it empty and triggering a full "all" deploy instead of the requested tags.
+  // Optional force=true — Ludus refuses deploy in testing mode unless set (CLI `--force`).
+  // Optional verbose — Ludus `--verbose-ansible`. Proxy also injects from Settings when omitted.
+  deployRange: (
+    tags?: string[],
+    limit?: string,
+    rangeId?: string,
+    force?: boolean,
+    onlyRoles?: string[],
+    verbose?: boolean,
+  ) => {
+    const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
+    const tagsStr = tags?.length ? tags.join(",") : undefined
+    const body: {
+      tags?: string
+      limit?: string
+      force?: boolean
+      only_roles?: string[]
+      verbose?: boolean
+    } = {}
+    if (tagsStr) body.tags = tagsStr
+    if (limit) body.limit = limit
+    if (force) body.force = true
+    if (onlyRoles?.length) body.only_roles = onlyRoles
+    if (verbose !== undefined) body.verbose = verbose
+    return post(`/range/deploy${q}`, Object.keys(body).length > 0 ? body : undefined)
+  },
+  abortDeploy: (rangeId?: string): Promise<LudusEnvelope> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return post(`/range/abort?rangeID=${encodeURIComponent(id)}`)
+  },
+
+  // Logs — GET /range/logs → {"cursor":N,"result":"log text"}
+  getRangeLogs: (rangeId?: string): Promise<LudusEnvelope<{ cursor: number; result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ cursor: number; result: string }>(`/range/logs?rangeID=${encodeURIComponent(id)}`)
+  },
+
+  // Ansible inventory — GET /range/ansibleinventory
+  getRangeAnsibleInventory: (rangeId?: string): Promise<LudusEnvelope<{ result: string }>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<{ result: string }>(`/range/ansibleinventory?rangeID=${encodeURIComponent(id)}`)
+  },
+
+  // Range creation — routed through dedicated endpoint that proxies to admin API (port 8081)
+  createRange: async (data: { name: string; rangeID: string; description?: string; purpose?: string; userID?: string[] }): Promise<{ data?: { result: string }; error?: string; status: number }> => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    Object.assign(headers, getImpersonationHeaders())
+
+    const [who, sessRaw] = await Promise.all([
+      get<import("@/lib/core/types").UserObject[]>("/user"),
+      fetch("/api/auth/session", { credentials: "include" }).then(async (r) =>
+        r.ok
+          ? ((await r.json()) as {
+              username?: string
+              impersonationLudusPrincipal?: string | null
+            })
+          : null,
+      ),
+    ])
+
+    const hint = (
+      (sessRaw?.impersonationLudusPrincipal ??
+        sessRaw?.username ??
+        "") as string
+    ).trim()
+    const ludusPbId =
+      who.error || who.data === undefined
+        ? undefined
+        : ludusCallerFromGetUser(who.data, hint)?.userId
+
+    let payload: typeof data
+    if (ludusPbId) {
+      const extras = Array.isArray(data.userID) ? data.userID : []
+      const filtered = extras.filter(
+        (x): x is string =>
+          typeof x === "string" &&
+          /^[A-Za-z0-9]{1,20}$/.test(x.trim()) &&
+          x.trim().toLowerCase() !== ludusPbId.toLowerCase(),
+      )
+      payload = { ...data, userID: [ludusPbId, ...filtered] }
+    } else {
+      const copy = { ...data }
+      delete copy.userID
+      payload = copy
+    }
+
+    try {
+      const res = await fetch("/api/range/create", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+      })
+      const resData = await res.json().catch(() => null)
+      if (!res.ok) return { error: resData?.error || `HTTP ${res.status}`, status: res.status }
+      return { data: resData, status: res.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+
+  // Templates — GET /templates → [{name, built, status}]
+  listTemplates: () => get<import("@/lib/core/types").TemplateObject[]>("/templates"),
+  getTemplateStatus: () => get<import("@/lib/core/types").TemplateObject[] | null>("/templates/status"),
+  buildTemplates: (names: string[]) => post("/templates", { templates: names }),
+  abortTemplateBuild: () => post("/templates/abort"),
+  getTemplateLogs: () => get<{ cursor: number; result: string }>("/templates/logs"),
+
+  // Log history — range deploys
+  getRangeLogHistory: (rangeId?: string): Promise<LudusEnvelope<import("@/lib/core/types").LogHistoryEntry[]>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<import("@/lib/core/types").LogHistoryEntry[]>(`/range/logs/history?rangeID=${encodeURIComponent(id)}`)
+  },
+  getRangeLogHistoryById: (
+    logId: string,
+    rangeId?: string,
+  ): Promise<LudusEnvelope<import("@/lib/core/types").LogHistoryDetail>> => {
+    const id = rangeId?.trim()
+    if (!id) return Promise.resolve({ status: 400, error: "rangeID is required" })
+    return get<import("@/lib/core/types").LogHistoryDetail>(
+      `/range/logs/history/${encodeURIComponent(logId)}?rangeID=${encodeURIComponent(id)}`,
+    )
+  },
+
+  // Log history — template builds
+  getTemplateLogHistory: () =>
+    get<import("@/lib/core/types").LogHistoryEntry[]>("/templates/logs/history"),
+  getTemplateLogHistoryById: (logId: string) =>
+    get<import("@/lib/core/types").LogHistoryDetail>(`/templates/logs/history/${logId}`),
+
+  // Ansible roles+collections — GET /ansible → [{name, version, type}]
+  listAnsible: () => get<import("@/lib/core/types").AnsibleItem[]>("/ansible"),
+  // Ludus v2 role endpoint: POST /ansible/role — field "role", action "install"|"remove"
+  addRole: (name: string, version?: string) =>
+    post("/ansible/role", { role: name, action: "install", ...(version ? { version } : {}) }),
+  removeRole: (name: string) =>
+    post("/ansible/role", { role: name, action: "remove" }),
+  // Ludus 2.2.0+: POST /ansible/collection — action "install" (default) or "remove"
+  addCollection: (name: string, version?: string) =>
+    post("/ansible/collection", { collection: name, action: "install", ...(version ? { version } : {}) }),
+  removeCollection: (name: string) =>
+    post("/ansible/collection", { collection: name, action: "remove" }),
+
+  // Wireguard — GET /user/wireguard (session / impersonation vault key)
+  getUserWireguard: () =>
+    get<{ result: { wireGuardConfig: string } }>("/user/wireguard"),
+
+  // Range power actions — PUT /range/poweron|poweroff with {"machines": [...names]}
+  powerOn: (vmNames?: string[], rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${rangeId}` : ""
+    return put(`/range/poweron${q}`, { machines: vmNames ?? [] })
+  },
+  powerOff: (vmNames?: string[], rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${rangeId}` : ""
+    return put(`/range/poweroff${q}`, { machines: vmNames ?? [] })
+  },
+
+  // Testing mode (rangeId selects which range in Ludus v2 multi-range environments)
+  // POST /testing/allow and /testing/deny expect { domains?: string[], ips?: string[] }
+  allowDomain: (domain: string, rangeId?: string) =>
+    post(rangeId ? `/testing/allow?rangeID=${rangeId}` : "/testing/allow", { domains: [domain] }),
+  denyDomain: (domain: string, rangeId?: string) =>
+    post(rangeId ? `/testing/deny?rangeID=${rangeId}` : "/testing/deny", { domains: [domain] }),
+  allowIP: (ip: string, rangeId?: string) =>
+    post(rangeId ? `/testing/allow?rangeID=${rangeId}` : "/testing/allow", { ips: [ip] }),
+  denyIP: (ip: string, rangeId?: string) =>
+    post(rangeId ? `/testing/deny?rangeID=${rangeId}` : "/testing/deny", { ips: [ip] }),
+
+  // Snapshots — v2 ([docs](https://api-docs.ludus.cloud/)); rangeID matches GET /snapshots/list.
+  listSnapshots: (rangeId?: string) => {
+    const id = rangeId?.trim()
+    const q = id ? `?rangeID=${encodeURIComponent(id)}` : ""
+    return get<import("@/lib/core/types").SnapshotListResponse>(`/snapshots/list${q}`)
+  },
+  createSnapshot: (
+    payload: import("@/lib/core/types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("@/lib/core/types").LudusSnapshotMutationResult>(
+      `/snapshots/create${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotCreateBody(payload),
+    ),
+  revertSnapshot: (
+    payload: import("@/lib/core/types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("@/lib/core/types").LudusSnapshotMutationResult>(
+      `/snapshots/rollback${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotByNameBody(payload),
+    ),
+  deleteSnapshot: (
+    payload: import("@/lib/core/types").SnapshotCreatePayload,
+    rangeId?: string,
+  ) =>
+    post<import("@/lib/core/types").LudusSnapshotMutationResult>(
+      `/snapshots/remove${snapshotsRangeQuery(rangeId)}`,
+      ludusSnapshotByNameBody(payload),
+    ),
+
+  // Blueprints — v2 paths
+  listBlueprints: () => get<import("@/lib/core/types").BlueprintListItem[]>("/blueprints"),
+  createBlueprintFromRange: (body: {
+    blueprintID: string
+    rangeID?: string
+    name?: string
+    description?: string
+  }) => post("/blueprints/from-range", body),
+  getBlueprintDetail: (id: string) =>
+    get<import("@/lib/core/types").BlueprintDetail>(ludusBlueprintPath(id)),
+  getBlueprintConfig: (id: string) => get<{ result: string }>(ludusBlueprintPath(id, "config")),
+  installBlueprintDependencies: (
+    id: string,
+    body?: { global?: boolean; forceRoles?: boolean },
+  ) =>
+    post<import("@/lib/core/types").BlueprintInstallDepsResponse>(
+      ludusBlueprintPath(id, "install"),
+      body ?? { forceRoles: true },
+    ),
+  /** Ludus expects JSON `{ config: "<yaml string>" }`. */
+  updateBlueprintConfig: (id: string, config: string) =>
+    put(ludusBlueprintPath(id, "config"), { config }),
+  applyBlueprint: (id: string, rangeId?: string) => {
+    const q = rangeId ? `?rangeID=${encodeURIComponent(rangeId)}` : ""
+    return post(`${ludusBlueprintPath(id, "apply")}${q}`)
+  },
+  copyBlueprint: (id: string) => post(ludusBlueprintPath(id, "copy")),
+  deleteBlueprint: async (id: string, aliasIds?: string[]) => {
+    try {
+      const response = await fetch("/api/blueprints/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getImpersonationHeaders() },
+        credentials: "include",
+        body: JSON.stringify({
+          blueprintId: id,
+          aliasIds: aliasIds?.length ? aliasIds : undefined,
+        }),
+      })
+      const data = (await response.json().catch(() => null)) as {
+        error?: string
+        message?: string
+      } | null
+      if (!response.ok) {
+        return { error: data?.error || `HTTP ${response.status}`, status: response.status }
+      }
+      return { data, status: response.status }
+    } catch (err) {
+      return { error: (err as Error).message, status: 0 }
+    }
+  },
+  shareBlueprint: postBlueprintShare,
+  shareBlueprintWithUsers: (id: string, userIDs: string[]) =>
+    postBlueprintShare(id, { userIDs }),
+  shareBlueprintWithGroups: (id: string, groupNames: string[]) =>
+    postBlueprintShare(id, { groupNames }),
+  unshareBlueprintFromUsers: (id: string, userIDs: string[]) =>
+    del(ludusBlueprintPath(id, "share", "users"), { userIDs }),
+  unshareBlueprintFromGroups: (id: string, groupNames: string[]) =>
+    del(ludusBlueprintPath(id, "share", "groups"), { groupNames }),
+  getBlueprintAccessUsers: (id: string) =>
+    get<import("@/lib/core/types").BlueprintAccessUserItem[]>(ludusBlueprintPath(id, "access", "users")),
+  getBlueprintAccessGroups: (id: string) =>
+    get<import("@/lib/core/types").BlueprintAccessGroupItem[]>(ludusBlueprintPath(id, "access", "groups")),
+
+  // Users admin — POST /user and DELETE /user/:id
+  // These go to the Ludus admin port (8081) using the logged-in admin's own API key.
+  // In Ludus v2 the ROOT key is PocketBase-only; regular admin ops use the user's key.
+  addUser: (userId: string, name?: string, isAdmin?: boolean, email?: string) =>
+    post("/user", { userID: userId, name, isAdmin, email: email || `${userId}@ludus.internal` }, { useAdmin: true }),
+
+  // DELETE /user/{userID}?deleteDefaultRange=true
+  // deleteDefaultRange=true atomically removes the user's default range from Proxmox
+  // AND removes the user from PocketBase in a single admin API call.
+  deleteUser: <T = unknown>(userId: string, deleteDefaultRange = false) =>
+    del<T>(
+      `/user/${encodeURIComponent(userId)}${deleteDefaultRange ? "?deleteDefaultRange=true" : ""}`,
+      undefined,
+      { useAdmin: true }
+    ),
+
+  // Set Proxmox/Ludus password for a user — POST /user/credentials (port 8080).
+  // Admin can set another user's password by including userID in the body.
+  setUserCredentials: (userId: string, proxmoxPassword: string) =>
+    post<{ result: string }>("/user/credentials", { userID: userId, proxmoxPassword }),
+
+  // Range deletion — DELETE /range?userID=<id>[&rangeID=<id>]&force=true
+  // rangeID selects a specific range (required when user has multiple ranges).
+  // force=true destroys all VMs first; without it Ludus returns 409.
+  deleteUserRange: (userId: string, rangeId?: string) =>
+    del(
+      `/range?userID=${encodeURIComponent(userId)}${rangeId ? `&rangeID=${encodeURIComponent(rangeId)}` : ""}&force=true`,
+      undefined,
+      { useAdmin: true }
+    ),
+
+  // Groups — v2 paths (group names in URL segments must be encoded)
+  listGroups: () => get<import("@/lib/core/types").GroupObject[]>("/groups"),
+  createGroup: (name: string) => post("/groups", { name }),
+  deleteGroup: (name: string) => del(`/groups/${encodeURIComponent(name)}`),
+  addUsersToGroup: (group: string, userIds: string[]) =>
+    post(`/groups/${encodeURIComponent(group)}/users`, { userIDs: userIds }),
+  /** Ludus v2: BulkAddRangesToGroupRequest — `rangeIDs` (see api-docs.ludus.cloud). */
+  addRangesToGroup: (group: string, rangeIds: string[]) =>
+    post(`/groups/${encodeURIComponent(group)}/ranges`, { rangeIDs: rangeIds }),
+  removeRangesFromGroup: (group: string, rangeIds: string[]) =>
+    del(`/groups/${encodeURIComponent(group)}/ranges`, { rangeIDs: rangeIds }),
+  removeUsersFromGroup: (group: string, userIds: string[]) =>
+    del(`/groups/${encodeURIComponent(group)}/users`, { userIDs: userIds }),
+  listGroupMembers: (group: string) =>
+    get<import("@/lib/core/types").UserObject[]>(`/groups/${encodeURIComponent(group)}/users`),
+  listGroupRanges: (group: string) =>
+    get<unknown>(`/groups/${encodeURIComponent(group)}/ranges`),
+
+  // Range access sharing — v2: ranges/assign (admin only)
+  // POST /ranges/assign/{userID}/{rangeID} is on port 8080 with admin API key auth
+  assignRange: (userId: string, rangeId: string) =>
+    post(`/ranges/assign/${encodeURIComponent(userId)}/${encodeURIComponent(rangeId)}`),
+}

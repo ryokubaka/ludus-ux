@@ -3,25 +3,25 @@
 import { useState, useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react"
 import type { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime"
 import type { QueryClient } from "@tanstack/react-query"
-import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/api"
-import { matchingVmIdsForExtension } from "@/lib/extension-vm-match"
+import { ludusApi, postVmOperationAudit, pruneKnownHosts } from "@/lib/ui/api"
+import { matchingVmIdsForExtension } from "@/lib/goad/extension-vm-match"
 import {
   extensionIsProvisionOnly,
   goadSupportsProvisionOnlyExtensions,
-} from "@/lib/goad-catalog-capabilities"
-import { removeExtensionVmsFromRangeConfig } from "@/lib/network-rules"
-import { clearRangeAborting } from "@/lib/range-aborting"
-import { dropGoadInstanceFromCache } from "@/lib/goad-instance-list-cache"
-import { queryKeys } from "@/lib/query-keys"
-import type { GoadCatalog, GoadExtensionDef, GoadInstance } from "@/lib/types"
+} from "@/lib/goad/goad-catalog-capabilities"
+import { removeExtensionVmsFromRangeConfig } from "@/lib/range/network-rules"
+import { clearRangeAborting } from "@/lib/range/range-aborting"
+import { dropGoadInstanceFromCache } from "@/lib/goad/goad-instance-list-cache"
+import { queryKeys } from "@/lib/ui/query-keys"
+import type { GoadCatalog, GoadExtensionDef, GoadInstance } from "@/lib/core/types"
 import type { useToast } from "@/hooks/use-toast"
 import type { GoadRunActionOptions } from "@/hooks/use-goad-run-action"
 import {
   buildGoadProvisionReplCommand,
   provisionModeLabel,
   type GoadProvisionMode,
-} from "@/lib/goad-provision-target"
-import { withLuxInstallExtension } from "@/lib/lux-goad-args-meta"
+} from "@/lib/goad/goad-provision-target"
+import { withLuxInstallExtension } from "@/lib/lux/lux-goad-args-meta"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 type ConfirmFn = (label: string, fn: () => void, key?: string) => void
@@ -292,7 +292,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
 
         if (rangeId) {
           toast({ title: "Waiting for Ludus", description: "Range must be idle before GOAD provide/provision…" })
-          const { waitUntilLudusRangeNotDeploying } = await import("@/lib/wait-ludus-range-state")
+          const { waitUntilLudusRangeNotDeploying } = await import("@/lib/range/wait-ludus-range-state")
           await waitUntilLudusRangeNotDeploying(
             () => ludusApi.getRangeStatus(rangeId),
             { pollMs: 5_000 },

@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { STALE } from "@/lib/ui/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -12,22 +12,22 @@ import { LogViewer, LogViewerCompound } from "@/components/range/log-viewer"
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import { Activity, RefreshCw, Trash2, Download, History, ArrowLeft, ShieldAlert } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog } from "@/lib/api"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog } from "@/lib/ui/api"
 import {
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
   aggregateDeployStatuses,
-} from "@/lib/goad-deploy-history-correlation"
-import { useRange } from "@/lib/range-context"
+} from "@/lib/goad/goad-deploy-history-correlation"
+import { useRange } from "@/lib/range/range-context"
 import { useToast } from "@/hooks/use-toast"
-import { cn, extractArray } from "@/lib/utils"
-import { isBlankDeployLogLine, omitBlankLogLines } from "@/lib/log-line-timestamp"
-import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
-import { splitLogText } from "@/lib/strip-ansi"
-import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
-import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/log-buffer"
-import type { LogHistoryEntry } from "@/lib/types"
-import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+import { cn, extractArray } from "@/lib/core/utils"
+import { isBlankDeployLogLine, omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
+import { stampHistoryWithRecordedClock } from "@/lib/logs/deploy-log-clock"
+import { splitLogText } from "@/lib/logs/strip-ansi"
+import { fetchGoadTaskLogLines } from "@/lib/goad/goad-task-lines"
+import { appendStreamLines, MAX_STREAM_LOG_LINES } from "@/lib/logs/log-buffer"
+import type { LogHistoryEntry } from "@/lib/core/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
 
 export function LogsPageClient() {
   const { toast } = useToast()

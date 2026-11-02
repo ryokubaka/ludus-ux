@@ -4,7 +4,7 @@ import Link from "next/link"
 import { ArrowLeft, RefreshCw, Server, User, Wifi } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { GoadInstanceStatusBadge } from "./goad-instance-status-badge"
 import type { GoadInstanceHeaderProps } from "./types"
 

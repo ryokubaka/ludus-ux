@@ -5,12 +5,12 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
-import { filterLudusDeployTags } from "@/lib/ludus-deploy-tags"
-import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/range-log-markers-store"
-import { correlateLudusLogIdAfterRangeAction } from "@/lib/range-ludus-log-correlate"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { resolveSession } from "@/lib/session/session"
+import { filterLudusDeployTags } from "@/lib/ludus/ludus-deploy-tags"
+import { insertLuxDeployTagRun, updateLuxDeployTagRunLudusLogId } from "@/lib/logs/range-log-markers-store"
+import { correlateLudusLogIdAfterRangeAction } from "@/lib/range/range-ludus-log-correlate"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 async function getEffective(
   request: NextRequest,

@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto"
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { getLuxHostUpdateKey, getSettings, setLuxHostUpdateKey, type RuntimeSettings } from "@/lib/settings-store"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { getLuxHostUpdateKey, getSettings, setLuxHostUpdateKey, type RuntimeSettings } from "@/lib/settings/settings-store"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 import {
   LUX_HOST_VERIFY_CMD,
   buildLuxHostInstallShell,
@@ -12,7 +12,7 @@ import {
   loadLuxHostInstallPayload,
   luxHostSudoUsernameError,
   redactSecret,
-} from "@/lib/lux-host-install"
+} from "@/lib/lux/lux-host-install"
 
 type Body = Partial<{
   sshHost: string

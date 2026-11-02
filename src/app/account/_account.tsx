@@ -21,7 +21,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useShellSession } from "@/components/providers/shell-session-provider"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 interface SessionInfo {
   username: string

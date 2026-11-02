@@ -9,10 +9,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { requireAdmin } from "@/lib/require-admin"
-import { sshExec } from "@/lib/proxmox-ssh"
-import { requireProxmoxSsh } from "@/lib/root-ssh-auth"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { requireAdmin } from "@/lib/session/require-admin"
+import { sshExec } from "@/lib/ssh/proxmox-ssh"
+import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
 
 
 export interface SharedAdminVM {

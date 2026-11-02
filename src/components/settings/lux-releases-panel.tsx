@@ -22,7 +22,7 @@ import {
   luxUpgradeFailureFromLog,
   type LuxRelease,
   type LuxVersionRelation,
-} from "@/lib/lux-version"
+} from "@/lib/lux/lux-version"
 
 type ReleasesResponse = {
   current: string

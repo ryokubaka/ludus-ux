@@ -4,9 +4,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { requireSession } from "@/lib/require-session"
-import { pruneLuxRangeLogMarkers, listLuxTestingEvents, listLuxDeployTagRuns } from "@/lib/range-log-markers-store"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { requireSession } from "@/lib/session/require-session"
+import { pruneLuxRangeLogMarkers, listLuxTestingEvents, listLuxDeployTagRuns } from "@/lib/logs/range-log-markers-store"
 
 async function getEffective(
   request: NextRequest,

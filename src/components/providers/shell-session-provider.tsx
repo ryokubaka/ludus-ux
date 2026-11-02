@@ -1,8 +1,8 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState } from "react"
-import { AUTH_CHANGED_EVENT } from "@/lib/client-auth-state"
-import { fetchSharedSession } from "@/lib/session-fetch"
+import { AUTH_CHANGED_EVENT } from "@/lib/session/client-auth-state"
+import { fetchSharedSession } from "@/lib/session/session-fetch"
 
 /** Non-secret snapshot from server session (RootLayout); avoids redundant /api/auth/session. */
 export interface ShellSessionSnapshot {

@@ -1,4 +1,4 @@
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
 
 const NewRangePageClient = dynamicPageClient(
   () => import("./_new"),

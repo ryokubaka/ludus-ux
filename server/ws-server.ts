@@ -15,9 +15,9 @@
 // Must be imported first — monkey-patches console to add ISO timestamps.
 import "./logger"
 
-import { applyNodeTlsFromLudusEnv, isLudusTlsInsecure } from "../src/lib/tls-insecure-env"
-import { attachSshHostVerifier, explainSshHostKeyError } from "../src/lib/ssh-host-key"
-import { getProductionAppSecretFailureMessage } from "../src/lib/app-secret-policy"
+import { applyNodeTlsFromLudusEnv, isLudusTlsInsecure } from "@/lib/settings/tls-insecure-env"
+import { attachSshHostVerifier, explainSshHostKeyError } from "@/lib/ssh/ssh-host-key"
+import { getProductionAppSecretFailureMessage } from "@/lib/settings/app-secret-policy"
 
 applyNodeTlsFromLudusEnv()
 const _secretFail = getProductionAppSecretFailureMessage()
@@ -32,9 +32,9 @@ import net from "net"
 import fs from "fs"
 import { WebSocketServer, WebSocket } from "ws"
 import { Client as SSHClient } from "ssh2"
-import { consumeVncSession, type VncSession } from "../src/lib/vnc-token-store"
-import { proxmoxCreateVncProxy, proxmoxLogin } from "../src/lib/proxmox-http"
-import { readPrivateKey, getSshKeyPassphrase } from "../src/lib/root-ssh-auth"
+import { consumeVncSession, type VncSession } from "@/lib/proxmox/vnc-token-store"
+import { proxmoxCreateVncProxy, proxmoxLogin } from "@/lib/proxmox/proxmox-http"
+import { readPrivateKey, getSshKeyPassphrase } from "@/lib/ssh/root-ssh-auth"
 
 // ── TLS configuration ────────────────────────────────────────────────────────
 const tlsCertPath = process.env.TLS_CERT_PATH || "/app/certificates/cert.pem"

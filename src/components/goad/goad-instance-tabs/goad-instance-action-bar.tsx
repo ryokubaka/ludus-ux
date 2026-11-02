@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { GoadProvisionMode } from "@/lib/goad-provision-target"
+import type { GoadProvisionMode } from "@/lib/goad/goad-provision-target"
 import type { GoadInstanceActionBarProps } from "./types"
 
 export function GoadInstanceActionBar({

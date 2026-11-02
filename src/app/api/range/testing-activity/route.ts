@@ -5,11 +5,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { requireSession } from "@/lib/require-session"
-import { insertLuxTestingEvent, pruneLuxRangeLogMarkers } from "@/lib/range-log-markers-store"
-import type { LuxTestingOpType } from "@/lib/range-log-marker-types"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { requireSession } from "@/lib/session/require-session"
+import { insertLuxTestingEvent, pruneLuxRangeLogMarkers } from "@/lib/logs/range-log-markers-store"
+import type { LuxTestingOpType } from "@/lib/logs/range-log-marker-types"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 const DETAIL_MAX = 500
 

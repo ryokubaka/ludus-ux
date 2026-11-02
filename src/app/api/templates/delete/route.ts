@@ -13,26 +13,26 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus-cache-revalidate"
-import { ludusRequest } from "@/lib/ludus-client"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { sshExec } from "@/lib/goad-ssh"
-import { resolveLudusInstallPath } from "@/lib/runtime-paths"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { revalidateLudusResource, revalidateLudusScopeResource } from "@/lib/ludus/ludus-cache-revalidate"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { sshExec } from "@/lib/goad/goad-ssh"
+import { resolveLudusInstallPath } from "@/lib/core/runtime-paths"
 import {
   buildLudusTemplateDeleteCmd,
   buildLudusTemplateRmCliCmd,
   isLudusTemplateDeleteRefused,
   templateDirNameAliases,
-} from "@/lib/template-packer-paths"
-import { logAndSafeError } from "@/lib/safe-client-error"
+} from "@/lib/templates/template-packer-paths"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
 import {
   classifyTemplateDeleteFailure,
   httpStatusForTemplateDeleteError,
-} from "@/lib/template-delete-errors"
-import type { TemplateObject } from "@/lib/types"
+} from "@/lib/templates/template-delete-errors"
+import type { TemplateObject } from "@/lib/core/types"
 
 const NAME_RE = /^[a-zA-Z0-9._-]{1,120}$/
 

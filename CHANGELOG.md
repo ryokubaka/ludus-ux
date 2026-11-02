@@ -15,6 +15,21 @@ Each bullet uses a single tag:
 
 ---
 
+## Unreleased
+
+**LUX**
+
+- [Improve] **Repository line endings** — Every text file is stored with LF and checked out with LF on every OS. A Windows checkout no longer shows hundreds of CRLF-only modifications, and the sync scripts compare content instead of raw bytes.
+
+## [1.5.3] - 2026-10-30
+
+**LUX**
+
+- [Fix] **Background SSH probe no longer starves login** — A rejected host credential makes the deploy-log clock back off (up to 60 s) instead of retrying every 2 s, so repeated failures no longer trip OpenSSH per-source penalties that refuse the login SSH connection.
+- [Improve] **Documentation drift check** — CI refuses a docs tree whose framework version, documented environment names, or page index disagree with the code. It runs in the existing hygiene job on GitHub and GitLab, so no new check is required.
+- [Improve] **Server library layout** — `src/lib` files are grouped by domain. Import paths changed inside the app; no route, export, or behavior changed.
+- [Docs] **Documentation accuracy** — Architecture names Next.js 16 and React 19. Tuning knobs, legacy `GOAD_SSH_*` aliases, the Docker socket path, and the blueprint operator key fallback are documented in Environment variables.
+
 ## [1.5.2] - 2026-10-28
 
 **LUX**

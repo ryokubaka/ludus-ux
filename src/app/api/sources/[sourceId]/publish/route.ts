@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from "next/server"
 import {
   finalizeGlobalSourceBlueprintInstall,
   rememberBlueprintOperator,
-} from "@/lib/blueprint-global-install"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { blueprintInstalledFromSource, normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
-import { ludusRequest } from "@/lib/ludus-client"
-import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
-import { syncSource } from "@/lib/ludus-source-client"
-import { setSourcePublished } from "@/lib/source-publication"
-import { removeSourceInstalledItems } from "@/lib/source-unpublish"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
+} from "@/lib/blueprints/blueprint-global-install"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { blueprintInstalledFromSource, normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { revalidateAfterSourceMutation } from "@/lib/ludus/ludus-cache-revalidate"
+import { syncSource } from "@/lib/sources/ludus-source-client"
+import { setSourcePublished } from "@/lib/sources/source-publication"
+import { removeSourceInstalledItems } from "@/lib/sources/source-unpublish"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
 
 export const maxDuration = 300
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession, setSessionCookie } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
-import { resolveLudusIsAdmin } from "@/lib/session-admin-check"
+import { resolveSession, setSessionCookie } from "@/lib/session/session"
+import { getSettings } from "@/lib/settings/settings-store"
+import { resolveLudusIsAdmin } from "@/lib/session/session-admin-check"
 
 export async function GET(request: NextRequest) {
   const session = await resolveSession(request)

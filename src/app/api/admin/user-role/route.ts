@@ -11,11 +11,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { setPbUserAdmin } from "@/lib/pocketbase-client"
-import { bustAdminCache } from "@/lib/admin-data"
-import { clientIpFromRequest } from "@/lib/security-audit-log"
-import { logAppEvent } from "@/lib/app-log"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { setPbUserAdmin } from "@/lib/core/pocketbase-client"
+import { bustAdminCache } from "@/lib/admin/admin-data"
+import { clientIpFromRequest } from "@/lib/session/security-audit-log"
+import { logAppEvent } from "@/lib/logs/app-log"
 
 
 export async function POST(request: NextRequest) {

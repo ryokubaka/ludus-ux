@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getSettings } from "@/lib/settings-store"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
-import { isLudushoundSshConfigured, probeLudushoundHost } from "@/lib/ludushound-ssh"
-import { isLudushoundCollectionInstalled } from "@/lib/ludushound-ansible-requirements"
-import type { LudushoundStatus } from "@/lib/types"
+import { getSettings } from "@/lib/settings/settings-store"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
+import { isLudushoundSshConfigured, probeLudushoundHost } from "@/lib/ludushound/ludushound-ssh"
+import { isLudushoundCollectionInstalled } from "@/lib/ludushound/ludushound-ansible-requirements"
+import type { LudushoundStatus } from "@/lib/core/types"
 
 export async function GET(request: NextRequest) {
   const ctx = await resolveLudushoundSession(request)

@@ -1,34 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 
-vi.mock("@/lib/session", () => ({
+vi.mock("@/lib/session/session", () => ({
   resolveSession: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   sshExec: vi.fn(),
   isGoadConfigured: vi.fn(() => true),
 }))
 
-vi.mock("@/lib/runtime-paths", () => ({
+vi.mock("@/lib/core/runtime-paths", () => ({
   resolveGoadPath: vi.fn(() => "/opt/GOAD"),
 }))
 
-vi.mock("@/lib/lux-api-audit", () => ({
+vi.mock("@/lib/lux/lux-api-audit", () => ({
   logLuxRouteAction: vi.fn(),
 }))
 
-vi.mock("@/lib/root-ssh-auth", () => ({
+vi.mock("@/lib/ssh/root-ssh-auth", () => ({
   rootPasswordCredsIfSet: vi.fn(() => {
     throw new Error("preview-config must not select root credentials")
   }),
 }))
 
-import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad-preview-config-py"
+import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad/goad-preview-config-py"
 import { POST } from "./route"
-import { resolveSession } from "@/lib/session"
-import { sshExec } from "@/lib/goad-ssh"
-import { rootPasswordCredsIfSet } from "@/lib/root-ssh-auth"
+import { resolveSession } from "@/lib/session/session"
+import { sshExec } from "@/lib/goad/goad-ssh"
+import { rootPasswordCredsIfSet } from "@/lib/ssh/root-ssh-auth"
 
 function post(body: Record<string, unknown>) {
   return new NextRequest("http://localhost/api/goad/preview-config", {

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
-import { APP_VERSION } from "@/lib/changelog"
-import { ensureSourceAutoSyncLoopStarted } from "@/lib/source-auto-sync"
-import { ensureDeployLogClockLoopStarted } from "@/lib/deploy-log-clock-recorder"
-import { ensureLuxHostCurrent } from "@/lib/lux-host-sync"
+import { APP_VERSION } from "@/lib/core/changelog"
+import { ensureSourceAutoSyncLoopStarted } from "@/lib/sources/source-auto-sync"
+import { ensureDeployLogClockLoopStarted } from "@/lib/logs/deploy-log-clock-recorder"
+import { ensureLuxHostCurrent } from "@/lib/lux/lux-host-sync"
 
 export async function GET() {
   // Docker healthcheck hits this every 30s — keep the source auto-sync timer alive

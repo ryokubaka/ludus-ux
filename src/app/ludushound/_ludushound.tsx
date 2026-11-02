@@ -2,9 +2,9 @@
 
 import Link from "next/link"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -19,8 +19,8 @@ import {
   ExternalLink,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { useImpersonation } from "@/lib/impersonation-context"
-import type { LudushoundStatus } from "@/lib/types"
+import { useImpersonation } from "@/lib/session/impersonation-context"
+import type { LudushoundStatus } from "@/lib/core/types"
 import { useState } from "react"
 
 function HostReadyFlag({ ok, label }: { ok: boolean; label: string }) {

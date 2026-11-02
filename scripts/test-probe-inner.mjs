@@ -1,5 +1,5 @@
-import { runHostScriptViaDocker } from "../src/lib/lux-upgrade-docker.ts"
-import { wrapEncodedHostShellScript } from "../src/lib/lux-upgrade-host.ts"
+import { runHostScriptViaDocker } from "../src/lib/lux/lux-upgrade-docker.ts"
+import { wrapEncodedHostShellScript } from "../src/lib/lux/lux-upgrade-host.ts"
 
 const inner = `cd / 2>/dev/null || cd /tmp
 export PWD=/ HOME=/root

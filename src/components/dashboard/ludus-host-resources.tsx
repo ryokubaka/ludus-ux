@@ -3,8 +3,8 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { Cpu, MemoryStick } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
-import { consolidateNodeResources } from "@/lib/proxmox-node-metrics-parse"
-import { cn } from "@/lib/utils"
+import { consolidateNodeResources } from "@/lib/proxmox/proxmox-node-metrics-parse"
+import { cn } from "@/lib/core/utils"
 
 const POLL_MS = 10_000
 

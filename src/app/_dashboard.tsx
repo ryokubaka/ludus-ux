@@ -24,7 +24,7 @@ const LogViewer = dynamic(() => import("@/components/range/log-viewer").then((m)
   loading: () => <div className="p-4 text-xs italic text-muted-foreground">Loading logs…</div>,
 })
 import { PaginatedLogHistoryList } from "@/components/range/log-history-list"
-import { timeAgo, cn, downloadTextFile, extractArray, getRangeStateBadge } from "@/lib/utils"
+import { timeAgo, cn, downloadTextFile, extractArray, getRangeStateBadge } from "@/lib/core/utils"
 import { VmOperationLogList } from "@/components/range/vm-operation-log-list"
 import {
   Server,
@@ -55,52 +55,52 @@ import {
   ExternalLink,
   ShieldAlert,
 } from "lucide-react"
-import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/api"
-import { dropGoadInstanceFromCache } from "@/lib/goad-instance-list-cache"
+import { ludusApi, getImpersonationHeaders, getVmOperationLog, postVmOperationAudit, pruneKnownHosts, cleanupGoadWorkspaceAfterRangeDelete } from "@/lib/ui/api"
+import { dropGoadInstanceFromCache } from "@/lib/goad/goad-instance-list-cache"
 import {
   isRouterTemplateReadyForDeploy,
   requiredRouterTemplateName,
-} from "@/lib/ludus-router-template"
+} from "@/lib/ludus/ludus-router-template"
 import {
   goadTaskShortKind,
   correlateHistoryEntries,
   aggregateDeployStatuses,
   type GoadTaskForCorrelation,
-} from "@/lib/goad-deploy-history-correlation"
-import { useRange } from "@/lib/range-context"
-import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/types"
-import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
+} from "@/lib/goad/goad-deploy-history-correlation"
+import { useRange } from "@/lib/range/range-context"
+import type { RangeObject, VMObject, LogHistoryEntry } from "@/lib/core/types"
+import type { RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
 import { useToast } from "@/hooks/use-toast"
-import { useDeployLogContext } from "@/lib/deploy-log-context"
+import { useDeployLogContext } from "@/lib/logs/deploy-log-context"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { queryKeys } from "@/lib/query-keys"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { STALE } from "@/lib/query-client"
-import { omitBlankLogLines } from "@/lib/log-line-timestamp"
-import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
-import { splitLogText } from "@/lib/strip-ansi"
-import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
-import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { STALE } from "@/lib/ui/query-client"
+import { omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
+import { stampHistoryWithRecordedClock } from "@/lib/logs/deploy-log-clock"
+import { splitLogText } from "@/lib/logs/strip-ansi"
+import { fetchGoadTaskLogLines } from "@/lib/goad/goad-task-lines"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range/range-deploy-elapsed-anchor"
 import {
   clearRangeAborting,
   isRangeAborting,
-} from "@/lib/range-aborting"
-import { useAbortRange } from "@/lib/use-abort-range"
-import { IMPERSONATION_CHANGED_EVENT } from "@/lib/impersonation-context"
+} from "@/lib/range/range-aborting"
+import { useAbortRange } from "@/lib/ui/use-abort-range"
+import { IMPERSONATION_CHANGED_EVENT } from "@/lib/session/impersonation-context"
 import {
   pickNetworkFollowupDeployRow,
   isDeployHistoryRunning,
-} from "@/lib/wait-lux-network-tag-deploy"
+} from "@/lib/range/wait-lux-network-tag-deploy"
 import {
   clearVmPartialListStreak,
   dedupeVMs,
   resolveVmListForRangeQuery,
   vmIsRunning,
-} from "@/lib/dashboard-vm-merge"
-import { waitForVmPowerConfirmation } from "@/lib/wait-for-vm-power-state"
+} from "@/lib/ui/dashboard-vm-merge"
+import { waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
 import { LudusHostResources } from "@/components/dashboard/ludus-host-resources"
 
 /** Re-open inventory for the same range without waiting on Ludus again. */

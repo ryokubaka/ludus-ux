@@ -91,13 +91,17 @@ describe("lux-host allowlist", () => {
   })
 
   it("settings and credential probe", () => {
-    expect(run(["version"]).stdout.trim()).toBe("4")
+    expect(run(["version"]).stdout.trim()).toBe("5")
     expect(run(["true"]).status).toBe(0)
     expect(run(["id"]).stdout.trim()).toBe("0")
     denied(["writable-dir", "/etc"])
     denied(["writable-dir", "/opt/ludus/packer/../../etc"])
     denied(["dir-exists", "/tmp"])
     denied(["dir-exists", "/opt/ludus/packer/../secret"])
+    denied(["bridge-ageing"])
+    denied(["bridge-ageing", "eth0"])
+    denied(["bridge-ageing", "r4;id"])
+    denied(["bridge-ageing", "../r4"])
   })
 
   it("logs, clock, and range reconcile", () => {

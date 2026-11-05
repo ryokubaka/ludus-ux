@@ -1,7 +1,7 @@
 "use client"
 
 import { Component, type ReactNode } from "react"
-import { reloadDocument, reloadDocumentOnce } from "@/lib/document-reload"
+import { reloadDocument, reloadDocumentOnce } from "@/lib/ui/document-reload"
 
 type ShellErrorBoundaryProps = { children: ReactNode }
 type ShellErrorBoundaryState = { error: Error | null }

@@ -6,7 +6,7 @@
  * Output format:  [2026-03-30T14:23:01.456Z] [WARN] [pocketbase] …
  */
 
-import { sanitizeLogArgument } from "../src/lib/log-safe"
+import { sanitizeLogArgument } from "@/lib/logs/log-safe"
 
 const _log = console.log.bind(console)
 const _info = console.info.bind(console)

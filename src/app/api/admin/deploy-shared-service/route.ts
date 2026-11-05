@@ -16,18 +16,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { ludusRequest } from "@/lib/ludus-client"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { getSettings } from "@/lib/settings-store"
-import { logInfo } from "@/lib/log-safe"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { getSettings } from "@/lib/settings/settings-store"
+import { logInfo } from "@/lib/logs/log-safe"
 import {
   assertRouterTemplateReady,
-} from "@/lib/ludus-router-template-assert"
+} from "@/lib/ludus/ludus-router-template-assert"
 import {
   routerTemplateBlockMessage,
-} from "@/lib/ludus-router-template"
-import { ensureRangeDeployHostPatches } from "@/lib/range-deploy-host-patches"
+} from "@/lib/ludus/ludus-router-template"
+import { ensureRangeDeployHostPatches } from "@/lib/range/range-deploy-host-patches"
 
 
 export async function POST(request: NextRequest) {

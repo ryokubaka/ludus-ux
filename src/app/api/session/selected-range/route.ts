@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import { markRouteDynamic } from "@/lib/mark-route-dynamic"
-import { requireSession, parseJsonBody } from "@/lib/require-session"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
+import { markRouteDynamic } from "@/lib/core/mark-route-dynamic"
+import { requireSession, parseJsonBody } from "@/lib/session/require-session"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
 import {
   applySelectedRangeCookie,
   clearSelectedRangeCookie,
   isValidSelectedRangeId,
-} from "@/lib/selected-range-cookie"
+} from "@/lib/range/selected-range-cookie"
 
 type Body = { rangeId?: string | null }
 

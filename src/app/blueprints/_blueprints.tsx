@@ -5,8 +5,8 @@ import Link from "next/link"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
 import { useRouter } from "next/navigation"
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -52,7 +52,7 @@ import {
   CheckCircle2,
   Pencil,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import type {
   BlueprintListItem,
   BlueprintAccessUserItem,
@@ -61,39 +61,39 @@ import type {
   GroupObject,
   RangeAccessEntry,
   RangeObject,
-} from "@/lib/types"
+} from "@/lib/core/types"
 import { useToast } from "@/hooks/use-toast"
-import { cn, formatDate } from "@/lib/utils"
-import { useRange } from "@/lib/range-context"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { cn, formatDate } from "@/lib/core/utils"
+import { useRange } from "@/lib/range/range-context"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
 import { YamlEditor } from "@/components/range/yaml-editor"
-import { applyBlueprintToRange } from "@/lib/blueprint-apply"
+import { applyBlueprintToRange } from "@/lib/blueprints/blueprint-apply"
 import { ExpandableCardTrigger } from "@/components/ui/expandable-card-trigger"
-import { ludusSourceRegistrant } from "@/lib/ludus-source-ref"
+import { ludusSourceRegistrant } from "@/lib/sources/ludus-source-ref"
 import {
   mapRegisteredSources,
   pickDefaultRegisteredSource,
   registeredSourceOptionLabel,
   type RegisteredLudusSource,
-} from "@/lib/registered-ludus-sources"
+} from "@/lib/sources/registered-ludus-sources"
 import {
   buildInstalledBlueprintIds,
   formatVersionTransition,
   isBlueprintCatalogEntryInstalled,
   isMissingOrUnknownVersion,
-} from "@/lib/source-catalog-presence"
+} from "@/lib/sources/source-catalog-presence"
 import { useInstalledBlueprintVersions } from "@/hooks/use-installed-blueprint-versions"
 import { useSourceInstalledProvenance } from "@/hooks/use-source-installed-provenance"
 import {
   SourceRepoLink,
   SourceSyncControls,
 } from "@/components/sources/source-installed-controls"
-import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
-import { parseBlueprintBulkErrors } from "@/lib/blueprint-bulk-response"
-import { isSourceCatalogBlueprintId, normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
+import { consolidateBlueprintList } from "@/lib/blueprints/blueprint-list-consolidate"
+import { parseBlueprintBulkErrors } from "@/lib/blueprints/blueprint-bulk-response"
+import { isSourceCatalogBlueprintId, normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
 
 /** Ludus sometimes returns `{ result: [...] }`, a single row, or a bare array. */
 function asObjectArray<T>(data: unknown): T[] {

@@ -61,6 +61,19 @@ for (const file of tracked) {
   }
 }
 
+// --- Line endings -----------------------------------------------------------
+// Blobs are LF. A CRLF blob stays quiet until the file is saved or added, then
+// the diff rewrites every line. Fail here instead of letting that land.
+for (const entry of git("ls-files", "--eol", "-z").split("\0").filter(Boolean)) {
+  const tab = entry.indexOf("\t")
+  if (tab < 0) continue
+  const indexEol = entry.slice(0, tab).split(/\s+/)[0]
+  if (indexEol === "i/crlf" || indexEol === "i/mixed") {
+    const file = entry.slice(tab + 1)
+    fail(`${file}: stored with ${indexEol.slice(2)} line endings; text in this repo is LF`)
+  }
+}
+
 // --- Deployment details in CI and e2e files ---------------------------------
 const SCANNED = (file) =>
   file === ".gitlab-ci.yml" ||

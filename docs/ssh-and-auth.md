@@ -45,6 +45,8 @@ Copying that account’s private key off the Ludus server is only half of SSH ke
 
 That private key is often used for **outgoing** SSH (for example git). Its public half is **not** automatically trusted for **incoming** logins as the same account. If that line is missing, you will see “All configured authentication methods failed” even though the key file is correct.
 
+**A mismatch can also block login.** The deploy-log clock probes the host every 2 s. When `PROXMOX_SSH_USER` does not accept the mounted key (for example, the key belongs to `root` but Settings names `adminuser`), every probe is an auth failure. OpenSSH 10 penalizes the source address for failures and then refuses new connections from the LUX container with `Not allowed at this time`, including the SSH password login. LUX backs the probe off after a failure (up to 60 s), but the account and the key still have to match.
+
 **One-time fix on the Ludus server** — run as `PROXMOX_SSH_USER` and append this keypair’s **public** line. When the account is root, `$HOME` is `/root` and the file is `/root/.ssh/authorized_keys`. When it is not, `$HOME` is that user’s home (`/home/ludus/.ssh/authorized_keys` for user `ludus`):
 
 ```bash

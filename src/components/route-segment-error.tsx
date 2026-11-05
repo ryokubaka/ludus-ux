@@ -4,7 +4,7 @@ import { useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { AlertTriangle, RefreshCw } from "lucide-react"
-import { reloadDocument } from "@/lib/document-reload"
+import { reloadDocument } from "@/lib/ui/document-reload"
 
 export function RouteSegmentError({
   error,

@@ -8,24 +8,24 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   sshExec: vi.fn(),
   isGoadConfigured: vi.fn(() => true),
 }))
 
-vi.mock("@/lib/session-admin-check", () => ({
+vi.mock("@/lib/session/session-admin-check", () => ({
   liveSessionIsAdmin: async (session: { isAdmin?: boolean }) => session.isAdmin === true,
 }))
 
-import { sshExec } from "@/lib/goad-ssh"
-import { assertSafeInstanceId } from "@/lib/goad-pending-network-fs"
-import { canAccessGoadTask } from "@/lib/goad-task-api"
-import { goadTargetInstanceIds } from "@/lib/goad-instance-access"
-import { probeNeo4jFromHost } from "@/lib/ludushound-ssh"
-import { requestOriginAllowed } from "@/lib/request-origin"
-import { REPO_REQUEST_TIMEOUT_MS, REPO_RESPONSE_MAX_BYTES } from "@/lib/safe-template-repo-url"
-import { isLudusTlsInsecure } from "@/lib/tls-insecure-env"
-import type { ResolvedSession } from "@/lib/session"
+import { sshExec } from "@/lib/goad/goad-ssh"
+import { assertSafeInstanceId } from "@/lib/goad/goad-pending-network-fs"
+import { canAccessGoadTask } from "@/lib/goad/goad-task-api"
+import { goadTargetInstanceIds } from "@/lib/goad/goad-instance-access"
+import { probeNeo4jFromHost } from "@/lib/ludushound/ludushound-ssh"
+import { requestOriginAllowed } from "@/lib/core/request-origin"
+import { REPO_REQUEST_TIMEOUT_MS, REPO_RESPONSE_MAX_BYTES } from "@/lib/templates/safe-template-repo-url"
+import { isLudusTlsInsecure } from "@/lib/settings/tls-insecure-env"
+import type { ResolvedSession } from "@/lib/session/session"
 
 type Finding = {
   source: "advisory" | "review"
@@ -45,7 +45,7 @@ const FINDINGS: Record<string, Finding> = {
   },
   "a manual API key login must match the Ludus profile": {
     source: "advisory",
-    tests: { "src/lib/login-ludus-check.test.ts": ["returns profile_mismatch when the key belongs to a different user"] },
+    tests: { "src/lib/session/login-ludus-check.test.ts": ["returns profile_mismatch when the key belongs to a different user"] },
   },
   "GOAD preview: one lab segment, Jinja sandbox, runs as the user": {
     source: "advisory",
@@ -73,7 +73,7 @@ const FINDINGS: Record<string, Finding> = {
         "refuses linking another user's handoff",
         "refuses linking a handoff onto another user's task",
       ],
-      "src/lib/goad-pending-network-workflow.test.ts": [
+      "src/lib/goad/goad-pending-network-workflow.test.ts": [
         "does not apply another user's rules to the task owner's range",
         "ignores a handoff that belongs to another user",
       ],
@@ -82,7 +82,7 @@ const FINDINGS: Record<string, Finding> = {
   "GOAD instance and task ownership, never a username prefix": {
     source: "review",
     tests: {
-      "src/lib/goad-instance-access.test.ts": [
+      "src/lib/goad/goad-instance-access.test.ts": [
         "trusts a named workspace owner over any task",
         "refuses an unclaimed or unlisted instance unless the caller is claiming it",
         "collects the body instance and every REPL use line",
@@ -103,9 +103,9 @@ const FINDINGS: Record<string, Finding> = {
   "the session vault decides, not the cookie": {
     source: "advisory",
     tests: {
-      "src/lib/session-layout.test.ts": ["treats a cookie with no vault row as logged out"],
+      "src/lib/session/session-layout.test.ts": ["treats a cookie with no vault row as logged out"],
       "src/app/api/settings/route.test.ts": ["returns 401 when the vault session is missing"],
-      "src/lib/require-admin.test.ts": ["returns 403 when Ludus says non-admin but cookie says admin"],
+      "src/lib/session/require-admin.test.ts": ["returns 403 when Ludus says non-admin but cookie says admin"],
       "src/security/route-audit.test.ts": [
         "gates every handler on the server session, or lists why it is public",
         "runs the gate first, on every path through the handler",
@@ -115,7 +115,7 @@ const FINDINGS: Record<string, Finding> = {
   "mutating requests come from this origin, including other ports": {
     source: "review",
     tests: {
-      "src/lib/request-origin.test.ts": [
+      "src/lib/core/request-origin.test.ts": [
         "rejects another port on the same host",
         "allows a login on an 8443:443 mapping even when the proxy dropped the port",
         "rejects a cross-site origin and an origin header that lies about a cross-site fetch",
@@ -124,12 +124,12 @@ const FINDINGS: Record<string, Finding> = {
   },
   "run-as-user refuses privileged accounts": {
     source: "advisory",
-    tests: { "src/lib/lux-host-allowlist.test.ts": ["templates, packer files, and source ownership"] },
+    tests: { "src/lib/lux/lux-host-allowlist.test.ts": ["templates, packer files, and source ownership"] },
   },
   "host key pins accept every format ssh prints": {
     source: "review",
     tests: {
-      "src/lib/ssh-host-key.test.ts": [
+      "src/lib/ssh/ssh-host-key.test.ts": [
         "rejects a key that does not match LUX_SSH_HOST_KEY",
         "matches a stored fingerprint with or without base64 padding",
         "reads fingerprints, key lines, and known_hosts lines",
@@ -140,16 +140,16 @@ const FINDINGS: Record<string, Finding> = {
   "TLS is verified unless LUDUS_TLS_INSECURE says otherwise": {
     source: "review",
     tests: {
-      "src/lib/tls-insecure-env.test.ts": ["does not disable certificate checks for the whole process"],
-      "src/lib/login-ludus-check.test.ts": ["names the old default when an upgraded .env has no LUDUS_TLS_INSECURE"],
+      "src/lib/settings/tls-insecure-env.test.ts": ["does not disable certificate checks for the whole process"],
+      "src/lib/session/login-ludus-check.test.ts": ["names the old default when an upgraded .env has no LUDUS_TLS_INSECURE"],
     },
   },
   "API keys and passwords stay out of process arguments": {
     source: "review",
     tests: {
-      "src/lib/goad-ssh-secrets.test.ts": ["REPL run as the user's own SSH login", "non-REPL run"],
-      "src/lib/auth-ssh.test.ts": ["appends the key from stdin, not from the command string"],
-      "src/lib/ludushound-ansible-requirements.test.ts": ["reads the key from stdin into LUDUS_API_KEY"],
+      "src/lib/goad/goad-ssh-secrets.test.ts": ["REPL run as the user's own SSH login", "non-REPL run"],
+      "src/lib/ssh/auth-ssh.test.ts": ["appends the key from stdin, not from the command string"],
+      "src/lib/ludushound/ludushound-ansible-requirements.test.ts": ["reads the key from stdin into LUDUS_API_KEY"],
       "src/security/argv-secrets.test.ts": [
         "builds no shell command that interpolates a secret",
         "passes no secret as a shell argument in the bundled scripts",
@@ -168,7 +168,7 @@ const FINDINGS: Record<string, Finding> = {
   "template repo requests: abort, timeout, size cap": {
     source: "review",
     tests: {
-      "src/lib/safe-template-repo-url.test.ts": [
+      "src/lib/templates/safe-template-repo-url.test.ts": [
         "gives up on a host that never answers",
         "stops when the caller aborts, and refuses an already aborted signal",
         "returns a small body and rejects one over the cap",
@@ -195,23 +195,23 @@ const FINDINGS: Record<string, Finding> = {
   "CodeQL sinks from the v1.5.0 scan": {
     source: "review",
     tests: {
-      "src/lib/log-safe.test.ts": [
+      "src/lib/logs/log-safe.test.ts": [
         "strips newlines and percent signs and redacts a password-shaped env value",
       ],
-      "src/lib/packer-vm-name.test.ts": ["drops trailing slashes and keeps the directory name"],
-      "src/lib/template-repo-client.test.ts": [
+      "src/lib/templates/packer-vm-name.test.ts": ["drops trailing slashes and keeps the directory name"],
+      "src/lib/templates/template-repo-client.test.ts": [
         "rejects a URL whose hostname is not github.com",
         "keeps owner and repo on api.github.com and raw.githubusercontent.com",
       ],
-      "src/lib/sync-ip-prefix.test.ts": ["escapes an IPv4 prefix for sed and rejects a command suffix"],
-      "src/lib/settings-public.test.ts": [
+      "src/lib/range/sync-ip-prefix.test.ts": ["escapes an IPv4 prefix for sed and rejects a command suffix"],
+      "src/lib/settings/settings-public.test.ts": [
         "matches equal secrets, a one-character difference does not, and empty expected never matches",
       ],
-      "src/lib/random-id.test.ts": ["keeps the task id and range uid charset and does not use Math.random"],
-      "src/lib/ludus-fetch.test.ts": [
+      "src/lib/core/random-id.test.ts": ["keeps the task id and range uid charset and does not use Math.random"],
+      "src/lib/ludus/ludus-fetch.test.ts": [
         "rejects file, userinfo, and metadata hosts and still allows a private lab URL",
       ],
-      "src/lib/root-ssh-auth.test.ts": ["reads a regular key and a symlink the same way the probe did"],
+      "src/lib/ssh/root-ssh-auth.test.ts": ["reads a regular key and a symlink the same way the probe did"],
     },
   },
 }

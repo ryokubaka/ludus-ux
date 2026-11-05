@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { startLuxUpgrade } from "@/lib/lux-upgrade-run"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { startLuxUpgrade } from "@/lib/lux/lux-upgrade-run"
 
 export async function POST(request: NextRequest) {
   const admin = await requireAdmin(request)

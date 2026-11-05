@@ -1,0 +1,6 @@
+root = true
+
+# Git stores text as LF (.gitattributes). Editors must do the same, or a
+# Windows save puts CRLF back and the next commit rewrites the whole file.
+[*]
+end_of_line = lf

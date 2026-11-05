@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { decryptCookiePayload, readCookieToken } from "@/lib/session-edge"
-import { layoutSessionFromPayload } from "@/lib/session-layout"
-import { clearSessionWithCredentials } from "@/lib/session-node"
+import { decryptCookiePayload, readCookieToken } from "@/lib/session/session-edge"
+import { layoutSessionFromPayload } from "@/lib/session/session-layout"
+import { clearSessionWithCredentials } from "@/lib/session/session-node"
 
 /**
  * Clear a cookie whose vault row is already gone, then send the browser to login.

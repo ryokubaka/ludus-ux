@@ -99,7 +99,7 @@ if (releases.length > 0) {
 
   const versions = {
     "package.json": JSON.parse(read("package.json")).version,
-    "src/lib/changelog.ts": /APP_VERSION\s*=\s*"([^"]+)"/.exec(read("src/lib/changelog.ts"))?.[1],
+    "src/lib/core/changelog.ts": /APP_VERSION\s*=\s*"([^"]+)"/.exec(read("src/lib/core/changelog.ts"))?.[1],
     "README.md badge": /badge\/version-([\d.]+)-/.exec(read("README.md"))?.[1],
     "docs/openapi.yaml": /^\s+version:\s*"?([\d.]+)"?\s*$/m.exec(read("docs/openapi.yaml"))?.[1],
   }

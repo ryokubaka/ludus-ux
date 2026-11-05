@@ -1,5 +1,5 @@
-import { applyNodeTlsFromLudusEnv } from "@/lib/tls-insecure-env"
-import { getProductionAppSecretFailureMessage } from "@/lib/app-secret-policy"
+import { applyNodeTlsFromLudusEnv } from "@/lib/settings/tls-insecure-env"
+import { getProductionAppSecretFailureMessage } from "@/lib/settings/app-secret-policy"
 
 /**
  * Server TLS: same policy as `server/ws-server.ts` (Docker runs `node ws-server.js`).
@@ -13,9 +13,9 @@ export async function register() {
       throw new Error(`[ludus-ux] ${secretErr}`)
     }
     // Periodic Ludus source git pulls so catalog/install tip stays current.
-    const { startSourceAutoSyncLoop } = await import("@/lib/source-auto-sync")
+    const { startSourceAutoSyncLoop } = await import("@/lib/sources/source-auto-sync")
     startSourceAutoSyncLoop()
-    const { startDeployLogClockLoop } = await import("@/lib/deploy-log-clock-recorder")
+    const { startDeployLogClockLoop } = await import("@/lib/logs/deploy-log-clock-recorder")
     startDeployLogClockLoop()
   }
 }

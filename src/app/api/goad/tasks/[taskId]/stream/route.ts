@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server"
-import { subscribeToTask, getTask } from "@/lib/goad-task-store"
-import { resolveSession } from "@/lib/session"
-import { canAccessGoadTask } from "@/lib/goad-task-api"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
+import { subscribeToTask, getTask } from "@/lib/goad/goad-task-store"
+import { resolveSession } from "@/lib/session/session"
+import { canAccessGoadTask } from "@/lib/goad/goad-task-api"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 
 
 /**

@@ -2,34 +2,34 @@
 
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react"
 import type { QueryClient } from "@tanstack/react-query"
-import { ludusApi } from "@/lib/api"
-import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
-import { goadChainDebug } from "@/lib/goad-chain-debug"
+import { ludusApi } from "@/lib/ui/api"
+import { registerLuxDeployTagRun } from "@/lib/lux/register-lux-deploy-tag-run"
+import { goadChainDebug } from "@/lib/goad/goad-chain-debug"
 import {
   extractNetworkSection,
   mergeNetworkSection,
   networkSnapshotNeedsRedeploy,
   networkSectionEqual,
   type NetworkSnapshot,
-} from "@/lib/network-rules"
+} from "@/lib/range/network-rules"
 import {
   extractLudusExtensions,
   applyLudusExtensions,
   ludusExtensionsEqual,
   type LudusExtensionsSnapshot,
-} from "@/lib/ludus-extensions-config"
-import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
-import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
-import { queryKeys } from "@/lib/query-keys"
+} from "@/lib/ludus/ludus-extensions-config"
+import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/range/wait-ludus-range-state"
+import { waitForNetworkTagDeployCompletion } from "@/lib/range/wait-lux-network-tag-deploy"
+import { queryKeys } from "@/lib/ui/query-keys"
 import {
   RANGE_YAML_TOUCHING_ACTIONS,
   DEPLOY_TAB_ACTIONS,
   TERMINAL_TAB_ACTIONS,
 } from "@/components/goad/goad-instance-tab-utils"
 import type { GoadPostProcessingStep } from "@/components/goad/goad-instance-tabs/types"
-import type { GoadInstance } from "@/lib/types"
+import type { GoadInstance } from "@/lib/core/types"
 import type { useToast } from "@/hooks/use-toast"
-import { clearSessionEfiStopPreview } from "@/lib/testing-stop-efi-session"
+import { clearSessionEfiStopPreview } from "@/lib/testing/testing-stop-efi-session"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 

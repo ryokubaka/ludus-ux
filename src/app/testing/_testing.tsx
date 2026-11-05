@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
-import { STALE } from "@/lib/query-client"
-import { queryKeys } from "@/lib/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { queryKeys } from "@/lib/ui/query-keys"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,25 +30,25 @@ import {
   ChevronRight,
 } from "lucide-react"
 import Link from "next/link"
-import { ludusApi, getImpersonationHeaders } from "@/lib/api"
-import type { RangeObject } from "@/lib/types"
-import type { LuxRangeTestingEvent, RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
-import type { RangeOp, RangeOpStatus } from "@/lib/range-op-store"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { ludusApi, getImpersonationHeaders } from "@/lib/ui/api"
+import type { RangeObject } from "@/lib/core/types"
+import type { LuxRangeTestingEvent, RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
+import type { RangeOp, RangeOpStatus } from "@/lib/range/range-op-store"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { useRange } from "@/lib/range-context"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { useRange } from "@/lib/range/range-context"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import {
   prefetchTestingStopEfiForSelectedRange,
   sessionPreviewToNotice,
-} from "@/lib/prefetch-testing-stop-efi"
+} from "@/lib/testing/prefetch-testing-stop-efi"
 import {
   clearSessionEfiStopPreview,
   readSessionEfiStopPreview,
-} from "@/lib/testing-stop-efi-session"
+} from "@/lib/testing/testing-stop-efi-session"
 
 // ── parseEntry lives outside the component (pure, no deps) ───────────────────
 

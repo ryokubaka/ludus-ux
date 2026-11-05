@@ -1,0 +1,74 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import { goadPathFromEnv, ludusInstallPathFromEnv, ludushoundPathFromEnv } from "@/lib/settings/install-path-env"
+import type { RuntimeSettings } from "@/lib/settings/settings-store"
+
+vi.mock("@/lib/settings/settings-store", () => ({
+  getSettings: vi.fn(),
+}))
+
+import { getSettings } from "@/lib/settings/settings-store"
+import {
+  ludusRangeAnsibleLogPath,
+  resolveGoadPath,
+  resolveLudusInstallPath,
+  resolveLudushoundPath,
+} from "@/lib/core/runtime-paths"
+
+function mockSettings(overrides: Partial<RuntimeSettings>): void {
+  vi.mocked(getSettings).mockReturnValue({
+    ludusUrl: "",
+    ludusAdminUrl: "",
+    sshHost: "",
+    sshPort: 22,
+    goadPath: goadPathFromEnv(),
+    ludushoundPath: ludushoundPathFromEnv(),
+    ludusInstallPath: ludusInstallPathFromEnv(),
+    goadEnabled: true,
+    ludushoundEnabled: true,
+    ludusAnsibleVerbose: true,
+    useLudusHostDns: false,
+    rootApiKey: "",
+    blueprintOperatorApiKey: "",
+    blueprintOperatorUserId: "",
+    proxmoxSshUser: "root",
+    proxmoxSshPassword: "",
+    proxmoxSshKeyPath: "",
+    ...overrides,
+  })
+}
+
+describe("runtime-paths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("trims GOAD_PATH from settings", () => {
+    const nested = `${goadPathFromEnv()}/nested`
+    mockSettings({ goadPath: `  ${nested}  ` })
+    expect(resolveGoadPath()).toBe(nested)
+  })
+
+  it("trims LUDUSHOUND_PATH from settings", () => {
+    const nested = `${ludushoundPathFromEnv()}/nested`
+    mockSettings({ ludushoundPath: `  ${nested}  ` })
+    expect(resolveLudushoundPath()).toBe(nested)
+  })
+
+  it("trims LUDUS_INSTALL_PATH from settings", () => {
+    const nested = `${ludusInstallPathFromEnv()}/nested`
+    mockSettings({ ludusInstallPath: `  ${nested}  ` })
+    expect(resolveLudusInstallPath()).toBe(nested)
+  })
+
+  it("builds range ansible log path under Ludus install root", () => {
+    const ludusRoot = ludusInstallPathFromEnv()
+    mockSettings({ ludusInstallPath: ludusRoot })
+    expect(ludusRangeAnsibleLogPath("range-42")).toBe(`${ludusRoot}/ranges/range-42/ansible.log`)
+  })
+
+  it("sanitizes unsafe range id segments in ansible log path", () => {
+    const ludusRoot = ludusInstallPathFromEnv()
+    mockSettings({ ludusInstallPath: ludusRoot })
+    expect(ludusRangeAnsibleLogPath("bad/id")).toBe(`${ludusRoot}/ranges/badid/ansible.log`)
+  })
+})

@@ -7,7 +7,7 @@ const DEPLOY_STREAM_STALL_MS = 15_000
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react"
 import { useParams, usePathname, useRouter } from "next/navigation"
-import { useDeployLogContext } from "@/lib/deploy-log-context"
+import { useDeployLogContext } from "@/lib/logs/deploy-log-context"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -21,39 +21,39 @@ import type {
   GoadLabDef,
   TemplateObject,
   LogHistoryEntry,
-} from "@/lib/types"
-import { ludusApi } from "@/lib/api"
-import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
-import type { RangeLogMarkerEnrichment } from "@/lib/range-log-marker-types"
-import { goadChainDebug } from "@/lib/goad-chain-debug"
+} from "@/lib/core/types"
+import { ludusApi } from "@/lib/ui/api"
+import { registerLuxDeployTagRun } from "@/lib/lux/register-lux-deploy-tag-run"
+import type { RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
+import { goadChainDebug } from "@/lib/goad/goad-chain-debug"
 import {
   extensionIsProvisionOnly,
   goadSupportsProvisionOnlyExtensions,
-} from "@/lib/goad-catalog-capabilities"
-import type { InstanceInventoryFile } from "@/lib/goad-ssh"
-import { cn, extractArray, timeAgo } from "@/lib/utils"
-import { omitBlankLogLines } from "@/lib/log-line-timestamp"
-import { splitLogText } from "@/lib/strip-ansi"
-import { stampHistoryWithRecordedClock } from "@/lib/deploy-log-clock"
+} from "@/lib/goad/goad-catalog-capabilities"
+import type { InstanceInventoryFile } from "@/lib/goad/goad-ssh"
+import { cn, extractArray, timeAgo } from "@/lib/core/utils"
+import { omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
+import { splitLogText } from "@/lib/logs/strip-ansi"
+import { stampHistoryWithRecordedClock } from "@/lib/logs/deploy-log-clock"
 import { useElapsed } from "@/hooks/use-elapsed"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
 import { useGoadRunAction } from "@/hooks/use-goad-run-action"
 import { useGoadInstanceActionHandlers } from "@/hooks/use-goad-instance-action-handlers"
-import { useImpersonation } from "@/lib/impersonation-context"
-import { useRange } from "@/lib/range-context"
+import { useImpersonation } from "@/lib/session/impersonation-context"
+import { useRange } from "@/lib/range/range-context"
 import {
   hrefForGoadRangeSwitch,
   linkedInstanceIdForRange,
   stepGoadRangeFollow,
   type GoadRangeFollow,
-} from "@/lib/goad-range-switch"
+} from "@/lib/goad/goad-range-switch"
 import {
   type CorrelatedHistoryEntry,
   type GoadTaskForCorrelation,
   correlateHistoryEntries,
   pickGoadTaskForLiveLog,
-} from "@/lib/goad-deploy-history-correlation"
+} from "@/lib/goad/goad-deploy-history-correlation"
 import { GoadDeployTab } from "@/components/goad/goad-instance-tabs/goad-deploy-tab"
 import { GoadTerminalTab } from "@/components/goad/goad-instance-tabs/goad-terminal-tab"
 import { GoadInfoTab } from "@/components/goad/goad-instance-tabs/goad-info-tab"
@@ -64,24 +64,24 @@ import { GoadInstanceHeader } from "@/components/goad/goad-instance-tabs/goad-in
 import { GoadInstanceActionBar } from "@/components/goad/goad-instance-tabs/goad-instance-action-bar"
 import { GoadReassignDialog } from "@/components/goad/goad-instance-tabs/goad-reassign-dialog"
 import { GoadInstanceTabTriggers } from "@/components/goad/goad-instance-tabs/goad-instance-tab-triggers"
-import { fetchGoadTaskLogLines } from "@/lib/goad-task-lines"
+import { fetchGoadTaskLogLines } from "@/lib/goad/goad-task-lines"
 import {
   mergeNetworkSection,
   networkSectionEqual,
   type NetworkSnapshot,
-} from "@/lib/network-rules"
-import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/wait-ludus-range-state"
-import { waitForNetworkTagDeployCompletion } from "@/lib/wait-lux-network-tag-deploy"
-import { fetchDeployElapsedAnchorMs } from "@/lib/range-deploy-elapsed-anchor"
-import { useAbortRange } from "@/lib/use-abort-range"
+} from "@/lib/range/network-rules"
+import { LUDUS_WAIT_ABSOLUTE_MAX_MS, waitUntilLudusRangeNotDeploying } from "@/lib/range/wait-ludus-range-state"
+import { waitForNetworkTagDeployCompletion } from "@/lib/range/wait-lux-network-tag-deploy"
+import { fetchDeployElapsedAnchorMs } from "@/lib/range/range-deploy-elapsed-anchor"
+import { useAbortRange } from "@/lib/ui/use-abort-range"
 import {
   parseAnsibleInstalledSets,
   type AnsibleInstalledSets,
-} from "@/lib/goad-dependency-service"
+} from "@/lib/goad/goad-dependency-service"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import {
   normalizeGoadInstanceTab,

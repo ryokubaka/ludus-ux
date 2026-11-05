@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getTask, updateTaskInstance } from "@/lib/goad-task-store"
-import { assertGoadTaskAccess } from "@/lib/goad-task-api"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { resolveSession } from "@/lib/session"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { getTask, updateTaskInstance } from "@/lib/goad/goad-task-store"
+import { assertGoadTaskAccess } from "@/lib/goad/goad-task-api"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { resolveSession } from "@/lib/session/session"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 /**

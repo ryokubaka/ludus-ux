@@ -60,6 +60,8 @@ Thumbs.db
 
 # Developer docs (internal notes, not for end users)
 docs/CURRENT_STATUS.md
+# Release plans are local working notes, not shipped documentation
+docs/plans/
 
 # Local sync scripts
 sync-to-git.sh

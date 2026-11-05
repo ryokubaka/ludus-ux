@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { formatElapsed } from "@/lib/utils"
+import { formatElapsed } from "@/lib/core/utils"
 
 /**
  * One shared 1-second interval drives every active `useElapsed` instead of each

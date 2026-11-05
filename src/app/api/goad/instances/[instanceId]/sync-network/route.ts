@@ -34,11 +34,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad-ssh"
-import { resolveGoadPath } from "@/lib/runtime-paths"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad/goad-ssh"
+import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 const SYNC_NETWORK_PY = `

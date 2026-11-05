@@ -5,7 +5,7 @@ import { AlertTriangle, Check, Loader2, Server, Shield } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { TabsContent } from "@/components/ui/tabs"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import type { GoadDeployTabProps } from "./types"
 
 const GoadTerminal = dynamic(

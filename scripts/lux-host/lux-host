@@ -55,6 +55,7 @@
 #   patch-linux-reboot-wait         (no args; wait for SSH to drop after a Linux reboot)
 #   patch-adws-wait                  (no args; wait for ADWS before default OU creation)
 #   patch-router-single-clone        (no args; do not clone a second router; one VMID)
+#   bridge-ageing <iface>            (set Linux/SDN bridge ageing_time to 0 / hub mode)
 #   release-refs <repo>              (vX.Y.Z heads and tags on this clone's remote)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
@@ -945,7 +946,7 @@ shift || true
 
 case "$op" in
   version)
-    echo 4
+    echo 5
     ;;
   revision)
     [[ $# -eq 0 ]] || die "revision"
@@ -1635,6 +1636,21 @@ PY
   patch-router-single-clone)
     [[ $# -eq 0 ]] || die "patch-router-single-clone"
     patch_router_single_clone
+    ;;
+  bridge-ageing)
+    # Security Onion sniff NICs need the range bridge in hub mode
+    # (ageing_time 0) or unicast between other VMs never reaches the
+    # sensor. SDN vnets (rN) cannot take that through the network API
+    # without dropping live taps, so write sysfs here instead.
+    [[ $# -eq 1 ]] || die "bridge"
+    [[ "$1" =~ ^(vmbr[0-9]+|r[0-9]+)$ ]] || die "bridge"
+    f="/sys/class/net/$1/bridge/ageing_time"
+    [[ -e "$f" ]] || die "missing bridge $1"
+    before=$(cat "$f") || die "read"
+    printf '0\n' > "$f" || die "write"
+    after=$(cat "$f") || die "verify"
+    [[ "$after" == "0" ]] || die "ageing still $after"
+    printf 'bridge=%s ageing_before=%s ageing=0\n' "$1" "$before"
     ;;
   release-refs)
     [[ $# -eq 1 ]] || die "repo"

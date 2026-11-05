@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useShellSession } from "@/components/providers/shell-session-provider"
-import { fetchSharedSession } from "@/lib/session-fetch"
+import { fetchSharedSession } from "@/lib/session/session-fetch"
 
 export interface ResolvedSession {
   username: string

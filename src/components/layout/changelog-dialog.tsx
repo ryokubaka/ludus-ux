@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, ChevronRight } from "lucide-react"
-import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/changelog"
+import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/core/changelog"
 
 /**
  * Render inline markdown fragments: **bold**, `code`, and [links](url).

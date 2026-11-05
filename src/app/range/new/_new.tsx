@@ -37,40 +37,40 @@ import {
   Terminal,
 } from "lucide-react"
 import { YamlEditor } from "@/components/range/yaml-editor"
-import { validateGoadConfigYaml } from "@/lib/goad-preview-config"
-import { ludusApi, pruneKnownHosts } from "@/lib/api"
+import { validateGoadConfigYaml } from "@/lib/goad/goad-preview-config"
+import { ludusApi, pruneKnownHosts } from "@/lib/ui/api"
 import {
   isRouterTemplateReadyForDeploy,
   requiredRouterTemplateName,
-} from "@/lib/ludus-router-template"
+} from "@/lib/ludus/ludus-router-template"
 import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-dependencies-panel"
-import { checkBlueprintDependencies } from "@/lib/blueprint-dependency-service"
-import { applyBlueprintToRange } from "@/lib/blueprint-apply"
-import { substituteRangeIdInConfig } from "@/lib/range-config-templates"
-import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
-import { useRange } from "@/lib/range-context"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
+import { checkBlueprintDependencies } from "@/lib/blueprints/blueprint-dependency-service"
+import { applyBlueprintToRange } from "@/lib/blueprints/blueprint-apply"
+import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
+import { registerLuxDeployTagRun } from "@/lib/lux/register-lux-deploy-tag-run"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
+import { useRange } from "@/lib/range/range-context"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { useToast } from "@/hooks/use-toast"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
-import { cn, extractArray } from "@/lib/utils"
-import { consolidateBlueprintList } from "@/lib/blueprint-list-consolidate"
-import { normalizeBlueprintList } from "@/lib/blueprint-list-normalize"
-import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/types"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
+import { cn, extractArray } from "@/lib/core/utils"
+import { consolidateBlueprintList } from "@/lib/blueprints/blueprint-list-consolidate"
+import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
+import type { TemplateObject, RangeObject, BlueprintListItem } from "@/lib/core/types"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, extractNetworkRules } from "@/lib/network-rules"
+import { type NetworkRule, extractNetworkRules } from "@/lib/range/network-rules"
 import {
   type VMEntry,
   defaultsForTemplate,
   generateYaml,
   inferOS,
   parseConfigYaml,
-} from "@/lib/range-vm-wizard"
+} from "@/lib/range/range-vm-wizard"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
-} from "@/lib/ludus-deploy-only-roles"
+} from "@/lib/ludus/ludus-deploy-only-roles"
 import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
 import { NewGoadInstancePageClient } from "@/app/goad/new/_new"
 

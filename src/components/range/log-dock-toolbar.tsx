@@ -3,7 +3,7 @@
 import type { ReactNode, RefObject, KeyboardEvent } from "react"
 import { Pause, Play, ChevronsDown, WrapText, Sun, Moon, Search, Copy, Download, Trash2, ChevronUp, ChevronDown, X, RefreshCw, ArrowDownAZ, ArrowUpAZ } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 export type LogDockTheme = "dark" | "light"
 

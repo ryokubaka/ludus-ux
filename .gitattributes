@@ -1,5 +1,32 @@
-# Keep shell scripts LF so Linux CI (sh) and containers do not break on CRLF.
+# LUX stores every text file with LF in the repository.
+#
+# This keeps Linux CI (sh, containers), the sync scripts, and byte-for-byte
+# tree comparisons stable no matter which OS checked the repo out. Without it,
+# a Windows checkout writes CRLF and `git status` / the sync script report
+# hundreds of phantom changes.
+#
+# Binary assets are detected automatically; `text=auto` leaves them untouched.
+* text=auto eol=lf
+
+# Explicit, so a mis-detected script can never ship with CRLF.
 *.sh text eol=lf
 ci/** text eol=lf
 docker/** text eol=lf
 scripts/** text eol=lf
+
+# Never convert these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.mp4 binary
+*.webm binary

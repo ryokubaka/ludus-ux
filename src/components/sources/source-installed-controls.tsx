@@ -10,9 +10,9 @@ import {
   formatVersionTransition,
   isMissingOrUnknownVersion,
   normalizeCatalogVersion,
-} from "@/lib/source-catalog-presence"
-import type { InstalledSourceMatch } from "@/lib/source-installed-match"
-import { postSourceInstall } from "@/lib/source-install-client"
+} from "@/lib/sources/source-catalog-presence"
+import type { InstalledSourceMatch } from "@/lib/sources/source-installed-match"
+import { postSourceInstall } from "@/lib/sources/source-install-client"
 
 /** Repo origin link for content matched to a registered Ludus source. */
 export function SourceRepoLink({ match }: { match: InstalledSourceMatch }) {

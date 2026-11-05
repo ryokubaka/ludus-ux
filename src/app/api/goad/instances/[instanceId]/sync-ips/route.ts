@@ -22,16 +22,16 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { ludusRequest } from "@/lib/ludus-client"
-import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad-ssh"
-import { resolveGoadPath } from "@/lib/runtime-paths"
-import { shellSingleQuote } from "@/lib/template-packer-paths"
-import { ipv4Octet, sedPatternForIpPrefix } from "@/lib/sync-ip-prefix"
-import { getInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad/goad-ssh"
+import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { shellSingleQuote } from "@/lib/templates/template-packer-paths"
+import { ipv4Octet, sedPatternForIpPrefix } from "@/lib/range/sync-ip-prefix"
+import { getInstanceRangeLocal } from "@/lib/goad/goad-instance-range-store"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 export async function POST(

@@ -14,10 +14,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
-import { ludusRequest } from "@/lib/ludus-client"
-import { fetchPbRangeStatus } from "@/lib/pocketbase-client"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { resolveSession } from "@/lib/session/session"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { fetchPbRangeStatus } from "@/lib/core/pocketbase-client"
 import {
   createRangeOp,
   getActiveRangeOp,
@@ -26,10 +26,10 @@ import {
   pruneOldRangeOps,
   type RangeOp,
   type RangeOpType,
-} from "@/lib/range-op-store"
-import { recordLuxTestingOpTerminal } from "@/lib/range-testing-audit"
-import { logInfo, logWarn } from "@/lib/log-safe"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+} from "@/lib/range/range-op-store"
+import { recordLuxTestingOpTerminal } from "@/lib/range/range-testing-audit"
+import { logInfo, logWarn } from "@/lib/logs/log-safe"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 import {
   TESTING_OP_MIN_AGE_MS,
   clearTestingOpLogMarker,
@@ -39,9 +39,9 @@ import {
   readTestingOpLogSlice,
   syncPbTestingEnabledWithRetries,
   testingOpLogSliceProvesComplete,
-} from "@/lib/testing-mode-pb-reconcile"
-import { readLudusRangeLogsForReconcile } from "@/lib/goad-ludus-reconcile"
-import { runTestingStartEfiEnrollPreflight } from "@/lib/proxmox-testing-stop-preflight"
+} from "@/lib/testing/testing-mode-pb-reconcile"
+import { readLudusRangeLogsForReconcile } from "@/lib/goad/goad-ludus-reconcile"
+import { runTestingStartEfiEnrollPreflight } from "@/lib/proxmox/proxmox-testing-stop-preflight"
 
 async function getEffective(
   request: NextRequest,

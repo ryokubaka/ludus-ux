@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { queryKeys } from "@/lib/query-keys"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { STALE } from "@/lib/query-client"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { STALE } from "@/lib/ui/query-client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,30 +30,30 @@ import {
   ListChecks,
   Plus,
 } from "lucide-react"
-import { ludusApi } from "@/lib/api"
+import { ludusApi } from "@/lib/ui/api"
 import {
   isRouterTemplateReadyForDeploy,
   requiredRouterTemplateName,
-} from "@/lib/ludus-router-template"
-import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus-deploy-tags"
-import { resolveDeployLimitPattern } from "@/lib/ludus-deploy-limit"
+} from "@/lib/ludus/ludus-router-template"
+import { LUDUS_DEPLOY_TAGS, LUDUS_DEPLOY_TAG_DESCRIPTIONS } from "@/lib/ludus/ludus-deploy-tags"
+import { resolveDeployLimitPattern } from "@/lib/ludus/ludus-deploy-limit"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
-} from "@/lib/ludus-deploy-only-roles"
+} from "@/lib/ludus/ludus-deploy-only-roles"
 import { DeployLimitSelector } from "@/components/range/deploy-limit-selector"
 import { DeployOnlyRolesSelector } from "@/components/range/deploy-only-roles-selector"
-import { registerLuxDeployTagRun } from "@/lib/register-lux-deploy-tag-run"
-import { useRange } from "@/lib/range-context"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus-timeout-ui"
+import { registerLuxDeployTagRun } from "@/lib/lux/register-lux-deploy-tag-run"
+import { useRange } from "@/lib/range/range-context"
+import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useToast } from "@/hooks/use-toast"
 import { useDeployLogs } from "@/hooks/use-deploy-logs"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
-import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/network-rules"
-import { ludusSupportsExtensionsKey } from "@/lib/ludus-version"
+import { type NetworkRule, extractNetworkRules, injectNetworkRules, extractVlansFromConfig } from "@/lib/range/network-rules"
+import { ludusSupportsExtensionsKey } from "@/lib/ludus/ludus-version"
 import { AddVmWizardDialog } from "@/components/range/add-vm-wizard-dialog"
 
 const ALL_TAGS = [...LUDUS_DEPLOY_TAGS]

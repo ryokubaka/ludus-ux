@@ -1,25 +1,25 @@
 import { NextRequest, NextResponse } from "next/server"
-import { rememberBlueprintOperator } from "@/lib/blueprint-global-install"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
-import { createGitSource, isHttp404Error, listSources } from "@/lib/ludus-source-client"
-import { listVisibleLudusSources } from "@/lib/list-visible-ludus-sources"
+import { rememberBlueprintOperator } from "@/lib/blueprints/blueprint-global-install"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { revalidateAfterSourceMutation } from "@/lib/ludus/ludus-cache-revalidate"
+import { createGitSource, isHttp404Error, listSources } from "@/lib/sources/ludus-source-client"
+import { listVisibleLudusSources } from "@/lib/sources/list-visible-ludus-sources"
 import {
   DEFAULT_SOURCE_GIT_REF,
   ludusSourceGitRef,
   normalizeGitSourceUrl,
   suggestedLudusSourceId,
-} from "@/lib/ludus-source-ref"
+} from "@/lib/sources/ludus-source-ref"
 import {
   ensureSourceAutoSyncLoopStarted,
   ensureSourcesFresh,
   sourceAutoSyncIntervalMs,
-} from "@/lib/source-auto-sync"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
-import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session-admin-check"
-import { assertSafeTemplateRepoUrl } from "@/lib/safe-template-repo-url"
-import { logAndSafeError } from "@/lib/safe-client-error"
+} from "@/lib/sources/source-auto-sync"
+import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
+import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
+import { assertSafeTemplateRepoUrl } from "@/lib/templates/safe-template-repo-url"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
 
 export const maxDuration = 120
 

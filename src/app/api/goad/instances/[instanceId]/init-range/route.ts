@@ -14,19 +14,19 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveSession } from "@/lib/session"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
-import { assertGoadInstanceAccess } from "@/lib/goad-instance-access"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { getSettings } from "@/lib/settings-store"
-import { goadCommandRunsAsHostAccount, setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad-deploy-link"
-import { chownGoadInstance, listGoadInstances, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad-ssh"
-import { effectivePrivilegedSshUser } from "@/lib/root-ssh-preflight"
-import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus-client"
-import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
-import { bustAdminCache } from "@/lib/admin-data"
-import { setOwnership } from "@/lib/range-ownership-store"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveSession } from "@/lib/session/session"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
+import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { getSettings } from "@/lib/settings/settings-store"
+import { goadCommandRunsAsHostAccount, setRangeHostProcessActive, shouldDeferHostWorkspaceChown } from "@/lib/goad/goad-deploy-link"
+import { chownGoadInstance, listGoadInstances, readGoadRangeId, sshExecAsWorkspaceUser, writeGoadRangeId } from "@/lib/goad/goad-ssh"
+import { effectivePrivilegedSshUser } from "@/lib/ssh/root-ssh-preflight"
+import { ludusRequest, ludusRangeCreateApiKey } from "@/lib/ludus/ludus-client"
+import { ludusCallerFromGetUser } from "@/lib/ludus/ludus-user-from-profile"
+import { bustAdminCache } from "@/lib/admin/admin-data"
+import { setOwnership } from "@/lib/range/range-ownership-store"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 function deriveRangeInfo(instanceId: string, username: string): { rangeId: string; name: string } {

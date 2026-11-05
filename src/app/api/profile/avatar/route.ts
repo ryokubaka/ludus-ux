@@ -5,12 +5,12 @@
  * DELETE /api/profile/avatar        — remove current user's avatar
  */
 import { NextRequest, NextResponse } from "next/server"
-import { requireSession } from "@/lib/require-session"
-import { DATA_DIR } from "@/lib/db"
-import { detectImageType, sanitizeUsername } from "@/lib/safe-filename"
+import { requireSession } from "@/lib/session/require-session"
+import { DATA_DIR } from "@/lib/core/db"
+import { detectImageType, sanitizeUsername } from "@/lib/core/safe-filename"
 import fs from "fs"
 import path from "path"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
 const AVATARS_DIR = path.join(DATA_DIR, "avatars")

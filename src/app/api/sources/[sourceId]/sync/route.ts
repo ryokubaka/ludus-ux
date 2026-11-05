@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-import { effectiveScopeTagFromSession } from "@/lib/effective-scope"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { revalidateAfterSourceMutation } from "@/lib/ludus-cache-revalidate"
-import { isHttp404Error, syncSource } from "@/lib/ludus-source-client"
-import { requireSourcesSession } from "@/lib/ludus-sources-route-helpers"
-import { liveSessionIsAdmin } from "@/lib/session-admin-check"
-import { logAndSafeError } from "@/lib/safe-client-error"
+import { effectiveScopeTagFromSession } from "@/lib/session/effective-scope"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { revalidateAfterSourceMutation } from "@/lib/ludus/ludus-cache-revalidate"
+import { isHttp404Error, syncSource } from "@/lib/sources/ludus-source-client"
+import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
+import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
 
 export const maxDuration = 300
 

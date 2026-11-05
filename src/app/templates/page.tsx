@@ -1,7 +1,7 @@
 import { HydrationBoundary } from "@tanstack/react-query"
-import { dynamicPageClient } from "@/lib/dynamic-page-client"
-import { getLayoutSession } from "@/lib/session-layout"
-import { prefetchTemplatesData } from "@/lib/server-prefetch"
+import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
+import { getLayoutSession } from "@/lib/session/session-layout"
+import { prefetchTemplatesData } from "@/lib/core/server-prefetch"
 
 const TemplatesPageClient = dynamicPageClient(
   () => import("./_templates"),

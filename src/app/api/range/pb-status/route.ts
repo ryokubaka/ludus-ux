@@ -14,15 +14,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { resolveAdminImpersonationFromRequest } from "@/lib/admin-impersonation-request"
-import { resolveSession } from "@/lib/session"
+import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
+import { resolveSession } from "@/lib/session/session"
 import {
   enrichRangesWithPbRecords,
   fetchPbRangeStatus,
   fetchPbUserRanges,
-} from "@/lib/pocketbase-client"
-import type { RangeObject } from "@/lib/types"
-import { ludusRequest } from "@/lib/ludus-client"
+} from "@/lib/core/pocketbase-client"
+import type { RangeObject } from "@/lib/core/types"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
 
 
 /** Normalize Ludus GET /range body (single object, array, or { result }). */

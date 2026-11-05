@@ -19,9 +19,9 @@ const SECRET_INTERP = /\$\{[^}]*(api_?key|password|passwd|\bpass\b|secret|token|
 
 /** `file: line fragment` → why it is not an argv leak. */
 const SENT_ON_STDIN: Record<string, string> = {
-  "src/lib/auth-ssh.ts: export LUDUS_API_KEY=${apiKey}":
+  "src/lib/ssh/auth-ssh.ts: export LUDUS_API_KEY=${apiKey}":
     "The ~/.bashrc snippet is written by `cat >> ~/.bashrc` from stdin.",
-  "src/lib/goad-ssh.ts: LUDUS_API_KEY='${ludusApiKey":
+  "src/lib/goad/goad-ssh.ts: LUDUS_API_KEY='${ludusApiKey":
     "GOAD's environment is written from stdin to a 0600 file (goad-ssh-secrets.test.ts).",
 }
 

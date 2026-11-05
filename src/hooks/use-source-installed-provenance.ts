@@ -2,14 +2,14 @@
 
 import { useMemo } from "react"
 import { useQueries, useQuery } from "@tanstack/react-query"
-import { useEffectiveScopeTag } from "@/lib/effective-scope-context"
-import { queryKeys } from "@/lib/query-keys"
-import { STALE } from "@/lib/query-client"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { STALE } from "@/lib/ui/query-client"
 import {
   mapRegisteredSources,
   sourceIdsAreSameRegistration,
-} from "@/lib/registered-ludus-sources"
-import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/source-catalog-client"
+} from "@/lib/sources/registered-ludus-sources"
+import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/sources/source-catalog-client"
 import {
   buildAnsibleSourceMatchMap,
   buildBlueprintSourceMatchMap,
@@ -19,7 +19,7 @@ import {
   lookupTemplateSourceMatch,
   type InstalledSourceMatch,
   type SourceCatalogRef,
-} from "@/lib/source-installed-match"
+} from "@/lib/sources/source-installed-match"
 
 type AnsibleInstalled = { name: string; version?: string }
 type TemplateInstalled = { name: string; version?: string }

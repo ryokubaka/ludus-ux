@@ -14,9 +14,9 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
-import type { VmOperationLogEntry } from "@/lib/api"
-import { timeAgo } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
+import type { VmOperationLogEntry } from "@/lib/ui/api"
+import { timeAgo } from "@/lib/core/utils"
 
 function kindLabel(kind: VmOperationLogEntry["kind"]): string {
   return kind === "destroy_vm" ? "Destroy VM" : "Remove extension"

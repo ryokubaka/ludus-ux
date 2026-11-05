@@ -6,18 +6,18 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { markRouteDynamic } from "@/lib/mark-route-dynamic"
+import { markRouteDynamic } from "@/lib/core/mark-route-dynamic"
 import {
   clearSessionImpersonation,
   resolveSession,
   updateSessionImpersonation,
-} from "@/lib/session"
-import { ludusRequest } from "@/lib/ludus-client"
-import { ludusCallerFromGetUser } from "@/lib/ludus-user-from-profile"
-import { finishAdminResponse, requireAdmin } from "@/lib/require-admin"
-import { clientIpFromRequest } from "@/lib/security-audit-log"
-import { logAppEvent } from "@/lib/app-log"
-import { clearSelectedRangeCookie } from "@/lib/selected-range-cookie"
+} from "@/lib/session/session"
+import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { ludusCallerFromGetUser } from "@/lib/ludus/ludus-user-from-profile"
+import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
+import { clientIpFromRequest } from "@/lib/session/security-audit-log"
+import { logAppEvent } from "@/lib/logs/app-log"
+import { clearSelectedRangeCookie } from "@/lib/range/selected-range-cookie"
 
 export async function GET(request: NextRequest) {
   await markRouteDynamic()

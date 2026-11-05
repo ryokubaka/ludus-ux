@@ -6,7 +6,7 @@ import {
   checkGoadDeployDependencies,
   installGoadDependencies,
   refreshGoadDependencyCheck,
-} from "@/lib/goad-dependency-service"
+} from "@/lib/goad/goad-dependency-service"
 
 interface GoadAnsibleDependenciesPanelProps {
   configYaml: string

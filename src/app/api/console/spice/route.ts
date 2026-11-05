@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
-import { logAndSafeError } from "@/lib/safe-client-error"
-import { resolveSession } from "@/lib/session"
-import { getSettings } from "@/lib/settings-store"
+import { logAndSafeError } from "@/lib/ui/safe-client-error"
+import { resolveSession } from "@/lib/session/session"
+import { getSettings } from "@/lib/settings/settings-store"
 import {
   proxmoxCreateSpiceProxy,
   proxmoxCreateVncProxy,
   proxmoxGetNodeForVmid,
   proxmoxLogin,
   type SpiceProxyInfo,
-} from "@/lib/proxmox-http"
-import { CONSOLE_PAM_PASSWORD_REQUIRED, resolveSessionProxmoxUser } from "@/lib/session-proxmox-user"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
-import { isNumericId } from "@/lib/validate-id"
+} from "@/lib/proxmox/proxmox-http"
+import { CONSOLE_PAM_PASSWORD_REQUIRED, resolveSessionProxmoxUser } from "@/lib/session/session-proxmox-user"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { isNumericId } from "@/lib/core/validate-id"
 
 function formatSpiceVv(
   ticket: SpiceProxyInfo & { password: string; host: string },

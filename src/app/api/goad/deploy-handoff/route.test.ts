@@ -14,32 +14,32 @@ const gate = vi.hoisted(() => ({
   readableRanges: new Map<string, Set<string>>(),
 }))
 
-vi.mock("@/lib/require-session", () => ({
+vi.mock("@/lib/session/require-session", () => ({
   requireSession: vi.fn(),
 }))
 
-vi.mock("@/lib/lux-api-audit", () => ({
+vi.mock("@/lib/lux/lux-api-audit", () => ({
   logLuxRouteAction: vi.fn(),
 }))
 
-vi.mock("@/lib/app-log", () => ({
+vi.mock("@/lib/logs/app-log", () => ({
   writeAppLog: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-ssh", () => ({
+vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => gate.instances),
 }))
 
-vi.mock("@/lib/goad-task-store", () => ({
+vi.mock("@/lib/goad/goad-task-store", () => ({
   listTasks: () => gate.tasks,
   getTask: (taskId: string) => gate.tasks.find((task) => task.id === taskId) ?? null,
 }))
 
-vi.mock("@/lib/settings-store", () => ({
+vi.mock("@/lib/settings/settings-store", () => ({
   getSettings: () => ({ proxmoxSshUser: "ludus" }),
 }))
 
-vi.mock("@/lib/ludus-client", () => ({
+vi.mock("@/lib/ludus/ludus-client", () => ({
   ludusRequest: vi.fn(async (pathname: string, opts: { apiKey: string }) => {
     const rangeId = new URL(pathname, "http://x").searchParams.get("rangeID") ?? ""
     const ok = gate.readableRanges.get(opts.apiKey)?.has(rangeId) ?? false
@@ -47,11 +47,11 @@ vi.mock("@/lib/ludus-client", () => ({
   }),
 }))
 
-vi.mock("@/lib/goad-instance-range-store", () => ({
+vi.mock("@/lib/goad/goad-instance-range-store", () => ({
   setInstanceRangeLocal: vi.fn(),
 }))
 
-vi.mock("@/lib/goad-deploy-handoff-store", () => ({
+vi.mock("@/lib/goad/goad-deploy-handoff-store", () => ({
   createDeployHandoff: vi.fn((args: { rangeId: string; username: string }) => {
     const id = `h-${gate.handoffs.size + 1}`
     gate.handoffs.set(id, { id, username: args.username, rangeId: args.rangeId })
@@ -65,10 +65,10 @@ vi.mock("@/lib/goad-deploy-handoff-store", () => ({
   pruneOldHandoffs: vi.fn(),
 }))
 
-import { requireSession } from "@/lib/require-session"
-import { setInstanceRangeLocal } from "@/lib/goad-instance-range-store"
-import { linkHandoffToTask } from "@/lib/goad-deploy-handoff-store"
-import { readPendingNetworkEnvelope } from "@/lib/goad-pending-network-fs"
+import { requireSession } from "@/lib/session/require-session"
+import { setInstanceRangeLocal } from "@/lib/goad/goad-instance-range-store"
+import { linkHandoffToTask } from "@/lib/goad/goad-deploy-handoff-store"
+import { readPendingNetworkEnvelope } from "@/lib/goad/goad-pending-network-fs"
 import { PATCH, POST } from "./route"
 
 afterAll(() => {

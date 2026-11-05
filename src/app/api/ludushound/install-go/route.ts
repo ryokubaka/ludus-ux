@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { resolveLudushoundSession } from "@/lib/ludushound-session"
-import { installGoToolchain, isLudushoundSshConfigured } from "@/lib/ludushound-ssh"
-import { logLuxRouteAction } from "@/lib/lux-api-audit"
+import { resolveLudushoundSession } from "@/lib/ludushound/ludushound-session"
+import { installGoToolchain, isLudushoundSshConfigured } from "@/lib/ludushound/ludushound-ssh"
+import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 /** Install official Go toolchain on Ludus host under /usr/local/go (root SSH). */
 export async function POST(request: NextRequest) {

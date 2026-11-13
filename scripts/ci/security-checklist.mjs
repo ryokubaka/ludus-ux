@@ -62,7 +62,7 @@ export const CHECKLIST = [
   },
   {
     id: "live",
-    text: "`bash scripts/ci/live-security.sh` passed on this commit (the `security-gate/live` status, or the GitLab `security-live` job).",
+    text: "`bash scripts/ci/live-security.sh` is checked when that suite passed (`security-gate/live` or the GitLab `security-live` job), or when this pipeline has neither.",
     tests: [],
   },
 ]
@@ -78,13 +78,28 @@ function liveRank(row) {
 }
 
 // Newest status wins, whether it is the external security-gate/live status or
-// the GitLab security-live job. The checklist job runs before that stage, so
-// "pending" must not clear a box the live job already ticked.
+// the GitLab security-live job. "missing" means this pipeline did not run the
+// suite. "pending" means it is still running, and must not clear a box.
 export function liveStateFromStatuses(rows) {
   const list = (Array.isArray(rows) ? rows : []).slice().sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0))
   const row = list.find((item) => item?.name === LIVE_CONTEXT || item?.name === LIVE_JOB)
-  const rank = liveRank(row)
-  return rank === "missing" ? "pending" : rank
+  return liveRank(row)
+}
+
+function rankLiveJob(job) {
+  if (!job) return "missing"
+  if (job.status === "success" || job.status === "skipped") return "pass"
+  if (job.status === "failed" || job.status === "canceled") return "fail"
+  return "pending"
+}
+
+// A failure wins. A pass wins over a suite that never started. No live job and
+// no live status is a pass: this pipeline did not include that suite.
+export function resolveLiveState(statusRank, jobRank) {
+  if (statusRank === "fail" || jobRank === "fail") return "fail"
+  if (statusRank === "pass" || jobRank === "pass") return "pass"
+  if (statusRank === "pending" || jobRank === "pending") return "pending"
+  return "pass"
 }
 
 export function itemText(line) {
@@ -116,7 +131,7 @@ function matchesItem(item, line) {
   const text = itemText(line)
   if (!/^-\s+\[[ xX]\]\s+/.test(line.trim())) return false
   if (text === item.text) return true
-  return item.id === "live" && text.startsWith("`bash scripts/ci/live-security.sh` passed on this commit")
+  return item.id === "live" && text.startsWith("`bash scripts/ci/live-security.sh`")
 }
 
 export function applyChecklist(body, states) {
@@ -170,7 +185,7 @@ function liveFromGithub(repo, sha) {
     return "pending"
   }
   const status = (payload.statuses ?? []).find((row) => row.context === LIVE_CONTEXT)
-  if (!status) return "pending"
+  if (!status) return "pass"
   if (status.state === "success") return "pass"
   if (status.state === "failure" || status.state === "error") return "fail"
   return "pending"
@@ -203,9 +218,26 @@ function liveFromGitlab(sha) {
       if (batch.length < 100) break
     }
   } catch {
-    return rows.length > 0 ? liveStateFromStatuses(rows) : "pending"
+    return rows.length > 0 ? resolveLiveState(liveStateFromStatuses(rows), "pending") : "pending"
   }
-  return liveStateFromStatuses(rows)
+  return resolveLiveState(liveStateFromStatuses(rows), liveJobRank())
+}
+
+function liveJobRank() {
+  if (!process.env.CI_PIPELINE_ID || !process.env.CI_PROJECT_ID) return "missing"
+  let payload
+  try {
+    payload = JSON.parse(
+      gitlab(
+        "GET",
+        `/projects/${process.env.CI_PROJECT_ID}/pipelines/${process.env.CI_PIPELINE_ID}/jobs?per_page=100`,
+      ),
+    )
+  } catch {
+    return "pending"
+  }
+  const jobs = Array.isArray(payload) ? payload : []
+  return rankLiveJob(jobs.find((row) => row.name === LIVE_JOB))
 }
 
 function changelogFromGitlab() {

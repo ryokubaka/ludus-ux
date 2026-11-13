@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { bashPath } from "@/test-support/bash-path"
 import {
   asPrivilegedShell,
   formatLuxHost,
@@ -133,7 +134,7 @@ describe("buildRootSshProbeCommand", () => {
     )
     const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+      env: { ...process.env, PATH: bashPath(bin), NODE_ENV: "test" },
     })
     const parsed = parseRootSshProbe(result.stdout ?? "")
     expect(result.status).toBe(0)
@@ -152,7 +153,7 @@ describe("buildRootSshProbeCommand", () => {
     )
     const result = spawnSync("bash", ["-c", buildLuxHostAuthProbeCommand()], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+      env: { ...process.env, PATH: bashPath(bin), NODE_ENV: "test" },
     })
     const parsed = parseRootSshProbe(result.stdout ?? "")
     expect(result.status).toBe(0)
@@ -168,7 +169,7 @@ describe("buildRootSshProbeCommand", () => {
     writeFileSync(path.join(bin, "sudo"), "#!/bin/sh\nexit 1\n", { mode: 0o755 })
     const result = spawnSync("bash", ["-c", buildRootSshProbeCommand("/opt/ludus/packer")], {
       encoding: "utf8",
-      env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: "test" },
+      env: { ...process.env, PATH: bashPath(bin), NODE_ENV: "test" },
     })
     const parsed = parseRootSshProbe(result.stdout ?? "")
     expect(result.status).toBe(0)

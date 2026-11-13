@@ -73,6 +73,8 @@ Commit first: the script refuses to run on uncommitted changes, because the stat
 bash scripts/ci/live-security.sh
 ```
 
+On Windows, the unit step runs in a slim Linux container (`lux-ci-unit:node24`: Node 24 plus Python, compilers, and sudo). Docker Desktop has to be running. The first run builds that image and installs Linux dependencies into a Docker volume; later runs reuse both. The Windows `node_modules` directory is left alone. The suite's SQLite file is created on the container disk and the unit step runs one test file at a time, because WAL mode cannot use the Windows folder Docker mounts and parallel workers lock that file. `data/` in the checkout is left alone. Hygiene and the Playwright project still run on the host, so they reach `PLAYWRIGHT_BASE_URL`. `LUX_UNIT_DOCKER=0` runs the unit step with Windows Node instead. A WSL shell whose `node_modules` was installed on Windows takes the same container path, because those addons are Windows binaries.
+
 `SECURITY_GATE_UPGRADE=1` also replays an upgrade. A scratch clone at the previous release tag starts with your `.env` minus `LUDUS_TLS_INSECURE`, then runs that release's `upgrade.sh` to the current branch. The replay checks that the app user can still read the SSH key (directly or through the `/run/lux-ssh` copy) and that a certificate error names the missing `LUDUS_TLS_INSECURE`. The stack uses fixed container names and port 443, so stop any running LUX first.
 
 ## GitHub
@@ -131,6 +133,6 @@ The PR and MR templates carry the same checklist. `security-checklist` checks a 
 | Origin check | `origin-gate.test.ts` |
 | A fixed finding has a test | `finding-catalog.test.ts` |
 | Changelog entry | `changelog.sh` |
-| Live suite | `security-gate/live` is success for that commit, or the GitLab `security-live` job succeeded |
+| Live suite | `security-gate/live` or the GitLab `security-live` job succeeded, or this pipeline has neither |
 
-A failing item stays `[ ]`. The checklist job runs before the live stage, so it leaves that box untouched while the suite is still pending. `live-security.sh` ticks it after a pass. On GitLab that is the `security-live` job when `LUX_LIVE_SECURITY` is `1`.
+A failing item stays `[ ]`. The checklist job runs before the live stage. While `security-live` is still running it leaves that box untouched. When the pipeline has no live job and no `security-gate/live` result, it checks the box. `live-security.sh` also ticks it after a pass. On GitLab that job is `security-live` when `LUX_LIVE_SECURITY` is `1`.

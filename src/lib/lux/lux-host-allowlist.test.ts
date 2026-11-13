@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { bashPath, posixPath } from "../../test-support/bash-path"
 import { lacks } from "../../test-support/host-capabilities"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
@@ -48,8 +49,8 @@ function run(
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${bin}:/usr/bin:/bin`,
-      LUX_HOST_STUB_LOG: log,
+      PATH: bashPath(bin),
+      LUX_HOST_STUB_LOG: posixPath(log),
       ...extraEnv,
     },
   })
@@ -327,8 +328,8 @@ exec bash ${JSON.stringify(helper)} "$@"
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${bin}:/usr/bin:/bin`,
-        LUX_HOST_STUB_LOG: log,
+        PATH: bashPath(bin),
+        LUX_HOST_STUB_LOG: posixPath(log),
         LUX_TEST_UPDATE_KEY: updateKey ?? "",
         SUDO_USER: "ludus",
       },

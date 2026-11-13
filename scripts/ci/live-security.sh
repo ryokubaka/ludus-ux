@@ -10,6 +10,8 @@
 #   GITHUB_TOKEN                         post the status to GitHub (repo:status)
 #   GITLAB_TOKEN, GITLAB_URL, GITLAB_PROJECT   post the status to GitLab (api scope; project path or id)
 #   LUX_GATE_SKIP_UNIT=1                 skip unit.sh (the CI pipeline already ran it)
+#   LUX_UNIT_DOCKER=0                    run the unit step on this machine (Windows uses a Linux container)
+#   LUX_UNIT_DOCKER=1                    force the unit step into that container
 #   SECURITY_GATE_UPGRADE=1              also replay an upgrade from the previous release tag
 #   SECURITY_GATE_ALLOW_DIRTY=1          run with uncommitted changes (no status is posted)
 . "$(dirname "$0")/lib.sh"

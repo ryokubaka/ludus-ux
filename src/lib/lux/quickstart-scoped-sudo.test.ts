@@ -6,6 +6,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { decryptSettingsValueAtRest } from "@/lib/settings/settings-value-at-rest"
+import { bashPathInherit, posixPath } from "../../test-support/bash-path"
 import { lacks } from "../../test-support/host-capabilities"
 
 const quickstart = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../scripts/quickstart.sh")
@@ -38,7 +39,7 @@ function offerInstall(
     path.join(bin, "ssh"),
     `#!/bin/bash
 cmd="\${@: -1}"
-printf '%s\\n' "$cmd" >> ${JSON.stringify(callLog)}
+printf '%s\\n' "$cmd" >> ${JSON.stringify(posixPath(callLog))}
 if [[ "$cmd" == "true" || "$cmd" == "sudo -n true" ]]; then
   exit 0
 fi
@@ -66,7 +67,7 @@ if [[ "\${FAKE_APPLY}" == "1" && "$cmd" == "bash -c "* ]]; then
     export PATH="/usr/sbin:/usr/bin:/bin"
     eval "$1"
     cat /etc/lux-host.update-key
-  ' bash "$cmd" > ${JSON.stringify(keyFile)}
+  ' bash "$cmd" > ${JSON.stringify(posixPath(keyFile))}
   exit $?
 fi
 if [[ "$cmd" == *"visudo"* || "$cmd" == *"bash -c"* ]]; then
@@ -90,9 +91,9 @@ exit 1
       "-c",
       `
 set +e
-source ${JSON.stringify(quickstart)}
+source ${JSON.stringify(posixPath(quickstart))}
 set +e
-cd ${JSON.stringify(dir)}
+cd ${JSON.stringify(posixPath(dir))}
 set -e
 status=0
 lux_offer_scoped_host_sudo testuser || status=$?
@@ -104,7 +105,7 @@ printf '%s' "$status"
       input: "\n",
       env: {
         ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
+        PATH: bashPathInherit(bin),
         FAKE_ROOT: fakeRoot ? "1" : "0",
         FAKE_HELPER: fakeHelper ? "1" : "0",
         FAKE_APPLY: apply ? "1" : "0",

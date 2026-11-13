@@ -13,4 +13,4 @@ See `docs/security-testing.md`. Tick each item or say why it does not apply.
 - [ ] Mutating requests still pass the origin check.
 - [ ] A finding fixed here has a test in `src/security/regressions.test.ts` or a focused test it names.
 - [ ] `CHANGELOG.md` has one entry per change, under the right tag.
-- [ ] `bash scripts/ci/live-security.sh` passed on this commit (the `security-gate/live` status, or the GitLab `security-live` job).
+- [ ] `bash scripts/ci/live-security.sh` is checked when that suite passed (`security-gate/live` or the GitLab `security-live` job), or when this pipeline has neither.

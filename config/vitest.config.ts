@@ -13,6 +13,14 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     root: projectRoot,
+    // The Windows unit container shares one SQLite file. Parallel workers
+    // lock it, or fail WAL mode on the Docker Desktop mount.
+    ...(process.env.LUX_VITEST_MAX_WORKERS
+      ? {
+          maxWorkers: Number(process.env.LUX_VITEST_MAX_WORKERS),
+          fileParallelism: Number(process.env.LUX_VITEST_MAX_WORKERS) > 1,
+        }
+      : {}),
   },
   resolve: {
     alias: {

@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { CHECKLIST, applyChecklist, liveStateFromStatuses, resultsFromVitest } from "../../scripts/ci/security-checklist.mjs"
+import {
+  CHECKLIST,
+  applyChecklist,
+  liveStateFromStatuses,
+  resolveLiveState,
+  resultsFromVitest,
+} from "../../scripts/ci/security-checklist.mjs"
 
 function templateItems(file: string): string[] {
   return readFileSync(file, "utf8")
@@ -42,6 +48,10 @@ describe("security checklist sync", () => {
       ]),
     ).toBe("fail")
     expect(liveStateFromStatuses([{ id: 1, name: "security-live", status: "running" }])).toBe("pending")
+    expect(liveStateFromStatuses([])).toBe("missing")
+    expect(resolveLiveState("missing", "missing")).toBe("pass")
+    expect(resolveLiveState("pending", "missing")).toBe("pending")
+    expect(resolveLiveState("fail", "missing")).toBe("fail")
   })
 
   it("leaves other boxes alone when only the live result is known", () => {
@@ -54,7 +64,7 @@ describe("security checklist sync", () => {
     ].join("\n")
     const applied = applyChecklist(body, { live: "pass" })
     expect(applied.body).toContain(`- [x] ${CHECKLIST[0].text}`)
-    expect(applied.body).toContain("- [x] `bash scripts/ci/live-security.sh` passed")
+    expect(applied.body).toContain("- [x] `bash scripts/ci/live-security.sh` is checked")
   })
 
   it("reads vitest titles into item results", () => {

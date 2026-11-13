@@ -5,6 +5,7 @@ import path from "node:path"
 import yaml from "js-yaml"
 import { describe, expect, it } from "vitest"
 import { LUDUS_WRAPPER_SH } from "@/lib/goad/goad-ssh"
+import { posixPath } from "@/test-support/bash-path"
 import { lacks } from "../../test-support/host-capabilities"
 
 describe("ludus range wrapper network merge", () => {
@@ -40,8 +41,8 @@ describe("ludus range wrapper network merge", () => {
     const ludus = path.join(dir, "ludus")
     writeFileSync(ludus, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
     const wrapper = path.join(dir, "wrapper.sh")
-    writeFileSync(wrapper, LUDUS_WRAPPER_SH.replaceAll("REAL_LUDUS_PATH", ludus), { mode: 0o755 })
-    const result = spawnSync(wrapper, ["range", "config", "set", "-f", config], {
+    writeFileSync(wrapper, LUDUS_WRAPPER_SH.replaceAll("REAL_LUDUS_PATH", posixPath(ludus)), { mode: 0o755 })
+    const result = spawnSync("bash", [posixPath(wrapper), "range", "config", "set", "-f", posixPath(config)], {
       encoding: "utf8",
       env: { ...process.env, LUDUS_RANGE_ID: "range-1", PATH: process.env.PATH },
     })

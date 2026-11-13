@@ -3,6 +3,9 @@
 # when the matching check passed. The live box follows security-gate/live.
 # Exits 1 when any item except the live suite failed.
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=gitlab-trust.sh
+source "$(dirname "$0")/gitlab-trust.sh"
+lux_trust_gitlab_api
 
 if [[ ! -f security-checklist-part.json ]]; then
   echo "security-checklist-part.json is missing. The security job did not report item results." >&2

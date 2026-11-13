@@ -60,6 +60,7 @@ Each bullet uses a single tag:
 **CI**
 
 - [Add] **Security checklist** — GitHub and GitLab test each item on the security checklist and tick that box on the pull request or merge request when the check passes. The live box stays open until `scripts/ci/live-security.sh` passes for that commit.
+- [Fix] **Security checklist on GitLab** — The job trusts `CI_SERVER_TLS_CA_FILE` or `NODE_EXTRA_CA_CERTS` before it calls the API, and Node also uses the system certificate store. The job image's own CA bundle was rejecting the certificate that signed this GitLab.
 
 ## [1.5.3] - 2026-11-05
 

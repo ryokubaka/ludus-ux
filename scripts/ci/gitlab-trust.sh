@@ -21,4 +21,12 @@ lux_trust_gitlab_api() {
   if [[ -n "$src" ]]; then
     export NODE_EXTRA_CA_CERTS="$src"
   fi
+  # Node 24 verifies with its own CA bundle. Git in the same image uses the
+  # system store, so a private CA that git already trusts is still rejected
+  # until this flag is set. It adds the system store; it does not replace
+  # the bundled CAs.
+  case " ${NODE_OPTIONS:-} " in
+    *" --use-system-ca "*|*" --use-system-ca") ;;
+    *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca" ;;
+  esac
 }

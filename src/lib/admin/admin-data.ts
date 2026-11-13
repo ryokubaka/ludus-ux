@@ -10,7 +10,9 @@
  *
  * Slow path  — Ludus API (used when PocketBase is unavailable / misconfigured):
  *   GET /range/all  +  GET /user/all  +  up to 30× GET /range?rangeID=X
- *   for ownership resolution.  Can take 5–10 s with many ranges.
+ *   for ownership resolution. Detail lookups run with bounded concurrency and
+ *   unresolved ranges are reported in `partial` so the admin page can show a
+ *   partial-data notice instead of pretending the list is complete.
  *
  * Ownership resolution priority (highest → lowest):
  *   1. SQLite range_ownership table  (admin-confirmed, survives restarts)
@@ -21,17 +23,27 @@
  */
 
 import { ludusRequest } from "@/lib/ludus/ludus-client"
+import { mapWithConcurrency } from "@/lib/core/concurrency"
 import { dedupeVMs, mergeVmUnionPreferNext } from "@/lib/ui/dashboard-vm-merge"
 import { getAllOwnership } from "@/lib/range/range-ownership-store"
 import { fetchPbAdminData } from "@/lib/core/pocketbase-client"
 import type { RangeObject, UserObject, VMObject } from "@/lib/core/types"
 import { extractArray } from "@/lib/core/utils"
 
+export interface AdminDataPartial {
+  /** Ranges whose owner could not be resolved in this read. */
+  unresolvedRangeIDs: string[]
+  /** True when the per-range detail lookup cap skipped some unresolved ranges. */
+  truncated: boolean
+}
+
 export interface AdminData {
   ranges: RangeObject[]
   users: UserObject[]
   ownership: Record<string, string>
   ts: number
+  /** Present only when the slow path could not resolve every owner. */
+  partial?: AdminDataPartial
 }
 
 import { SWRCache } from "@/lib/core/server-cache"
@@ -174,6 +186,16 @@ async function buildAdminDataFromPb(apiKey: string): Promise<AdminData | null> {
 
 // ── Slow path: Ludus API ──────────────────────────────────────────────────────
 
+/** Cap detail lookups and run them with a small worker pool. */
+const MAX_DETAIL_LOOKUPS = 30
+const DETAIL_CONCURRENCY = 6
+
+interface RangeOwnerDetail {
+  rangeID: string
+  owner?: string
+  error?: string
+}
+
 async function buildAdminDataFromApi(apiKey: string): Promise<AdminData> {
   const [rangesRes, usersRes] = await Promise.all([
     ludusRequest<unknown>("/range/all", { apiKey }),
@@ -188,36 +210,65 @@ async function buildAdminDataFromApi(apiKey: string): Promise<AdminData> {
     : []
   const users: UserObject[] = usersRes.data ? extractArray<UserObject>(usersRes.data) : []
 
-  // For ranges still missing an owner, fetch individual range details (up to 30)
-  const storedOwnership = getAllOwnership()
-  const needsDetail = ranges
-    .filter((r) => !r.userID && !storedOwnership.has(r.rangeID))
-    .slice(0, 30)
+  // Join the bulk payload locally first. Only ranges that are still unowned
+  // after the SQLite, embedded-userID, primary-range, and default-range rules
+  // need an individual detail request.
+  const initialOwnership = resolveOwnership(ranges, users)
+  const needsDetailAll = ranges.filter((r) => !initialOwnership[r.rangeID])
+  const needsDetail = needsDetailAll.slice(0, MAX_DETAIL_LOOKUPS)
+  const truncated = needsDetailAll.length > needsDetail.length
+  const failedOrSkipped = new Set<string>(
+    needsDetailAll.slice(MAX_DETAIL_LOOKUPS).map((r) => r.rangeID),
+  )
 
   if (needsDetail.length > 0) {
-    const details = await Promise.allSettled(
-      needsDetail.map((r) =>
-        ludusRequest<RangeObject & { ownerID?: string; owner?: string }>(
-          `/range?rangeID=${encodeURIComponent(r.rangeID)}`,
-          { apiKey },
-        ),
-      ),
-    )
-    for (let i = 0; i < needsDetail.length; i++) {
-      const result = details[i]
-      if (result.status === "fulfilled" && result.value.data) {
-        const d = result.value.data
-        const owner = d.userID || d.ownerID || d.owner
-        if (owner) {
-          const idx = ranges.findIndex((r) => r.rangeID === needsDetail[i].rangeID)
-          if (idx !== -1) ranges[idx] = { ...ranges[idx], userID: owner }
+    const details = await mapWithConcurrency(
+      needsDetail,
+      DETAIL_CONCURRENCY,
+      async (r): Promise<RangeOwnerDetail> => {
+        try {
+          const res = await ludusRequest<RangeObject & { ownerID?: string; owner?: string }>(
+            `/range?rangeID=${encodeURIComponent(r.rangeID)}`,
+            { apiKey },
+          )
+          if (res.error) return { rangeID: r.rangeID, error: res.error }
+          if (!res.data) return { rangeID: r.rangeID, error: "empty response" }
+          const d = res.data
+          return { rangeID: r.rangeID, owner: d.userID || d.ownerID || d.owner }
+        } catch (err) {
+          return {
+            rangeID: r.rangeID,
+            error: err instanceof Error ? err.message : String(err),
+          }
         }
+      },
+    )
+
+    for (const detail of details) {
+      if (detail.error) {
+        failedOrSkipped.add(detail.rangeID)
+        continue
       }
+      if (!detail.owner) continue
+      const idx = ranges.findIndex((r) => r.rangeID === detail.rangeID)
+      if (idx !== -1) ranges[idx] = { ...ranges[idx], userID: detail.owner }
     }
   }
 
   const ownership = resolveOwnership(ranges, users)
-  return { ranges, users, ownership, ts: Date.now() }
+  const unresolvedRangeIDs = [...failedOrSkipped]
+    .filter((rangeID) => !ownership[rangeID])
+    .sort()
+
+  return {
+    ranges,
+    users,
+    ownership,
+    ts: Date.now(),
+    ...(unresolvedRangeIDs.length > 0
+      ? { partial: { unresolvedRangeIDs, truncated } }
+      : {}),
+  }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────

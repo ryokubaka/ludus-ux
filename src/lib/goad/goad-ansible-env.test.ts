@@ -33,6 +33,16 @@ describe("buildLudusAnsibleEnvShell", () => {
       'export ANSIBLE_ROLES_PATH="$_LUX_GOAD_ROOT/ansible/roles:$_LUX_LUDUS_ROOT/users/$_LUX_ANSIBLE_USER/.ansible/roles:',
     )
   })
+
+  it("exports pipelining and forks only when speedups is on", () => {
+    const root = ludusInstallPathFromEnv()
+    const off = buildLudusAnsibleEnvShell(root)
+    expect(off).not.toContain("ANSIBLE_PIPELINING")
+    expect(off).not.toContain("ANSIBLE_FORKS")
+    const on = buildLudusAnsibleEnvShell(root, undefined, undefined, { speedups: true })
+    expect(on).toContain("export ANSIBLE_PIPELINING=True")
+    expect(on).toContain("export ANSIBLE_FORKS=20")
+  })
 })
 
 describe("buildVerifyGoadCollectionsShell", () => {

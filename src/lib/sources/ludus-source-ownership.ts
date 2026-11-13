@@ -1,7 +1,7 @@
 /**
  * Keep Ludus git source trees writable by the `ludus` service user.
  * Sync runs as `ludus`; root-owned `.git/objects` causes fetch permission errors.
- * Ludus UX heals ownership over root SSH before sync / on retry.
+ * Ludus UX heals ownership over root SSH when a sync reports it cannot write the clone.
  */
 
 import "server-only"

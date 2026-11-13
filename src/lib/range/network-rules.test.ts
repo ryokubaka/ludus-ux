@@ -13,6 +13,8 @@ import {
   networkSectionEqual,
   blankRule,
   normalizeIpLastOctet,
+  displayHostAddress,
+  isHostAddress,
   sanitizeNetworkIpOctetsInYaml,
   sanitizeNetworkPortsInYaml,
   normalizePorts,
@@ -501,6 +503,26 @@ describe("networkSectionEqual", () => {
 
   it("returns false for invalid YAML", () => {
     expect(networkSectionEqual("{{", { external_default: "DROP" })).toBe(false)
+  })
+})
+
+describe("host address display", () => {
+  it("shows a full address when the range number and VLAN are known", () => {
+    expect(displayHostAddress(10, "11", 2)).toBe("10.2.10.11")
+  })
+
+  it("leaves a range and a subnet-wide rule unchanged", () => {
+    expect(displayHostAddress(10, "21-25", 2)).toBe("21-25")
+    expect(displayHostAddress(10, undefined, 2)).toBe("")
+    expect(displayHostAddress("wireguard", "11", 2)).toBe("11")
+  })
+
+  it("accepts a full address, an octet, or a range", () => {
+    expect(isHostAddress("")).toBe(true)
+    expect(isHostAddress("10.2.10.11")).toBe(true)
+    expect(isHostAddress("11")).toBe(true)
+    expect(isHostAddress("21-25")).toBe(true)
+    expect(isHostAddress("not-an-ip")).toBe(false)
   })
 })
 

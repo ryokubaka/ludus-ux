@@ -89,6 +89,7 @@ export const PUBLIC_HANDLERS = new Set([
   "auth/logout POST",
   "auth/revoke GET",
   "health GET",
+  "metrics GET",
   "logo GET",
   "logo HEAD",
   "about GET",

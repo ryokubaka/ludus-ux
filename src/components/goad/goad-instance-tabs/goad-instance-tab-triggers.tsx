@@ -13,7 +13,7 @@ export function GoadInstanceTabTriggers({
   onHistoryOpen,
 }: GoadInstanceTabTriggersProps) {
   return (
-    <TabsList>
+    <TabsList className="shrink-0">
       <TabsTrigger value="deploy">
         <Activity className="h-3.5 w-3.5 mr-1.5" />
         Deploy Status

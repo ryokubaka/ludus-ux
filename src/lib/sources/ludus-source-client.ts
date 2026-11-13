@@ -1,5 +1,7 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
+import { invalidateGitHubRefCache } from "@/lib/templates/template-repo-client"
 import {
   enrichCollectionInstallNames,
   gitUrlToGithubApiBase,
@@ -196,6 +198,25 @@ function filterRowsBySourceId<T extends { sourceID?: string; id?: string }>(
   return rows.filter((r) => rowMatchesSourceId(r, sourceID))
 }
 
+const SOURCE_LIST_TTL_MS = 30_000
+const sourceListCache = new Map<string, { at: number; rows: LudusSourceRow[] }>()
+
+function sourceListCacheKey(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex")
+}
+
+/** Drop a cached source list after a register or delete. */
+export function invalidateCachedSourceList(apiKey: string): void {
+  sourceListCache.delete(sourceListCacheKey(apiKey))
+}
+
+/** Recent source rows for catalog reads. Mutations call `invalidateCachedSourceList`. */
+export function peekCachedSourceList(apiKey: string): LudusSourceRow[] | null {
+  const hit = sourceListCache.get(sourceListCacheKey(apiKey))
+  if (!hit || Date.now() - hit.at > SOURCE_LIST_TTL_MS) return null
+  return hit.rows
+}
+
 /** List registered Ludus sources (requires Ludus 2.2.0+). */
 export async function listSources(apiKey: string): Promise<LudusSourceRow[]> {
   const res = await ludusJson<unknown>("/sources", apiKey, { method: "GET" })
@@ -205,10 +226,12 @@ export async function listSources(apiKey: string): Promise<LudusSourceRow[]> {
       `Failed to list sources (HTTP ${res.status})`
     throw new Error(msg)
   }
-  return ludusRows<LudusSourceRow>(res.data).map((row) => {
+  const rows = ludusRows<LudusSourceRow>(res.data).map((row) => {
     const normalized = normalizeLudusSourceRef(row)
     return { ...normalized, ...sanitizeSourceSyncPresentation(normalized) }
   })
+  sourceListCache.set(sourceListCacheKey(apiKey), { at: Date.now(), rows })
+  return rows
 }
 
 /** Register a new git source. Pass `id` to avoid Ludus colliding same-URL different refs. */
@@ -230,6 +253,7 @@ export async function createGitSource(
     method: "POST",
     body: form,
   })
+  invalidateCachedSourceList(apiKey)
   if (!created.ok || !created.data?.sourceID) {
     const msg =
       created.data?.error ||
@@ -239,8 +263,6 @@ export async function createGitSource(
       `Failed to register source (HTTP ${created.status})`
     throw new Error(msg)
   }
-  // Clone runs as ludus; heal in case a prior root-touched tree was reused.
-  await repairLudusSourcesOwnershipAsRoot()
   return created.data.sourceID
 }
 
@@ -285,6 +307,7 @@ export async function updateGitSource(
     apiKey,
     { method: "PATCH", body: form },
   )
+  invalidateCachedSourceList(apiKey)
   if (!res.ok) {
     const msg = res.data?.error || `Failed to update source (HTTP ${res.status})`
     throw new Error(msg)
@@ -342,6 +365,7 @@ export async function deleteSource(
       body: JSON.stringify({ purge }),
     },
   )
+  invalidateCachedSourceList(apiKey)
   if (!res.ok) {
     const msg = res.data?.error || `Failed to delete source (HTTP ${res.status})`
     throw new Error(msg)
@@ -371,22 +395,22 @@ async function syncSourceOnce(
     }
     throw new Error(msg)
   }
+  invalidateGitHubRefCache()
   return res.data
 }
 
 /**
  * Refresh a git source working tree via Ludus API.
  *
- * Before sync (and again on git permission errors), LUX chowns
- * `/opt/ludus/sources` to `ludus:ludus` over root SSH so a prior root-owned
- * `.git/objects` tree cannot brick every user's Sync button.
+ * The pull runs immediately. A root-owned `.git/objects` tree makes that pull
+ * fail with a permission error; LUX then chowns `/opt/ludus/sources` to
+ * `ludus:ludus` over host SSH and retries once.
  */
 export async function syncSource(
   apiKey: string,
   sourceID: string,
   options?: { globalRoles?: boolean; force?: boolean; dryRun?: boolean },
 ): Promise<unknown> {
-  await repairLudusSourcesOwnershipAsRoot()
   try {
     return await syncSourceOnce(apiKey, sourceID, options)
   } catch (err) {

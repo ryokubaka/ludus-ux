@@ -41,6 +41,9 @@ data/
 
 # Live security gate credentials (scripts/ci/live-security.sh)
 .security-gate.env
+/security-vitest.json
+/security-checklist-part.json
+/.security-checklist-body.json
 
 # Playwright
 /test-results/

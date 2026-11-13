@@ -39,7 +39,7 @@ export function GoadDeployTab({
 }: GoadDeployTabProps) {
   const goadFinished = exitCode !== null && !isRunning
   return (
-    <TabsContent value="deploy" className="mt-4 flex flex-col min-h-0 flex-1 overflow-hidden">
+    <TabsContent value="deploy" className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-3 mb-3 flex-shrink-0 flex-wrap">
         {deletingRange ? (
           <>
@@ -157,28 +157,31 @@ export function GoadDeployTab({
         <GoadTerminal
           lines={lines}
           onClear={clear}
+          resizable={false}
           label={`Range deletion — ${instanceId}${isRunning ? ` · ludus range rm${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
-          className="flex flex-col min-h-0 flex-1 h-full"
+          className="flex h-full min-h-0 flex-1 flex-col"
         />
       ) : (
       <GoadLogSplitPane
-        className="flex-1 min-h-0 gap-3"
+        className="min-h-0 flex-1 gap-3"
         left={
           <GoadTerminal
             lines={rangeLogLines}
             onClear={clearRangeLogs}
             onRefresh={instance.ludusRangeId ? handleRefreshRangeLogs : undefined}
             refreshLoading={rangeLogRefreshBusy}
+            resizable={false}
             label={`Range Logs — ${instance.ludusRangeId ?? "no range"}${isRangeStreaming ? ` (live)${rangeElapsed ? ` · ${rangeElapsed}` : ""}` : rangeState ? ` · ${rangeState}` : ""}`}
-            className="flex flex-col min-h-0 h-full"
+            className="flex h-full min-h-0 flex-1 flex-col"
           />
         }
         right={
           <GoadTerminal
             lines={lines}
             onClear={clear}
+            resizable={false}
             label={`GOAD Logs — ${instanceId}${isRunning ? ` — ${currentAction ?? "running"}${goadElapsed ? ` · ${goadElapsed}` : ""}` : exitCode !== null ? ` · exit ${exitCode}` : ""}`}
-            className="flex flex-col min-h-0 h-full"
+            className="flex h-full min-h-0 flex-1 flex-col"
           />
         }
       />

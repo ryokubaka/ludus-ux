@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useQueryClient } from "@tanstack/react-query"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -57,39 +57,69 @@ export function AnsibleDependenciesPanel({
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const checkGeneration = useRef(0)
+  const onCheckRef = useRef(onCheck)
+  const onReadyRef = useRef(onReadyChange)
+  onReadyRef.current = onReadyChange
+  if (onCheckRef.current !== onCheck) {
+    onCheckRef.current = onCheck
+    checkGeneration.current += 1
+  }
 
-  const runCheck = useCallback(async () => {
+  const runCheck = useCallback(async (): Promise<DependencyCheckResult | null> => {
+    const generation = ++checkGeneration.current
     setLoading(true)
     setError(null)
+    onReadyRef.current?.(false)
     try {
-      const result = await onCheck()
+      const result = await onCheckRef.current()
+      if (generation !== checkGeneration.current) return null
       setCheck(result)
-      onReadyChange?.(result.ready)
+      onReadyRef.current?.(result.ready)
+      return result
     } catch (err) {
+      if (generation !== checkGeneration.current) return null
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
-      onReadyChange?.(false)
+      onReadyRef.current?.(false)
+      return null
     } finally {
-      setLoading(false)
+      if (generation === checkGeneration.current) setLoading(false)
     }
-  }, [onCheck, onReadyChange])
+  }, [])
 
   useEffect(() => {
     void runCheck()
-  }, [runCheck])
+  }, [onCheck, runCheck])
 
   const handleInstall = async () => {
     if (!check || check.missing.length === 0) return
     const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
     if (ansibleMissing.length === 0) return
+    const generation = ++checkGeneration.current
+    onReadyRef.current?.(false)
     setInstalling(true)
     try {
       const result = await onInstall(ansibleMissing)
       await queryClient.invalidateQueries({ queryKey: queryKeys.ansible(scopeTag) })
 
-      const refreshed = await onRefresh()
-      setCheck(refreshed)
-      onReadyChange?.(refreshed.ready)
+      let refreshed: DependencyCheckResult | null
+      if (generation !== checkGeneration.current) {
+        refreshed = await runCheck()
+      } else {
+        try {
+          refreshed = await onRefresh()
+        } catch (err) {
+          if (generation === checkGeneration.current) throw err
+          refreshed = null
+        }
+        if (generation !== checkGeneration.current) refreshed = await runCheck()
+      }
+      if (!refreshed) return
+      if (generation === checkGeneration.current) {
+        setCheck(refreshed)
+        onReadyRef.current?.(refreshed.ready)
+      }
 
       if (refreshed.ready) {
         toast({
@@ -119,17 +149,21 @@ export function AnsibleDependenciesPanel({
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      const superseded = generation !== checkGeneration.current
       if (
         tryToastLudusSlowHttpError({
           toast,
           error: msg,
           slowTitle: "Slow response from Ludus",
-          onSlow: () => void runCheck(),
+          onSlow: () => {
+            void runCheck()
+          },
         })
       ) {
         return
       }
       toast({ variant: "destructive", title: "Install failed", description: msg })
+      if (superseded) void runCheck()
     } finally {
       setInstalling(false)
     }

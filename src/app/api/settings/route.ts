@@ -6,6 +6,7 @@ import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/users/resolve-root-api
 import { invalidateCatalogCache } from "@/lib/goad/goad-ssh"
 import { clientIpFromRequest } from "@/lib/session/security-audit-log"
 import { logAppEvent } from "@/lib/logs/app-log"
+import { applyLudusAnsibleSpeedups } from "@/lib/ludus/ludus-ansible-speedups"
 import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
 import {
   endpointSettingsChanged,
@@ -58,6 +59,7 @@ export async function POST(request: NextRequest) {
   if (typeof record.goadEnabled === "boolean") patch.goadEnabled = record.goadEnabled
   if (typeof record.ludushoundEnabled === "boolean") patch.ludushoundEnabled = record.ludushoundEnabled
   if (typeof record.ludusAnsibleVerbose === "boolean") patch.ludusAnsibleVerbose = record.ludusAnsibleVerbose
+  if (typeof record.ludusAnsibleSpeedups === "boolean") patch.ludusAnsibleSpeedups = record.ludusAnsibleSpeedups
   if (typeof record.useLudusHostDns === "boolean") patch.useLudusHostDns = record.useLudusHostDns
   const rootApiKey = nonEmptySecret(record.rootApiKey)
   if (rootApiKey !== undefined) patch.rootApiKey = rootApiKey.trim()
@@ -78,9 +80,17 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const previous = getSettings()
   const updated = updateSettings(patch)
   if ("goadPath" in patch) {
     invalidateCatalogCache()
+  }
+  // Apply the Ludus-server Ansible speedups drop-in on the host when the toggle
+  // changes. Best-effort: the host helper defers a restart during a live deploy.
+  if ("ludusAnsibleSpeedups" in patch && patch.ludusAnsibleSpeedups !== previous.ludusAnsibleSpeedups) {
+    void applyLudusAnsibleSpeedups(patch.ludusAnsibleSpeedups === true).catch((err) => {
+      console.warn("[settings] applyLudusAnsibleSpeedups:", err instanceof Error ? err.message : err)
+    })
   }
   logAppEvent("settings_save", "Settings updated", {
     username: admin.session.username,

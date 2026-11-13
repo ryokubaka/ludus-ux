@@ -203,6 +203,7 @@ export function GroupsPageClient() {
     enabled: !!removeRangeDialogRangeId,
     staleTime: 0,
     refetchInterval: pollRangeStatusWhileRouterOff,
+    refetchOnWindowFocus: true,
   })
 
   const { data: groupsRaw, isLoading: loading, isFetching: groupsFetching } = useQuery({
@@ -333,6 +334,7 @@ export function GroupsPageClient() {
         // to every visible range every few seconds.
         staleTime: isSelected ? 0 : STALE.short,
         refetchInterval: isSelected ? pollRangeStatusWhileRouterOff : false,
+        refetchOnWindowFocus: isSelected,
       }
     }),
   })

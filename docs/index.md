@@ -12,6 +12,7 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
 | [Templates](templates.md) | Packer template builds in LUX, add-from-source, Proxmox ACL troubleshooting |
 | [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |
+| [Performance audit](performance-audit.md) | Phase 1 audit: request lifecycle, bottlenecks, caching, data-integrity risks, baseline plan |
 | [Persistent data](persistent-data.md) | What lives under `data/` and related paths |
 | [Development](development.md) | Local `npm run dev`, Playwright E2E |
 | [Security testing](security-testing.md) | CI checks on GitHub and GitLab, the live security suite, adding a route |

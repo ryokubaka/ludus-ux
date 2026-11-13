@@ -1,14 +1,21 @@
 import type { NextRequest } from "next/server"
-import { listGoadInstances, isGoadConfigured } from "@/lib/goad/goad-ssh"
+import { listGoadInstancesResult, isGoadConfigured } from "@/lib/goad/goad-ssh"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
 import { ludusGet } from "@/lib/ludus/ludus-client"
 import type { GoadInstance, RangeObject } from "@/lib/core/types"
 import { getAllInstanceRangesLocal } from "@/lib/goad/goad-instance-range-store"
 import type { ResolvedSession } from "@/lib/session/session"
 
+export interface GoadInstancesTimings {
+  /** Time spent in the GOAD SSH listing (including cache hits). */
+  sshMs: number
+  /** Time spent in the Ludus range lookup. */
+  upstreamMs: number
+}
+
 export type GoadInstancesForRequestResult =
   | { configured: false; message: string }
-  | { configured: true; instances: GoadInstance[]; error?: string }
+  | { configured: true; instances: GoadInstance[]; error?: string; timings?: GoadInstancesTimings }
 
 /**
  * Shared logic for `/api/goad/instances` and `/api/goad/by-range`: list GOAD
@@ -44,15 +51,34 @@ export async function fetchGoadInstancesForRequest(
     ? (sshLogin || ludusPrincipal || "")
     : (session?.username ?? "")
 
+  let timings: GoadInstancesTimings | undefined
   try {
-    const [allInstances, rangesResult] = await Promise.all([
-      listGoadInstances(creds),
-      ludusGet<RangeObject[]>("/range/all", { apiKey: effectiveApiKey }).catch(() => ({
+    const sshStart = performance.now()
+    const listedPromise = listGoadInstancesResult(creds).then((value) => ({
+      value,
+      ms: performance.now() - sshStart,
+    }))
+    const upstreamStart = performance.now()
+    const rangesPromise = ludusGet<RangeObject[]>("/range/all", { apiKey: effectiveApiKey })
+      .catch(() => ({
         data: undefined,
         error: "could not fetch ranges",
         status: 0,
-      })),
-    ])
+      }))
+      .then((value) => ({ value, ms: performance.now() - upstreamStart }))
+    const [listedTimed, rangesTimed] = await Promise.all([listedPromise, rangesPromise])
+    const listed = listedTimed.value
+    const rangesResult = rangesTimed.value
+    timings = {
+      sshMs: listedTimed.ms,
+      upstreamMs: rangesTimed.ms,
+    }
+
+    if (!listed.ok) {
+      return { configured: true, instances: [], error: listed.error, timings }
+    }
+
+    const allInstances = listed.instances
 
     const rangeNumToId = new Map<number, string>()
     const userToRangeIds = new Map<string, string[]>()
@@ -104,12 +130,13 @@ export async function fetchGoadInstancesForRequest(
           return false
         })
 
-    return { configured: true, instances }
+    return { configured: true, instances, timings }
   } catch (err) {
     return {
       configured: true,
       instances: [],
       error: `Failed to list GOAD instances: ${(err as Error).message}`,
+      ...(timings ? { timings } : {}),
     }
   }
 }

@@ -43,9 +43,11 @@ export function makeQueryClient() {
           if (error instanceof Error && /40[0-9]/.test(error.message)) return false
           return failureCount < 2
         },
-        // Refetch when the window regains focus so navigating back to a tab
-        // that has been idle refreshes data automatically.
-        refetchOnWindowFocus: true,
+        // Returning to the tab used to refetch every mounted query at once —
+        // including expensive GOAD, admin, and ACL lists. Realtime views opt in
+        // per query (`refetchOnWindowFocus: true`); everything else waits for
+        // its staleTime or an explicit invalidate.
+        refetchOnWindowFocus: false,
       },
     },
   })

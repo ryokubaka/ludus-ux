@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -14,7 +14,15 @@
     "test:unit": "vitest run -c config/vitest.config.ts",
     "test:security": "vitest run -c config/vitest.config.ts src/security",
     "test:e2e": "playwright test -c config/playwright.config.ts",
-    "test:perf": "playwright test -c config/playwright.config.ts e2e/perf-refresh.spec.ts"
+    "test:perf": "playwright test -c config/playwright.config.ts e2e/perf-refresh.spec.ts",
+    "test:perf:pages": "playwright test -c config/playwright.config.ts e2e/perf-pages.spec.ts"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.9.0": true,
+    "cpu-features@0.0.10": true,
+    "esbuild@0.28.1": true,
+    "ssh2@1.17.0": true,
+    "unrs-resolver@1.11.1": true
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -35,6 +43,7 @@
     "@radix-ui/react-tooltip": "^1.0.7",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-virtual": "^3.14.5",
+    "@xyflow/react": "^12.12.0",
     "better-sqlite3": "^12.9.0",
     "braces": "file:vendor/braces",
     "class-variance-authority": "^0.7.0",
@@ -73,24 +82,27 @@
     "vite": "8.2.4",
     "zod": ">=4.6.6",
     "@eslint/config-array": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
     "@eslint/eslintrc": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
     "eslint": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
     "eslint-plugin-import": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
     "eslint-plugin-jsx-a11y": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
     "eslint-plugin-react": {
-      "minimatch": "10.2.5"
+      "minimatch": "11.0.5"
     },
-    "minimatch@10": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "11.0.5"
+    },
+    "minimatch@11": {
       "brace-expansion": "5.0.12"
     },
     "next": {

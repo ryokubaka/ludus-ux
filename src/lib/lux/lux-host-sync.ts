@@ -17,6 +17,7 @@ export type LuxHostSyncResult = {
 
 let syncedHash: string | null = null
 let nextAttemptAt = 0
+let inflightSync: Promise<LuxHostSyncResult> | null = null
 
 function parseProbe(text: string): { uid: number | null; sudoAll: boolean; sudoHelper: boolean } {
   const uid = /^uid=(\d+)$/m.exec(text)
@@ -63,20 +64,31 @@ export async function ensureLuxHostCurrent(opts?: { force?: boolean }): Promise<
   if (!opts?.force && Date.now() < nextAttemptAt) {
     return { ok: false, updated: false, detail: "waiting to retry" }
   }
-  if (opts?.force) nextAttemptAt = 0
-  try {
-    const result = await syncLuxHost(want)
-    if (result.ok) syncedHash = want
-    else nextAttemptAt = Date.now() + 10 * 60 * 1000
-    if (result.updated) console.info(`[lux-host] ${result.detail}`)
-    else if (!result.ok) console.warn(`[lux-host] ${result.detail}`)
-    return result
-  } catch (err) {
-    nextAttemptAt = Date.now() + 10 * 60 * 1000
-    const detail = err instanceof Error ? err.message : "lux-host sync failed"
-    console.warn(`[lux-host] ${detail}`)
-    return { ok: false, updated: false, detail }
+  // Concurrent deploy patches call this at once. Share one sync instead of
+  // installing the helper several times.
+  if (inflightSync) {
+    const result = await inflightSync
+    if (!opts?.force) return result
   }
+  if (opts?.force) nextAttemptAt = 0
+  inflightSync = (async () => {
+    try {
+      const result = await syncLuxHost(want)
+      if (result.ok) syncedHash = want
+      else nextAttemptAt = Date.now() + 10 * 60 * 1000
+      if (result.updated) console.info(`[lux-host] ${result.detail}`)
+      else if (!result.ok) console.warn(`[lux-host] ${result.detail}`)
+      return result
+    } catch (err) {
+      nextAttemptAt = Date.now() + 10 * 60 * 1000
+      const detail = err instanceof Error ? err.message : "lux-host sync failed"
+      console.warn(`[lux-host] ${detail}`)
+      return { ok: false, updated: false, detail }
+    } finally {
+      inflightSync = null
+    }
+  })()
+  return inflightSync
 }
 
 async function syncLuxHost(want: string): Promise<LuxHostSyncResult> {

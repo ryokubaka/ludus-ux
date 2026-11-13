@@ -8,21 +8,18 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 COPY vendor/braces ./vendor/braces
-# Bump npm so install logs do not nag about a newer major (optional for runtime — runner strips npm).
-RUN npm install -g npm@11.14.0
-RUN npm ci --legacy-peer-deps
-# esbuild is only an optional dev tool in the lockfile. Pin the same version the lockfile records.
-RUN npm install --no-save --no-package-lock esbuild@0.28.1
-
-# Bundle noVNC into a single browser ES module using esbuild.
-# The @novnc/novnc npm package ships CJS (core/rfb.js uses Babel-compiled require()),
-# so we can't serve it as a native ES module directly. esbuild resolves all
-# require() calls and outputs a single self-contained ESM file.
-RUN npm install --no-save @novnc/novnc@1.7.0 && \
-    mkdir -p /app/novnc-static && \
-    ./node_modules/.bin/esbuild node_modules/@novnc/novnc/core/rfb.js \
-        --bundle --format=esm --outfile=/app/novnc-static/rfb.js && \
-    rm -rf node_modules/@novnc
+# One layer so the builder snapshots node_modules once. Separate npm installs
+# each committed that tree again and dominated a cold `docker compose up --build`.
+# Do not add RUN --mount=type=cache: GitLab builds this file with Kaniko 1.23,
+# which rejects that flag. npm is bumped so the install matches CI; the runner
+# stage deletes it.
+RUN npm install -g npm@11.14.0 \
+ && npm ci --legacy-peer-deps \
+ && npm install --no-save --no-package-lock esbuild@0.28.1 @novnc/novnc@1.7.0 \
+ && mkdir -p /app/novnc-static \
+ && ./node_modules/.bin/esbuild node_modules/@novnc/novnc/core/rfb.js \
+        --bundle --format=esm --outfile=/app/novnc-static/rfb.js \
+ && rm -rf node_modules/@novnc
 
 # Rebuild the source code only when needed
 FROM base AS builder
@@ -59,6 +56,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Patch Alpine (zlib and the rest of the base image) and add openssl plus
+# util-linux-misc (/usr/bin/nsenter for the in-app host helper) before any app
+# file is copied. A later source change then reuses this layer instead of
+# downloading the package index again. Bump the base image digest when Node
+# itself should move.
+RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl util-linux-misc
+
 # Default uid/gid are outside the range typical host service accounts use.
 # docker-compose.yml passes .env LUX_UID and LUX_GID. A change needs a rebuild.
 # On the host, `getent passwd <uid>` should print nothing. A user namespace remap is safer still.
@@ -86,10 +90,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/better-sqlite3 ./nod
 COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 COPY --from=builder --chown=nextjs:nodejs /app/docs ./docs
-
-# Patch OS packages (e.g. zlib CVEs), install openssl for runtime TLS, and
-# util-linux-misc so this image contains /usr/bin/nsenter for the in-app host helper.
-RUN apk update && apk upgrade --no-cache && apk add --no-cache openssl util-linux-misc
 
 # Standalone Next runs with `node` only. The official Node image ships npm under
 # /usr/local/lib/node_modules/npm with its own dependency tree; Trivy reports those

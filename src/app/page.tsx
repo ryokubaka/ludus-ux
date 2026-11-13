@@ -10,10 +10,10 @@ const DashboardPageClient = dynamicPageClient(
 
 export default async function DashboardPage() {
   const { resolved } = await getLayoutSession()
-  const dehydratedState = await prefetchDashboardData(resolved)
+  const { dehydratedState, hasHostResources } = await prefetchDashboardData(resolved)
   return (
     <HydrationBoundary state={dehydratedState}>
-      <DashboardPageClient />
+      <DashboardPageClient initialHostResources={hasHostResources} />
     </HydrationBoundary>
   )
 }

@@ -101,6 +101,7 @@ export function RangeProvider({ children }: { children: React.ReactNode }) {
     staleTime: STALE.acl,
     refetchInterval: tabVisible ? 45_000 : 60_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   })
 
   // Keep sidebar/dashboard range across navigation and range-list refetches.

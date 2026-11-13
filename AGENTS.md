@@ -1,6 +1,6 @@
 <!-- BEGIN:nextjs-agent-rules -->
 
-# This is NOT the Next.js you know
+## This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
 
@@ -97,6 +97,8 @@ Deploy logs are an SSE stream from `src/app/api/logs/stream/route.ts` into `src/
 ## Changelog and pull requests
 
 User-facing notes go under `## Unreleased` in `CHANGELOG.md`, with one tag: `[Add]`, `[Fix]`, `[Improve]`, `[Perf]`, `[Security]`, `[Docs]`, `[Remove]`, or `[Breaking]`. Do not add a `## [X.Y.Z]` heading unless the user asked to cut a release. `.github/workflows/release.yml` publishes the newest versioned section when a pull request merges to `main`. The GitLab `publish-release` job does the same when the default branch updates.
+
+A capability that is new in the release being written is one `[Add]` bullet. Work that only makes that new capability behave as intended stays in that bullet. Do not also file it as `[Fix]`, `[Improve]`, `[Perf]`, or another tag. A `[Fix]` is a defect in a release that already shipped. `[Improve]` and `[Perf]` change behavior that already existed.
 
 Pull request titles look like `vX.Y.Z - Feature, feature, and feature`. The body is `## Summary` and one bullet per changelog item. `.github/workflows/pr-summary.yml` writes that from `CHANGELOG.md`. The GitLab `mr-summary` job does the same. Delete the `lux-pr-summary` comment to keep a hand-edited description.
 

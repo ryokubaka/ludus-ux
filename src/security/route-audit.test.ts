@@ -21,6 +21,7 @@ const PUBLIC_HANDLERS: Record<string, string> = {
   "auth/logout POST": "Clears only the caller's own cookie and vault row; needs no live session.",
   "auth/revoke GET": "Clears only a cookie whose vault row is already gone (see auth/revoke route test).",
   "health GET": "Container health check; returns no data.",
+  "metrics GET": "Process-local cache counters; no keys or user data.",
   "logo GET": "Branding image shown on the login page.",
   "logo HEAD": "Branding image shown on the login page.",
   "about GET": "Version and license text. src/proxy.ts still requires a session cookie.",

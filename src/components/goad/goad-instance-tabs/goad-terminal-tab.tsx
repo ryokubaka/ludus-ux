@@ -33,7 +33,8 @@ export function GoadTerminalTab({
           <GoadTerminal
             lines={lines}
             onClear={clear}
-            className="flex-1 flex flex-col min-h-0 w-full"
+            resizable={false}
+            className="flex h-full min-h-0 w-full flex-1 flex-col"
             label={`${instanceId} — ${currentAction ?? taskId ?? "terminal"}`}
           />
           {exitCode !== null && (

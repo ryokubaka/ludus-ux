@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { gitCatalogEntryNames, parseAnsibleRoleVersionYaml } from "@/lib/sources/source-git-catalog"
+import {
+  directGitChildren,
+  gitCatalogEntryNames,
+  parseAnsibleRoleVersionYaml,
+  roleMetaVersionPath,
+  templatePackerPath,
+} from "@/lib/sources/source-git-catalog"
 import type { RepoTreeItem } from "@/lib/templates/template-repo-client"
 
 describe("parseAnsibleRoleVersionYaml", () => {
@@ -29,12 +35,32 @@ describe("gitCatalogEntryNames", () => {
   it("includes submodule gitlinks under ansible paths", () => {
     const roles: RepoTreeItem[] = [
       { name: "ludus_adcs", type: "blob", path: "ansible/roles/ludus_adcs" },
+      { name: "ludus_adfs", type: "commit", path: "ansible/roles/ludus_adfs" },
     ]
     const collections: RepoTreeItem[] = [
-      { name: "community.general", type: "blob", path: "ansible/collections/community.general" },
+      { name: "community.general", type: "commit", path: "ansible/collections/community.general" },
     ]
-    expect(gitCatalogEntryNames(roles, "ansible/roles")).toEqual(["ludus_adcs"])
+    expect(gitCatalogEntryNames(roles, "ansible/roles")).toEqual(["ludus_adcs", "ludus_adfs"])
     expect(gitCatalogEntryNames(collections, "ansible/collections")).toEqual(["community.general"])
+  })
+
+  it("reads one recursive tree down to the files a catalog needs", () => {
+    const tree: RepoTreeItem[] = [
+      { name: "blueprints", type: "tree", path: "blueprints" },
+      { name: "ad-range", type: "tree", path: "blueprints/ad-range" },
+      { name: "blueprint.yml", type: "blob", path: "blueprints/ad-range/blueprint.yml" },
+      { name: "debian13", type: "tree", path: "templates/debian13" },
+      { name: "debian13.pkr.hcl", type: "blob", path: "templates/debian13/debian13.pkr.hcl" },
+      { name: "nested", type: "blob", path: "templates/debian13/http/extra.pkr.hcl" },
+      { name: "ludus_adcs", type: "tree", path: "ansible/roles/ludus_adcs" },
+      { name: "version.yml", type: "blob", path: "ansible/roles/ludus_adcs/meta/version.yml" },
+      { name: "main.yml", type: "blob", path: "ansible/roles/other/meta/main.yml" },
+    ]
+    expect(directGitChildren(tree, "blueprints").map((item) => item.name)).toEqual(["ad-range"])
+    expect(templatePackerPath(tree, "debian13")).toBe("templates/debian13/debian13.pkr.hcl")
+    expect(roleMetaVersionPath(tree, "ludus_adcs")).toBe("ansible/roles/ludus_adcs/meta/version.yml")
+    expect(roleMetaVersionPath(tree, "other")).toBe("ansible/roles/other/meta/main.yml")
+    expect(roleMetaVersionPath(tree, "missing")).toBeNull()
   })
 
   it("lists template directories", () => {

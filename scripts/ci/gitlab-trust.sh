@@ -3,22 +3,33 @@
 # job image does not include a private CA, so fetch fails with
 # UNABLE_TO_VERIFY_LEAF_SIGNATURE until one of these is set.
 lux_trust_gitlab_api() {
-  if [[ -n "${NODE_EXTRA_CA_CERTS:-}" ]]; then
-    return 0
+  if [[ -z "${NODE_EXTRA_CA_CERTS:-}" ]]; then
+    local src=""
+    if [[ -n "${CI_SERVER_TLS_CA_FILE:-}" && -f "${CI_SERVER_TLS_CA_FILE}" ]]; then
+      src="${CI_SERVER_TLS_CA_FILE}"
+      echo "Trusting the GitLab API certificate from CI_SERVER_TLS_CA_FILE"
+    elif [[ -n "${GITLAB_CA_CERT:-}" && -f "${GITLAB_CA_CERT}" ]]; then
+      src="${GITLAB_CA_CERT}"
+      echo "Trusting the GitLab API certificate from GITLAB_CA_CERT"
+    elif [[ "${GITLAB_CA_CERT:-}" == *"BEGIN CERTIFICATE"* ]]; then
+      src="$(mktemp)"
+      printf '%s\n' "$GITLAB_CA_CERT" >"$src"
+      echo "Trusting the GitLab API certificate from GITLAB_CA_CERT"
+    fi
+    if [[ -n "$src" ]]; then
+      export NODE_EXTRA_CA_CERTS="$src"
+    fi
   fi
-  local src=""
-  if [[ -n "${CI_SERVER_TLS_CA_FILE:-}" && -f "${CI_SERVER_TLS_CA_FILE}" ]]; then
-    src="${CI_SERVER_TLS_CA_FILE}"
-    echo "Trusting the GitLab API certificate from CI_SERVER_TLS_CA_FILE"
-  elif [[ -n "${GITLAB_CA_CERT:-}" && -f "${GITLAB_CA_CERT}" ]]; then
-    src="${GITLAB_CA_CERT}"
-    echo "Trusting the GitLab API certificate from GITLAB_CA_CERT"
-  elif [[ "${GITLAB_CA_CERT:-}" == *"BEGIN CERTIFICATE"* ]]; then
-    src="$(mktemp)"
-    printf '%s\n' "$GITLAB_CA_CERT" >"$src"
-    echo "Trusting the GitLab API certificate from GITLAB_CA_CERT"
-  fi
-  if [[ -n "$src" ]]; then
-    export NODE_EXTRA_CA_CERTS="$src"
-  fi
+  # Node 24 verifies with its own CA bundle. Git in the same image uses the
+  # system store, so a private CA that git already trusts is still rejected
+  # until this flag is set. It adds the system store; it does not replace
+  # the bundled CAs. Older Node builds reject the flag, so leave them alone.
+  case " ${NODE_OPTIONS:-} " in
+    *" --use-system-ca "*|*" --use-system-ca") ;;
+    *)
+      if node --use-system-ca -e "process.exit(0)" >/dev/null 2>&1; then
+        export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca"
+      fi
+      ;;
+  esac
 }

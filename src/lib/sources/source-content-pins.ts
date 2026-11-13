@@ -2,6 +2,7 @@ import "server-only"
 
 import { getDb } from "@/lib/core/db"
 import type { SourceInstallSelection } from "@/lib/sources/ludus-source-client"
+import type { SourceCatalogVersionPins } from "@/lib/sources/source-install-client"
 import {
   resolveSourceBlueprints,
   resolveSourceCollections,
@@ -133,19 +134,72 @@ function findVersion(
   return undefined
 }
 
+function pinVersion(map: Record<string, string> | undefined, name: string): string | undefined {
+  if (!map) return undefined
+  const direct = map[name]?.trim()
+  if (direct) return direct
+  const want = name.trim().toLowerCase()
+  for (const [key, value] of Object.entries(map)) {
+    if (key.trim().toLowerCase() === want && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+/**
+ * Record versions the caller already loaded. Returns false when a selected name
+ * has no version, so the caller can read the catalog for that kind.
+ */
+function pinKnownVersions(
+  sourceId: string,
+  kind: SourceContentKind,
+  names: string[] | undefined,
+  map: Record<string, string> | undefined,
+  catalogRef: string | undefined,
+): boolean {
+  if (!names?.length) return true
+  let complete = true
+  for (const raw of names) {
+    const name = (kind === "blueprint" ? blueprintShortName({ name: raw }) : raw).trim()
+    if (!name) continue
+    const version = pinVersion(map, name) || pinVersion(map, raw)
+    if (!version) {
+      complete = false
+      continue
+    }
+    if (kind === "role" || kind === "collection") {
+      clearOtherSourceContentPins({ exceptSourceId: sourceId, kind, name })
+    }
+    upsertSourceContentPin({ sourceId, kind, name, version, catalogRef })
+  }
+  return complete
+}
+
 /**
  * After a successful source install/re-sync, pin catalog tip versions so LUX can
  * detect later bumps even when Ludus omits installed versions.
+ * Versions already shown in the UI are stored directly.
  */
 export async function pinSourceInstallSelection(
   apiKey: string,
   sourceId: string,
   selection: SourceInstallSelection,
+  versions?: SourceCatalogVersionPins,
 ): Promise<void> {
   const sid = sourceId.trim()
   if (!sid) return
+  const catalogRef = versions?.catalogRef
+  const blueprintsKnown = pinKnownVersions(sid, "blueprint", selection.blueprints, versions?.blueprints, catalogRef)
+  const templatesKnown = pinKnownVersions(sid, "template", selection.templates, versions?.templates, catalogRef)
+  const rolesKnown = pinKnownVersions(sid, "role", selection.localRoles, versions?.localRoles, catalogRef)
+  const collectionsKnown = pinKnownVersions(
+    sid,
+    "collection",
+    selection.localCollections,
+    versions?.localCollections,
+    catalogRef,
+  )
 
-  if (selection.blueprints?.length) {
+  if (selection.blueprints?.length && !blueprintsKnown) {
     const { items, catalogRef } = await resolveSourceBlueprints(apiKey, sid)
     for (const raw of selection.blueprints) {
       const name = blueprintShortName({ name: raw }) || raw.trim()
@@ -165,7 +219,7 @@ export async function pinSourceInstallSelection(
     }
   }
 
-  if (selection.templates?.length) {
+  if (selection.templates?.length && !templatesKnown) {
     const { items, catalogRef } = await resolveSourceTemplates(apiKey, sid)
     for (const name of selection.templates) {
       const version = findVersion(items, name)
@@ -181,7 +235,7 @@ export async function pinSourceInstallSelection(
     }
   }
 
-  if (selection.localRoles?.length) {
+  if (selection.localRoles?.length && !rolesKnown) {
     const { items, catalogRef } = await resolveSourceRoles(apiKey, sid)
     for (const name of selection.localRoles) {
       const version = findVersion(items, name)
@@ -198,7 +252,7 @@ export async function pinSourceInstallSelection(
     }
   }
 
-  if (selection.localCollections?.length) {
+  if (selection.localCollections?.length && !collectionsKnown) {
     const { items, catalogRef } = await resolveSourceCollections(apiKey, sid)
     for (const name of selection.localCollections) {
       const version = findVersion(items, name)

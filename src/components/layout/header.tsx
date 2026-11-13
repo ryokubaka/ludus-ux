@@ -15,7 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { User, Shield, LogOut, ChevronDown, Settings } from "lucide-react"
+import { User, Shield, LogOut, ChevronDown, Settings, Menu } from "lucide-react"
 import { useSidebar } from "@/lib/ui/sidebar-context"
 import { useShellSession } from "@/components/providers/shell-session-provider"
 import { fetchSharedSession } from "@/lib/session/session-fetch"
@@ -37,7 +37,7 @@ export function Header() {
   )
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [avatarVersion, setAvatarVersion] = useState(0)
-  const { collapsed } = useSidebar()
+  const { collapsed, setMobileOpen } = useSidebar()
 
   useEffect(() => {
     let cancelled = false
@@ -85,14 +85,24 @@ export function Header() {
   return (
     <header
       className={cn(
-        "fixed top-0 right-0 z-30 h-16 bg-background/80 backdrop-blur-sm border-b border-border flex items-center px-6 gap-4",
+        "fixed top-0 right-0 z-30 h-16 bg-background/80 backdrop-blur-sm border-b border-border flex items-center px-4 lg:px-6 gap-4",
         "transition-[left] duration-200 ease-in-out",
-        collapsed ? "left-16" : "left-64",
+        "left-0",
+        collapsed ? "lg:left-16" : "lg:left-64",
       )}
     >
-      <div className="flex-1">
-        <h2 className="text-base font-semibold text-foreground">{pageInfo.title}</h2>
-        <p className="text-xs text-muted-foreground">{pageInfo.description}</p>
+      <button
+        type="button"
+        onClick={() => setMobileOpen(true)}
+        aria-label="Open navigation"
+        aria-controls="app-sidebar"
+        className="lg:hidden -ml-1 rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+      <div className="flex-1 min-w-0">
+        <h2 className="text-base font-semibold text-foreground truncate">{pageInfo.title}</h2>
+        <p className="text-xs text-muted-foreground truncate">{pageInfo.description}</p>
       </div>
 
       <div className="flex items-center gap-3">

@@ -32,4 +32,6 @@ The checks that gate `main` on GitHub and GitLab, and how to run them locally, a
 
 Opening a pull request or merge request sets the title to `vX.Y.Z - Feature, feature, and feature` and the description to a **Summary** list taken from that version's section in `CHANGELOG.md`. A branch named `vX.Y.Z` uses `## [X.Y.Z]`. Otherwise the job uses `## Unreleased`, then the newest versioned section. Later pushes refresh the description while it contains `<!-- lux-pr-summary -->`. Delete that comment to keep a hand-edited title and description. GitHub runs `.github/workflows/pr-summary.yml`. GitLab runs the `mr-summary` job, which needs a masked, unprotected CI/CD variable `GITLAB_TOKEN` (project access token, Maintainer role, `api` scope).
 
+The security checklist under that summary is ticked by the `security-checklist` job. A box is checked when the test for that item passed. The live box is checked when that suite passed, or when the pipeline has no live job and no `security-gate/live` result.
+
 Merging to `main` tags `vX.Y.Z` and publishes that changelog section. GitHub uses `.github/workflows/release.yml`. GitLab uses the `publish-release` job and the same `GITLAB_TOKEN`.

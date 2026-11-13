@@ -78,3 +78,50 @@ export async function waitForVmPowerConfirmation(opts: {
   }
   return { ok: false, via: "timeout", pending }
 }
+
+export type RestartRangeVmsResult =
+  | { ok: true }
+  | { ok: false; phase: "off" | "on"; error: string }
+  | { ok: false; phase: "off" | "on"; via: "timeout"; pending: string[] }
+  | { ok: false; phase: "off" | "on"; via: "missing_range"; detail: string }
+
+/**
+ * Restart by powering off, waiting until those VMs stop, then powering them on.
+ * Ludus has no reboot call. A slow HTTP error can still mean the power change
+ * started, so `continueAfterError` lets the wait proceed.
+ */
+export async function restartRangeVms(opts: {
+  rangeId?: string
+  vmNames: string[]
+  powerOff: () => Promise<{ error?: string }>
+  powerOn: () => Promise<{ error?: string }>
+  fetchStatus: () => Promise<{
+    data?: { VMs?: VMObject[]; vms?: VMObject[] } | null
+    error?: string
+  }>
+  continueAfterError?: (error: string) => boolean
+  pollMs?: number
+  timeoutMs?: number
+}): Promise<RestartRangeVmsResult> {
+  const waitOpts = {
+    rangeId: opts.rangeId,
+    vmNames: opts.vmNames,
+    fetchStatus: opts.fetchStatus,
+    pollMs: opts.pollMs,
+    timeoutMs: opts.timeoutMs,
+  }
+  const off = await opts.powerOff()
+  if (off.error && !opts.continueAfterError?.(off.error)) {
+    return { ok: false, phase: "off", error: off.error }
+  }
+  const offWait = await waitForVmPowerConfirmation({ ...waitOpts, action: "off" })
+  if (!offWait.ok) return { ...offWait, phase: "off" }
+
+  const on = await opts.powerOn()
+  if (on.error && !opts.continueAfterError?.(on.error)) {
+    return { ok: false, phase: "on", error: on.error }
+  }
+  const onWait = await waitForVmPowerConfirmation({ ...waitOpts, action: "on" })
+  if (!onWait.ok) return { ...onWait, phase: "on" }
+  return { ok: true }
+}

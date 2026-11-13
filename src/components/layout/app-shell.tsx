@@ -90,15 +90,15 @@ function ShellContent({ children }: { children: React.ReactNode }) {
       <main
         id="main-content"
         className={cn(
-          "flex flex-1 flex-col min-h-0 pt-16",
+          "flex flex-1 flex-col min-h-0 min-w-0 pt-16",
           "transition-[padding-left] duration-200 ease-in-out",
-          collapsed ? "pl-16" : "pl-64",
+          collapsed ? "lg:pl-16" : "lg:pl-64",
         )}
       >
         <ImpersonationBanner />
         <div
           className={cn(
-            "flex flex-1 flex-col min-h-0 overflow-x-hidden overflow-y-auto p-6",
+            "flex flex-1 flex-col min-h-0 min-w-0 overflow-y-auto p-4 lg:p-6",
             exitingImpersonation && "invisible pointer-events-none",
           )}
           aria-hidden={exitingImpersonation || undefined}

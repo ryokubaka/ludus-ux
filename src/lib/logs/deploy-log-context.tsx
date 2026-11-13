@@ -1,14 +1,8 @@
 "use client"
 
 import { createContext, useContext, useState, useRef, useCallback, useEffect, useMemo } from "react"
-import { ludusApi } from "@/lib/ui/api"
 import { appendStreamLines } from "@/lib/logs/log-buffer"
-import { isBlankDeployLogLine, omitBlankLogLines, stampDeployLogForDisplay, stampObservedDeployLines } from "@/lib/logs/log-line-timestamp"
-import { splitLogText } from "@/lib/logs/strip-ansi"
-import { fetchDeployLogClock } from "@/lib/logs/deploy-log-clock"
-import { pickLatestDeployHistoryEntry } from "@/lib/range/range-deploy-elapsed-anchor"
-import { extractArray } from "@/lib/core/utils"
-import type { LogHistoryEntry } from "@/lib/core/types"
+import { isBlankDeployLogLine, isDeployStreamHeartbeat } from "@/lib/logs/log-line-timestamp"
 
 export type StartRangeStreamOptions = {
   /**
@@ -69,21 +63,14 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
   const targetRangeRef = useRef<string | undefined>(undefined)
   const intentionalStopRef = useRef(false)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const snapshotTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectAttemptRef = useRef(0)
   const streamStartedAtRef = useRef<number | null>(null)
-  const historyLogIdRef = useRef("")
-  const observedLinesRef = useRef<string[]>([])
   const startStreamingRef = useRef<(rangeId?: string, opts?: StartRangeStreamOptions) => void>(() => {})
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
-    }
-    if (snapshotTimerRef.current) {
-      clearInterval(snapshotTimerRef.current)
-      snapshotTimerRef.current = null
     }
   }, [])
 
@@ -127,8 +114,6 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     if (!isReconnect) {
       intentionalStopRef.current = false
       reconnectAttemptRef.current = 0
-      historyLogIdRef.current = ""
-      observedLinesRef.current = []
     }
 
     const snapshotStart = opts?.snapshotStart ?? (isReconnect ? false : Boolean(rangeId))
@@ -157,52 +142,10 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Build the URL for the server-side SSE stream.  The server polls the Ludus
-    // API internally every 2 s and pushes incremental log lines + state changes —
-    // no client-side polling needed at all.
-    if (streamRangeId) {
-      // History already has the running deploy text. The live stream can stay
-      // empty until that connection finishes, so read the same record on a timer.
-      const pullHistory = async () => {
-        if (intentionalStopRef.current || targetRangeRef.current?.trim() !== streamRangeId) return
-        try {
-          const listed = await ludusApi.getRangeLogHistory(streamRangeId)
-          const entries = extractArray<LogHistoryEntry>(listed.data as unknown)
-          const running = pickLatestDeployHistoryEntry(entries)
-          if (!running) return
-          const [detail, generations] = await Promise.all([
-            ludusApi.getRangeLogHistoryById(running.id, streamRangeId),
-            fetchDeployLogClock(streamRangeId),
-          ])
-          const text = detail.data?.result
-          if (!text) return
-          const raw = omitBlankLogLines(splitLogText(text))
-          const logChanged = historyLogIdRef.current !== running.id
-          if (logChanged) {
-            historyLogIdRef.current = running.id
-            observedLinesRef.current = []
-          }
-          const now = Date.now()
-          // First paint spreads the backlog across the run. Lines that arrive
-          // after that keep the time this pane first saw them.
-          const stamped =
-            observedLinesRef.current.length === 0
-              ? stampDeployLogForDisplay(raw, generations, running.start, running.end, now)
-              : stampObservedDeployLines(observedLinesRef.current, raw, now)
-          observedLinesRef.current = stamped
-          setLines((prev) => {
-            if (!logChanged && stamped.length < prev.length) return prev
-            return stamped
-          })
-        } catch {
-          /* the open stream still owns state updates */
-        }
-      }
-      void pullHistory()
-      snapshotTimerRef.current = setInterval(() => {
-        void pullHistory()
-      }, 2000)
-    }
-
+    // API internally every 2 s and pushes incremental log lines + state changes.
+    // SSE is the single owner of live lines; it also sends the backlog when
+    // snapshotStart is false (refresh/navigation/reconnect), so no parallel
+    // history poll is needed.
     const url = new URL("/api/logs/stream", window.location.origin)
     if (rangeId) {
       url.searchParams.set("rangeId", rangeId)
@@ -216,7 +159,7 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     abortRef.current = ctrl
     const accept = (raw: string) => {
       // Keepalive so a quiet deploy does not look like a dead stream.
-      if (raw === "[PING]") return
+      if (isDeployStreamHeartbeat(raw)) return
       if (raw.startsWith("[STATE] ")) {
         setRangeState(raw.slice(8).trim())
         reconnectAttemptRef.current = 0
@@ -227,8 +170,6 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
         setLines((prev) => appendStreamLines(prev, raw))
         stopStreaming()
       } else if (raw.startsWith("[LUDUS] ") || raw.startsWith("[GOAD] ")) {
-        // The history poll owns the pane. A buffered stream would append the same lines again.
-        if (snapshotTimerRef.current) return
         if (!isBlankDeployLogLine(raw)) {
           setLines((prev) => appendStreamLines(prev, raw))
         }
@@ -253,6 +194,12 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
           const parts = buf.split("\n")
           buf = parts.pop() ?? ""
           for (const line of parts) {
+            // Comment frames (`: ping`) are the keepalive. They count as
+            // traffic so a quiet playbook does not look like a dead stream.
+            if (line.startsWith(":")) {
+              sawLine = true
+              continue
+            }
             if (!line.startsWith("data: ")) continue
             sawLine = true
             accept(line.slice(6))
@@ -316,8 +263,6 @@ export function DeployLogProvider({ children }: { children: React.ReactNode }) {
     setActiveRangeId(null)
     setStreamStartedAt(null)
     streamStartedAtRef.current = null
-    historyLogIdRef.current = ""
-    observedLinesRef.current = []
   }, [])
 
   // Clean up on provider unmount

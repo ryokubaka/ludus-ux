@@ -11,7 +11,15 @@ export const queryKeys = {
   // ── Range ─────────────────────────────────────────────────────────────────
   rangeStatus: (scopeTag: string, rangeId?: string | null) =>
     sc(scopeTag, ["range", "status", rangeId ?? "default"]),
+  /** PocketBase persisted fields. Kept off the live VM query so the table is not blocked on it. */
+  rangePersisted: (scopeTag: string, rangeId?: string | null) =>
+    sc(scopeTag, ["range", "persisted", rangeId ?? "default"]),
   rangePbStatusDot: (scopeTag: string, rangeId: string) => sc(scopeTag, ["range", "pb-status-dot", rangeId]),
+  /** Testing selector dots: one bulk PB status request for all visible ranges. */
+  rangePbStatusBulk: (scopeTag: string, rangeIds: readonly string[] = []) =>
+    sc(scopeTag, ["range", "pb-status-bulk", [...rangeIds].sort().join(",") || "all"]),
+  /** Dashboard: Ludus host CPU/memory snapshot (process-cached, revalidated). */
+  hostResources: (scopeTag: string) => sc(scopeTag, ["host", "resources"]),
   rangeConfig: (scopeTag: string, rangeId?: string | null) =>
     sc(scopeTag, ["range", "config", rangeId ?? "default"]),
 
@@ -95,6 +103,9 @@ export const queryKeys = {
   goadInstances: () => ["goad", "instances"] as const,
   goadInstancesList: (scopeTag: string, bucket: string) => [...queryKeys.goadInstances(), scopeTag, bucket] as const,
   goadInstanceForRange: (scopeTag: string, rangeId: string) => sc(scopeTag, ["goad", "by-range", rangeId]),
+  goadDomainMap: (scopeTag: string, lab: string, extensions: string) =>
+    sc(scopeTag, ["goad", "domain-map", lab, extensions]),
+  goadDomainCatalog: (scopeTag: string) => sc(scopeTag, ["goad", "domain-catalog"]),
   goadTasks: () => ["goad", "tasks"] as const,
   /** Dashboard: poll tasks for one GOAD instance. */
   goadTasksForInstance: (scopeTag: string, instanceId: string) =>
@@ -116,7 +127,7 @@ export function isVolatileQueryKey(queryKey: readonly unknown[]): boolean {
   const sub = String(parts[1] ?? "")
 
   if (head === "range") {
-    return sub === "status" || sub === "logs" || sub === "pb-status-dot"
+    return sub === "status" || sub === "logs" || sub === "pb-status-dot" || sub === "pb-status-bulk" || sub === "persisted"
   }
   if (head === "ranges") {
     return sub === "accessible" || sub === "owned" || sub === "all"
@@ -127,6 +138,7 @@ export function isVolatileQueryKey(queryKey: readonly unknown[]): boolean {
   if (head === "goad" && sub === "tasks") return true
   if (head === "vm-operation-log") return true
   if (head === "lux") return true
+  if (head === "ludus" && sub === "releases") return true
   if (head === "admin" && (sub === "range-vms" || sub === "shared-vms")) return true
   if (queryKey[0] === "goad" && queryKey[1] === "tasks") return true
   return false

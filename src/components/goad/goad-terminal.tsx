@@ -252,7 +252,8 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
           ref={containerRef}
           onScroll={handleScroll}
           className={cn(
-            "border rounded-b-lg p-4 font-mono overflow-y-auto min-h-[12rem] flex-1 min-w-0 w-full",
+            "border rounded-b-lg p-4 font-mono overflow-y-auto min-w-0 w-full",
+            resizable ? "min-h-[12rem] flex-1" : "h-full min-h-0 flex-1",
             dark ? "border-zinc-800 border-t-0" : "border-border",
             dark ? "bg-black text-gray-200" : "bg-gray-50 text-black",
             wrap ? "whitespace-pre-wrap break-words overflow-x-hidden" : "whitespace-pre overflow-x-auto",

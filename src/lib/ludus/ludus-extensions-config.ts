@@ -1,4 +1,5 @@
 import yaml from "js-yaml"
+import { extractNetworkSection } from "@/lib/range/network-rules"
 
 /** Parsed top-level `ludus_extensions` from range-config (Ludus 2.3.0+). */
 export type LudusExtensionsSnapshot = unknown
@@ -47,6 +48,21 @@ export function applyLudusExtensions(
   }
   doc.ludus_extensions = structuredClone(extensions)
   return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
+/** sync-network body. Null deletes a section the save removed; keys both documents lack are omitted. */
+export function goadSidecarSyncBody(
+  originalYaml: string,
+  savedYaml: string,
+): Record<string, unknown> | null {
+  const body: Record<string, unknown> = {}
+  const savedNetwork = extractNetworkSection(savedYaml)
+  const savedExtensions = extractLudusExtensions(savedYaml)
+  if (savedNetwork != null) body.network = savedNetwork
+  else if (extractNetworkSection(originalYaml) != null) body.network = null
+  if (savedExtensions != null) body.ludus_extensions = savedExtensions
+  else if (extractLudusExtensions(originalYaml) != null) body.ludus_extensions = null
+  return Object.keys(body).length > 0 ? body : null
 }
 
 /** True when YAML's `ludus_extensions` matches the snapshot (js-yaml normalized). */

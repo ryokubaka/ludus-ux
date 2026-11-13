@@ -26,7 +26,7 @@ import { resolveSession } from "@/lib/session/session"
 import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
 import { ludusRequest } from "@/lib/ludus/ludus-client"
-import { sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad/goad-ssh"
+import { invalidateGoadInstanceCache, sshExecAsWorkspaceUser, readGoadRangeId } from "@/lib/goad/goad-ssh"
 import { resolveGoadPath } from "@/lib/core/runtime-paths"
 import { shellSingleQuote } from "@/lib/templates/template-packer-paths"
 import { ipv4Octet, sedPatternForIpPrefix } from "@/lib/range/sync-ip-prefix"
@@ -199,6 +199,8 @@ export async function POST(
   } catch (err) {
     errors.push(`Inventory update error: ${(err as Error).message}`)
   }
+
+  if (updates.length > 0) invalidateGoadInstanceCache()
 
   logLuxRouteAction(request, session, {
     outcome: errors.length === 0 ? "success" : "failure",

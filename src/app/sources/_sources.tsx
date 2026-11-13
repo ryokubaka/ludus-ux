@@ -453,11 +453,49 @@ function SourceDetailPanel({
     queryClient.invalidateQueries({ queryKey: queryKeys.sourceCollections(scopeTag, sid) })
   }, [queryClient, scopeTag, sid])
 
+  const catalogVersionsFor = useCallback(
+    (selection: SourceInstallSelection) => {
+      const versions: {
+        catalogRef?: string
+        blueprints?: Record<string, string>
+        templates?: Record<string, string>
+        localRoles?: Record<string, string>
+        localCollections?: Record<string, string>
+      } = { catalogRef: sourceRef || undefined }
+      const put = (bucket: "blueprints" | "templates" | "localRoles" | "localCollections", name: string, version?: string) => {
+        const value = version?.trim()
+        if (!name || !value) return
+        const map = (versions[bucket] ??= {})
+        map[name] = value
+      }
+      for (const name of selection.blueprints ?? []) {
+        const row = blueprints.find((bp) => (bp.name || bp.sourceBlueprintID) === name)
+        put("blueprints", name, row?.version)
+      }
+      for (const name of selection.templates ?? []) {
+        put("templates", name, templates.find((tpl) => tpl.name === name)?.version)
+      }
+      for (const name of selection.localRoles ?? []) {
+        const row = roles.find((role) => role.name === name || role.fqcn === name)
+        put("localRoles", name, row?.version)
+      }
+      for (const name of selection.localCollections ?? []) {
+        const row = collections.find((coll) => coll.name === name || coll.fqcn === name)
+        put("localCollections", name, row?.version)
+      }
+      return versions
+    },
+    [sourceRef, blueprints, templates, roles, collections],
+  )
+
   const handleResync = async (key: string, selection: SourceInstallSelection) => {
     if (readOnly) return
     setResyncingKey(key)
     try {
-      const { warnings } = await postSourceInstall(sid, selection, { force: true })
+      const { warnings } = await postSourceInstall(sid, selection, {
+        force: true,
+        versions: catalogVersionsFor(selection),
+      })
       if (warnings.length > 0) {
         toast({
           variant: "destructive",
@@ -568,7 +606,10 @@ function SourceDetailPanel({
     if (outdatedCount === 0) return
     setBulkResyncing(true)
     try {
-      const { warnings } = await postSourceInstall(sid, outdatedSelection, { force: true })
+      const { warnings } = await postSourceInstall(sid, outdatedSelection, {
+        force: true,
+        versions: catalogVersionsFor(outdatedSelection),
+      })
       toast({
         variant: warnings.length > 0 ? "destructive" : "default",
         title: warnings.length > 0 ? "Re-synced with warnings" : "Re-synced outdated items",
@@ -1012,7 +1053,14 @@ export function SourcesPageClient() {
   )
   const registerId = idTouched ? newId.trim() : suggestedId
 
-  const { data, isLoading, refetch } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError: sourcesError,
+    error: sourcesErr,
+    isFetching: sourcesFetching,
+    refetch,
+  } = useQuery({
     queryKey: queryKeys.sources(scopeTag),
     queryFn: async () => {
       const res = await fetch("/api/sources")
@@ -1233,7 +1281,42 @@ export function SourcesPageClient() {
     }
   }
 
-  if (!sourcesAvailable && !isLoading) {
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading sources…
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (sourcesError) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center py-12 text-center gap-3">
+          <AlertTriangle className="h-10 w-10 text-status-warning" />
+          <p className="text-sm font-medium">Could not load sources</p>
+          <p className="text-xs text-muted-foreground max-w-md">
+            {sourcesErr instanceof Error ? sourcesErr.message : "The sources request failed."}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="gap-1.5"
+            disabled={sourcesFetching}
+            onClick={() => void refetch()}
+          >
+            {sourcesFetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            {sourcesFetching ? "Retrying…" : "Retry"}
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!sourcesAvailable) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center py-12 text-center gap-3">

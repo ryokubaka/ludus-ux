@@ -17,6 +17,8 @@ export function buildLudusAnsibleEnvShell(
   goadPath?: string,
   /** Ludus username. Collections live in /opt/ludus/users/<name>/.ansible, not $HOME. */
   ansibleUser?: string,
+  /** When true, also export SSH pipelining + a higher fork count for this session. */
+  opts?: { speedups?: boolean },
 ): string {
   const root = ludusInstallPath.replace(/'/g, "")
   const goadRoot = goadPath?.replace(/'/g, "")
@@ -42,6 +44,12 @@ export function buildLudusAnsibleEnvShell(
     // and owned by the ludus service account.
     `export ANSIBLE_SSH_CONTROL_PATH_DIR="$HOME/.goad/ansible-cp"`,
     `export ANSIBLE_LOCAL_TEMP="$HOME/.goad/ansible-local"`,
+    // Connection speedups (env outranks any ansible.cfg). Pipelining removes an
+    // SSH round trip per task on Linux guests; WinRM ignores it. Forks lift the
+    // default 5 so larger ranges stop serializing. No playbook is edited.
+    ...(opts?.speedups
+      ? [`export ANSIBLE_PIPELINING=True`, `export ANSIBLE_FORKS=20`]
+      : []),
     `mkdir -p "$ANSIBLE_HOME/collections" "$ANSIBLE_HOME/roles" "$ANSIBLE_SSH_CONTROL_PATH_DIR" "$ANSIBLE_LOCAL_TEMP" "$HOME/.goad/ansible-remote" "$HOME/.goad/py" 2>/dev/null || true`,
     `chmod 700 "$HOME/.goad/ansible-remote" 2>/dev/null || true`,
     `chmod 700 "$ANSIBLE_LOCAL_TEMP" 2>/dev/null || true`,
@@ -61,11 +69,12 @@ export function buildEnsureGoadVenvShell(
   goadPath: string,
   ludusInstallPath: string,
   ansibleUser?: string,
+  opts?: { speedups?: boolean },
 ): string {
   const root = goadPath.replace(/'/g, "")
   // Keep each `if …; then …; fi` as ONE array element so `.join("; ")` never yields `then;`.
   return [
-    buildLudusAnsibleEnvShell(ludusInstallPath, root, ansibleUser),
+    buildLudusAnsibleEnvShell(ludusInstallPath, root, ansibleUser, opts),
     `mkdir -p "$HOME/.goad"`,
     `_LUX_VENV="$HOME/.goad/.venv"`,
     `_LUX_PIP="$_LUX_VENV/bin/pip"`,

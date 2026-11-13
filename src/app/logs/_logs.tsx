@@ -21,7 +21,7 @@ import {
 import { useRange } from "@/lib/range/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { cn, extractArray } from "@/lib/core/utils"
-import { isBlankDeployLogLine, omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
+import { isBlankDeployLogLine, isDeployStreamHeartbeat, omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
 import { stampHistoryWithRecordedClock } from "@/lib/logs/deploy-log-clock"
 import { splitLogText } from "@/lib/logs/strip-ansi"
 import { fetchGoadTaskLogLines } from "@/lib/goad/goad-task-lines"
@@ -64,7 +64,7 @@ export function LogsPageClient() {
     queryFn: async () => {
       if (!selectedRangeId) return null
       const res = await fetch(`/api/goad/by-range?rangeId=${encodeURIComponent(selectedRangeId)}`)
-      if (!res.ok) return null
+      if (!res.ok) throw new Error(`GOAD lookup failed (${res.status})`)
       const data = (await res.json()) as { instanceId?: string | null }
       return data.instanceId && typeof data.instanceId === "string" ? data.instanceId : null
     },
@@ -232,7 +232,7 @@ export function LogsPageClient() {
             .filter((l) => l.startsWith("data: "))
             .map((l) => l.slice(6))
           const displayLines = newLines.filter(
-            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ") && !isBlankDeployLogLine(l)
+            (l) => !l.startsWith("[STATE] ") && !l.startsWith("[DONE] ") && !isBlankDeployLogLine(l) && !isDeployStreamHeartbeat(l)
           )
           if (displayLines.length) setLines((prev) => appendStreamLines(prev, displayLines))
           const doneLine = newLines.find((l) => l.startsWith("[DONE] "))

@@ -33,6 +33,10 @@ vi.mock("@/lib/logs/app-log", () => ({
   logAppEvent: vi.fn(),
 }))
 
+vi.mock("@/lib/ludus/ludus-ansible-speedups", () => ({
+  applyLudusAnsibleSpeedups: vi.fn(async () => ({ ok: true, changed: false, restart: null })),
+}))
+
 import { GET, POST } from "./route"
 import { requireSession } from "@/lib/session/require-session"
 import { requireAdmin } from "@/lib/session/require-admin"
@@ -49,6 +53,7 @@ const stored: RuntimeSettings = {
   goadEnabled: true,
   ludushoundEnabled: false,
   ludusAnsibleVerbose: true,
+  ludusAnsibleSpeedups: true,
   useLudusHostDns: false,
   rootApiKey: "ROOT.secret-value",
   blueprintOperatorApiKey: "operator-secret",

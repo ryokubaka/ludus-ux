@@ -10,9 +10,14 @@
 #   GITHUB_TOKEN                         post the status to GitHub (repo:status)
 #   GITLAB_TOKEN, GITLAB_URL, GITLAB_PROJECT   post the status to GitLab (api scope; project path or id)
 #   LUX_GATE_SKIP_UNIT=1                 skip unit.sh (the CI pipeline already ran it)
+#   LUX_UNIT_DOCKER=0                    run the unit step on this machine (Windows uses a Linux container)
+#   LUX_UNIT_DOCKER=1                    force the unit step into that container
 #   SECURITY_GATE_UPGRADE=1              also replay an upgrade from the previous release tag
 #   SECURITY_GATE_ALLOW_DIRTY=1          run with uncommitted changes (no status is posted)
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=gitlab-trust.sh
+source "$(dirname "$0")/gitlab-trust.sh"
+lux_trust_gitlab_api
 
 if [[ -f .security-gate.env ]]; then
   set -a
@@ -63,7 +68,12 @@ post_status() {
     [[ "$state" == "pending" ]] && gl_state="running"
     if [[ -n "$api" && -n "$project" ]]; then
       project="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$project")"
+      local cacert=()
+      if [[ -n "${NODE_EXTRA_CA_CERTS:-}" && -f "${NODE_EXTRA_CA_CERTS}" ]]; then
+        cacert=(--cacert "$NODE_EXTRA_CA_CERTS")
+      fi
       printf 'PRIVATE-TOKEN: %s\n' "$GITLAB_TOKEN" | curl -fsS -o /dev/null -H @- \
+        "${cacert[@]}" \
         --data-urlencode "state=$gl_state" \
         --data-urlencode "name=$STATUS_CONTEXT" \
         --data-urlencode "description=$description" \
@@ -76,8 +86,17 @@ post_status() {
 
 finish() {
   local code=$?
-  if [[ $code -eq 0 ]]; then post_status success "Live security suite passed"
-  else post_status failed "Live security suite failed"; fi
+  if [[ $code -eq 0 ]]; then
+    post_status success "Live security suite passed"
+    if [[ -z "$dirty" ]]; then
+      node scripts/ci/security-checklist.mjs mark-live pass || echo "Could not tick the live checklist item" >&2
+    fi
+  else
+    post_status failed "Live security suite failed"
+    if [[ -z "$dirty" ]]; then
+      node scripts/ci/security-checklist.mjs mark-live fail || echo "Could not update the live checklist item" >&2
+    fi
+  fi
   if declare -F lux_gate_cleanup >/dev/null; then lux_gate_cleanup; fi
   exit $code
 }

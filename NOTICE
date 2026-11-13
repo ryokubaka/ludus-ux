@@ -44,5 +44,16 @@ under MIT-compatible licenses:
   date-fns — https://github.com/date-fns/date-fns (MIT)
   js-yaml — https://github.com/nodeca/js-yaml (MIT)
   ws — https://github.com/websockets/ws (MIT)
+  React Flow / @xyflow/react — https://github.com/xyflow/xyflow (MIT)
 
 See each project's repository for the full text of their respective licenses.
+
+-------------------------------------------------------------------------------
+Design inspiration
+
+  The LUX Range Builder (visual range canvas) is inspired by redStackPRO
+  — https://github.com/devZero-Security/redStackPRO
+  Copyright (C) devZero Security LLC, licensed under the MIT License.
+  No redStackPRO source code is incorporated. LUX writes Ludus range-config.yml
+  and deploys through the Ludus API on Proxmox; it does not use redStackPRO's
+  schema, compiler, or Terraform/Ansible export.

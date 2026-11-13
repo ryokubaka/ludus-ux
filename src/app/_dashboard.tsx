@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { ludusVersionLabel, ludusVersionText } from "@/lib/ludus/ludus-releases"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ import {
   StopCircle,
   Power,
   PowerOff,
+  RotateCw,
   Shield,
   AlertTriangle,
   CheckCircle2,
@@ -76,7 +78,7 @@ import { useElapsed } from "@/hooks/use-elapsed"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import { queryKeys } from "@/lib/ui/query-keys"
-import { tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
+import { isLudusAwaitResponseTimeoutMessage, tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
 import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { STALE } from "@/lib/ui/query-client"
 import { omitBlankLogLines } from "@/lib/logs/log-line-timestamp"
@@ -100,13 +102,37 @@ import {
   resolveVmListForRangeQuery,
   vmIsRunning,
 } from "@/lib/ui/dashboard-vm-merge"
-import { waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
+import { restartRangeVms, waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
 import { LudusHostResources } from "@/components/dashboard/ludus-host-resources"
+import {
+  DeployStartupRangeStatusError,
+  TransientRangeStatusError,
+  RangeStatusError,
+  describeRangeRefreshState,
+  isTransientRangeStatus,
+  rangeErrorHidesStaleData,
+  rangeErrorKeepsSnapshot,
+} from "@/lib/ui/range-refresh-state"
+import { fetchPersistedRangeStatus } from "@/lib/ui/range-pb-status"
+import { mergePersistedRangeState } from "@/lib/ui/range-state-merge"
+
+/** Dashboard snapshot: Ludus live VMs plus PocketBase persisted fields. */
+type DashboardRangeSnapshot = RangeObject & {
+  /** VM identity keys retained from a previous poll and not confirmed by the latest one. */
+  __unconfirmedVmKeys?: string[]
+  /** Store that supplied persisted fields in this snapshot. */
+  __persistedStateSource?: "pocketbase" | "ludus" | "unknown"
+}
 
 /** Re-open inventory for the same range without waiting on Ludus again. */
 const INVENTORY_CACHE_MS = 3 * 60 * 1000
 
-export function DashboardPageClient() {
+export function DashboardPageClient({
+  initialHostResources = false,
+}: {
+  /** True when SSR prefetched a host snapshot, so hydration can render it safely. */
+  initialHostResources?: boolean
+}) {
   const { toast } = useToast()
   const router = useRouter()
   const queryClient = useQueryClient()
@@ -145,7 +171,7 @@ export function DashboardPageClient() {
   }, [])
   const [deletingRangeId, setDeletingRangeId] = useState<string | null>(null)
   const [destroyingAllVmsRangeId, setDestroyingAllVmsRangeId] = useState<string | null>(null)
-  const [powerAllPending, setPowerAllPending] = useState<"on" | "off" | null>(null)
+  const [powerAllPending, setPowerAllPending] = useState<"on" | "off" | "restart" | null>(null)
   const [deploying, setDeploying] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [downloadingVm, setDownloadingVm] = useState<string | null>(null)
@@ -208,10 +234,10 @@ export function DashboardPageClient() {
   }, [selectedRangeId, stopStreaming, startStreaming, refreshRangeStateFromServer])
 
   // ── Range status query ──────────────────────────────────────────────────────
-  // Replaces fetchRanges + silentRefresh + setInterval(silentRefresh, 15000).
-  // - isLoading is true ONLY on the very first fetch (no cached data available)
-  // - isFetching is true during any background revalidation
-  // - refetchInterval keeps the dashboard live without manual polling code
+  // Persisted range fields come from PocketBase (Ludus's backend store); live VM
+  // inventory comes from Ludus `/range`. A failed poll is NOT relabeled as fresh:
+  // React Query keeps the last verified data and `dataUpdatedAt` stays at the
+  // last success, so the UI can show "Refreshing" or "Unavailable" truthfully.
   const {
     data: rangeData,
     isLoading,
@@ -220,33 +246,37 @@ export function DashboardPageClient() {
     error: rangeError,
     refetch: refetchRangeStatus,
     dataUpdatedAt: rangeDataUpdatedAt,
-  } = useQuery({
+  } = useQuery<DashboardRangeSnapshot | null>({
     queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId),
     queryFn: async () => {
       const rid = selectedRangeId?.trim()
       if (!rid) return null
-      const result = await ludusApi.getRangeStatus(rid)
-      if (result.error) {
-        // Ludus sometimes returns HTTP 400 for GET /range during deploy / log-stream
-        // startup while GET /range/logs/history still succeeds (see access logs). Treat
-        // as transient: keep last good snapshot or empty state instead of throwing.
-        if (result.status === 400) {
-          const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(scopeTag, selectedRangeId))
-          return prev ?? null
+
+      const ludusResult = await ludusApi.getRangeStatus(rid)
+
+      if (ludusResult.error) {
+        const message =
+          typeof ludusResult.error === "string" ? ludusResult.error : "Failed to load range status"
+        if (ludusResult.status === 400) throw new DeployStartupRangeStatusError(message)
+        if (isTransientRangeStatus(ludusResult.status)) {
+          throw new TransientRangeStatusError(message)
         }
-        throw new Error(typeof result.error === "string" ? result.error : "Failed to load range status")
+        throw new RangeStatusError(message, ludusResult.status)
       }
-      if (!result.data) return null
-      const data = result.data
+
+      const data = ludusResult.data
+      if (!data) return null
       const rawVMs = data.VMs || (data as RangeObject & { vms?: VMObject[] }).vms || []
       const newVMs = dedupeVMs(rawVMs)
 
       // Ludus GET /range sometimes returns an empty or *short* VMs array on one poll (deploy,
       // Proxmox hiccup, or slow inventory). Prefer cache / numberOfVMs so refresh does not hide VMs.
-      const prev = queryClient.getQueryData<RangeObject>(queryKeys.rangeStatus(scopeTag, selectedRangeId))
+      const prev = queryClient.getQueryData<DashboardRangeSnapshot>(
+        queryKeys.rangeStatus(scopeTag, selectedRangeId),
+      )
       const prevVMs = prev?.VMs || (prev as (RangeObject & { vms?: VMObject[] }) | undefined)?.vms || []
       const state = (data.rangeState || "").toString().toUpperCase()
-      const vms = resolveVmListForRangeQuery({
+      const resolved = resolveVmListForRangeQuery({
         data,
         newVMs,
         prevVMs,
@@ -255,12 +285,23 @@ export function DashboardPageClient() {
         rangeId: rid,
       })
 
-      return { ...data, VMs: vms }
+      return {
+        ...data,
+        VMs: resolved.vms,
+        __unconfirmedVmKeys: resolved.unconfirmedVmKeys,
+        __persistedStateSource: "ludus" as const,
+      }
     },
     enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId?.trim(),
     staleTime: STALE.realtime,
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    // HTTP 400 during deploy/log-stream startup, network loss, and 5xx are
+    // retryable. Auth/permission failures are surfaced immediately.
+    retry: (failureCount, error) =>
+      error instanceof TransientRangeStatusError && failureCount < 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
       // When switching ranges, do not show the previous range's VM table as a placeholder.
       placeholderData: (previousData, previousQuery) => {
         if (!previousData || !previousQuery) return previousData
@@ -271,17 +312,83 @@ export function DashboardPageClient() {
       },
   })
 
+  const rangeRefresh = describeRangeRefreshState({
+    isLoading,
+    isFetching,
+    isError: !!rangeError,
+    dataUpdatedAt: rangeDataUpdatedAt,
+    error: rangeError,
+  })
+  const rangeAuthFailure = rangeErrorHidesStaleData(rangeError)
+  /**
+   * Stale rows stay up during a retry. A deploy-startup HTTP 400 keeps them
+   * after retries too. Network loss, 5xx, and auth failures hide them once
+   * the poll is no longer running.
+   */
+  const showStaleRangeData =
+    !rangeAuthFailure &&
+    (rangeErrorKeepsSnapshot(rangeError) ||
+      !(rangeError && rangeRefresh.refreshState === "unavailable"))
+  const liveRangeData = showStaleRangeData ? rangeData : null
+
+  // Persisted fields (state, testing, allow lists) come from PocketBase on
+  // their own query. The VM table does not wait for that read.
+  const { data: persistedStatus } = useQuery({
+    queryKey: queryKeys.rangePersisted(scopeTag, selectedRangeId),
+    queryFn: async () => {
+      const rid = selectedRangeId?.trim()
+      if (!rid) return null
+      return fetchPersistedRangeStatus(rid)
+    },
+    enabled: !rangeCtxLoading && !hasNoRanges && !!selectedRangeId?.trim(),
+    staleTime: STALE.short,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+  })
+
+  const visibleRangeData = useMemo(() => {
+    if (!liveRangeData) return null
+    const persisted = persistedStatus?.range
+    if (!persisted) return liveRangeData
+    const snapshot = mergePersistedRangeState(liveRangeData, persisted, persistedStatus.source)
+    if (!snapshot) return liveRangeData
+    return {
+      ...snapshot.range,
+      VMs: liveRangeData.VMs,
+      __unconfirmedVmKeys: liveRangeData.__unconfirmedVmKeys,
+      __persistedStateSource: snapshot.persistedStateSource,
+    }
+  }, [liveRangeData, persistedStatus])
+  const unconfirmedVmKeys = visibleRangeData?.__unconfirmedVmKeys ?? []
+
   // ── Version query ───────────────────────────────────────────────────────────
   // `select` collapses the payload to the version string so consumers only
   // re-render when the string itself changes.
-  const { data: version = "" } = useQuery({
+  const { data: version = "", isPending: versionPending } = useQuery({
     queryKey: queryKeys.version(scopeTag),
     queryFn: async () => {
       const result = await ludusApi.getVersion()
-      return result.data ?? null
+      if (result.error || result.data == null) {
+        throw new Error(typeof result.error === "string" && result.error ? result.error : "Ludus version unavailable")
+      }
+      return result.data
     },
-    select: (data) => (data ? data.result || data.version || "" : ""),
-    staleTime: STALE.long,
+    select: (data) => ludusVersionText(data),
+    staleTime: STALE.realtime,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  })
+
+  const { data: ludusRelease } = useQuery({
+    queryKey: ["ludus", "releases"],
+    queryFn: async () => {
+      const res = await fetch("/api/ludus/releases", { cache: "no-store" })
+      if (!res.ok) return null
+      return (await res.json()) as { latestStable?: string | null; updateAvailable?: boolean }
+    },
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const { data: deployHistoryEntries = [], isLoading: deployHistoryListLoading, isFetching: deployHistoryRefreshing } =
@@ -302,10 +409,10 @@ export function DashboardPageClient() {
       const s = (e.status || "").toLowerCase()
       return s === "running" || s === "waiting"
     })
-    const rs = (rangeData?.rangeState ?? "").toString().toUpperCase()
+    const rs = (visibleRangeData?.rangeState ?? "").toString().toUpperCase()
     const rangeBusy = rs === "DEPLOYING" || rs === "WAITING"
     return hist || rangeBusy
-  }, [deployHistoryEntries, rangeData?.rangeState])
+  }, [deployHistoryEntries, visibleRangeData?.rangeState])
 
   const { data: goadInstanceForRange = null } = useQuery({
     queryKey: queryKeys.goadInstanceForRange(scopeTag, selectedRangeId ?? ""),
@@ -315,7 +422,7 @@ export function DashboardPageClient() {
         credentials: "include",
         headers: { ...getImpersonationHeaders() },
       })
-      if (!res.ok) return null
+      if (!res.ok) throw new Error(`GOAD lookup failed (${res.status})`)
       const data = (await res.json()) as { instanceId?: string | null }
       return data.instanceId && typeof data.instanceId === "string" ? data.instanceId : null
     },
@@ -483,18 +590,18 @@ export function DashboardPageClient() {
   // isPlaceholderData guard prevents the previous range's stale data (shown
   // during key transition via range-scoped placeholder) from triggering a false positive.
   const streamIsForThisRange = isStreaming && streamingRangeId === (selectedRangeId ?? null)
-  const rangeDataId = !isPlaceholderData ? (rangeData?.rangeID ?? rangeData?.name ?? null) : null
+  const rangeDataId = !isPlaceholderData ? (visibleRangeData?.rangeID ?? visibleRangeData?.name ?? null) : null
   // Must depend on range state, not only range id: first fetch after redirect can still
   // show READY; when Ludus flips to DEPLOYING the id is unchanged — without this dep the
   // effect never re-runs and logs/stream never start until a full remount/refresh.
-  const rangeStateForStream = !isPlaceholderData ? (rangeData?.rangeState ?? null) : null
+  const rangeStateForStream = !isPlaceholderData ? (visibleRangeData?.rangeState ?? null) : null
   const historyDeployInFlight = deployHistoryEntries.some((e) => isDeployHistoryRunning(e.status || ""))
   const deployLive =
     rangeStateForStream === "DEPLOYING" ||
     rangeStateForStream === "WAITING" ||
     historyDeployInFlight
   useEffect(() => {
-    if (!rangeData || isPlaceholderData || rangeCtxLoading || hasNoRanges) return
+    if (!visibleRangeData || isPlaceholderData || rangeCtxLoading || hasNoRanges) return
     const deployingLike = deployLive
     // Suppress auto-restart of "Deploying…" + deploy-log stream during the
     // post-abort grace window. Ludus takes several seconds (sometimes longer)
@@ -557,7 +664,7 @@ export function DashboardPageClient() {
     // streamRangeState is set when the SSE server sends [DONE] with the final
     // state. If the stream ended via [ERROR] line or a network onerror it stays
     // null — fall back to what Ludus's GET already told us.
-    const finalState = streamRangeState ?? rangeData?.rangeState ?? null
+    const finalState = streamRangeState ?? visibleRangeData?.rangeState ?? null
     if (finalState && finalState !== "DEPLOYING" && finalState !== "WAITING") {
       setDeploying(false)
       queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, selectedRangeId) })
@@ -828,7 +935,7 @@ export function DashboardPageClient() {
     )
 
   const doPowerAll = async (action: "on" | "off") => {
-    const vms = rangeData?.VMs || (rangeData as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
+    const vms = visibleRangeData?.VMs || (visibleRangeData as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
     const vmNames = vms.map((v: VMObject) => v.name || v.vmName || `vm-${v.ID}`).filter(Boolean)
     if (vmNames.length === 0) {
       toast({ variant: "destructive", title: "No VMs", description: "No VMs in this range to power " + action })
@@ -894,6 +1001,66 @@ export function DashboardPageClient() {
     confirm(
       action === "on" ? `Power ON all VMs in this range?` : `Power OFF all VMs in this range?`,
       () => doPowerAll(action)
+    )
+
+  const doRestartAll = async () => {
+    const vms = rangeData?.VMs || (rangeData as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
+    const vmNames = vms.filter(vmIsRunning).map((v: VMObject) => v.name || v.vmName || `vm-${v.ID}`).filter(Boolean)
+    if (vmNames.length === 0) {
+      toast({ variant: "destructive", title: "No running VMs", description: "Power on a VM before restarting it." })
+      return
+    }
+    setPowerAllPending("restart")
+    try {
+      toast({
+        title: "Restarting running VMs",
+        description: `${vmNames.length} VM${vmNames.length === 1 ? "" : "s"} will power off, then power back on.`,
+      })
+      const noteSlow = (error: string) => {
+        if (!isLudusAwaitResponseTimeoutMessage(error)) return
+        tryToastLudusSlowHttpError({
+          toast,
+          error,
+          slowTitle: "Slow response from Ludus",
+          onSlow: () => { void invalidateRangeStatus() },
+        })
+      }
+      const restarted = await restartRangeVms({
+        rangeId: selectedRangeId ?? undefined,
+        vmNames,
+        continueAfterError: isLudusAwaitResponseTimeoutMessage,
+        powerOff: async () => {
+          const result = await ludusApi.powerOff(vmNames, selectedRangeId ?? undefined)
+          if (result.error) noteSlow(result.error)
+          return result
+        },
+        powerOn: async () => {
+          const result = await ludusApi.powerOn(vmNames, selectedRangeId ?? undefined)
+          if (result.error) noteSlow(result.error)
+          return result
+        },
+        fetchStatus: () => ludusApi.getRangeStatus(selectedRangeId ?? undefined),
+      })
+      void invalidateRangeStatus()
+      if (restarted.ok) {
+        toast({ title: "Restart confirmed", description: `${vmNames.length} VM${vmNames.length === 1 ? "" : "s"} running` })
+      } else if ("error" in restarted) {
+        toast({ variant: "destructive", title: "Restart failed", description: restarted.error })
+      } else if (restarted.via === "timeout") {
+        toast({
+          variant: "destructive",
+          title: "Restart not confirmed yet",
+          description: `${restarted.pending.length} VM(s) may still be ${restarted.phase === "off" ? "stopping" : "starting"}. Refresh to check.`,
+        })
+      }
+    } finally {
+      setPowerAllPending(null)
+    }
+  }
+  const handleRestartAll = () =>
+    confirm(
+      "Restart all running VMs in this range? They power off, then power back on.",
+      () => doRestartAll(),
     )
 
   // ── Range extras ────────────────────────────────────────────────────────────
@@ -994,8 +1161,27 @@ export function DashboardPageClient() {
   }
 
   // ── Derived values ──────────────────────────────────────────────────────────
-  const primaryRange = rangeData ?? null
+  const primaryRange = visibleRangeData ?? null
   const allVMs = primaryRange?.VMs || (primaryRange as (RangeObject & { vms?: VMObject[] }) | null)?.vms || []
+  /**
+   * Never render a failed or unloaded poll as "No VMs deployed yet". Stale rows
+   * stay visible only while a retry is actively running.
+   */
+  const vmTableState: "loading" | "error" | "empty" | "ready" =
+    rangeAuthFailure || (rangeError && rangeRefresh.refreshState === "unavailable")
+      ? "error"
+      : !visibleRangeData && isLoading
+        ? "loading"
+        : allVMs.length === 0
+          ? "empty"
+          : "ready"
+  const vmTableError = rangeAuthFailure
+    ? rangeError instanceof Error
+      ? rangeError.message
+      : "Access denied"
+    : rangeError
+      ? rangeRefresh.lastError ?? "Range status unavailable"
+      : null
 
   const handleShowInventory = async (rangeIdFromCard?: string) => {
     const rid = (rangeIdFromCard || selectedRangeId || "").trim()
@@ -1041,13 +1227,20 @@ export function DashboardPageClient() {
     }
   }
   const runningVMs = allVMs.filter(vmIsRunning).length
-  const rawRangeState = primaryRange?.rangeState || "NEVER DEPLOYED"
+  const rawRangeState = primaryRange?.rangeState?.trim() || ""
   const rangeState =
     historyDeployInFlight &&
     !["DEPLOYING", "WAITING"].includes(rawRangeState.toUpperCase())
       ? "DEPLOYING"
       : rawRangeState
   const error = rangeError ? (rangeError as Error).message : null
+  /**
+   * Without a verified snapshot there is no range state or VM count to report.
+   * Showing "NEVER DEPLOYED" / 0 would invent infrastructure state.
+   */
+  const statsUnavailable =
+    !visibleRangeData &&
+    (rangeAuthFailure || (rangeError && rangeRefresh.refreshState === "unavailable"))
 
   // Single range card from the selected range's status query (range picker lives in the sidebar).
   const ranges = primaryRange ? [primaryRange] : []
@@ -1122,6 +1315,23 @@ export function DashboardPageClient() {
 
   return (
     <div className="space-y-6">
+      <div className="sr-only" role="status" aria-live="polite">
+        {selectedRangeId
+          ? primaryRange
+            ? `Range ${selectedRangeId}: ${rangeState || "unknown"}`
+            : `Range ${selectedRangeId}: loading`
+          : ""}
+        {rangeRefresh.refreshState === "retrying"
+          ? ", refreshing"
+          : rangeRefresh.refreshState === "unavailable"
+            ? ", unavailable"
+            : ""}
+      </div>
+      {error && (
+        <div className="sr-only" role="alert">
+          {error}
+        </div>
+      )}
       {error && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -1138,31 +1348,44 @@ export function DashboardPageClient() {
         <StatCard title="Range State" icon={<Activity className="h-4 w-4 text-primary" />}
           value={isLoading
             ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            : <Badge className={cn("text-xs", getRangeStateBadge(rangeState))}>{rangeState}</Badge>}
+            : statsUnavailable
+              ? <Badge variant="outline" className="text-xs text-muted-foreground">Unavailable</Badge>
+              : rangeState
+                ? <Badge className={cn("text-xs", getRangeStateBadge(rangeState))}>{rangeState}</Badge>
+                : "—"}
         />
         <StatCard title="Total VMs" icon={<Server className="h-4 w-4 text-status-info" />}
-          value={isLoading ? "—" : String(allVMs.length)} />
+          value={isLoading ? "—" : statsUnavailable ? "—" : String(allVMs.length)} />
         <StatCard title="Running" icon={<CheckCircle2 className="h-4 w-4 text-status-success" />}
-          value={isLoading ? "—" : String(runningVMs)}
-          subtext={allVMs.length > 0 ? `${Math.round((runningVMs / allVMs.length) * 100)}% online` : undefined}
+          value={isLoading ? "—" : statsUnavailable ? "—" : String(runningVMs)}
+          subtext={!statsUnavailable && allVMs.length > 0 ? `${Math.round((runningVMs / allVMs.length) * 100)}% online` : undefined}
         />
         <StatCard title="Ludus Version" icon={<Layers className="h-4 w-4 text-primary" />}
-          value={isLoading ? "—" : (version ? (version.split(" ").pop() || "—") : "—")}
-          subtext={version ? version.replace(/\s+\S+$/, "") : "Not connected"}
+          value={version ? ludusVersionLabel(version) || "—" : "—"}
+          subtext={
+            ludusRelease?.updateAvailable && ludusRelease.latestStable
+              ? `Update ${ludusRelease.latestStable} available`
+              : version
+                ? version.slice(0, version.indexOf(ludusVersionLabel(version))).trim() || undefined
+                : versionPending
+                  ? undefined
+                  : "Not connected"
+          }
         />
       </div>
 
-      <LudusHostResources />
+      <div className="grid items-stretch gap-3 lg:grid-cols-2">
+      <LudusHostResources initialHostResources={initialHostResources} />
 
       {/* ── WireGuard — account-wide VPN (same profile for all accessible ranges) ── */}
       <Card className="border-status-info/25 bg-blue-500/[0.06]">
-        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div className="space-y-1.5 min-w-0">
-            <h3 className="text-sm font-semibold flex items-center gap-2">
-              <Wifi className="h-4 w-4 text-status-info shrink-0" />
+        <CardContent className="flex h-full items-center justify-between gap-3 p-3">
+          <div className="min-w-0 space-y-1">
+            <h3 className="flex items-center gap-2 text-sm font-semibold">
+              <Wifi className="h-4 w-4 shrink-0 text-status-info" />
               WireGuard VPN
             </h3>
-            <p className="text-xs text-muted-foreground">
+            <p className="truncate text-xs text-muted-foreground">
               One tunnel for this account
               {accessibleRanges.length > 0
                 ? `: ${accessibleRanges.map((r) => r.rangeID).join(", ")}`
@@ -1171,7 +1394,8 @@ export function DashboardPageClient() {
           </div>
           <Button
             type="button"
-            className="gap-2 shrink-0 bg-blue-600 hover:bg-blue-600/90 text-white"
+            size="sm"
+            className="shrink-0 gap-2 bg-blue-600 text-white hover:bg-blue-600/90"
             disabled={wireguardDownloading}
             onClick={() => void handleDownloadOwnWireguard()}
           >
@@ -1184,12 +1408,58 @@ export function DashboardPageClient() {
           </Button>
         </CardContent>
       </Card>
+      </div>
 
       {/* ── Selected range (single card; range switcher is in the sidebar) ─── */}
-      {waitingForRangeSelection || isLoading ? (
+      {waitingForRangeSelection ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
+      ) : isLoading && !visibleRangeData ? (
+        // Keep the range card in place while the first status poll runs so the
+        // VM table can show skeleton rows instead of a blank page.
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-3">
+              <Server className="h-4 w-4 text-primary" />
+              <CardTitle className="text-sm font-semibold">
+                {accessibleRanges.find((r) => r.rangeID === selectedRangeId)?.rangeID ||
+                  selectedRangeId ||
+                  "Range"}
+              </CardTitle>
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <VMTable
+              vms={[]}
+              rangeId={selectedRangeId ?? undefined}
+              state="loading"
+              onRefresh={() => void handleRefreshDashboard()}
+            />
+          </CardContent>
+        </Card>
+      ) : rangeError && !visibleRangeData ? (
+        <Card>
+          <CardContent className="py-12 text-center space-y-3">
+            <AlertTriangle className="h-10 w-10 mx-auto text-status-warning" />
+            <p className="font-medium">
+              {rangeAuthFailure ? "Range access denied" : "Range status unavailable"}
+            </p>
+            <p className="text-xs text-muted-foreground max-w-md mx-auto">
+              {rangeError instanceof Error ? rangeError.message : "The range status request failed."}
+            </p>
+            <Button
+              className="gap-1.5"
+              variant="outline"
+              onClick={() => void refetchRangeStatus()}
+              disabled={isFetching}
+            >
+              {isFetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              {isFetching ? "Retrying…" : "Retry"}
+            </Button>
+          </CardContent>
+        </Card>
       ) : ranges.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground space-y-3">
@@ -1207,7 +1477,7 @@ export function DashboardPageClient() {
           const rangeKey = range.rangeID || range.name || `range-${idx}`
           const vms = range.VMs || (range as RangeObject & { vms?: VMObject[] }).vms || []
           const running = vms.filter(vmIsRunning).length
-          const rawState = range.rangeState || "NEVER DEPLOYED"
+          const rawState = range.rangeState?.trim() || ""
           const state =
             historyDeployInFlight &&
             !["DEPLOYING", "WAITING"].includes(rawState.toUpperCase())
@@ -1232,7 +1502,20 @@ export function DashboardPageClient() {
                         <span className="text-status-success font-medium">{running}</span>
                         <span> / {vms.length} running</span>
                       </span>
-                      <Badge className={cn("text-xs", getRangeStateBadge(state))}>{state}</Badge>
+                      {state ? (
+                      <Badge
+                        className={cn("text-xs", getRangeStateBadge(state))}
+                        title={
+                          range.__persistedStateSource === "pocketbase"
+                            ? "Persisted state from PocketBase"
+                            : range.__persistedStateSource === "ludus"
+                              ? "Persisted state from Ludus (PocketBase unavailable)"
+                              : "Persisted state source unknown"
+                        }
+                      >
+                        {state}
+                      </Badge>
+                      ) : null}
                       {activeGoadTask && (
                         <Badge
                           variant="warning"
@@ -1243,12 +1526,51 @@ export function DashboardPageClient() {
                           GOAD: {activeGoadKind}
                         </Badge>
                       )}
-                      {rangeDataUpdatedAt > 0 && (
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      {rangeAuthFailure ? (
+                        <div className="flex items-center gap-1 text-xs text-status-error">
+                          <AlertTriangle className="h-3 w-3" />
+                          <span>{rangeError instanceof Error ? rangeError.message : "Access denied"}</span>
+                        </div>
+                      ) : rangeError ? (
+                        <div className="flex items-center gap-1 text-xs">
+                          {rangeRefresh.refreshState === "retrying" ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-status-warning" />
+                          ) : (
+                            <AlertTriangle className="h-3 w-3 text-status-error" />
+                          )}
+                          <span
+                            className={
+                              rangeRefresh.refreshState === "retrying"
+                                ? "text-status-warning"
+                                : "text-status-error"
+                            }
+                          >
+                            {rangeRefresh.refreshState === "retrying" ? "Refreshing" : "Unavailable"}
+                            {rangeRefresh.lastVerifiedAt
+                              ? ` — last verified ${new Date(rangeRefresh.lastVerifiedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+                              : ""}
+                          </span>
+                          {rangeRefresh.refreshState === "unavailable" && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-1.5 text-[11px]"
+                              onClick={() => void refetchRangeStatus()}
+                              disabled={isFetching}
+                            >
+                              Retry
+                            </Button>
+                          )}
+                        </div>
+                      ) : rangeDataUpdatedAt > 0 ? (
+                        <div
+                          className="flex items-center gap-1 text-xs text-muted-foreground"
+                          title="Verified range status"
+                        >
                           <Wifi className={cn("h-3 w-3", dashboardDataSyncing ? "text-status-warning animate-pulse" : "text-status-success")} />
                           {new Date(rangeDataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
               </CardHeader>
@@ -1298,6 +1620,12 @@ export function DashboardPageClient() {
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin text-status-success" />
                         : <Power className="h-3.5 w-3.5 text-status-success" />}
                       {powerAllPending === "on" ? "Powering on…" : "All On"}
+                    </Button>
+                    <Button variant="outline" onClick={() => handleRestartAll()} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
+                      {powerAllPending === "restart"
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin text-status-info" />
+                        : <RotateCw className="h-3.5 w-3.5 text-status-info" />}
+                      {powerAllPending === "restart" ? "Restarting…" : "Restart"}
                     </Button>
                     <Button variant="outline" onClick={() => handlePowerAll("off")} disabled={!!pendingAction || !!powerAllPending} className="gap-1.5">
                       {powerAllPending === "off"
@@ -1677,6 +2005,10 @@ export function DashboardPageClient() {
                   <VMTable
                     vms={vms}
                     rangeId={selectedRangeId ?? undefined}
+                    state={vmTableState}
+                    errorMessage={vmTableError}
+                    onRetry={() => void refetchRangeStatus()}
+                    unconfirmedVmKeys={unconfirmedVmKeys}
                     onRefresh={() => void handleRefreshDashboard()}
                     onDownloadVv={handleDownloadVv}
                     onOpenBrowser={handleOpenBrowser}

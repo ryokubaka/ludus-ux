@@ -537,6 +537,19 @@ function runMigrations(db: BetterSqlite3.Database): void {
           ON deploy_log_clock(updated_at);
       `)
     },
+
+    // v20 — Range Builder canvas positions. Not part of range-config.yml.
+    (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS range_builder_layouts (
+          range_id    TEXT    NOT NULL,
+          username    TEXT    NOT NULL,
+          layout      TEXT    NOT NULL,
+          updated_at  INTEGER NOT NULL,
+          PRIMARY KEY (range_id, username)
+        );
+      `)
+    },
   ]
 
   for (let v = current; v < migrations.length; v++) {

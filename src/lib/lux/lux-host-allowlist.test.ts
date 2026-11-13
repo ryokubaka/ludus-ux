@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
+import { bashPath, posixPath } from "../../test-support/bash-path"
 import { lacks } from "../../test-support/host-capabilities"
 
 const helper = path.join(process.cwd(), "scripts/lux-host/lux-host")
@@ -48,8 +49,8 @@ function run(
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${bin}:/usr/bin:/bin`,
-      LUX_HOST_STUB_LOG: log,
+      PATH: bashPath(bin),
+      LUX_HOST_STUB_LOG: posixPath(log),
       ...extraEnv,
     },
   })
@@ -91,7 +92,13 @@ describe("lux-host allowlist", () => {
   })
 
   it("settings and credential probe", () => {
-    expect(run(["version"]).stdout.trim()).toBe("5")
+    expect(run(["version"]).stdout.trim()).toBe("7")
+    denied(["ludus-upgrade"])
+    denied(["ludus-upgrade", "v2.3.10"])
+    denied(["ludus-upgrade", "2.3.10;id"])
+    denied(["ludus-upgrade", "2.3.10", "extra"])
+    denied(["ludus-upgrade-log", "2.3.10"])
+    expect(run(["ludus-upgrade-log"]).stdout).toMatch(/^active=(yes|no)/)
     expect(run(["true"]).status).toBe(0)
     expect(run(["id"]).stdout.trim()).toBe("0")
     denied(["writable-dir", "/etc"])
@@ -321,8 +328,8 @@ exec bash ${JSON.stringify(helper)} "$@"
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${bin}:/usr/bin:/bin`,
-        LUX_HOST_STUB_LOG: log,
+        PATH: bashPath(bin),
+        LUX_HOST_STUB_LOG: posixPath(log),
         LUX_TEST_UPDATE_KEY: updateKey ?? "",
         SUDO_USER: "ludus",
       },

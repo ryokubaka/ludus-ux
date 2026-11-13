@@ -10,6 +10,8 @@ import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ReleasePager } from "@/components/settings/release-pager"
+import { RELEASE_PAGE_SIZE, releasePageIndex, releasePageSlice } from "@/components/settings/release-page"
 import {
   Dialog,
   DialogContent,
@@ -34,7 +36,6 @@ import {
   RefreshCw,
   Save,
   ChevronRight,
-  Package,
   BookOpen,
   Search,
   X,
@@ -51,6 +52,7 @@ import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/ui/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/core/changelog"
+import { LudusReleasesPanel } from "@/components/settings/ludus-releases-panel"
 import { LuxReleasesPanel } from "@/components/settings/lux-releases-panel"
 import { SshHostKeysPanel } from "@/components/settings/ssh-host-keys-panel"
 import { cn } from "@/lib/core/utils"
@@ -60,7 +62,6 @@ import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/ui/query-keys"
 import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { STALE } from "@/lib/ui/query-client"
-import { luxHostManualInstallCommand } from "@/lib/lux/lux-host-manual-command"
 import { canSubmitLuxHostInstall } from "@/lib/ssh/root-ssh-preflight"
 import { ludusMayIgnoreDeployVerboseWhenForce } from "@/lib/ludus/ludus-version"
 
@@ -77,6 +78,7 @@ interface Settings {
   goadEnabled: boolean
   ludushoundEnabled: boolean
   ludusAnsibleVerbose: boolean
+  ludusAnsibleSpeedups: boolean
   useLudusHostDns: boolean
   /** New value typed by the admin. The server never sends the stored key. */
   rootApiKey?: string
@@ -93,11 +95,6 @@ interface Settings {
 interface SessionInfo {
   username: string
   isAdmin: boolean
-}
-
-interface Dependency {
-  name: string
-  version: string
 }
 
 // ── Changelog parsing ──────────────────────────────────────────────────────
@@ -330,6 +327,7 @@ function ReleaseNotes() {
   const [expanded, setExpanded] = useState<Record<number, boolean>>({ 0: true })
   const [searchQuery, setSearchQuery] = useState("")
   const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
 
   useEffect(() => {
     fetch("/api/changelog")
@@ -348,6 +346,10 @@ function ReleaseNotes() {
   const searchActive = searchQuery.trim().length > 0
   const filterActive = searchActive || tagFilter != null
   const matchCount = countFilteredEntries(filteredVersions)
+
+  useEffect(() => {
+    setPage(0)
+  }, [searchQuery, tagFilter])
 
   useEffect(() => {
     if (!filterActive) return
@@ -439,7 +441,8 @@ function ReleaseNotes() {
       )}
       {filterActive && matchCount === 0 ? null : (
     <div className="divide-y divide-border/40">
-      {filteredVersions.map((v, vi) => {
+      {releasePageSlice(filteredVersions, page).map((v, localIndex) => {
+        const vi = releasePageIndex(filteredVersions.length, page) * RELEASE_PAGE_SIZE + localIndex
         const isOpen = filterActive || !!expanded[vi]
         const entries = allEntries(v)
         const tagCounts = entries.reduce<Record<string, number>>((acc, e) => {
@@ -530,39 +533,7 @@ function ReleaseNotes() {
       })}
     </div>
       )}
-    </div>
-  )
-}
-
-// ── Dependencies section ───────────────────────────────────────────────────
-
-function DependenciesList() {
-  const [deps, setDeps] = useState<Dependency[] | null>(null)
-  const [error, setError] = useState(false)
-
-  useEffect(() => {
-    fetch("/api/about")
-      .then((r) => { if (!r.ok) throw new Error(); return r.json() })
-      .then((d: { dependencies: Dependency[] }) => setDeps(d.dependencies))
-      .catch(() => setError(true))
-  }, [])
-
-  if (error) return <p className="text-sm text-destructive py-4 text-center">Could not load dependencies.</p>
-  if (!deps) return (
-    <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
-      <Loader2 className="h-4 w-4 animate-spin" />
-      <span className="text-sm">Loading…</span>
-    </div>
-  )
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-      {deps.map((dep) => (
-        <div key={dep.name} className="flex items-center justify-between py-1 border-b border-border/30 last:border-0">
-          <span className="text-xs text-foreground font-mono">{dep.name}</span>
-          <span className="text-xs text-muted-foreground font-mono">{dep.version}</span>
-        </div>
-      ))}
+      <ReleasePager page={page} count={filteredVersions.length} onPage={setPage} label="LUX release notes" />
     </div>
   )
 }
@@ -571,10 +542,6 @@ function DependenciesList() {
 
 function AboutTab({ isAdmin }: { isAdmin: boolean }) {
   const [logoKey] = useState(0)
-  const [depsCount, setDepsCount] = useState<number | null>(null)
-  const [changelogCount, setChangelogCount] = useState<number | null>(null)
-  const [notesOpen, setNotesOpen] = useState(false)
-  const [depsOpen, setDepsOpen] = useState(false)
   const [repoUrl, setRepoUrl] = useState("")
 
   useEffect(() => {
@@ -586,120 +553,62 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
-    fetch("/api/about")
-      .then((r) => r.ok ? r.json() : null)
-      .then((d: { dependencies: Dependency[] } | null) => { if (d) setDepsCount(d.dependencies.length) })
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    fetch("/api/changelog")
-      .then((r) => r.ok ? r.text() : null)
-      .then((raw) => {
-        if (!raw) return
-        const v = parseChangelog(raw)
-        setChangelogCount(v.reduce((s, vv) => s + allEntries(vv).length, 0))
-      })
-      .catch(() => {})
-  }, [])
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
-        <div className="h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-border/50">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/logo?v=${logoKey}`} alt="LUX Logo" className="h-full w-full object-contain" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-semibold">Ludus UX</h2>
-            <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
-            {APP_VERSION_LABEL ? (
-              <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
-            ) : null}
-          </div>
-          <p className="text-xs text-muted-foreground mt-0.5">Cyber range manager</p>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
-          {repoUrl && (
-            <>
+      <div className="grid gap-x-6 lg:grid-cols-2">
+        <LudusReleasesPanel isAdmin={isAdmin} />
+        <div className="grid gap-4 lg:row-span-4 lg:[grid-template-rows:subgrid]">
+          <div className="flex h-full flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
+            <div className="h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-border/50">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/logo?v=${logoKey}`} alt="LUX Logo" className="h-full w-full object-contain" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-semibold">Ludus UX</h2>
+                <Badge variant="outline" className="font-mono text-xs">v{APP_VERSION}</Badge>
+                {APP_VERSION_LABEL ? (
+                  <Badge variant="secondary" className="text-xs">{APP_VERSION_LABEL}</Badge>
+                ) : null}
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">Cyber range manager</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+              {repoUrl && (
+                <>
+                  <a
+                    href={repoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-primary transition-colors"
+                  >
+                    {isGitHubRepoUrl(repoUrl) ? "GitHub" : "Repository"}
+                  </a>
+                  <span className="text-border">·</span>
+                </>
+              )}
+              <span>Apache 2.0</span>
+              <span className="text-border">·</span>
               <a
-                href={repoUrl}
+                href="https://docs.ludus.cloud"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-primary transition-colors"
               >
-                {isGitHubRepoUrl(repoUrl) ? "GitHub" : "Repository"}
+                Ludus docs
               </a>
-              <span className="text-border">·</span>
-            </>
-          )}
-          <span>Apache 2.0</span>
-          <span className="text-border">·</span>
-          <a
-            href="https://docs.ludus.cloud"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-primary transition-colors"
-          >
-            Ludus docs
-          </a>
+            </div>
+          </div>
+          <LuxReleasesPanel isAdmin={isAdmin} />
+          <div className="flex h-full flex-col rounded-lg border border-border bg-card">
+            <div className="px-4 py-3 border-b border-border/50">
+              <span className="text-sm font-medium">Release notes</span>
+            </div>
+            <div className="px-4 py-3">
+              <ReleaseNotes />
+            </div>
+          </div>
         </div>
-      </div>
-
-      <LuxReleasesPanel isAdmin={isAdmin} />
-
-      <div className="grid gap-4 lg:grid-cols-2">
-      {/* Release notes */}
-      <div className={cn("rounded-lg border border-border bg-card", notesOpen && "lg:col-span-2")}>
-        <button
-          type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
-          onClick={() => setNotesOpen((o) => !o)}
-        >
-          <div className="flex items-center gap-2">
-            <BookOpen className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Release notes</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {changelogCount != null && (
-              <Badge variant="secondary" className="text-xs h-5">{changelogCount}</Badge>
-            )}
-            <ChevronRight className={`h-4 w-4 text-muted-foreground/60 transition-transform ${notesOpen ? "rotate-90" : ""}`} />
-          </div>
-        </button>
-        {notesOpen && (
-          <div className="px-4 pb-4 border-t border-border/50 pt-3">
-            <ReleaseNotes />
-          </div>
-        )}
-      </div>
-
-      {/* Dependencies */}
-      <div className={cn("rounded-lg border border-border bg-card", depsOpen && "lg:col-span-2")}>
-        <button
-          type="button"
-          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-muted/30 transition-colors rounded-t-lg"
-          onClick={() => setDepsOpen((o) => !o)}
-        >
-          <div className="flex items-center gap-2">
-            <Package className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Dependencies</span>
-          </div>
-          <div className="flex items-center gap-2">
-            {depsCount != null && (
-              <Badge variant="secondary" className="text-xs h-5">{depsCount}</Badge>
-            )}
-            <ChevronRight className={`h-4 w-4 text-muted-foreground/60 transition-transform ${depsOpen ? "rotate-90" : ""}`} />
-          </div>
-        </button>
-        {depsOpen && (
-          <div className="px-4 pb-4 border-t border-border/50 pt-3">
-            <DependenciesList />
-          </div>
-        )}
-      </div>
       </div>
     </div>
   )
@@ -707,7 +616,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
 
 // ── Main settings page ─────────────────────────────────────────────────────
 
-function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
+function SettingsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { toast } = useToast()
@@ -739,14 +648,39 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   const [installingLuxHost, setInstallingLuxHost] = useState(false)
   const [luxHostRootPassword, setLuxHostRootPassword] = useState("")
   const [luxHostMode, setLuxHostMode] = useState<"shell" | "ssh">("shell")
-  const luxHostManual = useMemo(() => {
+  const [luxHostManual, setLuxHostManual] = useState({ command: "", error: "" })
+  useEffect(() => {
+    if (!luxHostDialogOpen) return
     const user = draft?.proxmoxSshUser?.trim() ?? ""
-    try {
-      return { command: luxHostManualInstallCommand(user, luxHostScript), error: "" }
-    } catch (e) {
-      return { command: "", error: e instanceof Error ? e.message : "Enter a plain Linux username." }
+    if (!user || user === "root") {
+      setLuxHostManual({
+        command: "",
+        error: "SSH user must be a plain Linux username other than root",
+      })
+      return
     }
-  }, [draft?.proxmoxSshUser, luxHostScript])
+    const ctrl = new AbortController()
+    void (async () => {
+      try {
+        const res = await fetch(`/api/settings/lux-host-command?user=${encodeURIComponent(user)}`, {
+          signal: ctrl.signal,
+        })
+        const body = (await res.json().catch(() => ({}))) as { command?: string; error?: string }
+        if (!res.ok) {
+          setLuxHostManual({ command: "", error: body.error || "Could not build the install command" })
+          return
+        }
+        setLuxHostManual({ command: body.command || "", error: "" })
+      } catch (err) {
+        if (ctrl.signal.aborted) return
+        setLuxHostManual({
+          command: "",
+          error: err instanceof Error ? err.message : "Could not build the install command",
+        })
+      }
+    })()
+    return () => ctrl.abort()
+  }, [luxHostDialogOpen, draft?.proxmoxSshUser])
   const [credentialTestResult, setCredentialTestResult] = useState<{
     rootSsh: {
       ok: boolean; host: string; port: number; user: string
@@ -1157,6 +1091,20 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
               </div>
               <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
                 <div>
+                  <p className="text-sm font-medium">Ansible speedups</p>
+                  <p className="text-xs text-muted-foreground">
+                    SSH pipelining and a higher fork count for Ludus and GOAD Ansible (env only, no
+                    playbook edits). Turn off if a guest&apos;s sudoers requires a TTY.
+                  </p>
+                </div>
+                <Switch
+                  checked={draft?.ludusAnsibleSpeedups ?? true}
+                  onCheckedChange={(v) => setDraft((d) => d ? { ...d, ludusAnsibleSpeedups: v } : d)}
+                  disabled={!session?.isAdmin}
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <div>
                   <p className="text-sm font-medium">Use Ludus host DNS</p>
                   <p className="text-xs text-muted-foreground">
                     Before a deploy, point the router AdGuard template at 192.0.2.254 instead of public DNS.
@@ -1539,14 +1487,14 @@ function SettingsContent({ luxHostScript }: { luxHostScript: string }) {
   )
 }
 
-export function SettingsPageClient({ luxHostScript }: { luxHostScript: string }) {
+export function SettingsPageClient() {
   return (
     <Suspense fallback={
       <div className="flex justify-center py-20">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     }>
-      <SettingsContent luxHostScript={luxHostScript} />
+      <SettingsContent />
     </Suspense>
   )
 }

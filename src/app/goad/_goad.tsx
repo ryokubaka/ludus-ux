@@ -380,7 +380,7 @@ export function GoadPageClient() {
       )}
 
       {configured && (
-        <div className="flex gap-6 items-start">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           {/* ── Left: main content ── */}
           <div className="flex-1 min-w-0 space-y-6">
 
@@ -577,8 +577,8 @@ export function GoadPageClient() {
             )}
           </div>
 
-          {/* ── Right: Recent Operations sidebar (always visible) ── */}
-          <div className="w-72 shrink-0 space-y-3">
+          {/* ── Right: Recent Operations sidebar (stacks below on narrow screens) ── */}
+          <div className="w-full lg:w-72 lg:shrink-0 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <History className="h-3.5 w-3.5" />

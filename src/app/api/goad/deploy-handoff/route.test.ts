@@ -28,6 +28,7 @@ vi.mock("@/lib/logs/app-log", () => ({
 
 vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => gate.instances),
+  listGoadInstancesResult: vi.fn(async () => ({ ok: true, instances: gate.instances })),
 }))
 
 vi.mock("@/lib/goad/goad-task-store", () => ({

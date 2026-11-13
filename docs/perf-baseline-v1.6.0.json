@@ -1,0 +1,249 @@
+{
+  "generatedAt": "2026-11-12T15:13:07.489Z",
+  "instance": "deployed LUX v1.6.0",
+  "baseURL": "https://172.28.16.1",
+  "note": "172.28.16.1 is the host gateway serving the same nginx/LUX instance as https://10.8.0.176",
+  "runs": [
+    {
+      "run": 1,
+      "scenarios": [
+        {
+          "label": "dashboard_reload",
+          "counts": {
+            "api/auth/impersonate": 3,
+            "api/settings": 1,
+            "next_rsc": 31,
+            "api/auth/session": 1
+          },
+          "maxMs": {
+            "api/auth/impersonate": 792,
+            "api/settings": 406,
+            "next_rsc": 928,
+            "api/auth/session": 968
+          },
+          "navigation": {
+            "domContentLoaded": 1166,
+            "loadEventEnd": 1166,
+            "duration": 1166
+          }
+        },
+        {
+          "label": "settings_reload",
+          "counts": {
+            "api/settings": 3,
+            "api/auth/impersonate": 3,
+            "api/auth/session": 2,
+            "next_rsc": 30
+          },
+          "maxMs": {
+            "api/settings": 656,
+            "api/auth/impersonate": 555,
+            "api/auth/session": 558,
+            "next_rsc": 857
+          },
+          "navigation": {
+            "domContentLoaded": 993,
+            "loadEventEnd": 993,
+            "duration": 993
+          }
+        }
+      ]
+    },
+    {
+      "run": 2,
+      "scenarios": [
+        {
+          "label": "dashboard_reload",
+          "counts": {
+            "api/auth/impersonate": 3,
+            "next_rsc": 35,
+            "api/auth/session": 2,
+            "api/settings": 1
+          },
+          "maxMs": {
+            "api/auth/impersonate": 773,
+            "next_rsc": 857,
+            "api/auth/session": 785,
+            "api/settings": 250
+          },
+          "navigation": {
+            "domContentLoaded": 1147,
+            "loadEventEnd": 1148,
+            "duration": 1148
+          }
+        },
+        {
+          "label": "settings_reload",
+          "counts": {
+            "api/settings": 3,
+            "api/auth/impersonate": 3,
+            "api/auth/session": 1,
+            "next_rsc": 30
+          },
+          "maxMs": {
+            "api/settings": 652,
+            "api/auth/impersonate": 538,
+            "api/auth/session": 541,
+            "next_rsc": 853
+          },
+          "navigation": {
+            "domContentLoaded": 892,
+            "loadEventEnd": 892,
+            "duration": 893
+          }
+        }
+      ]
+    },
+    {
+      "run": 3,
+      "scenarios": [
+        {
+          "label": "dashboard_reload",
+          "counts": {
+            "api/auth/impersonate": 3,
+            "next_rsc": 35,
+            "api/settings": 1,
+            "api/auth/session": 1
+          },
+          "maxMs": {
+            "api/auth/impersonate": 765,
+            "next_rsc": 876,
+            "api/settings": 335,
+            "api/auth/session": 1269
+          },
+          "navigation": {
+            "domContentLoaded": 1094,
+            "loadEventEnd": 1094,
+            "duration": 1094
+          }
+        },
+        {
+          "label": "settings_reload",
+          "counts": {
+            "api/settings": 3,
+            "api/auth/impersonate": 3,
+            "next_rsc": 30,
+            "api/auth/session": 1
+          },
+          "maxMs": {
+            "api/settings": 749,
+            "api/auth/impersonate": 489,
+            "next_rsc": 614,
+            "api/auth/session": 639
+          },
+          "navigation": {
+            "domContentLoaded": 786,
+            "loadEventEnd": 786,
+            "duration": 786
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "dashboard_reload": {
+      "navigationMs": {
+        "values": [
+          1166,
+          1148,
+          1094
+        ],
+        "median": 1148,
+        "min": 1094,
+        "max": 1166
+      },
+      "counts": [
+        {
+          "api/auth/impersonate": 3,
+          "api/settings": 1,
+          "next_rsc": 31,
+          "api/auth/session": 1
+        },
+        {
+          "api/auth/impersonate": 3,
+          "next_rsc": 35,
+          "api/auth/session": 2,
+          "api/settings": 1
+        },
+        {
+          "api/auth/impersonate": 3,
+          "next_rsc": 35,
+          "api/settings": 1,
+          "api/auth/session": 1
+        }
+      ],
+      "maxMs": [
+        {
+          "api/auth/impersonate": 792,
+          "api/settings": 406,
+          "next_rsc": 928,
+          "api/auth/session": 968
+        },
+        {
+          "api/auth/impersonate": 773,
+          "next_rsc": 857,
+          "api/auth/session": 785,
+          "api/settings": 250
+        },
+        {
+          "api/auth/impersonate": 765,
+          "next_rsc": 876,
+          "api/settings": 335,
+          "api/auth/session": 1269
+        }
+      ]
+    },
+    "settings_reload": {
+      "navigationMs": {
+        "values": [
+          993,
+          893,
+          786
+        ],
+        "median": 893,
+        "min": 786,
+        "max": 993
+      },
+      "counts": [
+        {
+          "api/settings": 3,
+          "api/auth/impersonate": 3,
+          "api/auth/session": 2,
+          "next_rsc": 30
+        },
+        {
+          "api/settings": 3,
+          "api/auth/impersonate": 3,
+          "api/auth/session": 1,
+          "next_rsc": 30
+        },
+        {
+          "api/settings": 3,
+          "api/auth/impersonate": 3,
+          "next_rsc": 30,
+          "api/auth/session": 1
+        }
+      ],
+      "maxMs": [
+        {
+          "api/settings": 656,
+          "api/auth/impersonate": 555,
+          "api/auth/session": 558,
+          "next_rsc": 857
+        },
+        {
+          "api/settings": 652,
+          "api/auth/impersonate": 538,
+          "api/auth/session": 541,
+          "next_rsc": 853
+        },
+        {
+          "api/settings": 749,
+          "api/auth/impersonate": 489,
+          "next_rsc": 614,
+          "api/auth/session": 639
+        }
+      ]
+    }
+  }
+}

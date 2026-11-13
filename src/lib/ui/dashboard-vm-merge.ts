@@ -84,7 +84,20 @@ function nextVmKeysAreSubsetOfPrev(next: VMObject[], prev: VMObject[]): boolean 
   return next.every((vm) => prevKeys.has(vmIdentityKey(vm)))
 }
 
-const vmPartialListStreak = new Map<string, { signature: string; streak: number }>()
+/**
+ * One short poll can be a Proxmox hiccup. Bound how long we retain rows that
+ * the authoritative payload did not confirm, including alternating short
+ * snapshots and DEPLOYING/WAITING gaps where `numberOfVMs` is still 0.
+ */
+const MAX_UNCONFIRMED_MERGES = 2
+
+interface VmPartialListState {
+  signature: string
+  streak: number
+  merges: number
+}
+
+const vmPartialListStreak = new Map<string, VmPartialListState>()
 
 function vmPartialStreakKey(scopeTag: string, rangeId: string) {
   return `${scopeTag}::${rangeId}`
@@ -94,12 +107,57 @@ export function clearVmPartialListStreak(): void {
   vmPartialListStreak.clear()
 }
 
+/** Result of resolving a Ludus VM list for the dashboard table. */
+export interface VmListResolution {
+  vms: VMObject[]
+  /**
+   * Identity keys of rows that came from the previous poll and were not in the
+   * current payload. They are shown while a refresh is in progress but must be
+   * labeled as unconfirmed.
+   */
+  unconfirmedVmKeys: string[]
+  /** True when the result contains at least one row not confirmed by this poll. */
+  merged: boolean
+}
+
+function resolution(
+  vms: VMObject[],
+  confirmedKeys: Set<string>,
+): VmListResolution {
+  const unconfirmedVmKeys = vms
+    .map(vmIdentityKey)
+    .filter((key) => !confirmedKeys.has(key))
+  return {
+    vms,
+    unconfirmedVmKeys,
+    merged: unconfirmedVmKeys.length > 0,
+  }
+}
+
+function nextStreak(
+  streakKey: string,
+  signature: string,
+  merge: boolean,
+): VmPartialListState {
+  const row = vmPartialListStreak.get(streakKey)
+  const next: VmPartialListState = {
+    signature,
+    streak: row && row.signature === signature ? row.streak + 1 : 1,
+    merges: merge ? (row?.merges ?? 0) + 1 : 0,
+  }
+  vmPartialListStreak.set(streakKey, next)
+  return next
+}
+
 /**
- * When GET /range returns fewer VM rows than we already had (or than numberOfVMs says exist),
- * one poll is merged with the previous list so a Proxmox hiccup does not hide VMs.
- * The same short snapshot on the next poll replaces the cache. A list at least as long as
- * numberOfVMs is shown as-is. Rows that share a Proxmox VMID, or a name with no VMID beside
- * a named row that has one, collapse to a single row.
+ * Resolve the VM list for a dashboard poll.
+ *
+ * A verified payload (at least `numberOfVMs` rows, or a list that is not
+ * shorter than the previous one) replaces the table immediately. A short
+ * payload is merged with the previous list at most `MAX_UNCONFIRMED_MERGES`
+ * times; rows retained from the previous poll are returned as unconfirmed.
+ * After the merge budget or a repeated identical short snapshot, the payload
+ * is treated as authoritative so stale rows cannot accumulate indefinitely.
  */
 export function resolveVmListForRangeQuery(args: {
   data: RangeObject
@@ -108,51 +166,42 @@ export function resolveVmListForRangeQuery(args: {
   stateUpper: string
   scopeTag: string
   rangeId: string
-}): VMObject[] {
-  const { data, newVMs, prevVMs, stateUpper, scopeTag, rangeId } = args
-  const transientVmGap = stateUpper === "DEPLOYING" || stateUpper === "WAITING"
+}): VmListResolution {
+  const { data, newVMs, prevVMs, scopeTag, rangeId } = args
   const streakKey = vmPartialStreakKey(scopeTag, rangeId)
 
+  // A missing count, or an explicit 0 from a store that defaulted an absent field,
+  // is not proof that this payload is complete.
   const expected =
-    typeof data.numberOfVMs === "number" && Number.isFinite(data.numberOfVMs) && data.numberOfVMs >= 0
+    typeof data.numberOfVMs === "number" && Number.isFinite(data.numberOfVMs) && data.numberOfVMs > 0
       ? data.numberOfVMs
       : undefined
 
   if (newVMs.length === 0) {
-    if (prevVMs.length > 0 && transientVmGap) {
+    if (prevVMs.length === 0) {
       vmPartialListStreak.delete(streakKey)
-      return dedupeVMs(prevVMs)
+      return resolution([], new Set())
     }
-    if (prevVMs.length > 0) {
-      const signature = "empty"
-      const row = vmPartialListStreak.get(streakKey)
-      if (row && row.signature === signature) row.streak += 1
-      else vmPartialListStreak.set(streakKey, { signature, streak: 1 })
-      const streak = vmPartialListStreak.get(streakKey)!.streak
-      if (streak >= 2) {
-        vmPartialListStreak.delete(streakKey)
-        return []
-      }
-      return dedupeVMs(prevVMs)
+
+    const row = nextStreak(streakKey, "empty", true)
+    if (row.streak >= 2 || row.merges > MAX_UNCONFIRMED_MERGES) {
+      vmPartialListStreak.delete(streakKey)
+      return resolution([], new Set())
     }
-    vmPartialListStreak.delete(streakKey)
-    return []
+
+    const kept = dedupeVMs(prevVMs)
+    return resolution(kept, new Set())
   }
 
   const listed = dedupeVMs(newVMs)
+  const listedKeys = new Set(listed.map(vmIdentityKey))
 
   // numberOfVMs is the range record's count, not a promise that this payload is partial.
   // A list at least that long is the snapshot to show. A longer list is extra clones, not ghosts.
   if (expected !== undefined && listed.length >= expected) {
     vmPartialListStreak.delete(streakKey)
-    return listed
+    return resolution(listed, listedKeys)
   }
-
-  const signature = incomingVmSignature(listed)
-  const row = vmPartialListStreak.get(streakKey)
-  if (row && row.signature === signature) row.streak += 1
-  else vmPartialListStreak.set(streakKey, { signature, streak: 1 })
-  const streak = vmPartialListStreak.get(streakKey)!.streak
 
   const shorterThanExpected = expected !== undefined && listed.length < expected
   const shorterThanPrev =
@@ -160,15 +209,20 @@ export function resolveVmListForRangeQuery(args: {
     listed.length < prevVMs.length &&
     nextVmKeysAreSubsetOfPrev(listed, prevVMs)
 
-  if (shorterThanExpected || shorterThanPrev) {
-    // One short poll can be a Proxmox hiccup. The same short snapshot twice is the real list.
-    if (streak >= 2) {
-      vmPartialListStreak.delete(streakKey)
-      return listed
-    }
-    return dedupeVMs(mergeVmUnionPreferNext(prevVMs, listed, true))
+  if (!shorterThanExpected && !shorterThanPrev) {
+    vmPartialListStreak.delete(streakKey)
+    return resolution(listed, listedKeys)
   }
 
-  vmPartialListStreak.delete(streakKey)
-  return listed
+  const row = nextStreak(streakKey, incomingVmSignature(listed), true)
+
+  // The same short snapshot twice, or a merge budget that is exhausted, means
+  // this is the authoritative list. Trust it instead of growing the cache.
+  if (row.streak >= 2 || row.merges > MAX_UNCONFIRMED_MERGES) {
+    vmPartialListStreak.delete(streakKey)
+    return resolution(listed, listedKeys)
+  }
+
+  const merged = dedupeVMs(mergeVmUnionPreferNext(prevVMs, listed, true))
+  return resolution(merged, listedKeys)
 }

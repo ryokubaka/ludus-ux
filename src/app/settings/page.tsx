@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs"
-import path from "node:path"
 import { Suspense } from "react"
 import { dynamicPageClient } from "@/lib/ui/dynamic-page-client"
 import { LuxVersionHeader } from "./lux-version-header"
@@ -10,7 +8,6 @@ const SettingsPageClient = dynamicPageClient(
 )
 
 export default function SettingsPage() {
-  const luxHostScript = readFileSync(path.join(process.cwd(), "scripts", "lux-host", "lux-host"), "utf8")
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <div className="flex justify-end px-6 pt-3">
@@ -18,7 +15,7 @@ export default function SettingsPage() {
           <LuxVersionHeader />
         </Suspense>
       </div>
-      <SettingsPageClient luxHostScript={luxHostScript} />
+      <SettingsPageClient />
     </div>
   )
 }

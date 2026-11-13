@@ -22,8 +22,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session/session"
 import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
-import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad/goad-ssh"
+import { invalidateGoadInstanceCache, isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad/goad-ssh"
 import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { assertSafeInstanceId, InvalidInstanceIdError } from "@/lib/goad/goad-pending-network-fs"
 import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
 
@@ -157,9 +158,14 @@ export async function POST(
   }
 
   const { instanceId: rawId } = await params
-  const instanceId = decodeURIComponent(rawId)
-  if (!instanceId) {
-    return NextResponse.json({ error: "Missing instance ID" }, { status: 400 })
+  let instanceId: string
+  try {
+    instanceId = assertSafeInstanceId(decodeURIComponent(rawId))
+  } catch (err) {
+    if (err instanceof InvalidInstanceIdError || err instanceof URIError) {
+      return NextResponse.json({ error: "Invalid instance id" }, { status: 400 })
+    }
+    throw err
   }
 
   const denied = await assertGoadInstanceAccess(session, request, instanceId)
@@ -222,6 +228,7 @@ export async function POST(
       )
     }
     logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} extension=${extensionName}` })
+    invalidateGoadInstanceCache()
     return NextResponse.json({
       ok: parsed.ok ?? true,
       removedFromInstance: parsed.removedFromInstance ?? false,

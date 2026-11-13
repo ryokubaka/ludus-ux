@@ -1,10 +1,6 @@
 import yaml from "js-yaml"
 import type { AnsibleItem } from "@/lib/core/types"
 import type { TemplateObject } from "@/lib/core/types"
-import {
-  buildInstalledAnsibleNames,
-  isAnsibleCatalogNameInstalled,
-} from "@/lib/sources/source-catalog-presence"
 import { parseTemplatesFromLudusYaml } from "@/lib/templates/ludushound-templates"
 
 export type BlueprintDepKind = "role" | "collection" | "template"
@@ -268,17 +264,142 @@ export function requirementsAtWrongVersion(
   return wrong
 }
 
+/** Directory names from GET /ansible, lowercased, with no short-name aliases. */
+function exactInstalledNames(items: AnsibleItem[]): Set<string> {
+  const names = new Set<string>()
+  for (const item of items) {
+    const name = ansibleItemName(item).toLowerCase()
+    if (name) names.add(name)
+  }
+  return names
+}
+
+function roleLastSegment(name: string): string {
+  const dot = name.lastIndexOf(".")
+  return dot >= 0 ? name.slice(dot + 1) : name
+}
+
+/**
+ * Name this account's role list will accept for a config reference.
+ * An exact name wins. Otherwise the Ansible page's role with the same last
+ * segment counts: the directory `role`, or the one namespaced name that uses
+ * that directory. Two different namespaces for the same directory do not match,
+ * and a collection of the same string is another kind.
+ */
+export function installedRoleNameForRequirement(
+  requiredName: string,
+  installedExact: Set<string>,
+): string | null {
+  const name = requiredName.trim().toLowerCase()
+  if (!name) return null
+  if (installedExact.has(name)) return name
+  const short = roleLastSegment(name)
+  const candidates = [...installedExact].filter((installed) => roleLastSegment(installed) === short)
+  if (candidates.length === 0) return null
+  const directory = candidates.find((installed) => !installed.includes("."))
+  if (directory) return directory
+  if (candidates.length === 1) return candidates[0] ?? null
+  return null
+}
+
+export function isDeployAnsibleNameInstalled(
+  requiredName: string,
+  installedExact: Set<string>,
+): boolean {
+  return installedRoleNameForRequirement(requiredName, installedExact) != null
+}
+
+/** Spelling from the Ansible page for a role Ludus rejected by its config name. */
+export function roleNameLudusAccepts(requiredName: string, installed: AnsibleItem[]): string | null {
+  const roles = installed.filter((item) => ansibleItemType(item) === "role")
+  const required = requiredName.trim().toLowerCase()
+  const resolved = installedRoleNameForRequirement(required, exactInstalledNames(roles))
+  if (!resolved) return null
+  if (resolved !== required) {
+    for (const item of roles) {
+      const name = ansibleItemName(item)
+      if (name.toLowerCase() === resolved) return name
+    }
+    return resolved
+  }
+  // The page lists the name Ludus just rejected. Galaxy often prints the directory instead.
+  const short = roleLastSegment(required)
+  if (!short || short === required) return null
+  for (const item of roles) {
+    const name = ansibleItemName(item)
+    if (name.toLowerCase() === short) return name
+  }
+  return short
+}
+
+const MISSING_ROLE = /role '([^']+)' does not exist/i
+
+export function missingRoleFromLudusError(error: string): string | null {
+  return error.match(MISSING_ROLE)?.[1]?.trim() || null
+}
+
+/** Replace one role token in range config. A longer name that continues past the token is left alone. */
+export function rewriteRoleNameInConfig(configYaml: string, from: string, to: string): string {
+  const source = from.trim()
+  const target = to.trim()
+  if (!source || !target || source === target) return configYaml
+  const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const boundary = "[\\s'\"\\[\\],]"
+  return configYaml.replace(new RegExp(`(^|${boundary})${escaped}(?=$|${boundary})`, "gm"), `$1${target}`)
+}
+
+/** Rewrite role tokens to the directory name this account actually has installed. */
+export function rewriteConfigToInstalledRoles(configYaml: string, installed: AnsibleItem[]): string {
+  const roles = installed.filter((item) => ansibleItemType(item) === "role")
+  const exact = exactInstalledNames(roles)
+  let yaml = configYaml
+  for (const ref of extractConfigRoleRefs(yaml)) {
+    const resolved = installedRoleNameForRequirement(ref, exact)
+    if (!resolved || resolved === ref.toLowerCase()) continue
+    const spelled = roles.find((item) => ansibleItemName(item).toLowerCase() === resolved)
+    yaml = rewriteRoleNameInConfig(yaml, ref, spelled ? ansibleItemName(spelled) : resolved)
+  }
+  return yaml
+}
+
+/**
+ * Spellings to try after Ludus rejects `requiredName`, best first.
+ * The rejected string is omitted. A directory name comes before another
+ * namespace, and the bare directory is always a candidate for a namespaced role.
+ */
+export function roleSpellingsToTry(requiredName: string, installed: AnsibleItem[]): string[] {
+  const required = requiredName.trim()
+  const requiredKey = required.toLowerCase()
+  const roles = installed.filter((item) => ansibleItemType(item) === "role")
+  const resolved = installedRoleNameForRequirement(required, exactInstalledNames(roles))
+  const out: string[] = []
+  const push = (value: string | null | undefined) => {
+    const name = value?.trim()
+    if (!name || name.toLowerCase() === requiredKey) return
+    if (out.some((item) => item.toLowerCase() === name.toLowerCase())) return
+    out.push(name)
+  }
+  const spelling = (key: string) => {
+    const item = roles.find((entry) => ansibleItemName(entry).toLowerCase() === key)
+    return item ? ansibleItemName(item) : key
+  }
+  if (resolved && resolved !== requiredKey) push(spelling(resolved))
+  const short = roleLastSegment(requiredKey)
+  if (short && short !== requiredKey) push(spelling(short))
+  for (const item of roles) {
+    const name = ansibleItemName(item)
+    if (roleLastSegment(name.toLowerCase()) === short) push(name)
+  }
+  return out
+}
+
 export function findMissingRequirements(
   installed: AnsibleItem[],
   required: BlueprintRequirement[],
 ): BlueprintRequirement[] {
-  const roles = installed.filter((i) => ansibleItemType(i) === "role")
-  const collections = installed.filter((i) => ansibleItemType(i) === "collection")
-  // Short names are matched only within the same kind. geerlingguy.mysql must
-  // not satisfy community.mysql — glpi.yml needs the collection's mysql_user.
   const installedByKind: Record<"role" | "collection", Set<string>> = {
-    role: buildInstalledAnsibleNames(roles, []),
-    collection: buildInstalledAnsibleNames([], collections),
+    role: exactInstalledNames(installed.filter((i) => ansibleItemType(i) === "role")),
+    collection: exactInstalledNames(installed.filter((i) => ansibleItemType(i) === "collection")),
   }
 
   const missing: BlueprintRequirement[] = []
@@ -290,7 +411,7 @@ export function findMissingRequirements(
     seen.add(key)
 
     const installedNames = req.kind === "role" || req.kind === "collection" ? installedByKind[req.kind] : null
-    if (!installedNames || !isAnsibleCatalogNameInstalled(req.name, installedNames)) {
+    if (!installedNames || !isDeployAnsibleNameInstalled(req.name, installedNames)) {
       missing.push(req)
     }
   }

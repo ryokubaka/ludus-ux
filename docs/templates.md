@@ -198,7 +198,7 @@ Ludus **server-side** range deploy runs `ansible-playbook` as the **`ludus`** Li
 
 Ludus sync runs `git fetch` as the **`ludus`** Linux user inside `/opt/ludus/sources/<id>/`. If any files there were created as **root** (manual `git` as root, older LUX writing into `sources/…/templates/`, etc.), fetch dies with `insufficient permission for adding an object to repository database .git/objects`.
 
-**LUX automation (1.3.0+):** every Sync / auto-sync chowns `/opt/ludus/sources` to `ludus:ludus` over host SSH first, and retries once if that error still appears. Operators should not need a manual fix for normal use.
+**LUX automation (1.3.0+):** when that permission error comes back, LUX chowns `/opt/ludus/sources` to `ludus:ludus` over host SSH and retries the sync once. A healthy sync does not open that SSH session first. Operators should not need a manual fix for normal use.
 
 **Manual repair** (if host SSH is unavailable to LUX):
 

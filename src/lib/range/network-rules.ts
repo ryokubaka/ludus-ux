@@ -46,6 +46,26 @@ function normalizeAction(v: unknown): RuleAction {
   return "ACCEPT"
 }
 
+/** Full address for a host rule. A bare octet or range is left as written. */
+export function displayHostAddress(
+  vlan: VlanValue,
+  octet: string | undefined,
+  rangeNumber: number | null,
+): string {
+  const last = octet?.trim() ?? ""
+  if (!last) return ""
+  if (typeof vlan !== "number" || rangeNumber == null || !/^\d{1,3}$/.test(last)) return last
+  return `10.${rangeNumber}.${vlan}.${last}`
+}
+
+/** True when the field is empty or Ludus can store it as a last octet or range. */
+export function isHostAddress(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!trimmed) return true
+  const normalized = normalizeIpLastOctet(trimmed)
+  return normalized != null && /^\d{1,3}(?:-\d{1,3})?$/.test(normalized)
+}
+
 /**
  * Ludus `ip_last_octet_*` is ONLY the last octet (or N-M range), never a full IP.
  * UI users often paste `10.1.20.20` — coerce to `20` so schema validation passes.
@@ -490,6 +510,34 @@ export function networkSectionEqual(
   } catch {
     return false
   }
+}
+
+function firewallIdentity(rule: NetworkRule, swapped: boolean): string {
+  const src = swapped ? rule.vlan_dst : rule.vlan_src
+  const dst = swapped ? rule.vlan_src : rule.vlan_dst
+  // Octets stay off this key. The diagram draws the VLAN boxes, so a host-specific
+  // rule and its reverse still share one line.
+  return [rule.protocol, rule.ports, rule.action, String(src), String(dst)].join("|")
+}
+
+function sameNameOpposite(rule: NetworkRule, other: NetworkRule): boolean {
+  const name = rule.name.trim().toLowerCase()
+  if (!name || name !== other.name.trim().toLowerCase()) return false
+  return String(other.vlan_src) === String(rule.vlan_dst) && String(other.vlan_dst) === String(rule.vlan_src)
+}
+
+/**
+ * Index of the rule that allows the same traffic in the opposite direction, or -1.
+ * A shared name with the VLANs swapped counts too: the canvas draws VLAN to VLAN,
+ * and two differently worded port lists were still one rule on the diagram.
+ */
+export function firewallMirrorIndex(rules: readonly NetworkRule[], index: number): number {
+  const rule = rules[index]
+  if (!rule) return -1
+  const wanted = firewallIdentity(rule, true)
+  const byIdentity = rules.findIndex((other, otherIndex) => otherIndex !== index && firewallIdentity(other, false) === wanted)
+  if (byIdentity !== -1) return byIdentity
+  return rules.findIndex((other, otherIndex) => otherIndex !== index && sameNameOpposite(rule, other))
 }
 
 /** Return a blank NetworkRule with sensible defaults. */

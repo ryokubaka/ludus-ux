@@ -98,6 +98,8 @@ Deploy logs are an SSE stream from `src/app/api/logs/stream/route.ts` into `src/
 
 User-facing notes go under `## Unreleased` in `CHANGELOG.md`, with one tag: `[Add]`, `[Fix]`, `[Improve]`, `[Perf]`, `[Security]`, `[Docs]`, `[Remove]`, or `[Breaking]`. Do not add a `## [X.Y.Z]` heading unless the user asked to cut a release. `.github/workflows/release.yml` publishes the newest versioned section when a pull request merges to `main`. The GitLab `publish-release` job does the same when the default branch updates.
 
+A capability that is new in the release being written is one `[Add]` bullet. Work that only makes that new capability behave as intended stays in that bullet. Do not also file it as `[Fix]`, `[Improve]`, `[Perf]`, or another tag. A `[Fix]` is a defect in a release that already shipped. `[Improve]` and `[Perf]` change behavior that already existed.
+
 Pull request titles look like `vX.Y.Z - Feature, feature, and feature`. The body is `## Summary` and one bullet per changelog item. `.github/workflows/pr-summary.yml` writes that from `CHANGELOG.md`. The GitLab `mr-summary` job does the same. Delete the `lux-pr-summary` comment to keep a hand-edited description.
 
 No **Testing** section, screenshots, or command logs.

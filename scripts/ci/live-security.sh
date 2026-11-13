@@ -13,6 +13,9 @@
 #   SECURITY_GATE_UPGRADE=1              also replay an upgrade from the previous release tag
 #   SECURITY_GATE_ALLOW_DIRTY=1          run with uncommitted changes (no status is posted)
 . "$(dirname "$0")/lib.sh"
+# shellcheck source=gitlab-trust.sh
+source "$(dirname "$0")/gitlab-trust.sh"
+lux_trust_gitlab_api
 
 if [[ -f .security-gate.env ]]; then
   set -a
@@ -63,7 +66,12 @@ post_status() {
     [[ "$state" == "pending" ]] && gl_state="running"
     if [[ -n "$api" && -n "$project" ]]; then
       project="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$project")"
+      local cacert=()
+      if [[ -n "${NODE_EXTRA_CA_CERTS:-}" && -f "${NODE_EXTRA_CA_CERTS}" ]]; then
+        cacert=(--cacert "$NODE_EXTRA_CA_CERTS")
+      fi
       printf 'PRIVATE-TOKEN: %s\n' "$GITLAB_TOKEN" | curl -fsS -o /dev/null -H @- \
+        "${cacert[@]}" \
         --data-urlencode "state=$gl_state" \
         --data-urlencode "name=$STATUS_CONTEXT" \
         --data-urlencode "description=$description" \

@@ -68,6 +68,24 @@ export const CHECKLIST = [
 ]
 
 const LIVE_CONTEXT = "security-gate/live"
+const LIVE_JOB = "security-live"
+
+function liveRank(row) {
+  if (!row) return "missing"
+  if (row.status === "success") return "pass"
+  if (row.status === "failed" || row.status === "canceled") return "fail"
+  return "pending"
+}
+
+// Newest status wins, whether it is the external security-gate/live status or
+// the GitLab security-live job. The checklist job runs before that stage, so
+// "pending" must not clear a box the live job already ticked.
+export function liveStateFromStatuses(rows) {
+  const list = (Array.isArray(rows) ? rows : []).slice().sort((a, b) => (b?.id ?? 0) - (a?.id ?? 0))
+  const row = list.find((item) => item?.name === LIVE_CONTEXT || item?.name === LIVE_JOB)
+  const rank = liveRank(row)
+  return rank === "missing" ? "pending" : rank
+}
 
 export function itemText(line) {
   return line.replace(/^\s*- \[[ xX]\]\s*/, "").trim()
@@ -109,6 +127,7 @@ export function applyChecklist(body, states) {
   }
   for (const item of CHECKLIST) {
     if (!Object.prototype.hasOwnProperty.call(states, item.id)) continue
+    if (states[item.id] === "pending") continue
     const mark = states[item.id] === "pass" ? "x" : " "
     const next = `- [${mark}] ${item.text}`
     const at = lines.findIndex((line) => matchesItem(item, line))
@@ -170,18 +189,23 @@ function gitlab(method, apiPath, bodyFile) {
 
 function liveFromGitlab(sha) {
   if (!process.env.CI_API_V4_URL || !process.env.CI_PROJECT_ID || !sha) return "pending"
-  let payload
+  const rows = []
   try {
-    payload = JSON.parse(gitlab("GET", `/projects/${process.env.CI_PROJECT_ID}/repository/commits/${sha}/statuses`))
+    for (let page = 1; page <= 5; page++) {
+      const payload = JSON.parse(
+        gitlab(
+          "GET",
+          `/projects/${process.env.CI_PROJECT_ID}/repository/commits/${sha}/statuses?per_page=100&page=${page}`,
+        ),
+      )
+      const batch = Array.isArray(payload) ? payload : []
+      rows.push(...batch)
+      if (batch.length < 100) break
+    }
   } catch {
-    return "pending"
+    return rows.length > 0 ? liveStateFromStatuses(rows) : "pending"
   }
-  const rows = Array.isArray(payload) ? payload : []
-  const status = rows.find((row) => row.name === LIVE_CONTEXT)
-  if (!status) return "pending"
-  if (status.status === "success") return "pass"
-  if (status.status === "failed" || status.status === "canceled") return "fail"
-  return "pending"
+  return liveStateFromStatuses(rows)
 }
 
 function changelogFromGitlab() {

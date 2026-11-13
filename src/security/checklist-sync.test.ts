@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { CHECKLIST, applyChecklist, resultsFromVitest } from "../../scripts/ci/security-checklist.mjs"
+import { CHECKLIST, applyChecklist, liveStateFromStatuses, resultsFromVitest } from "../../scripts/ci/security-checklist.mjs"
 
 function templateItems(file: string): string[] {
   return readFileSync(file, "utf8")
@@ -23,6 +23,25 @@ describe("security checklist sync", () => {
     expect(applied.body).toContain(`- [x] ${CHECKLIST[0].text}`)
     expect(applied.body).toContain(`- [ ] ${CHECKLIST[1].text}`)
     expect(applied.missing).toBe(false)
+  })
+
+  it("keeps a checked live box while that suite is still pending", () => {
+    const live = CHECKLIST.find((item) => item.id === "live")
+    const body = ["## Security checklist", "", `- [x] ${live?.text}`, ""].join("\n")
+    const applied = applyChecklist(body, { live: "pending" })
+    expect(applied.changed).toBe(false)
+    expect(applied.body).toContain(`- [x] ${live?.text}`)
+  })
+
+  it("treats the GitLab security-live job as the live suite", () => {
+    expect(liveStateFromStatuses([{ id: 2, name: "security-live", status: "success" }])).toBe("pass")
+    expect(
+      liveStateFromStatuses([
+        { id: 1, name: "security-gate/live", status: "success" },
+        { id: 3, name: "security-live", status: "failed" },
+      ]),
+    ).toBe("fail")
+    expect(liveStateFromStatuses([{ id: 1, name: "security-live", status: "running" }])).toBe("pending")
   })
 
   it("leaves other boxes alone when only the live result is known", () => {

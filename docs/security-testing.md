@@ -131,6 +131,6 @@ The PR and MR templates carry the same checklist. `security-checklist` checks a 
 | Origin check | `origin-gate.test.ts` |
 | A fixed finding has a test | `finding-catalog.test.ts` |
 | Changelog entry | `changelog.sh` |
-| Live suite | `security-gate/live` is success for that commit |
+| Live suite | `security-gate/live` is success for that commit, or the GitLab `security-live` job succeeded |
 
-A failing item stays `[ ]`. The live box stays open until `live-security.sh` posts success. On GitLab that is the `security-live` job when `LUX_LIVE_SECURITY` is `1`.
+A failing item stays `[ ]`. The checklist job runs before the live stage, so it leaves that box untouched while the suite is still pending. `live-security.sh` ticks it after a pass. On GitLab that is the `security-live` job when `LUX_LIVE_SECURITY` is `1`.

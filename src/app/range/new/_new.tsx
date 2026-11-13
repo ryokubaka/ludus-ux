@@ -35,6 +35,7 @@ import {
   Package,
   RotateCcw,
   Terminal,
+  Workflow,
 } from "lucide-react"
 import { YamlEditor } from "@/components/range/yaml-editor"
 import { validateGoadConfigYaml } from "@/lib/goad/goad-preview-config"
@@ -74,11 +75,12 @@ import {
 import { DeployAdvancedOptionsPanel } from "@/components/range/deploy-advanced-options-panel"
 import { NewGoadInstancePageClient } from "@/app/goad/new/_new"
 
-// Config Method is first. Target Range follows for Wizard, YAML, and Blueprint.
+// Config Method is first. Target Range follows for Wizard, YAML, Blueprint, and Range Builder.
 // From GOAD keeps the GOAD wizard's own steps, including its range choice.
 const WIZARD_STEPS = ["Config Method", "Select Range", "Configure VMs", "Domain Setup", "Network Rules", "Review & Deploy"]
 const YAML_STEPS   = ["Config Method", "Select Range", "YAML Config", "Review & Deploy"]
 const BLUEPRINT_STEPS = ["Config Method", "Select Range", "Choose Blueprint", "Review & Deploy"]
+const BUILDER_STEPS = ["Config Method", "Select Range"]
 
 // step 0 : Config Method
 // step 1 : Target Range (Wizard, YAML, Blueprint)
@@ -129,7 +131,7 @@ export function NewRangePageClient() {
   const [showAllTemplates, setShowAllTemplates] = useState(false)
 
   // ── Config method (chosen on step 0) ────────────────────────────────────────
-  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | "blueprint" | "goad" | null>(null)
+  const [configMethod, setConfigMethod] = useState<"wizard" | "yaml" | "blueprint" | "builder" | "goad" | null>(null)
 
   // ── Step 1: Range selection ──────────────────────────────────────────────────
   const [mode, setMode] = useState<"existing" | "new">("existing")
@@ -377,8 +379,18 @@ export function NewRangePageClient() {
    * Fetches the range's YAML upfront so it is ready for both Wizard (parsed into
    * VMEntry[]) and YAML mode (raw text) — no extra button click required on step 2.
    */
+  const openRangeBuilder = (id: string) => {
+    if (!id) return
+    selectRange(id)
+    router.push("/range/builder")
+  }
+
   const handleUseExisting = async () => {
     if (!selectedExistingRange) return
+    if (configMethod === "builder") {
+      openRangeBuilder(selectedExistingRange)
+      return
+    }
     setLoadingExistingConfig(true)
     try {
       const res = await ludusApi.getRangeConfig(selectedExistingRange)
@@ -423,6 +435,11 @@ export function NewRangePageClient() {
       setRangeCreated(true)
       await refreshRanges()
       toast({ title: "Range created", description: `Range ${rangeId} created successfully` })
+      if (configMethod === "builder") {
+        openRangeBuilder(rangeId)
+        setCreating(false)
+        return
+      }
       setStep(2)
     } catch (err) {
       toast({ title: "Error", description: (err as Error).message, variant: "destructive" })
@@ -430,7 +447,7 @@ export function NewRangePageClient() {
     setCreating(false)
   }
 
-  const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint" | "goad") => {
+  const pickConfigMethod = (method: "wizard" | "yaml" | "blueprint" | "builder" | "goad") => {
     setConfigMethod(method)
     setShowAdvancedDeployOptions(false)
     if (method === "goad") {
@@ -617,7 +634,11 @@ export function NewRangePageClient() {
           }
         }
         setDeployStatus("Applying blueprint…")
-        const applyRes = await applyBlueprintToRange(selectedBlueprintId, effectiveRangeId || "")
+        const applyRes = await applyBlueprintToRange(
+          selectedBlueprintId,
+          effectiveRangeId || "",
+          reviewBlueprintYaml || blueprintPreviewYaml,
+        )
         if (!applyRes.ok) {
           if (
             tryToastLudusSlowHttpError({
@@ -642,7 +663,7 @@ export function NewRangePageClient() {
           setDeployStatus("")
           return
         }
-        if (reviewBlueprintEdited && reviewBlueprintYaml.trim() && effectiveRangeId) {
+        if (reviewBlueprintEdited && applyRes.method !== "config" && reviewBlueprintYaml.trim() && effectiveRangeId) {
           setDeployStatus("Uploading edited configuration…")
           const yaml = substituteRangeIdInConfig(reviewBlueprintYaml, effectiveRangeId)
           const uploadRes = await ludusApi.setRangeConfig(yaml, effectiveRangeId)
@@ -731,7 +752,9 @@ export function NewRangePageClient() {
       ? YAML_STEPS
       : configMethod === "blueprint"
         ? BLUEPRINT_STEPS
-        : WIZARD_STEPS
+        : configMethod === "builder"
+          ? BUILDER_STEPS
+          : WIZARD_STEPS
 
   const reviewBackStep =
     configMethod === "yaml" || configMethod === "blueprint" ? 2 : 4
@@ -820,8 +843,16 @@ export function NewRangePageClient() {
                   <Info className="h-4 w-4" />
                   <AlertDescription className="text-xs space-y-1">
                     <p>
-                      Continuing through this wizard will <strong>destroy all existing VMs</strong> in the selected
-                      range and redeploy from scratch.
+                      {configMethod === "builder" ? (
+                        <>
+                          Opens the Range Builder for this range. Existing VMs stay until you deploy from the canvas.
+                        </>
+                      ) : (
+                        <>
+                          Continuing through this wizard will <strong>destroy all existing VMs</strong> in the selected
+                          range and redeploy from scratch.
+                        </>
+                      )}
                     </p>
                     <p>
                       To update configuration or run individual deployment steps <em>without</em> deleting VMs,
@@ -957,7 +988,7 @@ export function NewRangePageClient() {
             How do you want to configure this range?
           </p>
 
-          <div className={cn("grid grid-cols-1 gap-4", goadEnabled ? "md:grid-cols-2 xl:grid-cols-4" : "md:grid-cols-3")}>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {/* Wizard option */}
             <button
               onClick={() => pickConfigMethod("wizard")}
@@ -1002,6 +1033,22 @@ export function NewRangePageClient() {
                 <div>
                   <p className="font-semibold text-sm">From Blueprint</p>
                   <p className="text-xs text-muted-foreground">Apply a saved config, then deploy</p>
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => pickConfigMethod("builder")}
+              className="text-left p-5 rounded-xl border-2 border-border hover:border-primary/60 hover:bg-primary/5 transition-all space-y-3 group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 group-hover:bg-primary/20 transition-colors">
+                  <Workflow className="h-4 w-4 text-primary" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">Range Builder</p>
+                  <p className="text-xs text-muted-foreground">Draw the range, then deploy</p>
                 </div>
               </div>
             </button>

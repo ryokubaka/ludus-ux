@@ -32,6 +32,12 @@ See [Workflows](workflows.md) for a plain-English walkthrough of the deploy proc
 
 **[LudusHound](https://github.com/bagelByt3s/LudusHound)** (bagelByt3s) generates Ludus range YAML from BloodHound data (full replica or Attack Path). LUX runs the CLI over SSH, then uploads the YAML and deploys via the Ludus API. Credits and licenses: [NOTICE](../NOTICE).
 
+## Range Builder
+
+The **Range Builder** is a visual canvas for a Ludus range: drag installed templates onto the graph, wire VLANs and firewall rules, assign domain membership, draw forest trusts, and edit Ansible roles. It reads and writes the same `range-config.yml` the New Range wizard and Configuration page use, then deploys through the Ludus API — nothing is invented outside the Ludus schema. On a GOAD-mapped range it draws the lab read-only and adds machines by installing GOAD extensions.
+
+The canvas interaction is inspired by **[redStackPRO](https://github.com/devZero-Security/redStackPRO)** (devZero Security, MIT). No redStackPRO code is used; LUX targets Proxmox through Ludus rather than its Terraform/Ansible export. Credits: [NOTICE](../NOTICE).
+
 ## Future enhancements
 
 **Multi-extension batch install** — Install multiple GOAD extensions in a single queued session. Each extension would get its own Ludus deploy + GOAD task, with a progress indicator and the ability to cancel remaining items. Deferred until the single-extension flow is proven stable.

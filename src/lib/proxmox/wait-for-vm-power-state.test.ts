@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   pendingVmPowerNames,
+  restartRangeVms,
   vmMatchesExpectedPower,
   waitForVmPowerConfirmation,
 } from "@/lib/proxmox/wait-for-vm-power-state"
@@ -59,5 +60,47 @@ describe("waitForVmPowerConfirmation", () => {
       fetchStatus: async () => ({ data: { VMs: [vm("a", true)] } }),
     })
     expect(result).toEqual({ ok: false, via: "timeout", pending: ["a"] })
+  })
+})
+
+describe("restartRangeVms", () => {
+  it("powers off, waits until the VM stops, then powers it on", async () => {
+    const calls: string[] = []
+    let running = true
+    const result = await restartRangeVms({
+      rangeId: "DEMO",
+      vmNames: ["a"],
+      pollMs: 1,
+      timeoutMs: 500,
+      powerOff: async () => {
+        calls.push("off")
+        running = false
+        return {}
+      },
+      powerOn: async () => {
+        calls.push("on")
+        running = true
+        return {}
+      },
+      fetchStatus: async () => ({ data: { VMs: [vm("a", running)] } }),
+    })
+    expect(result).toEqual({ ok: true })
+    expect(calls).toEqual(["off", "on"])
+  })
+
+  it("does not power on when power off is refused", async () => {
+    let poweredOn = false
+    const result = await restartRangeVms({
+      rangeId: "DEMO",
+      vmNames: ["a"],
+      powerOff: async () => ({ error: "busy" }),
+      powerOn: async () => {
+        poweredOn = true
+        return {}
+      },
+      fetchStatus: async () => ({ data: { VMs: [vm("a", false)] } }),
+    })
+    expect(result).toEqual({ ok: false, phase: "off", error: "busy" })
+    expect(poweredOn).toBe(false)
   })
 })

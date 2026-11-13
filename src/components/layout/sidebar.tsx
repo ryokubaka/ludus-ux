@@ -19,6 +19,7 @@ import {
   Zap,
   GitBranch,
   Plus,
+  Workflow,
   Settings,
   Terminal,
   ChevronRight,
@@ -29,6 +30,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ExternalLink,
+  X,
 } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
@@ -78,6 +80,7 @@ const navGroups: NavGroup[] = [
     label: "Range Management",
     items: [
       { href: "/range/new", label: "Deploy New Range", icon: Plus },
+      { href: "/range/builder", label: "Range Builder", icon: Workflow },
       { href: "/range/config", label: "Configuration", icon: FileCode2 },
       { href: "/templates", label: "Templates", icon: BookTemplate },
       { href: "/testing", label: "Testing Mode", icon: Shield },
@@ -157,8 +160,23 @@ export function Sidebar() {
   const { pendingHref } = useNavPending()
   const navPathForActive = pendingHref ?? pathname
   const scopeTag = useEffectiveScopeTag()
-  const { collapsed, toggle } = useSidebar()
+  const { collapsed: collapsedPref, toggle, mobileOpen, closeMobile } = useSidebar()
+  const collapsed = collapsedPref && !mobileOpen
   const shell = useShellSession()
+
+  // Navigating from the drawer should reveal the page, not leave the overlay open.
+  useEffect(() => {
+    closeMobile()
+  }, [pathname, closeMobile])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMobile()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [mobileOpen, closeMobile])
 
   // Initialise from sessionStorage so cached values apply on the very first
   // render after a page reload — eliminating the "admin items pop in later" flash.
@@ -269,43 +287,64 @@ export function Sidebar() {
 
   return (
     <TooltipProvider delayDuration={0}>
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+          aria-hidden="true"
+          onClick={closeMobile}
+        />
+      )}
       <aside
+        id="app-sidebar"
+        aria-label="Main navigation"
         className={cn(
-          "fixed left-0 top-0 z-40 h-screen bg-sidebar border-r border-sidebar-border flex flex-col",
-          "transition-[width] duration-200 ease-in-out",
-          collapsed ? "w-16" : "w-64",
+          "fixed left-0 top-0 z-50 h-[100dvh] w-64 bg-sidebar border-r border-sidebar-border flex flex-col",
+          "transition-[width,transform] duration-200 ease-in-out",
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+          "lg:translate-x-0 lg:z-40",
+          collapsed ? "lg:w-16" : "lg:w-64",
         )}
       >
         {/* Logo */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <AppNavLink
-              href="/"
-              className={cn(
-                "flex items-center gap-3 hover:opacity-80 transition-opacity flex-shrink-0",
-                collapsed ? "px-3 py-5 justify-center" : "px-6 py-5",
-              )}
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-md overflow-hidden flex-shrink-0">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/logo?v=${logoKey}`}
-                  alt="Logo"
-                  className="h-full w-full object-contain"
-                />
-              </div>
-              {!collapsed && (
-                <div>
-                  <span className="font-semibold text-foreground text-sm">Ludus UX</span>
-                  <p className="text-xs text-muted-foreground">Cyber Range Manager</p>
+        <div className="flex items-center justify-between flex-shrink-0">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <AppNavLink
+                href="/"
+                className={cn(
+                  "flex items-center gap-3 hover:opacity-80 transition-opacity flex-shrink-0",
+                  collapsed ? "px-3 py-5 justify-center" : "px-6 py-5",
+                )}
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-md overflow-hidden flex-shrink-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/logo?v=${logoKey}`}
+                    alt="Logo"
+                    className="h-full w-full object-contain"
+                  />
                 </div>
-              )}
-            </AppNavLink>
-          </TooltipTrigger>
-          {collapsed && (
-            <TooltipContent side="right">Ludus UX — Dashboard</TooltipContent>
-          )}
-        </Tooltip>
+                {!collapsed && (
+                  <div>
+                    <span className="font-semibold text-foreground text-sm">Ludus UX</span>
+                    <p className="text-xs text-muted-foreground">Cyber Range Manager</p>
+                  </div>
+                )}
+              </AppNavLink>
+            </TooltipTrigger>
+            {collapsed && (
+              <TooltipContent side="right">Ludus UX — Dashboard</TooltipContent>
+            )}
+          </Tooltip>
+          <button
+            type="button"
+            onClick={closeMobile}
+            aria-label="Close navigation"
+            className="lg:hidden mr-3 rounded-md p-2 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
 
         <Separator className="bg-sidebar-border" />
 
@@ -543,7 +582,7 @@ export function Sidebar() {
             <TooltipTrigger asChild>
               <button
                 onClick={toggle}
-                className="flex items-center justify-center rounded-md p-1.5 text-muted-foreground
+                className="hidden lg:flex items-center justify-center rounded-md p-1.5 text-muted-foreground
                            hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
                 aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
               >

@@ -7,6 +7,11 @@ import {
   findMissingRequirements,
   findMissingTemplateRequirements,
   mergeBlueprintRequirements,
+  missingRoleFromLudusError,
+  rewriteRoleNameInConfig,
+  roleNameLudusAccepts,
+  roleSpellingsToTry,
+  rewriteConfigToInstalledRoles,
   parseRequirementsYaml,
   resolveBlueprintRequirements,
   roleRefToRequirements,
@@ -111,6 +116,48 @@ describe("findMissingRequirements", () => {
     expect(missing).toEqual([])
   })
 
+  it("accepts a namespaced role installed as its directory name", () => {
+    const missing = findMissingRequirements(
+      [{ name: "ludus_threat_hunting", version: "1.0.0", type: "role" }],
+      [{ kind: "role", name: "whispergate.ludus_threat_hunting" }],
+    )
+    expect(missing).toEqual([])
+  })
+
+  it("accepts the one installed role that uses that directory name", () => {
+    const missing = findMissingRequirements(
+      [{ name: "other.ludus_mythic_teamserver", version: "1.0.0", type: "role" }],
+      [{ kind: "role", name: "whispergate.ludus_mythic_teamserver" }],
+    )
+    expect(missing).toEqual([])
+  })
+
+  it("does not guess when two namespaces share the directory, or treat a collection as the role", () => {
+    const missing = findMissingRequirements(
+      [
+        { name: "other.ludus_threat_hunting", version: "1.0.0", type: "role" },
+        { name: "whispergate.ludus_threat_hunting", version: "1.0.0", type: "role" },
+        { name: "whispergate.ludus_windows_utils", version: "1.0.0", type: "collection" },
+      ],
+      [
+        { kind: "role", name: "third.ludus_threat_hunting" },
+        { kind: "role", name: "whispergate.ludus_windows_utils" },
+      ],
+    )
+    expect(missing.map((item) => item.name)).toEqual([
+      "third.ludus_threat_hunting",
+      "whispergate.ludus_windows_utils",
+    ])
+  })
+
+  it("accepts the role when that exact name is installed for the account", () => {
+    const missing = findMissingRequirements(
+      [{ name: "Whispergate.ludus_threat_hunting", version: "1.0.0", type: "role" }],
+      [{ kind: "role", name: "whispergate.ludus_threat_hunting" }],
+    )
+    expect(missing).toEqual([])
+  })
+
   it("does not treat the geerlingguy.mysql role as the community.mysql collection", () => {
     const missing = findMissingRequirements(
       [{ name: "geerlingguy.mysql", version: "4.3.0", type: "role" }],
@@ -120,6 +167,39 @@ describe("findMissingRequirements", () => {
       ],
     )
     expect(missing).toEqual([{ kind: "collection", name: "community.mysql" }])
+  })
+
+  it("rewrites a rejected namespaced role to the directory name on the Ansible page", () => {
+    const yaml = `
+ludus:
+  - vm_name: elk
+    roles:
+      - name: whispergate.ludus_threat_hunting
+`
+    expect(missingRoleFromLudusError("Configuration error: the role 'whispergate.ludus_threat_hunting' does not exist on the Ludus server for user adminuser")).toBe(
+      "whispergate.ludus_threat_hunting",
+    )
+    expect(roleNameLudusAccepts("whispergate.ludus_threat_hunting", [
+      { name: "ludus_threat_hunting", version: "1.0.0", type: "role" },
+    ])).toBe("ludus_threat_hunting")
+    expect(roleNameLudusAccepts("whispergate.ludus_threat_hunting", [
+      { name: "whispergate.ludus_threat_hunting", version: "1.0.0", type: "role" },
+    ])).toBe("ludus_threat_hunting")
+    expect(roleNameLudusAccepts("whispergate.ludus_mythic_teamserver", [
+      { name: "other.ludus_mythic_teamserver", version: "1.0.0", type: "role" },
+    ])).toBe("other.ludus_mythic_teamserver")
+    expect(rewriteRoleNameInConfig(yaml, "whispergate.ludus_threat_hunting", "ludus_threat_hunting")).toContain(
+      "name: ludus_threat_hunting",
+    )
+    expect(rewriteRoleNameInConfig(yaml, "whispergate.ludus_threat_hunting", "ludus_threat_hunting")).not.toContain(
+      "whispergate.ludus_threat_hunting",
+    )
+    expect(roleSpellingsToTry("whispergate.ludus_threat_hunting", [
+      { name: "whispergate.ludus_threat_hunting", version: "1.0.0", type: "role" },
+    ])).toEqual(["ludus_threat_hunting"])
+    expect(rewriteConfigToInstalledRoles(yaml, [
+      { name: "ludus_threat_hunting", version: "1.0.0", type: "role" },
+    ])).toContain("name: ludus_threat_hunting")
   })
 })
 

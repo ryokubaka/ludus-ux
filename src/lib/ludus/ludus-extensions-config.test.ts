@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   applyLudusExtensions,
   extractLudusExtensions,
+  goadSidecarSyncBody,
   ludusExtensionsEqual,
 } from "@/lib/ludus/ludus-extensions-config"
 
@@ -45,6 +46,32 @@ describe("ludus-extensions-config", () => {
   it("apply with null leaves YAML unchanged", () => {
     const yaml = "ludus: []\n"
     expect(applyLudusExtensions(yaml, null)).toBe(yaml)
+  })
+
+  it("omits sidecar keys absent from both the loaded and saved YAML", () => {
+    expect(goadSidecarSyncBody("ludus: []\n", "ludus: []\n")).toBeNull()
+  })
+
+  it("sends null only for a section the save removed", () => {
+    const original = "network:\n  external_default: REJECT\nludus_extensions:\n  notes: keep\n"
+    const saved = "ludus_extensions:\n  notes: keep\n"
+    expect(goadSidecarSyncBody(original, saved)).toEqual({
+      network: null,
+      ludus_extensions: { notes: "keep" },
+    })
+  })
+
+  it("drops removed extensions without deleting a network sidecar neither document has", () => {
+    const original = "ludus_extensions:\n  notes: keep\n"
+    const saved = "ludus: []\n"
+    expect(goadSidecarSyncBody(original, saved)).toEqual({ ludus_extensions: null })
+  })
+
+  it("posts a network section the save added and omits extensions both lack", () => {
+    const saved = "network:\n  external_default: ACCEPT\n"
+    expect(goadSidecarSyncBody("ludus: []\n", saved)).toEqual({
+      network: { external_default: "ACCEPT" },
+    })
   })
 
   it("equality matches after apply", () => {

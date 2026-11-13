@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react"
-import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { STALE } from "@/lib/ui/query-client"
 import { queryKeys } from "@/lib/ui/query-keys"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,6 +31,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { ludusApi, getImpersonationHeaders } from "@/lib/ui/api"
+import { fetchPersistedRangeStatuses } from "@/lib/ui/range-pb-status"
 import type { RangeObject } from "@/lib/core/types"
 import type { LuxRangeTestingEvent, RangeLogMarkerEnrichment } from "@/lib/logs/range-log-marker-types"
 import type { RangeOp, RangeOpStatus } from "@/lib/range/range-op-store"
@@ -66,57 +67,10 @@ function parseEntry(entry: string): { type: "domain" | "ip"; raw: string; displa
  * Find a range row from GET /api/range/pb-status (or Ludus fallback) for an
  * accessible-range id. Strict `===` often failed when Ludus/PB used different
  * casing or when JSON used `rangeId` vs `rangeID` — which hid the status dots.
+ *
+ * Implemented in `range-pb-status.ts`; the dashboard uses the same helper so
+ * both pages classify persisted state the same way.
  */
-function findRangeByRangeId(list: RangeObject[] | undefined, id: string): RangeObject | undefined {
-  if (!list?.length || !id) return undefined
-  const want = id.trim()
-  const wantLower = want.toLowerCase()
-  return list.find((rd) => {
-    const rid = (rd.rangeID ?? (rd as { rangeId?: string }).rangeId ?? "").trim()
-    if (!rid) return false
-    return rid === want || rid.toLowerCase() === wantLower
-  })
-}
-
-/** Normalize each range object from API so rangeID / booleans are reliable for the UI. */
-function normalizeRangeListFromApi(raw: unknown): RangeObject[] {
-  const arr: unknown[] = Array.isArray(raw)
-    ? raw
-    : raw && typeof raw === "object" && "result" in raw && Array.isArray((raw as { result?: unknown }).result)
-      ? ((raw as { result: unknown[] }).result)
-      : []
-  const out: RangeObject[] = []
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue
-    const o = item as Record<string, unknown>
-    const rangeID = String(o.rangeID ?? o.rangeId ?? o.RangeID ?? "").trim()
-    if (!rangeID) continue
-    const testing =
-      o.testingEnabled === true || o.testingEnabled === false
-        ? Boolean(o.testingEnabled)
-        : Boolean(o.TestingEnabled)
-    const rangeState = (o.rangeState ?? o.RangeState ?? "NEVER DEPLOYED") as RangeObject["rangeState"]
-    out.push({
-      ...(item as RangeObject),
-      rangeID,
-      testingEnabled: testing,
-      rangeState,
-    })
-  }
-  return out
-}
-
-async function fetchPbStatusForRange(rangeId: string): Promise<RangeObject | null> {
-  const res = await fetch(
-    `/api/range/pb-status?rangeId=${encodeURIComponent(rangeId)}`,
-    { headers: { ...getImpersonationHeaders() } },
-  )
-  if (!res.ok) return null
-  const data: unknown = await res.json()
-  if (data && typeof data === "object" && "error" in data) return null
-  const list = normalizeRangeListFromApi(Array.isArray(data) ? data : [data])
-  return findRangeByRangeId(list, rangeId) ?? list[0] ?? null
-}
 
 /** After this many seconds of a running testing op, offer UI unlock (clears server-side DB lock only). */
 const STUCK_TESTING_OP_UI_UNLOCK_SEC = 90
@@ -355,17 +309,25 @@ export function TestingPageClient() {
   } = useRange()
   const scopeTag = useEffectiveScopeTag()
 
-  // ── Per-range PB status for selector dots (all accessible ranges) ─────────
-  // Bulk GET /pb-status only returns ranges "owned" by the effective user; group-shared
-  // ranges are missing. One ?rangeId= fetch per sidebar range keeps dots correct.
-  const testingDotQueries = useQueries({
-    queries: contextRanges.map((r) => ({
-      queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID),
-      queryFn: () => fetchPbStatusForRange(r.rangeID),
-      enabled: !rangesLoading && !!r.rangeID,
-      staleTime: STALE.realtime,
-    })),
+  // ── Bulk PB status for selector dots (all accessible ranges) ─────────────
+  // One ?rangeIds= request replaces the old per-range N+1 queries and covers
+  // group-shared ranges. Selected-range refreshes reuse this cache.
+  const rangeIds = useMemo(
+    () => contextRanges.map((r) => r.rangeID).filter((id): id is string => !!id),
+    [contextRanges],
+  )
+  const bulkStatusKey = useMemo(
+    () => queryKeys.rangePbStatusBulk(scopeTag, rangeIds),
+    [scopeTag, rangeIds],
+  )
+  const { data: testingStatuses, isFetching: testingStatusesFetching } = useQuery({
+    queryKey: bulkStatusKey,
+    queryFn: () => fetchPersistedRangeStatuses(rangeIds),
+    enabled: !rangesLoading && rangeIds.length > 0,
+    staleTime: STALE.realtime,
+    refetchOnWindowFocus: true,
   })
+  const statusByRangeId = testingStatuses?.ranges ?? {}
 
   // Ref so closures (effects, intervals, callbacks) always read the LATEST
   // selectedRangeId without needing it in every dependency array.
@@ -382,14 +344,9 @@ export function TestingPageClient() {
     prefetchTestingStopEfiForSelectedRange(selectedRangeId)
   }, [rangesLoading, selectedRangeId])
 
-  // ── Per-range status (from dot queries — single source of truth) ────────
-  const selectedRangeIdx = useMemo(
-    () => contextRanges.findIndex((r) => r.rangeID === selectedRangeId),
-    [contextRanges, selectedRangeId],
-  )
-  const selectedPbQuery = selectedRangeIdx >= 0 ? testingDotQueries[selectedRangeIdx] : undefined
-  const status = selectedPbQuery?.data ?? null
-  const statusLoading = selectedPbQuery?.isFetching ?? false
+  // ── Selected range status (from the bulk status cache) ──────────────────
+  const status = selectedRangeId ? statusByRangeId[selectedRangeId] ?? null : null
+  const statusLoading = testingStatusesFetching
 
   // New VMs after deploy — drop session so next Start re-probes.
   const prevRangeStateRef = useRef<string | undefined>(undefined)
@@ -405,29 +362,25 @@ export function TestingPageClient() {
   }, [selectedRangeId, status?.rangeState])
 
   const refreshRangeStatus = useCallback(
-    (rangeId: string) =>
-      queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
-    [queryClient, scopeTag],
+    (_rangeId: string) =>
+      queryClient.refetchQueries({ queryKey: bulkStatusKey }),
+    [queryClient, bulkStatusKey],
   )
 
   /** Refetch PB toggle state + LUX activity log after a testing op settles. */
   const refetchTestingPageData = useCallback(
     async (rangeId: string) => {
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, rangeId) }),
+        queryClient.refetchQueries({ queryKey: bulkStatusKey }),
         queryClient.refetchQueries({ queryKey: queryKeys.rangeLogEnrichment(scopeTag, rangeId) }),
       ])
     },
-    [queryClient, scopeTag],
+    [queryClient, scopeTag, bulkStatusKey],
   )
 
   const refreshAllRangeStatusDots = useCallback(() => {
-    for (const r of contextRanges) {
-      if (r.rangeID) {
-        void queryClient.refetchQueries({ queryKey: queryKeys.rangePbStatusDot(scopeTag, r.rangeID) })
-      }
-    }
-  }, [contextRanges, queryClient, scopeTag])
+    void queryClient.refetchQueries({ queryKey: bulkStatusKey })
+  }, [queryClient, bulkStatusKey])
   const [toggling, setToggling] = useState(false)
 
   // ── Allowed domains (fetched via dedicated endpoint) ─────────────────────
@@ -721,7 +674,7 @@ export function TestingPageClient() {
           // Filter out internal sentinel lines — show only real log content
           // Filter out internal control lines — never show them as log output
           const displayLines = newLines.filter(
-            (l) => !l.startsWith("[DONE] ") && !l.startsWith("[STATE] ")
+            (l) => !l.startsWith("[DONE] ") && !l.startsWith("[STATE] ") && l.trim() !== "[PING]"
           )
           if (displayLines.length) setLogLines((prev) => [...prev, ...displayLines])
 
@@ -761,7 +714,7 @@ export function TestingPageClient() {
   }, [])
 
   // When selected range changes: reset per-range UI state, then load allowed
-  // domains and any active DB op. PB status comes from testingDotQueries cache.
+  // domains and any active DB op. PB status comes from the bulk status cache.
   useEffect(() => {
     if (!selectedRangeId) return
     setActiveOp(null)
@@ -1156,10 +1109,10 @@ export function TestingPageClient() {
       ) : contextRanges.length > 1 && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            {contextRanges.map((r, i) => {
+            {contextRanges.map((r) => {
               const isSelected = r.rangeID === selectedRangeId
               const rangeSwitchBlocked = testingToggleInProgress && !isSelected
-              const dotEntry = testingDotQueries[i]?.data
+              const dotEntry = statusByRangeId[r.rangeID]
               const showTestingDot = dotEntry?.testingEnabled === true
               const showDeployingDot =
                 dotEntry?.rangeState === "DEPLOYING" || dotEntry?.rangeState === "WAITING"

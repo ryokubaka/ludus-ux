@@ -117,3 +117,96 @@
   border-radius: 0.5rem;
   overflow: hidden;
 }
+
+/*
+ * Radix keeps every tab panel mounted. A `flex` class overrides the `hidden`
+ * attribute, so inactive panels stay in the column and each later tab starts
+ * lower. This wins over utility `display` values.
+ */
+[role="tabpanel"][data-state="inactive"] {
+  display: none !important;
+}
+
+/*
+ * Preflight sets `button { -webkit-appearance: button; background: transparent }`
+ * and `svg { display: block }` with no cascade layer, so those rules beat the
+ * utility classes. Switches collapse to a dark knob, and an alert icon takes
+ * its own line above the text.
+ */
+button,
+[type="button"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+[role="alert"]:has(> svg) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75rem;
+  align-items: start;
+}
+
+[role="alert"] > svg {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  grid-column: 1;
+  grid-row: 1 / -1;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.125rem;
+}
+
+[role="alert"] > svg ~ * {
+  grid-column: 2;
+  padding-left: 0 !important;
+  transform: none !important;
+}
+
+.react-flow {
+  --xy-controls-button-background-color: hsl(var(--card));
+  --xy-controls-button-background-color-hover: hsl(var(--accent));
+  --xy-controls-button-color: hsl(var(--foreground));
+  --xy-controls-button-color-hover: hsl(var(--foreground));
+  --xy-controls-button-border-color: hsl(var(--border));
+  --xy-controls-box-shadow: none;
+}
+
+/* An edge SVG uses its parent box's z-index, which paints over the HTML label. */
+.react-flow .react-flow__edgelabel-renderer {
+  z-index: 1100;
+}
+
+button[role="switch"] {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  padding: 0;
+  background-color: hsl(var(--foreground) / 0.28);
+}
+
+button[role="switch"][data-state="checked"] {
+  background-color: hsl(var(--primary));
+}
+
+button[role="switch"] > span {
+  display: block;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  background-color: hsl(var(--background));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  transform: translateX(0);
+  transition: transform 150ms ease;
+}
+
+button[role="switch"][data-state="checked"] > span {
+  transform: translateX(1.25rem);
+  background-color: hsl(var(--primary-foreground));
+}

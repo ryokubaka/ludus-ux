@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, ExternalLink, Loader2, RefreshCw } from "lucide-react"
-import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { VersionStatusCard, type VersionStatusState } from "@/components/settings/version-status-card"
+import { ReleasePager } from "@/components/settings/release-pager"
+import { releasePageSlice } from "@/components/settings/release-page"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -58,7 +60,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   const queryClient = useQueryClient()
   const [releases, setReleases] = useState<ReleasesResponse | null>(null)
   const [checking, setChecking] = useState(false)
-  const [showAllReleases, setShowAllReleases] = useState(false)
+  const [releasePage, setReleasePage] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [host, setHost] = useState<HostStatus | null>(null)
   const [hostLoading, setHostLoading] = useState(false)
@@ -195,6 +197,15 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
 
   const latest = releases?.releases.find((r) => r.tag === releases.latestStable) ?? null
   const canAct = isAdmin && !!host?.canSwitch && !switchingTag && !starting
+  const status: VersionStatusState = switchingTag
+    ? "working"
+    : !releases && !loadError
+      ? "loading"
+      : releases?.updateAvailable
+        ? "update"
+        : releases?.latestStable
+          ? "current"
+          : "unknown"
 
   const openConfirm = (release: LuxRelease) => {
     setPending(release)
@@ -233,37 +244,31 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   const confirmBlocked = needsAck && !ack
 
   return (
-    <div className="space-y-3">
-      {releases?.updateAvailable && latest && (
-        <Alert variant="warning">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>LUX {latest.tag} is available</AlertTitle>
-          <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span>This install is v{releases.current}. A newer stable release is on this install&apos;s git remote.</span>
-            {isAdmin && (
-              <Button
-                size="sm"
-                variant="warning"
-                disabled={!canAct}
-                onClick={() => openConfirm(latest)}
-              >
-                Upgrade
-              </Button>
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {loadError && (
-        <p className="text-xs text-muted-foreground">{loadError}</p>
-      )}
-      {releases?.error && (
-        <p className="text-xs text-muted-foreground">{releases.error}</p>
-      )}
-
-      {isAdmin && host && !host.canSwitch && (
-        <Alert>
-          <AlertDescription>
+    <>
+      <VersionStatusCard
+        product="LUX"
+        state={status}
+        current={releases ? `v${releases.current}` : ""}
+        latest={latest?.tag}
+        detail={
+          switchingTag
+            ? `Checking out ${switchingTag} and rebuilding. This page reconnects when the new version is up.`
+            : releases?.error || loadError || undefined
+        }
+        action={
+          isAdmin && status === "update" && latest ? (
+            <Button size="sm" variant="warning" disabled={!canAct} onClick={() => openConfirm(latest)}>
+              Upgrade
+            </Button>
+          ) : null
+        }
+      />
+      <div className="flex h-full flex-col rounded-lg border border-border bg-card">
+        {(loadError || releases?.error || switchError) && (
+          <p className="px-4 pt-3 text-xs text-destructive">{switchError || loadError || releases?.error}</p>
+        )}
+        {isAdmin && host && !host.canSwitch && (
+          <p className="px-4 pt-3 text-xs text-muted-foreground">
             {host.reason}{" "}
             {releases?.docsUrl && (
               <a
@@ -275,27 +280,8 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
                 Upgrade and downgrade
               </a>
             )}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {switchingTag && (
-        <Alert>
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertTitle>Switching to {switchingTag}</AlertTitle>
-          <AlertDescription>
-            LUX is checking out that release and rebuilding. This page will reconnect when the new version is up.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {switchError && (
-        <Alert variant="destructive">
-          <AlertDescription>{switchError}</AlertDescription>
-        </Alert>
-      )}
-
-      <div className="rounded-lg border border-border bg-card">
+          </p>
+        )}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/50">
           <span className="text-sm font-medium shrink-0">Releases</span>
           {releases?.repoUrl && (
@@ -331,7 +317,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           {releases && releases.releases.length === 0 && (
             <p className="px-4 py-6 text-sm text-muted-foreground text-center">No published releases found.</p>
           )}
-          {previewSlice(releases?.releases ?? [], showAllReleases).map((release) => (
+          {releasePageSlice(releases?.releases ?? [], releasePage).map((release) => (
             <div key={release.tag} className="flex items-center gap-3 px-4 py-2">
               <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="font-mono text-sm">{release.tag}</span>
@@ -373,21 +359,19 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
               </div>
             </div>
           ))}
-          <ShowAllBar
-            expanded={showAllReleases}
-            count={releases?.releases.length ?? 0}
-            onToggle={() => setShowAllReleases((v) => !v)}
-          />
         </div>
-      </div>
-
-      {logTail && (switchingTag || switchError) && (
-        <pre className="max-h-40 overflow-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap">
-          {logTail}
-        </pre>
-      )}
-
-      <Dialog open={!!pending} onOpenChange={(open) => { if (!open && !starting) setPending(null) }}>
+        <ReleasePager
+          page={releasePage}
+          count={releases?.releases.length ?? 0}
+          onPage={setReleasePage}
+          label="LUX releases"
+        />
+        {logTail && (switchingTag || switchError) && (
+          <pre className="mx-4 mb-4 max-h-40 overflow-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap">
+            {logTail}
+          </pre>
+        )}
+        <Dialog open={!!pending} onOpenChange={(open) => { if (!open && !starting) setPending(null) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -455,7 +439,8 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
-    </div>
+        </Dialog>
+      </div>
+    </>
   )
 }

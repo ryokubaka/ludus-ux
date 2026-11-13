@@ -21,8 +21,18 @@ import {
   Layers,
   Download,
   ExternalLink,
+  Power,
+  PowerOff,
+  RotateCw,
+  Loader2,
 } from "lucide-react"
 import { cn } from "@/lib/core/utils"
+import { vmIsRunning } from "@/lib/ui/dashboard-vm-merge"
+import { vmDisplayName as powerVmName, restartRangeVms, waitForVmPowerConfirmation } from "@/lib/proxmox/wait-for-vm-power-state"
+import { isLudusAwaitResponseTimeoutMessage, tryToastLudusSlowHttpError } from "@/lib/ludus/ludus-timeout-ui"
+import { useToast } from "@/hooks/use-toast"
+import { useConfirm } from "@/hooks/use-confirm"
+import { ConfirmBar } from "@/components/ui/confirm-bar"
 
 interface FlatVM extends VMObject {
   rangeID: string
@@ -72,6 +82,9 @@ function ConsolePageInner() {
 
   // .vv download state
   const [downloadingVv, setDownloadingVv] = useState(false)
+  const [powerPending, setPowerPending] = useState<"on" | "off" | "restart" | null>(null)
+  const { toast } = useToast()
+  const { pendingAction: pendingConfirm, confirm, cancelConfirm, commitConfirm } = useConfirm()
 
   // VMs visible in the picker — filtered to the selected range, deduplicated by proxmoxID
   const vms = useMemo<FlatVM[]>(() => {
@@ -111,7 +124,7 @@ function ConsolePageInner() {
               stateUpper,
               scopeTag,
               rangeId: rid,
-            })
+            }).vms
             for (const vm of vmList) {
               flat.push({ ...vm, rangeID: rid })
             }
@@ -148,6 +161,22 @@ function ConsolePageInner() {
     if (!selectedRangeId) return
     fetchVms(selectedRangeId)
   }, [fetchVms, selectedRangeId])
+
+  // A URL-opened console can start from a stub VM. Replace it once the range list has power state.
+  useEffect(() => {
+    setActiveVm((current) => {
+      if (!current?.proxmoxID) return current
+      const fresh = allVms.find((v) => v.proxmoxID === current.proxmoxID)
+      if (!fresh) return current
+      if (
+        fresh.poweredOn === current.poweredOn &&
+        fresh.powerState === current.powerState &&
+        fresh.name === current.name &&
+        fresh.rangeID === current.rangeID
+      ) return current
+      return { ...current, ...fresh }
+    })
+  }, [allVms])
 
   // Close VM picker when clicking outside
   useEffect(() => {
@@ -208,10 +237,124 @@ function ConsolePageInner() {
     window.setTimeout(() => setReconnectingConsole(false), 600)
   }
 
+  const vmRunning = activeVm ? vmIsRunning(activeVm) : false
+
+  function rememberPower(proxmoxID: number, on: boolean) {
+    const powerState = on ? "running" : "stopped"
+    setActiveVm((vm) => (vm && vm.proxmoxID === proxmoxID ? { ...vm, poweredOn: on, powerState } : vm))
+    setAllVms((prev) => prev.map((v) => (v.proxmoxID === proxmoxID ? { ...v, poweredOn: on, powerState } : v)))
+  }
+
+  async function runPower(action: "on" | "off" | "restart") {
+    if (!activeVm) return
+    const name = powerVmName(activeVm)
+    const rangeId = activeVm.rangeID || selectedRangeId || undefined
+    const proxmoxID = activeVm.proxmoxID
+    if (!rangeId) {
+      toast({ variant: "destructive", title: "No range", description: "Select a range before changing power." })
+      return
+    }
+    setPowerPending(action)
+    const noteSlow = (error: string) => {
+      if (!isLudusAwaitResponseTimeoutMessage(error)) return false
+      return tryToastLudusSlowHttpError({
+        toast,
+        error,
+        slowTitle: "Slow response from Ludus",
+        onSlow: () => { void fetchVms(rangeId) },
+      })
+    }
+    try {
+      if (action === "restart") {
+        toast({ title: "Restarting", description: `${name} will power off, then power back on.` })
+        const restarted = await restartRangeVms({
+          rangeId,
+          vmNames: [name],
+          continueAfterError: isLudusAwaitResponseTimeoutMessage,
+          powerOff: async () => {
+            const result = await ludusApi.powerOff([name], rangeId)
+            if (result.error) noteSlow(result.error)
+            return result
+          },
+          powerOn: async () => {
+            const result = await ludusApi.powerOn([name], rangeId)
+            if (result.error) noteSlow(result.error)
+            return result
+          },
+          fetchStatus: () => ludusApi.getRangeStatus(rangeId),
+        })
+        void fetchVms(rangeId)
+        if (restarted.ok) {
+          rememberPower(proxmoxID, true)
+          toast({ title: "Restart confirmed", description: `${name} is running` })
+          reloadConsole()
+        } else if ("error" in restarted) {
+          toast({ variant: "destructive", title: "Restart failed", description: restarted.error })
+        } else if (restarted.via === "timeout") {
+          toast({
+            variant: "destructive",
+            title: "Restart not confirmed yet",
+            description: `${name} may still be ${restarted.phase === "off" ? "stopping" : "starting"}.`,
+          })
+        }
+        return
+      }
+
+      const result = action === "on"
+        ? await ludusApi.powerOn([name], rangeId)
+        : await ludusApi.powerOff([name], rangeId)
+      if (result.error && !noteSlow(result.error)) {
+        toast({ variant: "destructive", title: "Error", description: result.error })
+        return
+      }
+      if (!result.error) {
+        toast({
+          title: action === "on" ? "Powering on" : "Powering off",
+          description: `${name} — waiting for confirmation…`,
+        })
+      }
+      void fetchVms(rangeId)
+      const wait = await waitForVmPowerConfirmation({
+        rangeId,
+        vmNames: [name],
+        action,
+        fetchStatus: () => ludusApi.getRangeStatus(rangeId),
+      })
+      void fetchVms(rangeId)
+      if (wait.ok) {
+        rememberPower(proxmoxID, action === "on")
+        toast({
+          title: action === "on" ? "Power on confirmed" : "Power off confirmed",
+          description: name,
+        })
+        if (action === "on") reloadConsole()
+      } else if (wait.via === "timeout") {
+        toast({
+          variant: "destructive",
+          title: "Power state not confirmed yet",
+          description: `${name} may still be ${action === "on" ? "starting" : "stopping"}.`,
+        })
+      }
+    } finally {
+      setPowerPending(null)
+    }
+  }
+
+  function askPower(action: "on" | "off" | "restart") {
+    if (!activeVm || powerPending) return
+    const name = powerVmName(activeVm)
+    const label = action === "restart"
+      ? `Restart ${name}? It powers off, then back on.`
+      : action === "on"
+        ? `Power on ${name}?`
+        : `Power off ${name}?`
+    confirm(label, () => { void runPower(action) })
+  }
+
   return (
     <div className="flex flex-col bg-black" style={{ height: "100vh", overflow: "hidden" }}>
       {/* ── Top toolbar ───────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-4 py-2 bg-zinc-900 border-b border-zinc-800 shrink-0 h-11">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-2 bg-zinc-900 border-b border-zinc-800 shrink-0 min-h-11">
         {/* Back to dashboard */}
         <Link
           href="/"
@@ -383,6 +526,48 @@ function ConsolePageInner() {
 
         <div className="flex-1" />
 
+        {activeVm && (
+          <div className="flex items-center gap-1.5" role="group" aria-label="Power">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">Power</span>
+            <button
+              type="button"
+              onClick={() => askPower("on")}
+              disabled={!!powerPending || !!pendingConfirm || vmRunning}
+              title="Power on this VM"
+              className="flex items-center gap-1 rounded-md border border-status-success/40 bg-zinc-900 px-2 py-1 text-xs text-status-success hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {powerPending === "on"
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Power className="h-3.5 w-3.5" />}
+              On
+            </button>
+            <button
+              type="button"
+              onClick={() => askPower("restart")}
+              disabled={!!powerPending || !!pendingConfirm || !vmRunning}
+              title="Restart this VM. It powers off, then back on."
+              className="flex items-center gap-1 rounded-md border border-status-info/40 bg-zinc-900 px-2 py-1 text-xs text-status-info hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {powerPending === "restart"
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <RotateCw className="h-3.5 w-3.5" />}
+              Restart
+            </button>
+            <button
+              type="button"
+              onClick={() => askPower("off")}
+              disabled={!!powerPending || !!pendingConfirm || !vmRunning}
+              title="Power off this VM"
+              className="flex items-center gap-1 rounded-md border border-status-error/40 bg-status-error/15 px-2 py-1 text-xs text-status-error hover:bg-status-error/25 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {powerPending === "off"
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <PowerOff className="h-3.5 w-3.5" />}
+              Off
+            </button>
+          </div>
+        )}
+
         {/* Hint when no VM selected */}
         {!activeVm && !loading && (
           <span className="text-xs text-zinc-600 italic">
@@ -390,6 +575,12 @@ function ConsolePageInner() {
           </span>
         )}
       </div>
+
+      {pendingConfirm && (
+        <div className="shrink-0 border-b border-zinc-800 bg-zinc-950 px-4 py-2">
+          <ConfirmBar pending={pendingConfirm} onConfirm={commitConfirm} onCancel={cancelConfirm} />
+        </div>
+      )}
 
       {/* ── Console iframe ────────────────────────────────────────────────── */}
       <div className="flex-1 relative min-h-0">

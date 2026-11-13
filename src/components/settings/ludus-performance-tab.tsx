@@ -15,7 +15,7 @@ import { Activity, Loader2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
-const POLL_MS = 4000
+const POLL_MS = 10_000
 const MAX_POINTS = 90
 
 type MetricRow = Record<string, number | string | undefined> & { time: number; timeLabel: string }
@@ -98,17 +98,51 @@ export function LudusPerformanceTab() {
       if (n.memPct != null) row[`mem_${key}`] = n.memPct
       if (n.load1 != null) row[`load_${key}`] = n.load1
     }
-    setRows((prev) => [...prev, row].slice(-MAX_POINTS))
+    setRows((prev) => {
+      // The server may serve the same cached sample twice (e.g. a visibility
+      // resume inside the cache TTL); keep one point per capture time.
+      if (prev.length > 0 && prev[prev.length - 1]!.time === capturedAt) return prev
+      return [...prev, row].slice(-MAX_POINTS)
+    })
     setLoading(false)
   }, [])
 
   useEffect(() => {
     mounted.current = true
+    let timer: number | null = null
+
+    const stop = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+    }
+
+    const schedule = () => {
+      stop()
+      timer = window.setTimeout(async () => {
+        await fetchOnce()
+        if (mounted.current) schedule()
+      }, POLL_MS)
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void fetchOnce()
+        schedule()
+      } else {
+        stop()
+      }
+    }
+
     void fetchOnce()
-    const id = window.setInterval(() => void fetchOnce(), POLL_MS)
+    if (document.visibilityState === "visible") schedule()
+    document.addEventListener("visibilitychange", onVisibility)
+
     return () => {
       mounted.current = false
-      window.clearInterval(id)
+      stop()
+      document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [fetchOnce])
 
@@ -121,8 +155,8 @@ export function LudusPerformanceTab() {
       <Alert>
         <Activity className="h-4 w-4" />
         <AlertDescription className="text-xs">
-          Samples Proxmox every {POLL_MS / 1000}s via <code className="text-primary">pvesh</code> over host SSH. Same credentials as
-          SSH &amp; GOAD. CPU and memory come from <code className="text-primary">/cluster/resources</code> (pvestatd); load averages from{" "}
+          Samples Proxmox every {POLL_MS / 1000}s while this tab is visible via <code className="text-primary">pvesh</code> over host SSH. Polling pauses while the
+          browser tab is hidden. Same credentials as SSH &amp; GOAD. CPU and memory come from <code className="text-primary">/cluster/resources</code> (pvestatd); load averages from{" "}
           <code className="text-primary">/nodes/&lt;node&gt;/status</code>.
         </AlertDescription>
       </Alert>

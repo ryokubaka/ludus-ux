@@ -36,7 +36,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session/session"
 import { assertGoadInstanceAccess } from "@/lib/goad/goad-instance-access"
-import { isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad/goad-ssh"
+import { invalidateGoadInstanceCache, isGoadConfigured, runWorkspaceSshPlan, workspaceSshExecPlan } from "@/lib/goad/goad-ssh"
 import { resolveGoadPath } from "@/lib/core/runtime-paths"
 import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 
@@ -236,6 +236,7 @@ export async function POST(
       )
     }
     logLuxRouteAction(request, session, { detail: `instanceId=${instanceId} updated=${parsed.updated ?? false}` })
+    invalidateGoadInstanceCache()
     return NextResponse.json({
       ok: parsed.ok ?? false,
       updated: parsed.updated ?? false,

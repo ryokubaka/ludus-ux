@@ -18,6 +18,7 @@ import {
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
 import { ensureSourceFresh, sourceIdOf } from "@/lib/sources/source-auto-sync"
 import { pinSourceInstallSelection } from "@/lib/sources/source-content-pins"
+import type { SourceCatalogVersionPins } from "@/lib/sources/source-install-client"
 import { isSourcePublished } from "@/lib/sources/source-publication"
 import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
@@ -43,16 +44,21 @@ export async function POST(
   let selection: SourceInstallSelection = {}
   let force = false
   let noDeps: boolean | undefined
+  let versions: SourceCatalogVersionPins | undefined
   try {
     const body = await request.json()
     force = Boolean(body?.force)
     if (typeof body?.noDeps === "boolean") noDeps = body.noDeps
+    if (body?.versions && typeof body.versions === "object") {
+      versions = body.versions as SourceCatalogVersionPins
+    }
     if (body?.selection && typeof body.selection === "object") {
       selection = body.selection as SourceInstallSelection
     } else {
-      const { force: _force, noDeps: _noDeps, ...rest } = (body ?? {}) as SourceInstallSelection & {
+      const { force: _force, noDeps: _noDeps, versions: _versions, ...rest } = (body ?? {}) as SourceInstallSelection & {
         force?: boolean
         noDeps?: boolean
+        versions?: SourceCatalogVersionPins
       }
       selection = rest
     }
@@ -126,7 +132,7 @@ export async function POST(
       const sources = await listSources(installApiKey)
       const want = sourceId.trim().toLowerCase()
       const src = sources.find((s) => sourceIdOf(s).toLowerCase() === want)
-      if (src) await ensureSourceFresh(installApiKey, src, { force })
+      if (src) await ensureSourceFresh(installApiKey, src)
     } catch (syncErr) {
       logWarn(`[sources/install] pre-install sync failed ${syncErr instanceof Error ? syncErr.message : String(syncErr)}`)
     }
@@ -139,7 +145,7 @@ export async function POST(
 
     // Record catalog tip versions so future bumps show Update available without Ludus versions.
     try {
-      await pinSourceInstallSelection(installApiKey, sourceId, selection)
+      await pinSourceInstallSelection(installApiKey, sourceId, selection, versions)
     } catch (pinErr) {
       logError(`[sources/install] pin failed ${pinErr instanceof Error ? pinErr.message : String(pinErr)}`)
     }

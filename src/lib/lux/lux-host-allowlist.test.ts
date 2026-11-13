@@ -91,7 +91,13 @@ describe("lux-host allowlist", () => {
   })
 
   it("settings and credential probe", () => {
-    expect(run(["version"]).stdout.trim()).toBe("5")
+    expect(run(["version"]).stdout.trim()).toBe("7")
+    denied(["ludus-upgrade"])
+    denied(["ludus-upgrade", "v2.3.10"])
+    denied(["ludus-upgrade", "2.3.10;id"])
+    denied(["ludus-upgrade", "2.3.10", "extra"])
+    denied(["ludus-upgrade-log", "2.3.10"])
+    expect(run(["ludus-upgrade-log"]).stdout).toMatch(/^active=(yes|no)/)
     expect(run(["true"]).status).toBe(0)
     expect(run(["id"]).stdout.trim()).toBe("0")
     denied(["writable-dir", "/etc"])

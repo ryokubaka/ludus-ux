@@ -1,5 +1,6 @@
 import "server-only"
 
+import { createHash } from "node:crypto"
 import {
   getSourceCatalog,
   listSourceBlueprints,
@@ -7,7 +8,9 @@ import {
   listSourceRoles,
   listSourceTemplates,
   listSources,
+  peekCachedSourceList,
   type LudusCatalogItem,
+  type LudusSourceCatalog,
   type LudusSourceRow,
   type SourceBlueprintRow,
   type SourceCollectionRow,
@@ -16,7 +19,6 @@ import {
 } from "@/lib/sources/ludus-source-client"
 import { ludusSourceGitRef } from "@/lib/sources/ludus-source-ref"
 import { blueprintShortName } from "@/lib/sources/registered-ludus-sources"
-import { ensureSourceFresh } from "@/lib/sources/source-auto-sync"
 import {
   enrichCollectionInstallNames,
   enrichRoleVersionsFromGit,
@@ -26,6 +28,7 @@ import {
   listGitSourceCollections,
   listGitSourceRoles,
   listGitSourceTemplates,
+  mapGitCatalogWork,
   resolveGitCollectionFqcn,
 } from "@/lib/sources/source-git-catalog"
 
@@ -37,20 +40,18 @@ async function enrichBlueprintVersionsFromGit(
 ): Promise<SourceBlueprintRow[]> {
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   if (!apiBase || items.length === 0) return items
-  return Promise.all(
-    items.map(async (item) => {
-      const short = blueprintShortName(item)
-      if (!short) return item
-      const manifest = await fetchGitBlueprintManifest(apiBase, ref, short)
-      if (!manifest) return item
-      return {
-        ...item,
-        version: manifest.version || item.version,
-        description: item.description || manifest.description,
-        min_ludus_version: item.min_ludus_version || manifest.min_ludus_version,
-      }
-    }),
-  )
+  return mapGitCatalogWork(items, async (item) => {
+    const short = blueprintShortName(item)
+    if (!short) return item
+    const manifest = await fetchGitBlueprintManifest(apiBase, ref, short)
+    if (!manifest) return item
+    return {
+      ...item,
+      version: manifest.version || item.version,
+      description: item.description || manifest.description,
+      min_ludus_version: item.min_ludus_version || manifest.min_ludus_version,
+    }
+  })
 }
 
 export type SourceCatalogOrigin = "ludus" | "github"
@@ -62,25 +63,73 @@ export type SourceCatalogResolveResult<T> = {
   catalogRef: string
 }
 
-async function findRegisteredSource(
-  apiKey: string,
-  sourceID: string,
-): Promise<LudusSourceRow | null> {
-  const sources = await listSources(apiKey)
+function findSourceRow(sources: LudusSourceRow[], sourceID: string): LudusSourceRow | null {
   const want = sourceID.trim().toLowerCase()
   return (
     sources.find((s) => (s.sourceID || s.id || "").trim().toLowerCase() === want) ?? null
   )
 }
 
-/** Resolve source row and re-pull git working tree when last sync is stale. */
+async function findRegisteredSource(
+  apiKey: string,
+  sourceID: string,
+): Promise<LudusSourceRow | null> {
+  const cached = peekCachedSourceList(apiKey)
+  if (cached) return findSourceRow(cached, sourceID)
+  return findSourceRow(await listSources(apiKey), sourceID)
+}
+
+/**
+ * URL and ref for this registration. Catalog reads use the git remote.
+ * A pull runs from Sync, from the background interval, and from an install
+ * when the clone is stale — not while the modules are loading.
+ */
 async function prepareRegisteredSource(
   apiKey: string,
   sourceID: string,
 ): Promise<LudusSourceRow | null> {
-  const src = await findRegisteredSource(apiKey, sourceID)
-  if (src) await ensureSourceFresh(apiKey, src)
-  return src
+  return findRegisteredSource(apiKey, sourceID)
+}
+
+/** Ludus catalog calls wait this long when git can already name the modules. */
+const LUDUS_CATALOG_WAIT_MS = 4_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(fallback)
+    }, ms)
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(fallback)
+      },
+    )
+  })
+}
+
+const catalogInflight = new Map<string, Promise<LudusSourceCatalog | null>>()
+
+function sourceCatalogShared(apiKey: string, sourceID: string): Promise<LudusSourceCatalog | null> {
+  const cacheKey = `${createHash("sha256").update(apiKey).digest("hex")}\n${sourceID}`
+  const pending = catalogInflight.get(cacheKey)
+  if (pending) return pending
+  const run = getSourceCatalog(apiKey, sourceID).finally(() => {
+    catalogInflight.delete(cacheKey)
+  })
+  catalogInflight.set(cacheKey, run)
+  return run
 }
 
 async function ludusCatalogOrEmpty<T>(fn: () => Promise<T[]>): Promise<T[]> {
@@ -187,12 +236,12 @@ export async function resolveSourceBlueprints(
 ): Promise<SourceCatalogResolveResult<SourceBlueprintRow>> {
   const src = await prepareRegisteredSource(apiKey, sourceID)
   const catalogRef = ludusSourceGitRef(src)
-  const ludus = await ludusCatalogOrEmpty(() => listSourceBlueprints(apiKey, sourceID))
-
-  let git: Array<{ name: string; sourceBlueprintID: string }> = []
-  if (src?.url) {
-    git = await listGitSourceBlueprints(src.url, catalogRef, sourceID)
-  }
+  const ludusPromise = ludusCatalogOrEmpty(() => listSourceBlueprints(apiKey, sourceID))
+  const gitPromise = src?.url
+    ? listGitSourceBlueprints(src.url, catalogRef, sourceID)
+    : Promise.resolve([] as Array<{ name: string; sourceBlueprintID: string }>)
+  const git = await gitPromise
+  const ludus = git.length > 0 ? await withTimeout(ludusPromise, LUDUS_CATALOG_WAIT_MS, []) : await ludusPromise
 
   let items: SourceBlueprintRow[] = []
   let catalogSource: SourceCatalogOrigin = "ludus"
@@ -254,12 +303,12 @@ export async function resolveSourceTemplates(
 ): Promise<SourceCatalogResolveResult<SourceTemplateRow>> {
   const src = await prepareRegisteredSource(apiKey, sourceID)
   const catalogRef = ludusSourceGitRef(src)
-  const ludus = await ludusCatalogOrEmpty(() => listSourceTemplates(apiKey, sourceID))
-
-  let git: Array<{ name: string; path: string }> = []
-  if (src?.url) {
-    git = await listGitSourceTemplates(src.url, catalogRef)
-  }
+  const ludusPromise = ludusCatalogOrEmpty(() => listSourceTemplates(apiKey, sourceID))
+  const gitPromise = src?.url
+    ? listGitSourceTemplates(src.url, catalogRef)
+    : Promise.resolve([] as Array<{ name: string; path: string }>)
+  const git = await gitPromise
+  const ludus = git.length > 0 ? await withTimeout(ludusPromise, LUDUS_CATALOG_WAIT_MS, []) : await ludusPromise
 
   if (ludus.length === 0 && git.length === 0) {
     return { items: [], catalogSource: "ludus", catalogRef }
@@ -276,28 +325,30 @@ export async function resolveSourceRoles(
 ): Promise<SourceCatalogResolveResult<SourceRoleRow>> {
   const src = await prepareRegisteredSource(apiKey, sourceID)
   const catalogRef = ludusSourceGitRef(src)
-  const catalog = await getSourceCatalog(apiKey, sourceID)
+  const catalogPromise = sourceCatalogShared(apiKey, sourceID)
+  const catalog = src?.url
+    ? await withTimeout(catalogPromise, LUDUS_CATALOG_WAIT_MS, null)
+    : await catalogPromise
 
   let items: SourceRoleRow[] = []
   let catalogSource: SourceCatalogOrigin = "ludus"
 
   if (catalog?.localRoles?.length) {
     items = catalog.localRoles.map(mapCatalogRole)
-  } else {
-    const ludus = await ludusCatalogOrEmpty(() => listSourceRoles(apiKey, sourceID))
-    if (ludus.length > 0) {
-      items = ludus
-    } else if (src?.url) {
-      const git = await listGitSourceRoles(src.url, catalogRef)
-      if (git.length > 0) {
-        items = git
-        catalogSource = "github"
-      }
+  } else if (src?.url) {
+    const git = await listGitSourceRoles(src.url, catalogRef)
+    if (git.length > 0) {
+      items = git
+      catalogSource = "github"
     }
   }
+  if (items.length === 0) {
+    items = await ludusCatalogOrEmpty(() => listSourceRoles(apiKey, sourceID))
+    catalogSource = "ludus"
+  }
 
-  // Prefer git tip (Sources-tab ref) over Ludus sync cache.
-  if (src?.url && items.length > 0) {
+  // Prefer git tip (Sources-tab ref) over Ludus sync cache. Git listing already read those files.
+  if (src?.url && catalogSource === "ludus" && items.length > 0) {
     items = (await enrichRoleVersionsFromGit(items, src.url, catalogRef)) as SourceRoleRow[]
   }
 
@@ -310,7 +361,10 @@ export async function resolveSourceCollections(
 ): Promise<SourceCatalogResolveResult<SourceCollectionRow>> {
   const src = await prepareRegisteredSource(apiKey, sourceID)
   const catalogRef = ludusSourceGitRef(src)
-  const catalog = await getSourceCatalog(apiKey, sourceID)
+  const catalogPromise = sourceCatalogShared(apiKey, sourceID)
+  const catalog = src?.url
+    ? await withTimeout(catalogPromise, LUDUS_CATALOG_WAIT_MS, null)
+    : await catalogPromise
   if (catalog?.localCollections?.length) {
     return {
       items: catalog.localCollections.map(mapCatalogCollection),
@@ -319,17 +373,16 @@ export async function resolveSourceCollections(
     }
   }
 
-  const ludus = await ludusCatalogOrEmpty(() => listSourceCollections(apiKey, sourceID))
-  let items = ludus
-  let catalogSource: SourceCatalogOrigin = "ludus"
-
-  if (ludus.length === 0 && src?.url) {
+  if (src?.url) {
     const git = await listGitSourceCollections(src.url, catalogRef)
     if (git.length > 0) {
-      items = git
-      catalogSource = "github"
+      return { items: git, catalogSource: "github", catalogRef }
     }
-  } else if (src?.url && items.length > 0) {
+  }
+
+  let items = await ludusCatalogOrEmpty(() => listSourceCollections(apiKey, sourceID))
+  const catalogSource: SourceCatalogOrigin = "ludus"
+  if (src?.url && items.length > 0) {
     items = await enrichCollectionRows(items, src.url, catalogRef)
   }
 

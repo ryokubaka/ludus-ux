@@ -26,25 +26,51 @@ import { ludusRequest } from "@/lib/ludus/ludus-client"
 import { setOwnership, removeOwnership } from "@/lib/range/range-ownership-store"
 import { getAdminData, bustAdminCache } from "@/lib/admin/admin-data"
 import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
+import { applyServerTiming } from "@/lib/lux/apply-server-timing"
 
 
 // ── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
+  const requestStart = performance.now()
+  const authStart = performance.now()
   const admin = await requireAdmin(request)
-  if (!admin.ok) return admin.response
+  const authMs = performance.now() - authStart
+  if (!admin.ok) {
+    return applyServerTiming(admin.response, {
+      auth: authMs,
+      total: performance.now() - requestStart,
+    })
+  }
 
+  // Explicit refresh bypasses the 30 s server cache so the admin page can
+  // retry a partial ownership resolution instead of receiving the same body.
+  const force = request.nextUrl.searchParams.get("refresh") === "1"
+  const dataStart = performance.now()
   try {
-    const data = await getAdminData(admin.session.apiKey)
-    return finishAdminResponse(NextResponse.json(data), admin)
+    const data = await getAdminData(
+      admin.session.apiKey,
+      force ? { bypassCache: true } : undefined,
+    )
+    const response = await finishAdminResponse(NextResponse.json(data), admin)
+    return applyServerTiming(response, {
+      auth: authMs,
+      data: performance.now() - dataStart,
+      total: performance.now() - requestStart,
+    })
   } catch (err) {
-    return finishAdminResponse(
+    const response = await finishAdminResponse(
       NextResponse.json(
         { error: (err as Error).message || "Failed to fetch admin data" },
         { status: 500 },
       ),
       admin,
     )
+    return applyServerTiming(response, {
+      auth: authMs,
+      data: performance.now() - dataStart,
+      total: performance.now() - requestStart,
+    })
   }
 }
 

@@ -74,7 +74,7 @@ export function GoadHistoryTab({
   onCopyTaskId,
 }: GoadHistoryTabProps) {
   return (
-    <TabsContent value="history" className="mt-4 flex flex-col min-h-0 flex-1">
+    <TabsContent value="history" className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
       {active ? (
         <>
           {selectedHistoryEntry ? (
@@ -238,6 +238,7 @@ export function GoadHistoryTab({
                     left={
                       <GoadTerminal
                         lines={historyDeployLines}
+                        resizable={false}
                         label={`Range Logs — ${ludusRangeId ?? "no range"}${
                           selectedHistoryEntry.deployEntry
                             ? ` · ${
@@ -253,6 +254,7 @@ export function GoadHistoryTab({
                     right={
                       <GoadTerminal
                         lines={historyGoadLines}
+                        resizable={false}
                         label={`GOAD Logs — ${instanceId}${selectedHistoryEntry.goadTask ? ` · ${selectedHistoryEntry.goadTask.command}` : ""}`}
                         className="flex flex-col min-h-0 h-full"
                       />
@@ -295,7 +297,7 @@ export function GoadHistoryTab({
                   )
                 }
                 return (
-                  <div className="space-y-2 overflow-y-auto flex-1">
+                  <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
                     {correlated.map((entry, idx) => (
                       <CorrelatedHistoryRow
                         key={

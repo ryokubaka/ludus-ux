@@ -248,18 +248,11 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
       },
     )
 
-  const handleInstallExtension = (name: string) => {
+  const installExtension = async (name: string) => {
     const def = extMap[name]
     const noNewVms = def ? extensionIsProvisionOnly(def) : false
     const skipDeploy = noNewVms && goadSupportsProvisionOnlyExtensions(catalog)
-
-    confirm(
-      skipDeploy
-        ? `Enable "${name}" and run Ansible only (no Ludus range deploy)?`
-        : noNewVms
-        ? `Install "${name}"? This extension adds no VMs, but GOAD at ${catalog?.goadPath ?? "your server"} does not support provision-only install_extension — a full Ludus range deploy will run.`
-        : `Install "${name}"? Waits for Ludus idle, then one run: provide + Ansible (Ansible only if provide exits 0).`,
-      async () => {
+    {
         try {
           const en = await fetch(
             `/api/goad/instances/${encodeURIComponent(instanceId)}/enable-extension`,
@@ -341,7 +334,20 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
             name,
           ),
         )
-      },
+    }
+  }
+
+  const handleInstallExtension = (name: string) => {
+    const def = extMap[name]
+    const noNewVms = def ? extensionIsProvisionOnly(def) : false
+    const skipDeploy = noNewVms && goadSupportsProvisionOnlyExtensions(catalog)
+    confirm(
+      skipDeploy
+        ? `Enable "${name}" and run Ansible only (no Ludus range deploy)?`
+        : noNewVms
+        ? `Install "${name}"? This extension adds no VMs, but GOAD at ${catalog?.goadPath ?? "your server"} does not support provision-only install_extension — a full Ludus range deploy will run.`
+        : `Install "${name}"? Waits for Ludus idle, then one run: provide + Ansible (Ansible only if provide exits 0).`,
+      () => installExtension(name),
       `ext-install:${name}`,
     )
   }
@@ -685,6 +691,7 @@ export function useGoadInstanceActionHandlers(params: UseGoadInstanceActionHandl
     handleStatus,
     handleSyncIps,
     handleInstallExtension,
+    installExtension,
     handleReprovisionExtension,
     handleRemoveExtension,
     handleDestroy,

@@ -134,8 +134,8 @@ export async function installBlueprintDependencies(
   const bulk = await ludusApi.installBlueprintDependencies(blueprintId, { forceRoles: true })
   if (!bulk.error && bulk.data) {
     const parsed = formatInstallResults(bulk.data.ansibleResults)
-    if (parsed.ok) return parsed
-
+    // Ludus can return ok for a few Galaxy roles and omit a source role entirely.
+    // That is not a full install; the omitted role still has to be installed by name.
     const installed = await fetchInstalledAnsible()
     const stillMissing = findMissingRequirements(installed, ansibleMissing)
     if (stillMissing.length === 0) {
@@ -145,7 +145,7 @@ export async function installBlueprintDependencies(
     return {
       ok: fallback.ok,
       installed: [...parsed.installed, ...fallback.installed],
-      failed: [...parsed.failed, ...fallback.failed],
+      failed: fallback.failed,
       usedBulkInstall: true,
     }
   }

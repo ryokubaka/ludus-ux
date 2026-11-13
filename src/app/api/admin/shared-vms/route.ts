@@ -5,123 +5,61 @@
  * These VMs are NOT part of any user range so they never appear in /range/all.
  * We query the Proxmox API directly via SSH (pvesh) to discover them.
  *
+ * GET ?refresh=1 bypasses the short server cache for an explicit refresh.
  * Response: { vms: SharedAdminVM[] }
  */
 
 import { NextRequest, NextResponse } from "next/server"
 import { logAndSafeError } from "@/lib/ui/safe-client-error"
 import { requireAdmin } from "@/lib/session/require-admin"
-import { sshExec } from "@/lib/ssh/proxmox-ssh"
 import { requireProxmoxSsh } from "@/lib/ssh/root-ssh-auth"
+import { loadSharedAdminVmsWithMeta, type SharedAdminVM } from "@/lib/admin/shared-admin-vms"
+import { applyServerTiming } from "@/lib/lux/apply-server-timing"
 
-
-export interface SharedAdminVM {
-  vmid: number
-  name: string
-  node: string
-  status: "running" | "stopped" | "unknown"
-  ip: string
-  serviceType: "nexus" | "share" | "other"
-}
+export type { SharedAdminVM }
 
 export async function GET(request: NextRequest) {
+  const requestStart = performance.now()
+  const authStart = performance.now()
   const admin = await requireAdmin(request)
-  if (!admin.ok) return admin.response
+  const authMs = performance.now() - authStart
+  if (!admin.ok) {
+    return applyServerTiming(admin.response, {
+      auth: authMs,
+      total: performance.now() - requestStart,
+    })
+  }
 
   // Proxmox pvesh must use PROXMOX_SSH_* / mounted key only — never the browser session's Ludus SSH password.
   const ssh = requireProxmoxSsh()
-  if (!ssh.ok) return NextResponse.json({ error: ssh.error }, { status: 503 })
-  const { sshHost, sshPort, sshUser, sshPass } = ssh.creds
+  if (!ssh.ok) {
+    return applyServerTiming(NextResponse.json({ error: ssh.error }, { status: 503 }), {
+      auth: authMs,
+      total: performance.now() - requestStart,
+    })
+  }
 
   try {
-    // 1. Get ADMIN pool members (vmid + node)
-    let poolJson = "{}"
-    try {
-      poolJson = await sshExec(
-        sshHost, sshPort, sshUser, sshPass,
-        ["pvesh", "get", "/pools/ADMIN", "--output-format", "json"],
-      )
-    } catch {
-      poolJson = "{}"
-    }
-
-    let members: Array<{ vmid: number; node?: string; type?: string }> = []
-    try {
-      const pool = JSON.parse(poolJson) as { members?: Array<{ vmid: number; node?: string; type?: string }> }
-      members = (pool.members || []).filter((m) => m.type === "qemu" || !m.type)
-    } catch {
-      return NextResponse.json({ vms: [] })
-    }
-
-    if (members.length === 0) return NextResponse.json({ vms: [] })
-
-    // 2. For each member, get current status (name, power state, IP via guest agent)
-    const vms: SharedAdminVM[] = []
-
-    for (const member of members) {
-      const { vmid } = member
-
-      // Determine node — use member.node if present, else discover from /nodes
-      let node = member.node
-      if (!node) {
-        try {
-          const nodesJson = await sshExec(
-            sshHost, sshPort, sshUser, sshPass,
-            ["pvesh", "get", "/nodes", "--output-format", "json"],
-          )
-          const nodes = JSON.parse(nodesJson) as Array<{ node: string }>
-          node = nodes[0]?.node ?? "pve"
-        } catch {
-          node = "pve"
-        }
-      }
-
-      let name = `vmid-${vmid}`
-      let status: "running" | "stopped" | "unknown" = "unknown"
-      let ip = ""
-
-      try {
-        const statusJson = await sshExec(
-          sshHost, sshPort, sshUser, sshPass,
-          ["pvesh", "get", `/nodes/${node}/qemu/${vmid}/status/current`, "--output-format", "json"],
-        )
-        const s = JSON.parse(statusJson) as { name?: string; status?: string }
-        name = s.name ?? name
-        status = s.status === "running" ? "running" : s.status === "stopped" ? "stopped" : "unknown"
-      } catch { /* leave defaults */ }
-
-      // Try to get IP via QEMU guest agent (may fail if VM is off or no agent)
-      try {
-        const netJson = await sshExec(
-          sshHost, sshPort, sshUser, sshPass,
-          ["pvesh", "get", `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`, "--output-format", "json"],
-        )
-        const net = JSON.parse(netJson) as {
-          result?: Array<{ "ip-addresses"?: Array<{ "ip-address"?: string; "ip-address-type"?: string }> }>
-        }
-        // Find first non-loopback IPv4 address
-        for (const iface of net.result ?? []) {
-          for (const addr of iface["ip-addresses"] ?? []) {
-            const a = addr["ip-address"] ?? ""
-            if (addr["ip-address-type"] === "ipv4" && !a.startsWith("127.") && !a.startsWith("169.254")) {
-              ip = a
-              break
-            }
-          }
-          if (ip) break
-        }
-      } catch { /* no IP available */ }
-
-      let serviceType: "nexus" | "share" | "other" = "other"
-      if (/nexus/i.test(name)) serviceType = "nexus"
-      else if (/(^|-)share($|-)/i.test(name) || /ludus.?share/i.test(name)) serviceType = "share"
-
-      vms.push({ vmid, name, node, status, ip, serviceType })
-    }
-
-    return NextResponse.json({ vms })
+    const result = await loadSharedAdminVmsWithMeta(ssh.creds, {
+      force: request.nextUrl.searchParams.get("refresh") === "1",
+    })
+    return applyServerTiming(NextResponse.json({ vms: result.vms }), {
+      auth: authMs,
+      cache: { dur: 0, desc: result.cacheStatus },
+      ssh: result.readMs,
+      total: performance.now() - requestStart,
+    })
   } catch (err) {
     console.error("[shared-vms] Error:", err)
-    return NextResponse.json({ error: logAndSafeError("admin/shared-vms", err, "Failed to load shared VMs") }, { status: 500 })
+    return applyServerTiming(
+      NextResponse.json(
+        { error: logAndSafeError("admin/shared-vms", err, "Failed to load shared VMs") },
+        { status: 500 },
+      ),
+      {
+        auth: authMs,
+        total: performance.now() - requestStart,
+      },
+    )
   }
 }

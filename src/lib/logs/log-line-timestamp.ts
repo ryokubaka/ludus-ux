@@ -66,6 +66,11 @@ export function deployLogLineHasLeadingWallTimestamp(line: string): boolean {
  * them because empty lines are not deduped. A line is blank when nothing
  * remains after the role prefix and wall-clock stamp.
  */
+/** Keepalive the log stream used to send as a data frame. Not a log line. */
+export function isDeployStreamHeartbeat(line: string): boolean {
+  return line.trim() === "[PING]"
+}
+
 export function isBlankDeployLogLine(line: string): boolean {
   const withoutRole = line.replace(/^\[(?:LUDUS|GOAD|ERROR)\]\s*/, "")
   const { body } = splitLeadingWallTimestamp(withoutRole)

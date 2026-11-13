@@ -46,6 +46,12 @@ export interface RuntimeSettings {
    */
   ludusAnsibleVerbose: boolean
   /**
+   * Apply SSH pipelining + a higher Ansible fork count to Ludus and GOAD runs.
+   * Env only (ANSIBLE_PIPELINING / ANSIBLE_FORKS); no Ludus or GOAD playbook is
+   * edited. Default true. Turn off if a guest's sudoers still requires a TTY.
+   */
+  ludusAnsibleSpeedups: boolean
+  /**
    * Before a deploy, rewrite the range router's AdGuard template so DNS
    * forwards to the Ludus host (192.0.2.254) instead of public resolvers.
    */
@@ -98,6 +104,7 @@ function defaults(): RuntimeSettings {
     goadEnabled: process.env.ENABLE_GOAD !== "false",
     ludushoundEnabled: process.env.ENABLE_LUDUSHOUND !== "false",
     ludusAnsibleVerbose: process.env.LUDUS_ANSIBLE_VERBOSE !== "false",
+    ludusAnsibleSpeedups: process.env.LUX_ANSIBLE_SPEEDUPS !== "false",
     useLudusHostDns: process.env.LUX_USE_LUDUS_HOST_DNS === "true",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
@@ -123,6 +130,7 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "goadEnabled",
   "ludushoundEnabled",
   "ludusAnsibleVerbose",
+  "ludusAnsibleSpeedups",
   "useLudusHostDns",
   "rootApiKey",
   "blueprintOperatorApiKey",
@@ -175,7 +183,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose" || k === "useLudusHostDns") {
+      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose" || k === "ludusAnsibleSpeedups" || k === "useLudusHostDns") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)

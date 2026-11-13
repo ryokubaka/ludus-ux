@@ -4,8 +4,8 @@ import yaml from "js-yaml"
 import { parseGalaxyCollectionFqcn } from "@/lib/ansible/ansible-collection-fqcn"
 import {
   githubApiPath,
-  githubRawFileUrl,
   githubRepoFromApiBase,
+  listGitHubRepoTree,
   listRepoDirectory,
   fetchRepoRawFile,
   parseGitHubCloneUrl,
@@ -26,12 +26,42 @@ interface GitHubContentEntry {
   git_url?: string
 }
 
-/** Git submodule entries appear as blobs under ansible/roles|collections. */
+/** Git submodule entries appear as blobs or gitlinks under ansible/roles|collections. */
 export function gitCatalogEntryNames(items: RepoTreeItem[], dirPath: string): string[] {
   const ansiblePath = dirPath.startsWith("ansible/")
   return items
-    .filter((i) => i.type === "tree" || (ansiblePath && i.type === "blob"))
+    .filter((i) => i.type === "tree" || (ansiblePath && (i.type === "blob" || i.type === "commit")))
     .map((i) => i.name)
+}
+
+/** Immediate children of `dirPath` in a recursive tree. */
+export function directGitChildren(items: RepoTreeItem[], dirPath: string): RepoTreeItem[] {
+  const prefix = `${dirPath.replace(/\/+$/, "")}/`
+  return items.filter((item) => {
+    if (!item.path.startsWith(prefix)) return false
+    const rest = item.path.slice(prefix.length)
+    return rest.length > 0 && !rest.includes("/")
+  })
+}
+
+/** Prefer meta/version.yml, then meta/main.yml, when the tree already lists them. */
+export function roleMetaVersionPath(items: RepoTreeItem[], roleDir: string): string | null {
+  const version = `ansible/roles/${roleDir}/meta/version.yml`
+  const main = `ansible/roles/${roleDir}/meta/main.yml`
+  if (items.some((item) => item.path === version && item.type === "blob")) return version
+  if (items.some((item) => item.path === main && item.type === "blob")) return main
+  return null
+}
+
+/** Packer file directly inside `templates/<dir>/`. */
+export function templatePackerPath(items: RepoTreeItem[], dirName: string): string | null {
+  const prefix = `templates/${dirName}/`
+  const hit = items.find((item) => {
+    if (item.type !== "blob" || !item.path.startsWith(prefix)) return false
+    const rest = item.path.slice(prefix.length)
+    return rest.length > 0 && !rest.includes("/") && (rest.endsWith(".pkr.hcl") || rest.endsWith(".pkr.json"))
+  })
+  return hit?.path ?? null
 }
 
 export function gitUrlToGithubApiBase(gitUrl: string): string | null {
@@ -69,12 +99,9 @@ export async function resolveGitCollectionFqcn(
 ): Promise<string> {
   const branch = gitRefOrDefault(ref)
   try {
-    const rawUrl = githubRawFileUrl(apiBase, `ansible/collections/${dirName}/galaxy.yml`, branch)
-    const res = await fetch(rawUrl, { headers: GITHUB_FETCH_HEADERS, cache: "no-store" })
-    if (res.ok) {
-      const fqcn = parseGalaxyCollectionFqcn(await res.text())
-      if (fqcn) return fqcn
-    }
+    const raw = await fetchRepoRawFile(apiBase, `ansible/collections/${dirName}/galaxy.yml`, branch)
+    const fqcn = parseGalaxyCollectionFqcn(raw)
+    if (fqcn) return fqcn
   } catch {
     /* inline collection or fetch failure */
   }
@@ -99,12 +126,34 @@ export async function resolveGitCollectionFqcn(
   return dirName
 }
 
+const GIT_CATALOG_CONCURRENCY = 8
+
+export async function mapGitCatalogWork<T, R>(
+  items: T[],
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  return mapWithConcurrency(items, GIT_CATALOG_CONCURRENCY, fn)
+}
+
+async function githubTreeOrEmpty(apiBase: string, ref: string): Promise<RepoTreeItem[]> {
+  try {
+    return await listGitHubRepoTree(apiBase, ref)
+  } catch {
+    return []
+  }
+}
+
 async function listGitSubdirs(gitUrl: string, ref: string, dirPath: string): Promise<string[]> {
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   if (!apiBase) return []
+  const branch = gitRefOrDefault(ref)
+  const tree = await githubTreeOrEmpty(apiBase, branch)
+  if (tree.length > 0) {
+    return gitCatalogEntryNames(directGitChildren(tree, dirPath), dirPath)
+  }
   try {
-    const tree = await listRepoDirectory(apiBase, dirPath, gitRefOrDefault(ref))
-    return gitCatalogEntryNames(tree, dirPath)
+    const listed = await listRepoDirectory(apiBase, dirPath, branch)
+    return gitCatalogEntryNames(listed, dirPath)
   } catch {
     return []
   }
@@ -204,10 +253,22 @@ export async function listGitSourceTemplates(
   const names = await listGitSubdirs(gitUrl, ref, "templates")
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   if (!apiBase) return names.map((name) => ({ name, path: `templates/${name}` }))
-  return mapWithConcurrency(names, 5, async (dir) => ({
-    name: await resolveGitTemplateInstallName(apiBase, ref, dir),
-    path: `templates/${dir}`,
-  }))
+  const branch = gitRefOrDefault(ref)
+  const tree = await githubTreeOrEmpty(apiBase, branch)
+  return mapGitCatalogWork(names, async (dir) => {
+    const packer = templatePackerPath(tree, dir)
+    const fileName = packer ? packer.slice(packer.lastIndexOf("/") + 1) : undefined
+    return {
+      name: await resolveGitTemplateInstallName(
+        apiBase,
+        branch,
+        dir,
+        fileName ? [fileName] : undefined,
+        `templates/${dir}`,
+      ),
+      path: `templates/${dir}`,
+    }
+  })
 }
 
 /** Parse `meta/version.yml` or galaxy_info.version from role meta/main.yml. */
@@ -254,6 +315,18 @@ export async function fetchGitRoleVersion(
   return undefined
 }
 
+async function readRoleVersionFile(
+  apiBase: string,
+  ref: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    return parseAnsibleRoleVersionYaml(await fetchRepoRawFile(apiBase, path, ref))
+  } catch {
+    return undefined
+  }
+}
+
 export async function listGitSourceRoles(
   gitUrl: string,
   ref: string,
@@ -264,13 +337,16 @@ export async function listGitSourceRoles(
   if (!apiBase) {
     return names.map((name) => ({ name, scope: "local" as const }))
   }
-  return Promise.all(
-    names.map(async (name) => ({
-      name,
-      version: await fetchGitRoleVersion(apiBase, branch, name),
-      scope: "local" as const,
-    })),
-  )
+  const tree = await githubTreeOrEmpty(apiBase, branch)
+  return mapGitCatalogWork(names, async (name) => {
+    const known = roleMetaVersionPath(tree, name)
+    const version = known
+      ? await readRoleVersionFile(apiBase, branch, known)
+      : tree.length > 0
+        ? undefined
+        : await fetchGitRoleVersion(apiBase, branch, name)
+    return { name, version, scope: "local" as const }
+  })
 }
 
 /** Prefer git tip meta/version.yml over Ludus sync-cache versions (often stale/missing). */
@@ -282,15 +358,19 @@ export async function enrichRoleVersionsFromGit(
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   if (!apiBase || items.length === 0) return items
   const branch = gitRefOrDefault(ref)
-  return Promise.all(
-    items.map(async (item) => {
-      const name = (item.name ?? "").trim()
-      if (!name) return item
-      const dir = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name
-      const version = await fetchGitRoleVersion(apiBase, branch, dir)
-      return version ? { ...item, version } : item
-    }),
-  )
+  const tree = await githubTreeOrEmpty(apiBase, branch)
+  return mapGitCatalogWork(items, async (item) => {
+    const name = (item.name ?? "").trim()
+    if (!name) return item
+    const dir = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name
+    const known = roleMetaVersionPath(tree, dir)
+    const version = known
+      ? await readRoleVersionFile(apiBase, branch, known)
+      : tree.length > 0
+        ? undefined
+        : await fetchGitRoleVersion(apiBase, branch, dir)
+    return version ? { ...item, version } : item
+  })
 }
 
 export async function listGitSourceCollections(
@@ -301,13 +381,10 @@ export async function listGitSourceCollections(
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   const names = await listGitSubdirs(gitUrl, branch, "ansible/collections")
   if (!apiBase) return names.map((name) => ({ name, scope: "local" as const }))
-  const resolved = await Promise.all(
-    names.map(async (dirName) => ({
-      name: await resolveGitCollectionFqcn(apiBase, branch, dirName),
-      scope: "local" as const,
-    })),
-  )
-  return resolved
+  return mapGitCatalogWork(names, async (dirName) => ({
+    name: await resolveGitCollectionFqcn(apiBase, branch, dirName),
+    scope: "local" as const,
+  }))
 }
 
 /** Map short collection dir names to FQCN before POST /sources/{id}/install. */
@@ -319,10 +396,8 @@ export async function enrichCollectionInstallNames(
   const apiBase = gitUrlToGithubApiBase(gitUrl)
   if (!apiBase) return names
   const branch = gitRefOrDefault(ref)
-  return Promise.all(
-    names.map(async (name) => {
-      if (name.includes(".")) return name
-      return resolveGitCollectionFqcn(apiBase, branch, name)
-    }),
-  )
+  return mapGitCatalogWork(names, async (name) => {
+    if (name.includes(".")) return name
+    return resolveGitCollectionFqcn(apiBase, branch, name)
+  })
 }

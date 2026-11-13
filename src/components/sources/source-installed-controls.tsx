@@ -74,7 +74,25 @@ export function SourceSyncControls({
   const handleResync = async () => {
     setBusy(true)
     try {
-      await postSourceInstall(match.sourceId, match.selection, { force: true })
+      const version = match.catalogVersion?.trim()
+      const versions = version
+        ? {
+            catalogRef: match.sourceRef,
+            ...(match.kind === "blueprint" && match.selection.blueprints?.[0]
+              ? { blueprints: { [match.selection.blueprints[0]]: version } }
+              : {}),
+            ...(match.kind === "template" && match.selection.templates?.[0]
+              ? { templates: { [match.selection.templates[0]]: version } }
+              : {}),
+            ...(match.kind === "role" && match.selection.localRoles?.[0]
+              ? { localRoles: { [match.selection.localRoles[0]]: version } }
+              : {}),
+            ...(match.kind === "collection" && match.selection.localCollections?.[0]
+              ? { localCollections: { [match.selection.localCollections[0]]: version } }
+              : {}),
+          }
+        : undefined
+      await postSourceInstall(match.sourceId, match.selection, { force: true, versions })
       toast({ title: "Re-synced", description: match.catalogName })
       onResynced?.()
     } catch (err) {

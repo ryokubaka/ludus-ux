@@ -13,10 +13,21 @@ import type { NextRequest } from "next/server"
 import { randomUUID } from "crypto"
 import { Client as SSHClient, ConnectConfig, type ClientChannel } from "ssh2"
 import type { GoadInstance, GoadCatalog } from "@/lib/core/types"
+import {
+  isSafeGoadName,
+  type GoadInventoryGroup,
+  type GoadInventoryHost,
+  type GoadJoinHint,
+  type GoadPlannedVm,
+  type GoadPlay,
+  type GoadRawDomain,
+  type GoadRawHost,
+} from "@/lib/goad/goad-domain-map"
 import { resolveAdminImpersonationFromRequest } from "@/lib/admin/admin-impersonation-request"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 import type { SessionData } from "@/lib/session/session"
 import { getSettings } from "@/lib/settings/settings-store"
+import { TtlCache } from "@/lib/core/server-cache"
 import { readPrivateKey, getSshKeyPassphrase, isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
 import { asPrivilegedShell, effectivePrivilegedSshUser, formatLuxHost, isPrivilegedRoot, wrapLuxHostStdin } from "@/lib/ssh/root-ssh-preflight"
 import { filterLudusDeployTags } from "@/lib/ludus/ludus-deploy-tags"
@@ -1034,6 +1045,7 @@ export async function streamGoadCommand(
     goadPath,
     resolveLudusInstallPath(),
     ansibleLinuxUser ?? undefined,
+    { speedups: getSettings().ludusAnsibleSpeedups },
   )
   const pythonEnvSetup =
     `if [ ! -f "$HOME/.goad/.venv/bin/activate" ]; then echo "[-] GOAD venv missing ($HOME/.goad/.venv/bin/activate)."; exit 1; fi; . "$HOME/.goad/.venv/bin/activate"`
@@ -1321,6 +1333,7 @@ export async function writeGoadRangeId(
   if (code !== 0) {
     throw new Error(stderr.trim() || `Failed to write .goad_range_id (exit ${code})`)
   }
+  invalidateGoadInstanceCache()
 }
 
 /** Read the dedicated Ludus rangeID for a GOAD instance. Returns null if not set. */
@@ -1412,7 +1425,53 @@ print(json.dumps(results))
  * host (just like discoverGoadCatalog), and returns all instances + ownership
  * data in one round-trip.
  */
-export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[]> {
+/**
+ * Result of listing GOAD workspaces.
+ *
+ * A transport or remote-command failure is distinct from an empty workspace
+ * list. Callers that need to tell "no instances" apart from "could not list"
+ * must use this result instead of the array-shaped wrapper below.
+ */
+export type GoadInstanceListResult =
+  | { ok: true; instances: GoadInstance[] }
+  | { ok: false; error: string }
+
+/**
+ * GOAD workspace listings are a single SSH+Python round trip but every page,
+ * access check, and deploy-link poll used to pay it. Cache a successful listing
+ * for a few seconds; failures are not cached so a retry can recover.
+ *
+ * Keyed by host/port/SSH user and goadPath. The listing itself is host-wide;
+ * per-user visibility is applied by `fetchGoadInstancesForRequest`.
+ */
+const GOAD_INSTANCE_LIST_TTL_MS = 7000
+const goadInstanceListCache = new TtlCache<GoadInstanceListResult>(GOAD_INSTANCE_LIST_TTL_MS, 32)
+
+function goadInstanceListCacheKey(creds?: SSHCreds): string {
+  const settings = getSettings()
+  const host = pickFirstNonEmpty(
+    settings.sshHost,
+    process.env.LUDUS_SSH_HOST,
+    process.env.GOAD_SSH_HOST,
+  )
+  const user = creds?.username || settings.proxmoxSshUser || "root"
+  return `${host}:${settings.sshPort || 22}:${user}:${resolveGoadPath()}`
+}
+
+/** Drop the cached listing after a GOAD workspace mutation. */
+export function invalidateGoadInstanceCache(): void {
+  goadInstanceListCache.invalidate()
+}
+
+export async function listGoadInstancesResult(creds?: SSHCreds): Promise<GoadInstanceListResult> {
+  return goadInstanceListCache.resolve(
+    goadInstanceListCacheKey(creds),
+    () => listGoadInstancesUncached(creds),
+    { cacheable: (result) => result.ok },
+  )
+}
+
+async function listGoadInstancesUncached(creds?: SSHCreds): Promise<GoadInstanceListResult> {
   try {
     const goadPath = resolveGoadPath();
     const encoded = Buffer.from(LIST_INSTANCES_PY).toString("base64");
@@ -1420,8 +1479,15 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
 
     const { stdout, code } = await sshExecAccountOrUser(cmd, creds);
 
-    if (code !== 0 || !stdout.trim()) {
-      return [];
+    if (code !== 0) {
+      return {
+        ok: false,
+        error: `GOAD workspace listing failed (exit ${code}): ${stdout.trim().slice(0, 200) || "no output"}`,
+      };
+    }
+
+    if (!stdout.trim()) {
+      return { ok: false, error: "GOAD workspace listing returned no output" };
     }
 
     let parsed: Array<Record<string, unknown>>;
@@ -1429,7 +1495,11 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
       parsed = JSON.parse(stdout.trim());
     } catch {
       console.error("listGoadInstances: failed to parse Python output:", stdout.slice(0, 200));
-      return [];
+      return { ok: false, error: "GOAD workspace listing returned invalid JSON" };
+    }
+
+    if (!Array.isArray(parsed)) {
+      return { ok: false, error: "GOAD workspace listing returned an unexpected payload" };
     }
 
     const instances: GoadInstance[] = []
@@ -1459,11 +1529,21 @@ export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[
     }
 
     instances.sort((a, b) => a.instanceId.localeCompare(b.instanceId));
-    return instances;
+    return { ok: true, instances };
   } catch (err) {
     console.error("Error listing GOAD instances:", err);
-    return [];
+    return { ok: false, error: `GOAD workspace listing failed: ${(err as Error).message}` };
   }
+}
+
+/**
+ * Array-shaped wrapper kept for callers whose behavior on failure is "treat as
+ * no instances". New callers that need to surface a failure should use
+ * `listGoadInstancesResult`.
+ */
+export async function listGoadInstances(creds?: SSHCreds): Promise<GoadInstance[]> {
+  const result = await listGoadInstancesResult(creds);
+  return result.ok ? result.instances : [];
 }
 
 // ── Catalog discovery ─────────────────────────────────────────────────────────
@@ -1847,6 +1927,7 @@ export async function discoverGoadCatalog(creds?: SSHCreds): Promise<GoadCatalog
 /** Invalidate the catalog cache (call after GOAD path setting changes). */
 export function invalidateCatalogCache(): void {
   catalogCache = null;
+  domainCatalogCache = null;
 }
 
 /**
@@ -1903,6 +1984,723 @@ for f in sorted(os.listdir(workspace_dir)):
 print(json.dumps(results))
 `
 
+const READ_DOMAIN_SOURCES_PY = `
+import os, json, re, sys
+
+goad_path = sys.argv[1]
+lab = sys.argv[2]
+extensions = [name for name in sys.argv[3].split(",") if name] if len(sys.argv) > 3 else []
+
+def section_hosts(blob):
+    if not isinstance(blob, dict):
+        return []
+    hosts = blob.get("hosts")
+    if not isinstance(hosts, dict):
+        return []
+    rows = []
+    for key, host in hosts.items():
+        if not isinstance(host, dict):
+            continue
+        rows.append({
+            "key": str(key),
+            "hostname": str(host.get("hostname") or ""),
+            "type": str(host.get("type") or ""),
+            "domain": str(host.get("domain") or ""),
+        })
+    return rows
+
+def hosts_from(cfg):
+    if not isinstance(cfg, dict):
+        return []
+    return section_hosts(cfg.get("lab")) + section_hosts(cfg.get("lab_extension"))
+
+def section_domains(blob):
+    if not isinstance(blob, dict):
+        return []
+    domains = blob.get("domains")
+    if not isinstance(domains, dict):
+        return []
+    rows = []
+    for fqdn, info in domains.items():
+        if not isinstance(info, dict):
+            info = {}
+        rows.append({
+            "fqdn": str(fqdn),
+            "dc": str(info.get("dc") or ""),
+            "trust": str(info.get("trust") or ""),
+        })
+    return rows
+
+def domains_from(cfg):
+    if not isinstance(cfg, dict):
+        return []
+    return section_domains(cfg.get("lab")) + section_domains(cfg.get("lab_extension"))
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+def unquote(value):
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+def play_joins(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return []
+    joins = []
+    play_hosts = ""
+    play_domain = ""
+    play_role = ""
+    def flush():
+        nonlocal play_hosts, play_domain, play_role
+        if play_role and play_hosts:
+            joins.append({"hosts": play_hosts, "memberDomain": play_domain, "role": play_role})
+        play_domain = ""
+        play_role = ""
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("- name:") or line.startswith("- hosts:"):
+            flush()
+            play_hosts = ""
+            if line.startswith("- hosts:"):
+                play_hosts = unquote(line.split(":", 1)[1])
+            continue
+        if line.startswith("hosts:"):
+            play_hosts = unquote(line.split(":", 1)[1])
+            continue
+        role = re.search(r"role:\\s*['\\"]?(commonwkstn|member_server)", line, re.I)
+        if role:
+            play_role = role.group(1).lower()
+            continue
+        if line.startswith("member_domain:"):
+            play_domain = unquote(line.split(":", 1)[1])
+    flush()
+    return joins
+
+def ludus_vms(path, extension):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return []
+    vms = []
+    current = None
+    item_indent = None
+    def assign(item, key, value):
+        value = unquote(value)
+        if key in ("vm_name", "hostname", "template"):
+            item[key] = value
+        elif key in ("vlan", "ip_last_octet", "ram_gb", "cpus"):
+            try:
+                item[key] = int(float(value))
+            except Exception:
+                pass
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        # Extension configs indent the list under two spaces. Nested keys such
+        # as windows.sysprep stay on the same item and are ignored below.
+        if stripped.startswith("-") and (item_indent is None or indent <= item_indent):
+            if current:
+                vms.append(current)
+            current = {}
+            item_indent = indent
+            inline = re.match(r"^-\\s*(\\w+)\\s*:\\s*(.*)$", stripped)
+            if inline:
+                assign(current, inline.group(1), inline.group(2) or "")
+            continue
+        if current is None or item_indent is None or indent <= item_indent:
+            continue
+        field = re.match(r"^(\\w+)\\s*:\\s*(.*)$", stripped)
+        if field:
+            assign(current, field.group(1), field.group(2))
+    if current:
+        vms.append(current)
+    out = []
+    for vm in vms:
+        if not vm.get("vm_name") and not vm.get("hostname"):
+            continue
+        out.append({
+            "extension": extension,
+            "vmName": vm.get("vm_name") or "",
+            "hostname": vm.get("hostname") or "",
+            "template": vm.get("template") or "",
+            "vlan": vm.get("vlan") or 0,
+            "ipLastOctet": vm.get("ip_last_octet") or 0,
+            "ramGb": vm.get("ram_gb") or 0,
+            "cpus": vm.get("cpus") or 0,
+        })
+    return out
+
+def blank_play(extension):
+    return {
+        "extension": extension,
+        "hosts": [],
+        "roles": [],
+        "memberDomain": "",
+        "domain": "",
+        "parentDomain": "",
+        "domainName": "",
+    }
+
+def add_host_token(play, value):
+    value = unquote(value.strip().strip(","))
+    if not value or value.startswith("{%") or value.startswith("{{"):
+        return
+    if value.startswith("[") and value.endswith("]"):
+        value = value[1:-1]
+    for part in re.split(r"[\\s,]+", value):
+        part = unquote(part.strip())
+        if part and part not in play["hosts"]:
+            play["hosts"].append(part)
+
+def playbook_records(path, extension):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return []
+    records = []
+    cur = None
+    mode = ""
+    mode_indent = -1
+    def flush():
+        nonlocal cur, mode
+        if cur and cur["hosts"] and cur["roles"]:
+            records.append(cur)
+        cur = None
+        mode = ""
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if stripped.startswith("- import_playbook") or stripped.startswith("import_playbook"):
+            flush()
+            continue
+        if indent == 0 and (stripped.startswith("- name:") or stripped.startswith("- hosts:")):
+            flush()
+            cur = blank_play(extension)
+            if stripped.startswith("- hosts:"):
+                add_host_token(cur, stripped.split(":", 1)[1])
+            continue
+        if cur is None:
+            continue
+        if mode == "hosts" and indent <= mode_indent and not stripped.startswith("-"):
+            mode = ""
+        if stripped.startswith("hosts:"):
+            mode = "hosts"
+            mode_indent = indent
+            rest = stripped.split(":", 1)[1].strip()
+            if rest:
+                add_host_token(cur, rest)
+                mode = ""
+            continue
+        if mode == "hosts" and stripped.startswith("-"):
+            add_host_token(cur, stripped[1:])
+            continue
+        role = re.search(r"role:\\s*['\\"]?([A-Za-z0-9_./-]+)", stripped, re.I)
+        if role:
+            name = role.group(1).lower()
+            if name not in cur["roles"]:
+                cur["roles"].append(name)
+            continue
+        for key, field in (
+            ("member_domain", "memberDomain"),
+            ("parent_domain", "parentDomain"),
+            ("domain_name", "domainName"),
+            ("domain", "domain"),
+        ):
+            if re.match(r"^%s\\s*:" % key, stripped):
+                cur[field] = unquote(stripped.split(":", 1)[1])
+                break
+    flush()
+    return records
+
+def inventory_records(path, extension):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except Exception:
+        return [], []
+    groups = {}
+    children = {}
+    octets = {}
+    current = None
+    child_mode = False
+    for raw in text.splitlines():
+        line = raw.split(";", 1)[0].strip()
+        if not line or line.startswith("#") or line.startswith("{%") or line.startswith("{{"):
+            continue
+        header = re.match(r"^\\[([^\\]:]+)(?::([^\\]]+))?\\]$", line)
+        if header:
+            current = header.group(1).strip().lower()
+            kind = (header.group(2) or "").strip().lower()
+            child_mode = kind == "children"
+            groups.setdefault(current, [])
+            children.setdefault(current, [])
+            continue
+        if current is None or line.startswith("{"):
+            continue
+        token = unquote(line.split()[0]).strip().lower()
+        if not token or token.startswith("{%"):
+            continue
+        if child_mode:
+            if token not in children[current]:
+                children[current].append(token)
+            continue
+        if token not in groups[current]:
+            groups[current].append(token)
+        found = re.search(r"ansible_host=\\{\\{[^}]+\\}\\}\\.(\\d+)", line)
+        if not found:
+            found = re.search(r"ansible_host=(?:\\d+\\.){3}(\\d+)", line)
+        if found and token not in octets:
+            octets[token] = int(found.group(1))
+    group_rows = []
+    for name, members in groups.items():
+        group_rows.append({
+            "extension": extension,
+            "name": name,
+            "hosts": members,
+            "children": children.get(name) or [],
+        })
+    host_rows = []
+    for host, octet in octets.items():
+        owned = [gname for gname, members in groups.items() if host in members]
+        host_rows.append({"extension": extension, "host": host, "octet": octet, "groups": owned})
+    return group_rows, host_rows
+
+hosts = []
+domains = []
+seen_hosts = set()
+seen_domains = set()
+
+def absorb(cfg):
+    if not isinstance(cfg, dict):
+        return
+    for row in hosts_from(cfg):
+        key = row["key"].lower()
+        if not key or key in seen_hosts:
+            continue
+        seen_hosts.add(key)
+        hosts.append(row)
+    for row in domains_from(cfg):
+        key = row["fqdn"].lower()
+        if not key or key in seen_domains:
+            continue
+        seen_domains.add(key)
+        domains.append(row)
+
+joins = []
+vms = []
+plays = []
+groups = []
+addresses = []
+absorb(load(os.path.join(goad_path, "ad", lab, "data", "config.json")))
+joins.extend(play_joins(os.path.join(goad_path, "ansible", "ad-members.yml")))
+for rel in ("ansible/ad-members.yml", "ansible/ad-parent_domain.yml", "ansible/ad-child_domain.yml"):
+    plays.extend(playbook_records(os.path.join(goad_path, rel), ""))
+inv_groups, inv_hosts = inventory_records(os.path.join(goad_path, "ad", lab, "providers", "ludus", "inventory"), "")
+if not inv_hosts:
+    inv_groups, inv_hosts = inventory_records(os.path.join(goad_path, "ad", lab, "data", "inventory"), "")
+groups.extend(inv_groups)
+addresses.extend(inv_hosts)
+ext_root = os.path.join(goad_path, "extensions")
+ext_names = []
+if os.path.isdir(ext_root):
+    for name in sorted(os.listdir(ext_root)):
+        if name in ("TEMPLATE",) or name.startswith("."):
+            continue
+        if os.path.isdir(os.path.join(ext_root, name)):
+            ext_names.append(name)
+for name in ext_names:
+    ext_dir = os.path.join(ext_root, name)
+    for rel in ("config.json", "extension.json", os.path.join("data", "config.json")):
+        absorb(load(os.path.join(ext_dir, rel)))
+    joins.extend(play_joins(os.path.join(ext_dir, "ansible", "install.yml")))
+    plays.extend(playbook_records(os.path.join(ext_dir, "ansible", "install.yml"), name))
+    inv_groups, inv_hosts = inventory_records(os.path.join(ext_dir, "inventory"), name)
+    groups.extend(inv_groups)
+    addresses.extend(inv_hosts)
+    # Every extension, not only the ones this instance lists. A deployed VM can
+    # still use an older name, such as WS01 for the workstation now called w11-23h2.
+    for rel in ("providers/ludus/config.yml", "providers/ludus/config.yaml"):
+        found = ludus_vms(os.path.join(ext_dir, rel), name)
+        if found:
+            vms.extend(found)
+            break
+
+print(json.dumps({"hosts": hosts, "domains": domains, "joins": joins, "vms": vms, "plays": plays, "inventory": addresses, "groups": groups}))
+`
+
+function parseLastJsonObject(stdout: string): {
+  hosts?: unknown
+  domains?: unknown
+  joins?: unknown
+  vms?: unknown
+  plays?: unknown
+  inventory?: unknown
+  groups?: unknown
+} | null {
+  const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]) as {
+        hosts?: unknown
+        domains?: unknown
+        joins?: unknown
+        vms?: unknown
+        plays?: unknown
+        inventory?: unknown
+        groups?: unknown
+      }
+      if (parsed && typeof parsed === "object") return parsed
+    } catch {
+      // Banner lines can precede the JSON object.
+    }
+  }
+  return null
+}
+
+function asRawHosts(value: unknown): GoadRawHost[] {
+  if (!Array.isArray(value)) return []
+  const hosts: GoadRawHost[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    const octet = Number(record.ipLastOctet) || 0
+    hosts.push({
+      key: String(record.key ?? ""),
+      hostname: String(record.hostname ?? ""),
+      type: String(record.type ?? ""),
+      domain: String(record.domain ?? ""),
+      ipLastOctet: octet || undefined,
+    })
+  }
+  return hosts
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean)
+}
+
+function asPlays(value: unknown): GoadPlay[] {
+  if (!Array.isArray(value)) return []
+  const plays: GoadPlay[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    plays.push({
+      extension: String(record.extension ?? ""),
+      hosts: asStringList(record.hosts),
+      roles: asStringList(record.roles),
+      memberDomain: String(record.memberDomain ?? ""),
+      domain: String(record.domain ?? ""),
+      parentDomain: String(record.parentDomain ?? ""),
+      domainName: String(record.domainName ?? ""),
+    })
+  }
+  return plays
+}
+
+function asInventory(value: unknown): GoadInventoryHost[] {
+  if (!Array.isArray(value)) return []
+  const rows: GoadInventoryHost[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    rows.push({
+      extension: String(record.extension ?? ""),
+      host: String(record.host ?? ""),
+      octet: Number(record.octet) || 0,
+      groups: asStringList(record.groups),
+    })
+  }
+  return rows
+}
+
+function asGroups(value: unknown): GoadInventoryGroup[] {
+  if (!Array.isArray(value)) return []
+  const rows: GoadInventoryGroup[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    rows.push({
+      extension: String(record.extension ?? ""),
+      name: String(record.name ?? ""),
+      hosts: asStringList(record.hosts),
+      children: asStringList(record.children),
+    })
+  }
+  return rows
+}
+
+function asJoins(value: unknown): GoadJoinHint[] {
+  if (!Array.isArray(value)) return []
+  const joins: GoadJoinHint[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    joins.push({
+      hosts: String(record.hosts ?? ""),
+      memberDomain: String(record.memberDomain ?? ""),
+      role: String(record.role ?? ""),
+    })
+  }
+  return joins
+}
+
+function asPlannedVms(value: unknown): GoadPlannedVm[] {
+  if (!Array.isArray(value)) return []
+  const vms: GoadPlannedVm[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    vms.push({
+      extension: String(record.extension ?? ""),
+      vmName: String(record.vmName ?? ""),
+      hostname: String(record.hostname ?? ""),
+      template: String(record.template ?? ""),
+      vlan: Number(record.vlan) || 0,
+      ipLastOctet: Number(record.ipLastOctet) || 0,
+      ramGb: Number(record.ramGb) || 0,
+      cpus: Number(record.cpus) || 0,
+    })
+  }
+  return vms
+}
+
+function asRawDomains(value: unknown): GoadRawDomain[] {
+  if (!Array.isArray(value)) return []
+  const domains: GoadRawDomain[] = []
+  for (const row of value) {
+    if (!row || typeof row !== "object") continue
+    const record = row as Record<string, unknown>
+    domains.push({
+      fqdn: String(record.fqdn ?? ""),
+      dc: String(record.dc ?? ""),
+      trust: String(record.trust ?? ""),
+    })
+  }
+  return domains
+}
+
+/**
+ * Read domain membership from a GOAD lab and its extensions.
+ * Returns host keys, hostnames, types, and domain names only. Passwords stay on the host.
+ */
+export async function readGoadDomainSources(
+  labName: string,
+  extensions: readonly string[],
+  creds?: SSHCreds,
+): Promise<{
+  hosts: GoadRawHost[]
+  domains: GoadRawDomain[]
+  joins: GoadJoinHint[]
+  vms: GoadPlannedVm[]
+  plays: GoadPlay[]
+  inventory: GoadInventoryHost[]
+  groups: GoadInventoryGroup[]
+}> {
+  const empty = {
+    hosts: [] as GoadRawHost[],
+    domains: [] as GoadRawDomain[],
+    joins: [] as GoadJoinHint[],
+    vms: [] as GoadPlannedVm[],
+    plays: [] as GoadPlay[],
+    inventory: [] as GoadInventoryHost[],
+    groups: [] as GoadInventoryGroup[],
+  }
+  if (!isSafeGoadName(labName) || extensions.some((name) => !isSafeGoadName(name))) return empty
+  try {
+    const goadPath = resolveGoadPath()
+    const encoded = Buffer.from(READ_DOMAIN_SOURCES_PY).toString("base64")
+    const extArg = extensions.join(",")
+    const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath.replace(/'/g, "'\\''")}' '${labName}' '${extArg}'`
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds)
+    if (code !== 0 || !stdout.trim()) return empty
+    const parsed = parseLastJsonObject(stdout)
+    if (!parsed) return empty
+    return {
+      hosts: asRawHosts(parsed.hosts),
+      domains: asRawDomains(parsed.domains),
+      joins: asJoins(parsed.joins),
+      vms: asPlannedVms(parsed.vms),
+      plays: asPlays(parsed.plays),
+      inventory: asInventory(parsed.inventory),
+      groups: asGroups(parsed.groups),
+    }
+  } catch {
+    return empty
+  }
+}
+
+const READ_DOMAIN_CATALOG_PY = `
+import os, json, sys
+
+goad_path = sys.argv[1]
+
+def section_hosts(blob):
+    if not isinstance(blob, dict):
+        return []
+    hosts = blob.get("hosts")
+    if not isinstance(hosts, dict):
+        return []
+    rows = []
+    for key, host in hosts.items():
+        if not isinstance(host, dict):
+            continue
+        rows.append({
+            "key": str(key),
+            "hostname": str(host.get("hostname") or ""),
+            "type": str(host.get("type") or ""),
+            "domain": str(host.get("domain") or ""),
+        })
+    return rows
+
+def hosts_from(cfg):
+    if not isinstance(cfg, dict):
+        return []
+    return section_hosts(cfg.get("lab")) + section_hosts(cfg.get("lab_extension"))
+
+def section_domains(blob):
+    if not isinstance(blob, dict):
+        return []
+    domains = blob.get("domains")
+    if not isinstance(domains, dict):
+        return []
+    rows = []
+    for fqdn, info in domains.items():
+        if not isinstance(info, dict):
+            info = {}
+        rows.append({
+            "fqdn": str(fqdn),
+            "dc": str(info.get("dc") or ""),
+            "trust": str(info.get("trust") or ""),
+        })
+    return rows
+
+def domains_from(cfg):
+    if not isinstance(cfg, dict):
+        return []
+    return section_domains(cfg.get("lab")) + section_domains(cfg.get("lab_extension"))
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+def collect(root, names):
+    found = []
+    if not os.path.isdir(root):
+        return found
+    for name in names:
+        if name in ("TEMPLATE",):
+            continue
+        directory = os.path.join(root, name)
+        if not os.path.isdir(directory):
+            continue
+        hosts = []
+        domains = []
+        seen_hosts = set()
+        seen_domains = set()
+        paths = [
+            os.path.join(directory, "data", "config.json"),
+            os.path.join(directory, "config.json"),
+            os.path.join(directory, "extension.json"),
+        ]
+        for path in paths:
+            cfg = load(path)
+            if not isinstance(cfg, dict):
+                continue
+            for row in hosts_from(cfg):
+                key = row["key"].lower()
+                if not key or key in seen_hosts:
+                    continue
+                seen_hosts.add(key)
+                hosts.append(row)
+            for row in domains_from(cfg):
+                key = row["fqdn"].lower()
+                if not key or key in seen_domains:
+                    continue
+                seen_domains.add(key)
+                domains.append(row)
+        if hosts or domains:
+            found.append({"name": name, "hosts": hosts, "domains": domains})
+    return found
+
+ad_path = os.path.join(goad_path, "ad")
+ext_path = os.path.join(goad_path, "extensions")
+labs = collect(ad_path, sorted(os.listdir(ad_path)) if os.path.isdir(ad_path) else [])
+extensions = collect(ext_path, sorted(os.listdir(ext_path)) if os.path.isdir(ext_path) else [])
+print(json.dumps({"labs": labs, "extensions": extensions}))
+`
+
+let domainCatalogCache: {
+  data: { labs: { name: string; hosts: GoadRawHost[]; domains: GoadRawDomain[] }[]; extensions: { name: string; hosts: GoadRawHost[]; domains: GoadRawDomain[] }[] }
+  expiry: number
+  goadPath: string
+} | null = null
+
+/**
+ * Read every GOAD lab and extension domain map. Passwords stay on the host.
+ * Used when a range was deployed from a lab but is not linked to an instance.
+ */
+export async function readGoadDomainCatalog(
+  creds?: SSHCreds,
+): Promise<{
+  labs: { name: string; hosts: GoadRawHost[]; domains: GoadRawDomain[] }[]
+  extensions: { name: string; hosts: GoadRawHost[]; domains: GoadRawDomain[] }[]
+}> {
+  const empty = { labs: [], extensions: [] }
+  try {
+    const goadPath = resolveGoadPath()
+    if (domainCatalogCache && domainCatalogCache.goadPath === goadPath && domainCatalogCache.expiry > Date.now()) {
+      return domainCatalogCache.data
+    }
+    const encoded = Buffer.from(READ_DOMAIN_CATALOG_PY).toString("base64")
+    const cmd = `echo '${encoded}' | base64 -d | python3 - '${goadPath.replace(/'/g, "'\\''")}'`
+    const { stdout, code } = await sshExecAccountOrUser(cmd, creds)
+    if (code !== 0 || !stdout.trim()) return empty
+    const parsed = parseLastJsonObject(stdout) as { labs?: unknown; extensions?: unknown } | null
+    if (!parsed) return empty
+    const asGroups = (value: unknown) => {
+      if (!Array.isArray(value)) return []
+      const groups: { name: string; hosts: GoadRawHost[]; domains: GoadRawDomain[] }[] = []
+      for (const row of value) {
+        if (!row || typeof row !== "object") continue
+        const record = row as Record<string, unknown>
+        const name = String(record.name ?? "")
+        if (!isSafeGoadName(name)) continue
+        groups.push({ name, hosts: asRawHosts(record.hosts), domains: asRawDomains(record.domains) })
+      }
+      return groups
+    }
+    const data = { labs: asGroups(parsed.labs), extensions: asGroups(parsed.extensions) }
+    domainCatalogCache = { data, expiry: Date.now() + 5 * 60 * 1000, goadPath }
+    return data
+  } catch {
+    return empty
+  }
+}
+
 /**
  * Return all compiled inventory files for a GOAD instance (base + extension inventories).
  * Path on server: <goadPath>/workspace/<instanceId>/inventory, .../adfs_inventory, etc.
@@ -1939,4 +2737,5 @@ export async function chownGoadInstance(
   if (code !== 0) {
     throw new Error(`chown failed (exit ${code}): ${stderr.trim() || "unknown error"}`)
   }
+  invalidateGoadInstanceCache()
 }

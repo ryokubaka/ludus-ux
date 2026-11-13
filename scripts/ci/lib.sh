@@ -9,7 +9,7 @@ cd "$LUX_ROOT"
 # Container images used when the tool is not on PATH. Pinned by digest; a GitLab
 # job can use the same image directly so the tool is already present.
 LUX_GITLEAKS_IMAGE="zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
-LUX_SEMGREP_IMAGE="semgrep/semgrep:1.181.1@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2"
+LUX_SEMGREP_IMAGE="semgrep/semgrep:1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d"
 LUX_KANIKO_IMAGE="gcr.io/kaniko-project/executor:v1.23.2-debug@sha256:c3109d5926a997b100c4343944e06c6b30a6804b2f9abe0994d3de6ef92b028e"
 
 lux_step() {

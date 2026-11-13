@@ -8,6 +8,7 @@ import { isRootProxmoxSshConfigured } from "@/lib/ssh/root-ssh-auth"
 import { refreshLudusWallClockFromSsh } from "@/lib/ludus/ludus-wall-clock"
 import { getCachedLudusWallHmsOrUtc } from "@/lib/ludus/ludus-wall-clock-bridge"
 import { createDeployLogDedupe } from "@/lib/logs/deploy-log-sse-dedupe"
+import { readGoadLogTail } from "@/lib/logs/goad-log-tail-cache"
 import { readLudusAnsibleLogMtimeMs } from "@/lib/goad/goad-ludus-reconcile"
 import {
   deployLogLineHasLeadingWallTimestamp,
@@ -24,19 +25,37 @@ async function readGoadLog(
   lastCount: number,
 ): Promise<{ lines: string[]; newCount: number }> {
   if (!settings.sshHost || !isRootProxmoxSshConfigured(settings)) return { lines: [], newCount: lastCount }
-  try {
-    const safeRange = rangeId.replace(/[^a-zA-Z0-9_-]/g, "")
+  const safeRange = rangeId.replace(/[^a-zA-Z0-9_-]/g, "")
+  const tail = await readGoadLogTail(safeRange, async () => {
     const content = await sshExec(
       settings.sshHost, settings.sshPort,
       settings.proxmoxSshUser || "root", settings.proxmoxSshPassword || "",
       ["range-log", "read", safeRange],
     )
-    const allLines = omitBlankLogLines(splitLogText(content))
-    const newLines = allLines.slice(lastCount)
-    return { lines: newLines, newCount: allLines.length }
-  } catch {
-    return { lines: [], newCount: lastCount }
-  }
+    return omitBlankLogLines(splitLogText(content))
+  })
+  if (!tail.ok) return { lines: [], newCount: lastCount }
+  return { lines: tail.lines.slice(lastCount), newCount: tail.lines.length }
+}
+
+/** Abortable poll delay so a cancelled stream stops without waiting the interval. */
+function pollDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
 }
 
 export async function GET(request: NextRequest) {
@@ -61,6 +80,11 @@ export async function GET(request: NextRequest) {
   // back to the session's own key. Both apiKey and userId from cookie.
   const { apiKey: impersonateApiKey } = await resolveAdminImpersonationFromRequest(session, request)
   const effectiveApiKey = impersonateApiKey || session.apiKey
+
+  // A client cancel (new stream, navigation) flips this controller so the poll
+  // loop stops without waiting for the next interval or an in-flight read.
+  const stopController = new AbortController()
+  request.signal.addEventListener("abort", () => stopController.abort(), { once: true })
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -101,12 +125,12 @@ export async function GET(request: NextRequest) {
         return
       }
 
-      // Ansible can block the first log poll for a long time. A data frame on a
-      // timer keeps the proxy from closing the stream and the client from
-      // reporting a reconnect blip while the deploy is still quiet.
+      // Ansible can block the first log poll for a long time. A comment frame
+      // keeps the proxy from closing the stream. A `data:` frame would show
+      // up in Range Activity as a log line.
       const heartbeat = setInterval(() => {
         try {
-          controller.enqueue(encoder.encode("data: [PING]\n\n"))
+          controller.enqueue(encoder.encode(": ping\n\n"))
         } catch {
           clearInterval(heartbeat)
         }
@@ -165,60 +189,74 @@ export async function GET(request: NextRequest) {
 
         while (Date.now() < streamDeadline) {
           pollIdx++
-          if (request.signal.aborted) {
+          if (stopController.signal.aborted) {
             await tryEmitTerminalDone("request-aborted")
             break
           }
 
-          await refreshLudusWallClockFromSsh()
+          const logPath = `/range/logs${rangeId ? `?rangeID=${rangeId}` : userId ? `?userID=${userId}` : ""}`
+          const rangeQuery = rangeId ? `?rangeID=${rangeId}` : userId ? `?userID=${userId}` : ""
+
+          // The SSH clock sample must not hold the first log bytes. Stamp with
+          // the last known Ludus time (or UTC) and refresh the clock in the background.
+          void refreshLudusWallClockFromSsh()
+          const pollResults = await Promise.allSettled([
+            ludusGet<{ cursor: number; result: string }>(logPath, { apiKey: effectiveApiKey }),
+            ludusGet<{ rangeState: string; rangeID?: string }>(
+              `/range${rangeQuery}`,
+              { apiKey: effectiveApiKey },
+            ),
+          ])
+          if (stopController.signal.aborted) {
+            await tryEmitTerminalDone("request-aborted")
+            break
+          }
           const pollStamp = getCachedLudusWallHmsOrUtc()
+          const logRead = pollResults[0]!
+          const rangeRead = pollResults[1]!
 
           // ── Ludus range logs ───────────────────────────────────────────────
-          const logPath = `/range/logs${rangeId ? `?rangeID=${rangeId}` : userId ? `?userID=${userId}` : ""}`
-          const result = await ludusGet<{ cursor: number; result: string }>(
-            logPath, { apiKey: effectiveApiKey }
-          )
-
-          if (result.data) {
-            const logText = result.data.result || ""
-            if (logText.length !== lastLogBytes) {
-              lastActivityAt = Date.now()
-              lastLogBytes = logText.length
-            }
-            const allLines = omitBlankLogLines(splitLogText(logText))
-            const newLines = allLines.slice(lastLudusCount)
-            lastLudusCount = allLines.length
-
-            if (firstPoll && snapshotStart) {
-              // Skip all pre-existing lines — only stream new content from here on.
-              // This prevents allow/deny operations from flooding the panel with
-              // stale deployment logs that were written before this stream opened.
-              firstPoll = false
-            } else {
-              firstPoll = false
-              // One clock for the whole poll. Ludus text has no per-line times,
-              // and spreading a batch backward made skips look one second long.
-              for (let i = 0; i < newLines.length; i++) {
-                const out = newLines[i] ?? ""
-                sendLudusOrGoadLine("LUDUS", out, pollStamp)
-                deployDedupe.remember(out)
+          if (logRead.status === "fulfilled") {
+            const result = logRead.value
+            if (result.data) {
+              const logText = result.data.result || ""
+              if (logText.length !== lastLogBytes) {
+                lastActivityAt = Date.now()
+                lastLogBytes = logText.length
               }
-              if (newLines.length > 0) lastActivityAt = Date.now()
+              const allLines = omitBlankLogLines(splitLogText(logText))
+              const newLines = allLines.slice(lastLudusCount)
+              lastLudusCount = allLines.length
+
+              if (firstPoll && snapshotStart) {
+                // Skip all pre-existing lines — only stream new content from here on.
+                // This prevents allow/deny operations from flooding the panel with
+                // stale deployment logs that were written before this stream opened.
+                firstPoll = false
+              } else {
+                firstPoll = false
+                // One clock for the whole poll. Ludus text has no per-line times,
+                // and spreading a batch backward made skips look one second long.
+                for (let i = 0; i < newLines.length; i++) {
+                  const out = newLines[i] ?? ""
+                  sendLudusOrGoadLine("LUDUS", out, pollStamp)
+                  deployDedupe.remember(out)
+                }
+                if (newLines.length > 0) lastActivityAt = Date.now()
+              }
+            } else if (result.error) {
+              send("ERROR", safeClientError(result.error, "Failed to fetch range logs"), pollStamp)
+              break
             }
-          } else if (result.error) {
-            send("ERROR", safeClientError(result.error, "Failed to fetch range logs"), pollStamp)
+          } else {
+            send("ERROR", safeClientError(logRead.reason, "Failed to fetch range logs"), pollStamp)
             break
           }
 
           // ── Check range state + get rangeID for GOAD log path ─────────────
-          const rangeQuery = rangeId ? `?rangeID=${rangeId}` : userId ? `?userID=${userId}` : ""
-          const rangeResult = await ludusGet<{ rangeState: string; rangeID?: string }>(
-            `/range${rangeQuery}`,
-            { apiKey: effectiveApiKey }
-          )
-          const state = rangeResult.data?.rangeState
-          if (!rangeId && rangeResult.data?.rangeID) {
-            rangeId = rangeResult.data.rangeID
+          const state = rangeRead.status === "fulfilled" ? rangeRead.value.data?.rangeState : undefined
+          if (rangeRead.status === "fulfilled" && !rangeId && rangeRead.value.data?.rangeID) {
+            rangeId = rangeRead.value.data.rangeID
           }
 
           // ── Emit state changes so the client doesn't need a separate poll ──
@@ -304,7 +342,7 @@ export async function GET(request: NextRequest) {
           }
 
           const idleMs = Date.now() - lastActivityAt
-          await new Promise((r) => setTimeout(r, pollIntervalMs(idleMs)))
+          await pollDelay(pollIntervalMs(idleMs), stopController.signal)
         }
         await tryEmitTerminalDone("after-loop")
       } catch (err) {
@@ -314,7 +352,9 @@ export async function GET(request: NextRequest) {
         try { controller.close() } catch { /* already closed */ }
       }
     },
-    cancel() {},
+    cancel() {
+      stopController.abort()
+    },
   })
 
   return new Response(stream, {

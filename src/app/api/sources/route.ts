@@ -13,7 +13,6 @@ import {
 } from "@/lib/sources/ludus-source-ref"
 import {
   ensureSourceAutoSyncLoopStarted,
-  ensureSourcesFresh,
   sourceAutoSyncIntervalMs,
 } from "@/lib/sources/source-auto-sync"
 import { requireSourcesSession } from "@/lib/ludus/ludus-sources-route-helpers"
@@ -38,11 +37,6 @@ export async function GET(request: NextRequest) {
     }
 
     const sources = await listVisibleLudusSources({ isAdmin, apiKey })
-    const own = sources.filter((row) => row.sharedCatalog !== true)
-    // Refresh stale git trees in the background; don't block the list response.
-    void ensureSourcesFresh(apiKey, own).catch((err) => {
-      console.warn("[sources/list] auto-sync failed", err)
-    })
     return refreshRevokedAdminCookie(
       NextResponse.json({
         sources,

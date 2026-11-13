@@ -6,7 +6,8 @@ import { safeRepoFetch } from "@/lib/templates/safe-template-repo-url"
 
 export interface RepoTreeItem {
   name: string
-  type: "tree" | "blob"
+  /** `commit` is a gitlink (submodule) in a recursive GitHub tree. */
+  type: "tree" | "blob" | "commit"
   path: string
 }
 
@@ -180,7 +181,31 @@ export function githubRawFileUrl(apiBase: string, path: string, ref: string): st
 }
 
 const refShaCache = new Map<string, { sha: string; at: number }>()
-const REF_SHA_TTL_MS = 15_000
+const refShaInflight = new Map<string, Promise<string>>()
+const REF_SHA_TTL_MS = 5 * 60_000
+
+const repoTreeCache = new Map<string, RepoTreeItem[]>()
+const repoTreeByRef = new Map<string, RepoTreeItem[]>()
+const repoTreeInflight = new Map<string, Promise<RepoTreeItem[]>>()
+const REPO_TREE_CACHE_MAX = 8
+
+/** Next catalog read resolves the branch tip again. File bodies stay cached by commit. */
+export function invalidateGitHubRefCache(): void {
+  refShaCache.clear()
+}
+
+const rawFileCache = new Map<string, string>()
+const RAW_FILE_CACHE_MAX = 400
+
+function rememberBounded<T>(map: Map<string, T>, key: string, value: T, max: number) {
+  if (map.has(key)) map.delete(key)
+  map.set(key, value)
+  while (map.size > max) {
+    const oldest = map.keys().next().value
+    if (oldest == null) break
+    map.delete(oldest)
+  }
+}
 
 /**
  * Resolve a branch/tag to a commit SHA before reading file contents.
@@ -192,18 +217,78 @@ export async function resolveGitHubCommitSha(apiBase: string, ref: string): Prom
   const key = `${apiBase}\n${ref}`
   const hit = refShaCache.get(key)
   if (hit && Date.now() - hit.at < REF_SHA_TTL_MS) return hit.sha
-  const repo = githubRepoFromApiBase(apiBase)
-  if (!repo) throw new Error("Invalid GitHub apiBase")
-  const res = await repoFetch(`${githubApiPath(repo, "commits", ref)}`, {
-    headers: FETCH_HEADERS,
-    ...NO_STORE,
-  })
-  if (!res.ok) throw new Error(`Could not resolve GitHub ref "${ref}" (HTTP ${res.status})`)
-  const body = (await res.json()) as { sha?: string }
-  const sha = body.sha?.trim()
-  if (!sha) throw new Error(`GitHub ref "${ref}" did not return a commit sha`)
-  refShaCache.set(key, { sha, at: Date.now() })
-  return sha
+  const pending = refShaInflight.get(key)
+  if (pending) return pending
+  const run = (async () => {
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) throw new Error("Invalid GitHub apiBase")
+    const res = await repoFetch(`${githubApiPath(repo, "commits", ref)}`, {
+      headers: FETCH_HEADERS,
+      ...NO_STORE,
+    })
+    if (!res.ok) throw new Error(`Could not resolve GitHub ref "${ref}" (HTTP ${res.status})`)
+    const body = (await res.json()) as { sha?: string }
+    const sha = body.sha?.trim()
+    if (!sha) throw new Error(`GitHub ref "${ref}" did not return a commit sha`)
+    refShaCache.set(key, { sha, at: Date.now() })
+    return sha
+  })()
+  refShaInflight.set(key, run)
+  try {
+    return await run
+  } finally {
+    refShaInflight.delete(key)
+  }
+}
+
+/**
+ * One recursive tree for a GitHub repo at this ref. Catalog routes share it,
+ * and a later read of the same commit reuses the list.
+ */
+export async function listGitHubRepoTree(apiBase: string, ref: string): Promise<RepoTreeItem[]> {
+  const key = `${apiBase}\n${ref}`
+  const pending = repoTreeInflight.get(key)
+  if (pending) return pending
+  const run = (async () => {
+    let sha = ""
+    try {
+      sha = await resolveGitHubCommitSha(apiBase, ref)
+    } catch (err) {
+      const previous = repoTreeByRef.get(key)
+      if (previous) return previous
+      throw err
+    }
+    const cached = repoTreeCache.get(`${apiBase}\n${sha}`)
+    if (cached) return cached
+    const repo = githubRepoFromApiBase(apiBase)
+    if (!repo) throw new Error("Invalid GitHub apiBase")
+    const res = await repoFetch(`${githubApiPath(repo, "git", "trees", ref)}?recursive=1`, {
+      headers: FETCH_HEADERS,
+      ...NO_STORE,
+    })
+    if (!res.ok) throw new Error(`Could not list GitHub tree (HTTP ${res.status})`)
+    const body = (await res.json()) as {
+      truncated?: boolean
+      tree?: Array<{ path?: string; type?: string }>
+    }
+    if (body.truncated) throw new Error("GitHub tree truncated")
+    const items: RepoTreeItem[] = []
+    for (const item of body.tree ?? []) {
+      const path = item.path?.trim()
+      if (!path) continue
+      const type = item.type === "tree" ? "tree" : item.type === "commit" ? "commit" : "blob"
+      items.push({ name: path.split("/").pop() ?? path, path, type })
+    }
+    rememberBounded(repoTreeCache, `${apiBase}\n${sha}`, items, REPO_TREE_CACHE_MAX)
+    repoTreeByRef.set(key, items)
+    return items
+  })()
+  repoTreeInflight.set(key, run)
+  try {
+    return await run
+  } finally {
+    repoTreeInflight.delete(key)
+  }
 }
 
 export async function listRepoDirectory(
@@ -294,10 +379,15 @@ export async function fetchRepoRawFile(apiBase: string, path: string, ref: strin
     } catch {
       sha = ref
     }
+    const cacheKey = `${sha}\n${path}`
+    const cached = rawFileCache.get(cacheKey)
+    if (cached != null) return cached
     const url = githubRawFileUrl(apiBase, path, sha)
     const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${path}`)
-    return res.text()
+    const body = await res.text()
+    rememberBounded(rawFileCache, cacheKey, body, RAW_FILE_CACHE_MAX)
+    return body
   }
   const url = `${apiBase}/files/${encodeURIComponent(path)}/raw?ref=${encodeURIComponent(ref)}`
   const res = await repoFetch(url, { headers: { "User-Agent": "ludus-ux/1.0" }, ...NO_STORE })

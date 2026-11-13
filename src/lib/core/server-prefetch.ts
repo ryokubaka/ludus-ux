@@ -90,6 +90,8 @@ import {
 } from "@/lib/ludus/cached-ludus-fetch"
 
 import { isHttp404Error } from "@/lib/sources/ludus-source-client"
+import { peekHostResourcesPayload } from "@/lib/proxmox/host-resources-cache"
+import type { HostResourcesPayload } from "@/lib/proxmox/host-resources"
 
 // ── L1 SWR caches (non-blocking peek; fetchers populate L2 via cached-ludus-fetch) ──
 
@@ -372,19 +374,30 @@ export async function prefetchRangePageData(
 
   slices: RangePrefetchSlice[],
 
+  options?: { hostResources?: HostResourcesPayload | null },
+
 ) {
 
   const queryClient = new QueryClient()
 
   try {
 
-    if (!session || slices.length === 0) return dehydrate(queryClient)
+    if (!session) return dehydrate(queryClient)
 
 
 
     const scopeTag = effectiveScopeTagFromSession(session)
 
     const effectiveApiKey = session.impersonationApiKey || session.apiKey
+
+    // Host metrics are cluster-wide, not range-scoped, so prefetch them before
+    // the range-id early return. Callers pass a non-blocking `peek` result: a
+    // cold cache returns null and starts a background SSH read.
+    if (options?.hostResources) {
+      queryClient.setQueryData(queryKeys.hostResources(scopeTag), options.hostResources)
+    }
+
+    if (slices.length === 0) return dehydrate(queryClient)
 
     const rangeId = await resolvePrefetchRangeId(session)
 
@@ -480,7 +493,19 @@ export async function prefetchRangePageData(
 
 export async function prefetchDashboardData(session: ResolvedSession | null) {
 
-  return prefetchRangePageData(session, ["status", "logHistory", "logEnrichment"])
+  const hostResources = session ? peekHostResourcesPayload() : null
+
+  const dehydratedState = await prefetchRangePageData(session, ["status", "logHistory", "logEnrichment"], {
+
+    hostResources,
+
+  })
+
+  // The dashboard island renders host metrics during SSR only when this is
+
+  // true, so its hydration output matches the server HTML.
+
+  return { dehydratedState, hasHostResources: hostResources !== null }
 
 }
 

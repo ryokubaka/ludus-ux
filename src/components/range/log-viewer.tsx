@@ -385,6 +385,14 @@ function LogViewerBody() {
   } = useLogViewer()
 
   const parsedLines = useMemo(() => parseLogLines(visibleLines, theme), [visibleLines, theme])
+  // Announce only terminal errors, not every appended line.
+  const lastErrorLine = useMemo(() => {
+    for (let i = visibleLines.length - 1; i >= 0; i--) {
+      const line = visibleLines[i] ?? ""
+      if (line.includes("[ERROR]")) return line
+    }
+    return ""
+  }, [visibleLines])
   const useVirtual = parsedLines.length > LOG_VIRTUALIZE_THRESHOLD
   const canResize = Boolean(resizable) && !fillHeight
   useResizableHeight(canResize, containerRef, {
@@ -426,6 +434,9 @@ function LogViewerBody() {
 
   return (
     <div className={cn("relative", fillHeight && "flex flex-col flex-1 min-h-0")}>
+      <p className="sr-only" role="status" aria-live="polite">
+        {lastErrorLine}
+      </p>
       <div
         ref={containerRef}
         onScroll={handleScroll}

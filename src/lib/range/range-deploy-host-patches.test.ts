@@ -45,6 +45,13 @@ function bash(script: string, extraEnv: Record<string, string> = {}) {
   })
 }
 
+describe("ansible speedups helper", () => {
+  it("loads against the current host-patch module", async () => {
+    const mod = await import("@/lib/ludus/ludus-ansible-speedups")
+    expect(typeof mod.applyLudusAnsibleSpeedups).toBe("function")
+  })
+})
+
 describe("parseHostPlaybookPatch", () => {
   it("accepts an updated playbook and a skip", () => {
     expect(parseHostPlaybookPatch("status=ok\nchanged=yes\n", "", 0)).toEqual({
@@ -254,6 +261,180 @@ EOF
     expect(file).toContain("Get-ADDomain -ErrorAction Stop")
     expect(file).toContain("until: lux_adws_ready.rc == 0")
     expect(file.match(/BEGIN LUX-ADWS-WAIT/g)).toHaveLength(1)
+  })
+})
+
+describe("patch-windows-static-ip", () => {
+  const windowsPlaybook = `---
+- name: Modern Method - Set up static IP address (Windows 8+/Server 2012+)
+  ansible.windows.win_shell: |
+    New-NetIPAddress
+  async: 100
+  poll: 0
+  ignore_errors: true
+  register: modern_static_ip
+  when: windows_major_version.stdout | int >= 6
+- name: Is fallback needed?
+  ansible.builtin.set_fact:
+    fallback_needed: true
+  when: windows_major_version.stdout | int < 6
+- name: Legacy Method - Set up static IP address with netsh
+  ansible.windows.win_shell: netsh interface ip set address
+  when: fallback_needed | default(false)
+`
+
+  it("rejects arguments", () => {
+    const result = bash('bash "$LUX_HOST_HELPER" patch-windows-static-ip extra')
+    expect(result.status).toBe(2)
+    expect(result.stderr).toMatch(/lux-host:/)
+  })
+
+  it("gives the modern task 120 seconds and runs the netsh fallback when that task failed", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-ip-and-hostname-windows.yml"
+      cat > "$play" <<'EOF'
+${windowsPlaybook}
+EOF
+      export LUX_WINDOWS_STATIC_IP_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-windows-static-ip
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-windows-static-ip
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const modern = file.indexOf("- name: Modern Method - Set up static IP address")
+    const timeout = file.indexOf("ansible_win_async_startup_timeout: 120")
+    const fallback = file.indexOf("- name: Is fallback needed?")
+    const netsh = file.indexOf("- name: Legacy Method - Set up static IP address with netsh")
+    expect(modern).toBeGreaterThan(-1)
+    expect(timeout).toBeGreaterThan(modern)
+    expect(timeout).toBeLessThan(fallback)
+    expect(netsh).toBeGreaterThan(fallback)
+    expect(file).toContain("ansible_win_async_startup_timeout: 120")
+    expect(file).not.toContain("ansible_winrm_win_async_startup_timeout")
+    expect(file).toContain(
+      "when: (windows_major_version.stdout | int < 6) or modern_static_ip is failed",
+    )
+    expect(file).toContain("when: windows_major_version.stdout | int >= 6")
+    expect(file).toContain("when: fallback_needed | default(false)")
+    expect(file.match(/BEGIN LUX-WIN-STATIC-IP/g)).toHaveLength(1)
+  })
+
+  it("skips when the modern static-IP task is not in the play", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-ip-and-hostname-windows.yml"
+      printf '%s\\n' '- name: Something else' '  ansible.builtin.debug:' '    msg: hi' > "$play"
+      export LUX_WINDOWS_STATIC_IP_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-windows-static-ip
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=skipped\nreason=task")
+  })
+})
+
+describe("patch-windows-sysprep-netnative", () => {
+  const sysprepPlaybook = `---
+- name: Generalize the Windows VM
+  block:
+    - name: Clear previous Sysprep result files
+      ansible.windows.win_file:
+        path: C:\\Windows\\System32\\Sysprep\\Sysprep_succeeded.tag
+        state: absent
+    - name: Start Sysprep
+      ansible.windows.win_command:
+        argv: "{{ ludus_sysprep_argv }}"
+    - name: Start the Sysprep retry
+      ansible.windows.win_command:
+        argv: "{{ ludus_sysprep_argv }}"
+`
+
+  it("rejects arguments", () => {
+    const result = bash('bash "$LUX_HOST_HELPER" patch-windows-sysprep-netnative extra')
+    expect(result.status).toBe(2)
+    expect(result.stderr).toMatch(/lux-host:/)
+  })
+
+  it("removes .NET Native 2.2 only when that package is present, before the first sysprep", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/sysprep.yml"
+      cat > "$play" <<'EOF'
+${sysprepPlaybook}
+EOF
+      export LUX_WINDOWS_SYSPREP_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-windows-sysprep-netnative
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-windows-sysprep-netnative
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const remove = file.indexOf("- name: Remove Microsoft.NET.Native.Framework.2.2 before Sysprep")
+    const reboot = file.indexOf("- name: Reboot after removing Microsoft.NET.Native.Framework.2.2")
+    const start = file.indexOf("- name: Start Sysprep")
+    const retry = file.indexOf("- name: Start the Sysprep retry")
+    expect(remove).toBeGreaterThan(-1)
+    expect(reboot).toBeGreaterThan(remove)
+    expect(start).toBeGreaterThan(reboot)
+    expect(retry).toBeGreaterThan(start)
+    expect(file).toContain("Microsoft.NET.Native.Framework.2.2")
+    expect(file).not.toContain("Microsoft.NET.Native.Framework*")
+    expect(file).toContain("ignore_errors: true")
+    expect(file).toContain("when: lux_sysprep_netnative.present | default(false) | bool")
+    expect(file.match(/BEGIN LUX-SYSPREP-NETNATIVE/g)).toHaveLength(1)
+    expect(file.slice(retry)).not.toContain("LUX-SYSPREP-NETNATIVE")
+  })
+
+  it("skips when Start Sysprep is not in the play", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/sysprep.yml"
+      printf '%s\\n' '- name: Something else' '  ansible.builtin.debug:' '    msg: hi' > "$play"
+      export LUX_WINDOWS_SYSPREP_PLAYBOOK="$play"
+      before=$(cat "$play")
+      bash "$LUX_HOST_HELPER" patch-windows-sysprep-netnative
+      echo "---FILE---"
+      cat "$play"
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=skipped\nreason=task")
+    const file = result.stdout.split("---FILE---")[1] ?? ""
+    expect(file).toContain("- name: Something else")
+    expect(file).not.toContain("LUX-SYSPREP-NETNATIVE")
+  })
+
+  it("skips when the playbook is missing", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      export LUX_WINDOWS_SYSPREP_PLAYBOOK="$dir/sysprep.yml"
+      bash "$LUX_HOST_HELPER" patch-windows-sysprep-netnative
+      `,
+    )
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain("status=skipped\nreason=missing")
   })
 })
 
@@ -522,5 +703,47 @@ EOF
     expect(deb822).not.toContain("bullseye/updates")
     expect(conf).toContain('Acquire::Check-Valid-Until "false";')
     expect(aptLog).toContain("ca-certificates")
+  })
+})
+
+describe("ansible-speedups", () => {
+  it("writes the drop-in, defers restart during a deploy, and restarts once idle", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      bin="$dir/bin"
+      mkdir -p "$bin"
+      printf '%s\\n' '#!/bin/sh' 'case "$1" in cat) exit 0 ;; daemon-reload) exit 0 ;; try-restart) printf "%s\\n" "$2" >> "$LUX_RESTART_LOG"; exit 0 ;; *) exit 0 ;; esac' > "$bin/systemctl"
+      printf '%s\\n' '#!/bin/sh' 'if [ "$LUX_FAKE_DEPLOYING" = 1 ]; then exit 0; fi; exit 1' > "$bin/pgrep"
+      chmod +x "$bin/systemctl" "$bin/pgrep"
+      export PATH="$bin:$PATH" LUX_ANSIBLE_SPEEDUPS_DROP_DIR="$dir/drop" LUX_RESTART_LOG="$dir/restart.log" LUX_FAKE_DEPLOYING=1
+      : > "$LUX_RESTART_LOG"
+      bash "$LUX_HOST_HELPER" ansible-speedups on
+      echo "---DURING---"
+      cat "$dir/drop/10-lux-ansible-speedups.conf"
+      echo "---IDLE---"
+      unset LUX_FAKE_DEPLOYING
+      bash "$LUX_HOST_HELPER" ansible-speedups on
+      echo "---RESTART---"
+      cat "$LUX_RESTART_LOG"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" ansible-speedups on
+      `,
+    )
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0)
+    const during = result.stdout.split("---DURING---")[0] ?? ""
+    const conf = result.stdout.split("---DURING---")[1]?.split("---IDLE---")[0] ?? ""
+    const idle = result.stdout.split("---IDLE---")[1]?.split("---RESTART---")[0] ?? ""
+    const restart = result.stdout.split("---RESTART---")[1]?.split("---AGAIN---")[0] ?? ""
+    const again = result.stdout.split("---AGAIN---")[1] ?? ""
+    expect(during).toContain("restart=deferred")
+    expect(during).toContain("changed=yes")
+    expect(conf).toContain("Environment=ANSIBLE_PIPELINING=True")
+    expect(conf).toContain("Environment=ANSIBLE_FORKS=20")
+    expect(idle).toContain("changed=no")
+    expect(idle).toContain("restart=done")
+    expect(restart.trim()).toBe("ludus")
+    expect(again).toContain("restart=unchanged")
   })
 })

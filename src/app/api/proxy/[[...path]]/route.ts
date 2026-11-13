@@ -25,6 +25,7 @@ import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus/ludus-router-template"
 import { ensureRangeDeployHostPatches } from "@/lib/range/range-deploy-host-patches"
+import { serverTimingHeader } from "@/lib/lux/server-timing"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -59,9 +60,20 @@ async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path?: string[] }> }
 ) {
+  const requestStart = performance.now()
+  const timings: Record<string, number> = {}
+  const mark = (name: string, start: number) => {
+    timings[name] = performance.now() - start
+  }
+
+  const authStart = performance.now()
   const session = await resolveSession(request)
+  mark("auth", authStart)
   if (!session) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+    const response = NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+    const header = serverTimingHeader({ ...timings, total: performance.now() - requestStart })
+    if (header) response.headers.set("Server-Timing", header)
+    return response
   }
 
   const { path: pathSegments } = await params
@@ -71,9 +83,15 @@ async function handler(
   const queryString = request.nextUrl.searchParams.toString()
   const fullPath = queryString ? `${path}?${queryString}` : path
 
+  const adminStart = performance.now()
   const isAdmin = await liveSessionIsAdmin(session)
-  const finish = <T extends NextResponse>(response: T) =>
-    refreshRevokedAdminCookie(response, session, isAdmin)
+  mark("admin", adminStart)
+  const finish = async <T extends NextResponse>(response: T) => {
+    const finalized = await refreshRevokedAdminCookie(response, session, isAdmin)
+    const header = serverTimingHeader({ ...timings, total: performance.now() - requestStart })
+    if (header) finalized.headers.set("Server-Timing", header)
+    return finalized
+  }
 
   const useAdmin = request.headers.get("X-Ludus-Admin") === "true"
   if (useAdmin && !isAdmin) {
@@ -98,9 +116,12 @@ async function handler(
       : impersonateApiKey || session.apiKey
 
   try {
+    const bodyStart = performance.now()
     const rawBody = await parseRequestBody(request)
+    mark("body", bodyStart)
     const body = applyLudusDeployVerbose(path, request.method, rawBody)
 
+    const preflightStart = performance.now()
     const linuxUser = await resolveSessionLinuxUser(session, request)
     const basePath = path.split("?")[0]
     if (request.method === "POST" && basePath === "/range/deploy") {
@@ -108,6 +129,7 @@ async function handler(
         userOverride,
       })
       if (!router.ok) {
+        mark("preflight", preflightStart)
         return finish(NextResponse.json(
           {
             error: routerTemplateBlockMessage(router),
@@ -120,13 +142,16 @@ async function handler(
       }
       const patches = await ensureRangeDeployHostPatches(body, { configText: router.template })
       if (!patches.ok) {
+        mark("preflight", preflightStart)
         return finish(NextResponse.json(
           { error: patches.error, code: "deploy_host_patch" },
           { status: 503 },
         ))
       }
     }
+    mark("preflight", preflightStart)
 
+    const upstreamStart = performance.now()
     const result = await ludusRequest(fullPath, {
       method: request.method,
       body,
@@ -135,6 +160,7 @@ async function handler(
       userOverride,
       timeout: getProxyLudusTimeoutMs(path, request.method),
     })
+    mark("upstream", upstreamStart)
 
     if (result.error) {
       // Annotate connection failures on the admin endpoint with an actionable hint so the
@@ -175,7 +201,20 @@ async function handler(
         detailParts.join(" "),
         "success",
       )
-      revalidateAfterLudusProxyMutation(request.method, path, session)
+      revalidateAfterLudusProxyMutation(
+        request.method,
+        path,
+        session,
+        request.nextUrl.searchParams.get("rangeID") ||
+          (body && typeof body === "object" && !Array.isArray(body)
+            ? String(
+                (body as { rangeID?: unknown; rangeId?: unknown }).rangeID ??
+                  (body as { rangeID?: unknown; rangeId?: unknown }).rangeId ??
+                  "",
+              ).trim()
+            : "") ||
+          null,
+      )
       if (linuxUser && shouldRepairAnsibleHomeAfterProxyMutation(request.method, basePath, body)) {
         await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
         console.info(formatAnsibleHomeRepairLogLine(linuxUser))

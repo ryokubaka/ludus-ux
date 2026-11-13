@@ -65,6 +65,8 @@ export function AdminPageClient() {
   const searchParams = useSearchParams()
   const queryClient = useQueryClient()
   const scopeTag = useEffectiveScopeTag()
+  const forceSharedVmsRefreshRef = useRef(false)
+  const forceAdminDataRefreshRef = useRef(false)
 
   const adminTab = searchParams.get("tab") === "vms" ? "vms" : "overview"
   const setAdminTab = useCallback(
@@ -91,7 +93,11 @@ export function AdminPageClient() {
   } = useQuery({
     queryKey: queryKeys.adminRangesData(scopeTag),
     queryFn: async () => {
-      const res = await fetch("/api/admin/ranges-data")
+      // Explicit refreshes bypass the server cache so a partial ownership
+      // resolution can actually be retried.
+      const force = forceAdminDataRefreshRef.current
+      forceAdminDataRefreshRef.current = false
+      const res = await fetch(`/api/admin/ranges-data${force ? "?refresh=1" : ""}`)
       if (!res.ok) {
         const d = await res.json().catch(() => ({})) as { error?: string }
         throw new Error(d.error || `HTTP ${res.status}`)
@@ -100,6 +106,7 @@ export function AdminPageClient() {
         ranges: RangeObject[]
         users: UserObject[]
         ownership: Record<string, string>
+        partial?: { unresolvedRangeIDs?: string[]; truncated?: boolean }
       }>
     },
     // Users and ranges are modified by explicit admin actions; medium stale
@@ -155,7 +162,11 @@ export function AdminPageClient() {
   } = useQuery({
     queryKey: queryKeys.adminSharedVms(scopeTag),
     queryFn: async () => {
-      const res = await fetch("/api/admin/shared-vms")
+      // Manual refresh requests set this flag so the server bypasses its
+      // short discovery cache. Normal mounts read the cached discovery.
+      const force = forceSharedVmsRefreshRef.current
+      forceSharedVmsRefreshRef.current = false
+      const res = await fetch(`/api/admin/shared-vms${force ? "?refresh=1" : ""}`)
       if (!res.ok) return { vms: [] as SharedAdminVM[] }
       return res.json() as Promise<{ vms: SharedAdminVM[] }>
     },
@@ -165,6 +176,7 @@ export function AdminPageClient() {
   const adminPoolVMs = useMemo(() => sharedVmsData?.vms ?? [], [sharedVmsData?.vms])
 
   const fetchAdminPoolVMs = useCallback(() => {
+    forceSharedVmsRefreshRef.current = true
     void queryClient.invalidateQueries({ queryKey: queryKeys.adminSharedVms(scopeTag) })
   }, [queryClient, scopeTag])
 
@@ -300,6 +312,7 @@ export function AdminPageClient() {
   }, [queryClient, scopeTag])
 
   const refetchAdminData = useCallback(() => {
+    forceAdminDataRefreshRef.current = true
     void queryClient.refetchQueries({ queryKey: queryKeys.adminRangesData(scopeTag) })
   }, [queryClient, scopeTag])
 
@@ -560,6 +573,28 @@ export function AdminPageClient() {
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {adminData?.partial && (adminData.partial.unresolvedRangeIDs?.length ?? 0) > 0 && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription className="flex flex-wrap items-center gap-2 text-xs">
+            <span>
+              Ownership could not be resolved for {adminData.partial.unresolvedRangeIDs?.length ?? 0} range
+              {(adminData.partial.unresolvedRangeIDs?.length ?? 0) === 1 ? "" : "s"}
+              {adminData.partial.truncated ? " (per-range lookup cap reached)" : ""}. Showing partial data.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void refetchAdminData()}
+              disabled={fetchingAdminData}
+            >
+              {fetchingAdminData && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Retry
+            </Button>
+          </AlertDescription>
         </Alert>
       )}
 

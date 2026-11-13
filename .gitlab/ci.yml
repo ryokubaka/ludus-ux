@@ -100,7 +100,7 @@ secrets:
 sast:
   stage: check
   image:
-    name: semgrep/semgrep:1.181.1@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2
+    name: semgrep/semgrep:1.185.0@sha256:67518c174185a2043fdbed16c70631b79209499b3671178e7194379b48295a0d
     entrypoint: [""]
   script:
     - bash scripts/ci/sast.sh

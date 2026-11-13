@@ -261,6 +261,9 @@ export function NewGoadInstancePageClient({
   // Range selection (step 2)
   const [rangeMode, setRangeMode] = useState<"new" | "existing">("new")
   const [selectedExistingRange, setSelectedExistingRange] = useState<string>("")
+  // Range Builder links here with ?rangeId= so the lab deploys into that range.
+  const [presetRangeId, setPresetRangeId] = useState("")
+  const presetAppliedRef = useRef(false)
 
   // Stable UID shared between the auto-generated range name and GOAD instance ID.
   // Using the same UID means the range suffix visually matches the instance name suffix,
@@ -271,6 +274,20 @@ export function NewGoadInstancePageClient({
   const [clearingRange, setClearingRange] = useState(false)
   // Existing GOAD instance that lives in the currently-selected existing range (if any)
   const [existingInstanceInSelectedRange, setExistingInstanceInSelectedRange] = useState<string | null>(null)
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("rangeId")?.trim() ?? ""
+    setPresetRangeId(id)
+  }, [])
+
+  useEffect(() => {
+    if (!presetRangeId || presetAppliedRef.current) return
+    if (!accessibleRanges.some((range) => range.rangeID === presetRangeId)) return
+    presetAppliedRef.current = true
+    setRangeMode("existing")
+    setSelectedExistingRange(presetRangeId)
+    if (selectedRangeId !== presetRangeId) selectRange(presetRangeId)
+  }, [accessibleRanges, presetRangeId, selectRange, selectedRangeId])
 
   // When the user picks an existing range, check if there is already a GOAD instance
   // in it.  This drives the review step copy ("re-deploy" vs "fresh install").

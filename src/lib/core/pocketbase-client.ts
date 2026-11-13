@@ -173,20 +173,43 @@ function bool(r: Row, key: string): boolean {
   return Boolean(r[key])
 }
 
+function optionalNum(r: Row, ...keys: string[]): number | undefined {
+  for (const k of keys) {
+    if (r[k] == null || r[k] === "") continue
+    const n = Number(r[k])
+    if (!isNaN(n)) return n
+  }
+  return undefined
+}
+
+function optionalBool(r: Row, key: string): boolean | undefined {
+  const value = r[key]
+  if (value === true || value === false) return value
+  if (value === 1 || value === "1" || value === "true") return true
+  if (value === 0 || value === "0" || value === "false") return false
+  return undefined
+}
+
 function mapRange(r: Row): RangeObject {
   // rangeID: Ludus stores the human-readable range slug here.
   // For default ranges it equals the userID; named ranges have a distinct value.
   // PocketBase's auto-generated `id` is our last resort.
   const rangeID = str(r, "rangeID", "id")
+  const rangeState = str(r, "rangeState")
+  const numberOfVMs = optionalNum(r, "numberOfVMs")
+  const testingEnabled = optionalBool(r, "testingEnabled")
+  const rangeNumber = optionalNum(r, "rangeNumber")
 
+  // Absent persisted fields stay absent. Filling them with NEVER DEPLOYED, 0,
+  // or false made a partial PocketBase row look like a real range record.
   return {
     rangeID,
     name: str(r, "name", "rangeID") || rangeID,
-    rangeNumber: num(r, "rangeNumber"),
-    rangeState: (str(r, "rangeState") || "NEVER DEPLOYED") as RangeState,
+    ...(rangeNumber !== undefined ? { rangeNumber } : {}),
+    ...(rangeState ? { rangeState: rangeState as RangeState } : {}),
     lastDeployment: str(r, "lastDeployment") || undefined,
-    numberOfVMs: num(r, "numberOfVMs"),
-    testingEnabled: bool(r, "testingEnabled"),
+    ...(numberOfVMs !== undefined ? { numberOfVMs } : {}),
+    ...(testingEnabled !== undefined ? { testingEnabled } : {}),
     description: str(r, "description") || undefined,
     purpose: str(r, "purpose") || undefined,
     VMs: [], // Live Proxmox VM state is not persisted in PocketBase
@@ -197,7 +220,7 @@ function mapRange(r: Row): RangeObject {
     allowedIPs: Array.isArray(r.allowedIPs)
       ? (r.allowedIPs as string[])
       : undefined,
-  }
+  } as RangeObject
 }
 
 function mapUser(u: Row): UserObject {
@@ -260,6 +283,45 @@ export async function fetchPbRangeStatus(rangeId: string): Promise<RangeObject |
   } catch (err) {
     console.warn("[pocketbase] fetchPbRangeStatus failed:", (err as Error).message)
     return null
+  }
+}
+
+/**
+ * Bulk variant of `fetchPbRangeStatus` for the testing-page selector dots.
+ * One OR-filtered query instead of one request per range. Returns a map keyed
+ * by `rangeID`; missing IDs are simply absent (caller decides the fallback).
+ */
+export async function fetchPbRangeStatuses(
+  rangeIds: readonly string[],
+): Promise<Record<string, RangeObject>> {
+  const ids = [...new Set(rangeIds.map((id) => id?.trim()).filter((id): id is string => !!id))]
+  if (ids.length === 0) return {}
+
+  try {
+    const token = await getToken()
+    if (!token) return {}
+
+    let rows: Row[]
+    const filter = ids.map((id) => `rangeID = "${escapePbFilterLiteral(id)}"`).join(" || ")
+    try {
+      rows = await fetchAll<Row>("ranges", token, { filter })
+    } catch {
+      // Some Ludus/PocketBase builds reject compound filters. One full scan is
+      // still cheaper than one request per range.
+      const all = await fetchAll<Row>("ranges", token)
+      const wanted = new Set(ids)
+      rows = all.filter((row) => wanted.has(str(row as Row, "rangeID")))
+    }
+
+    const byId: Record<string, RangeObject> = {}
+    for (const row of rows) {
+      const mapped = mapRange(row)
+      if (mapped.rangeID) byId[mapped.rangeID] = mapped
+    }
+    return byId
+  } catch (err) {
+    console.warn("[pocketbase] fetchPbRangeStatuses failed:", (err as Error).message)
+    return {}
   }
 }
 
@@ -330,13 +392,13 @@ export async function fetchPbUserRanges(userId: string): Promise<RangeObject[]> 
  * testingEnabled, rangeState, allowedDomains, etc.
  */
 export async function enrichRangesWithPbRecords(ranges: RangeObject[]): Promise<RangeObject[]> {
-  const merged = await Promise.all(
-    ranges.map(async (r) => {
-      if (!r.rangeID?.trim()) return r
-      const pb = await fetchPbRangeStatus(r.rangeID.trim())
-      return pb ? { ...r, ...pb, rangeID: r.rangeID } : r
-    }),
-  )
+  const ids = ranges.map((r) => r.rangeID?.trim()).filter((id): id is string => !!id)
+  const byId = await fetchPbRangeStatuses(ids)
+  const merged = ranges.map((r) => {
+    if (!r.rangeID?.trim()) return r
+    const pb = byId[r.rangeID.trim()]
+    return pb ? { ...r, ...pb, rangeID: r.rangeID } : r
+  })
   return merged.sort((a, b) => (a.rangeNumber ?? 0) - (b.rangeNumber ?? 0))
 }
 

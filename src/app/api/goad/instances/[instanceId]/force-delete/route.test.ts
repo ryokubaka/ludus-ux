@@ -20,6 +20,7 @@ vi.mock("@/lib/ludus/ludus-cache-revalidate", () => ({
 vi.mock("@/lib/ludus/ludus-swr-invalidate", () => ({ invalidateInProcessLudusCachesAfterMutation: vi.fn() }))
 vi.mock("@/lib/goad/goad-ssh", () => ({
   listGoadInstances: vi.fn(async () => gate.instances),
+  listGoadInstancesResult: vi.fn(async () => ({ ok: true, instances: gate.instances })),
   readGoadRangeId: vi.fn(async () => null),
   sshExec: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
   sshExecAsWorkspaceUser: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),

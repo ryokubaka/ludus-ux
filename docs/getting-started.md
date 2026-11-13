@@ -206,6 +206,10 @@ The switch uses the local Docker daemon. Compose mounts `/var/run/docker.sock` i
 
 Every upgrade and downgrade asks you to confirm first. The dialog covers the host checkout, image rebuild, UI restart, and that `./data`, `./ssh`, and `.env` stay on the host. A downgrade also warns that an older release may not understand settings or schema written by a newer version. A target older than v1.4.0 adds a required acknowledgement: that release has no Releases panel and no in-app upgrade or downgrade, so later changes use `bash scripts/upgrade.sh` on the host.
 
+### Ludus, from Settings → About
+
+The same page lists Ludus on the left. The version is the one the Ludus API reports, and the list is the [GitLab releases](https://gitlab.com/badsectorlabs/ludus/-/releases). An admin can upgrade to a newer stable release. LUX downloads that version's `ludus-server` package, checks `ludus_<version>_checksums.txt`, and runs the temp copy with `--update`. The installed binary cannot update itself. The upgrade refuses to start while Ansible or Packer is running, and while another install or upgrade is already running. The Ludus API drops until the service is back. LUX stays up, and the dashboard version refreshes on its own. This does not downgrade Ludus.
+
 ## Quick SSH sanity check
 
 With the stack up and `./ssh/id_rsa` readable in the container:

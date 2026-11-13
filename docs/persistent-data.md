@@ -4,7 +4,7 @@ All persistent state lives in the `data/` directory (Docker volume):
 
 | Path | Contents |
 |---|---|
-| `data/ludus-ux.db` | SQLite: settings, GOAD tasks, range ownership, pending ops, instance→range mappings, `vm_operation_log` (VM/extension deletion audit) |
+| `data/ludus-ux.db` | SQLite: settings, GOAD tasks, range ownership, pending ops, instance→range mappings, Range Builder canvas positions (`range_builder_layouts`, per range and user), `vm_operation_log` (VM/extension deletion audit) |
 | `data/tasks/` | GOAD task log files |
 | `data/uploads/` | Custom logo |
 | `docker/nginx/certificates/` | TLS PEMs for the **nginx** edge proxy (`cert.pem`, `key.pem`); auto-generated on first nginx boot if missing |

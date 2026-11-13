@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 import { effectiveImpersonatedOperatorUsername } from "@/lib/admin/admin-impersonation-request"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 import { writeAppLog } from "@/lib/logs/app-log"
-import { listGoadInstances } from "@/lib/goad/goad-ssh"
+import { listGoadInstancesResult } from "@/lib/goad/goad-ssh"
 import { listTasks } from "@/lib/goad/goad-task-store"
 import { sameOperator } from "@/lib/users/operator-name"
 import { effectivePrivilegedSshUser } from "@/lib/ssh/root-ssh-preflight"
@@ -72,13 +72,15 @@ export async function assertGoadInstanceAccess(
 ): Promise<NextResponse | null> {
   if (await liveSessionIsAdmin(session)) return null
   const caller = await effectiveImpersonatedOperatorUsername(session, request)
-  let workspaceOwner: string | null = null
-  try {
-    const listed = (await listGoadInstances()).find((inst) => inst.instanceId === instanceId)
-    workspaceOwner = listed ? listed.ownerUserId ?? "" : null
-  } catch {
-    workspaceOwner = null
+  const listed = await listGoadInstancesResult()
+  if (!listed.ok) {
+    return NextResponse.json(
+      { error: listed.error || "GOAD workspace listing failed" },
+      { status: 503 },
+    )
   }
+  const match = listed.instances.find((inst) => inst.instanceId === instanceId)
+  const workspaceOwner = match ? match.ownerUserId ?? "" : null
   const allowed = decideGoadInstanceAccess({
     isAdmin: false,
     caller,

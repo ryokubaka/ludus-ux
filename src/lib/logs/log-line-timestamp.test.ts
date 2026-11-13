@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { augmentLudusDeployHistoryLines, deployLogClockPrefix, extendDeployLogClock, hashDeployLogLine, isBlankDeployLogLine, omitBlankLogLines, selectDeployLogClock, stampDeployLogForDisplay, stampObservedDeployLines } from "@/lib/logs/log-line-timestamp"
+import { augmentLudusDeployHistoryLines, deployLogClockPrefix, extendDeployLogClock, hashDeployLogLine, isBlankDeployLogLine, isDeployStreamHeartbeat, omitBlankLogLines, selectDeployLogClock, stampDeployLogForDisplay, stampObservedDeployLines } from "@/lib/logs/log-line-timestamp"
 import { formatInstantForDeployLog } from "@/lib/ludus/ludus-wall-clock-bridge"
+
+describe("isDeployStreamHeartbeat", () => {
+  it("recognizes the keepalive and nothing else", () => {
+    expect(isDeployStreamHeartbeat("[PING]")).toBe(true)
+    expect(isDeployStreamHeartbeat("  [PING]  ")).toBe(true)
+    expect(isDeployStreamHeartbeat("ok: [localhost]")).toBe(false)
+    expect(isDeployStreamHeartbeat("TASK [Revert VM to snapshot]")).toBe(false)
+  })
+})
 
 describe("isBlankDeployLogLine", () => {
   it("treats ansible separators and poll-stamped blanks as empty", () => {

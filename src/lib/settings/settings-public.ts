@@ -13,6 +13,7 @@ export const PUBLIC_SETTINGS_KEYS = [
   "goadEnabled",
   "ludushoundEnabled",
   "ludusAnsibleVerbose",
+  "ludusAnsibleSpeedups",
   "useLudusHostDns",
 ] as const
 
@@ -43,6 +44,7 @@ export function toPublicSettings(
     goadEnabled: settings.goadEnabled,
     ludushoundEnabled: settings.ludushoundEnabled,
     ludusAnsibleVerbose: settings.ludusAnsibleVerbose,
+    ludusAnsibleSpeedups: settings.ludusAnsibleSpeedups,
     useLudusHostDns: settings.useLudusHostDns,
   }
   if (!opts.isAdmin) return base

@@ -138,10 +138,12 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r1",
     })
-    expect(result).toEqual(newVMs)
+    expect(result.vms).toEqual(newVMs)
+    expect(result.merged).toBe(false)
+    expect(result.unconfirmedVmKeys).toEqual([])
   })
 
-  it("merges when newVMs count is less than numberOfVMs", () => {
+  it("merges when newVMs count is less than numberOfVMs and marks retained rows unconfirmed", () => {
     const prev = [makeVM({ proxmoxID: 1 }), makeVM({ proxmoxID: 2 })]
     const next = [makeVM({ proxmoxID: 1 })]
     const result = resolveVmListForRangeQuery({
@@ -152,7 +154,9 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r1",
     })
-    expect(result.length).toBeGreaterThanOrEqual(2)
+    expect(result.vms.length).toBeGreaterThanOrEqual(2)
+    expect(result.merged).toBe(true)
+    expect(result.unconfirmedVmKeys).toEqual(["p:2"])
   })
 
   it("keeps prev VMs during transient gap when DEPLOYING and newVMs is empty", () => {
@@ -165,7 +169,23 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r1",
     })
-    expect(result).toEqual(prev)
+    expect(result.vms).toEqual(prev)
+    expect(result.merged).toBe(true)
+    expect(result.unconfirmedVmKeys).toEqual(["p:1"])
+  })
+
+  it("bounds a DEPLOYING gap after repeated empty polls", () => {
+    const prev = [makeVM({ proxmoxID: 1 })]
+    const args = {
+      data: { rangeID: "r1", name: "test", rangeNumber: 1, rangeState: "DEPLOYING" as const, VMs: [] },
+      newVMs: [] as VMObject[],
+      prevVMs: prev,
+      stateUpper: "DEPLOYING",
+      scopeTag: "user|self",
+      rangeId: "r-deploy-gap",
+    }
+    expect(resolveVmListForRangeQuery(args).vms).toEqual(prev)
+    expect(resolveVmListForRangeQuery(args).vms).toEqual([])
   })
 
   it("returns [] when newVMs is empty and not deploying", () => {
@@ -177,7 +197,7 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r1",
     })
-    expect(result).toEqual([])
+    expect(result.vms).toEqual([])
   })
 
   it("shows a full poll immediately after a one-VM first paint", () => {
@@ -204,9 +224,9 @@ describe("resolveVmListForRangeQuery", () => {
       rangeId: "r1",
     }
     const painted = resolveVmListForRangeQuery({ ...base, data: { ...base.data, VMs: first }, newVMs: first, prevVMs: [] })
-    expect(painted).toHaveLength(1)
-    const settled = resolveVmListForRangeQuery({ ...base, newVMs: full, prevVMs: painted })
-    expect(settled.map((vm) => vm.proxmoxID).sort((a, b) => a - b)).toEqual([144, 169, 211, 217, 255])
+    expect(painted.vms).toHaveLength(1)
+    const settled = resolveVmListForRangeQuery({ ...base, newVMs: full, prevVMs: painted.vms })
+    expect(settled.vms.map((vm) => vm.proxmoxID).sort((a, b) => a - b)).toEqual([144, 169, 211, 217, 255])
   })
 
   it("trusts a repeated short list instead of growing the cache", () => {
@@ -220,8 +240,31 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r-short",
     }
-    expect(resolveVmListForRangeQuery(args)).toHaveLength(2)
-    expect(resolveVmListForRangeQuery(args)).toEqual(only)
+    expect(resolveVmListForRangeQuery(args).vms).toHaveLength(2)
+    expect(resolveVmListForRangeQuery(args).vms).toEqual(only)
+  })
+
+  it("bounds alternating short snapshots instead of merging forever", () => {
+    const a = [makeVM({ proxmoxID: 144, name: "router" })]
+    const b = [makeVM({ proxmoxID: 169, name: "dc" })]
+    const prev = [
+      makeVM({ proxmoxID: 144, name: "router" }),
+      makeVM({ proxmoxID: 169, name: "dc" }),
+      makeVM({ proxmoxID: 217, name: "lx" }),
+    ]
+    const base = {
+      data: { rangeID: "r1", name: "test", rangeNumber: 1, rangeState: "SUCCESS" as const, numberOfVMs: 5 },
+      stateUpper: "SUCCESS",
+      scopeTag: "user|self",
+      rangeId: "r-alternating",
+    }
+
+    // Two merges are allowed. The third short payload must be trusted.
+    expect(resolveVmListForRangeQuery({ ...base, data: { ...base.data, VMs: a }, newVMs: a, prevVMs: prev }).vms).toHaveLength(3)
+    expect(resolveVmListForRangeQuery({ ...base, data: { ...base.data, VMs: b }, newVMs: b, prevVMs: prev }).vms).toHaveLength(3)
+    const trusted = resolveVmListForRangeQuery({ ...base, data: { ...base.data, VMs: a }, newVMs: a, prevVMs: prev })
+    expect(trusted.vms).toEqual(a)
+    expect(trusted.merged).toBe(false)
   })
 
   it("keeps prev VMs on first empty SUCCESS poll, clears on second", () => {
@@ -241,7 +284,22 @@ describe("resolveVmListForRangeQuery", () => {
       scopeTag: "user|self",
       rangeId: "r1",
     }
-    expect(resolveVmListForRangeQuery(base)).toEqual(prev)
-    expect(resolveVmListForRangeQuery(base)).toEqual([])
+    expect(resolveVmListForRangeQuery(base).vms).toEqual(prev)
+    expect(resolveVmListForRangeQuery(base).vms).toEqual([])
+  })
+
+  it("does not treat numberOfVMs 0 as a complete inventory", () => {
+    const prev = [makeVM({ proxmoxID: 1 }), makeVM({ proxmoxID: 2 })]
+    const next = [makeVM({ proxmoxID: 1 })]
+    const result = resolveVmListForRangeQuery({
+      data: { rangeID: "r1", name: "test", rangeNumber: 1, rangeState: "SUCCESS", VMs: next, numberOfVMs: 0 },
+      newVMs: next,
+      prevVMs: prev,
+      stateUpper: "SUCCESS",
+      scopeTag: "user|self",
+      rangeId: "r-zero-count",
+    })
+    expect(result.vms.map((vm) => vm.proxmoxID).sort()).toEqual([1, 2])
+    expect(result.unconfirmedVmKeys.length).toBeGreaterThan(0)
   })
 })

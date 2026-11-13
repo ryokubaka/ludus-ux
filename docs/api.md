@@ -12,4 +12,4 @@ docker run --rm -p 8088:8080 \
 # Open http://localhost:8088
 ```
 
-> **Authentication note:** All endpoints (except `/api/auth/login`, `/api/auth/logout`, and `/api/health`) require a valid session cookie set by `POST /api/auth/login`.
+> **Authentication note:** All endpoints (except `/api/auth/login`, `/api/auth/logout`, `/api/health`, and `/api/metrics`) require a valid session cookie set by `POST /api/auth/login`.

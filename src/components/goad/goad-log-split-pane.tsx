@@ -33,9 +33,9 @@ export function GoadLogSplitPane({
 
   if (wide !== true) {
     return (
-      <div className={cn("flex flex-col gap-3 flex-1 min-h-0 w-full", className)}>
-        <div className="flex flex-col flex-1 min-h-0">{left}</div>
-        <div className="flex flex-col flex-1 min-h-0">{right}</div>
+      <div className={cn("flex h-full min-h-0 w-full flex-1 flex-col gap-3", className)}>
+        <div className="flex min-h-0 flex-1 flex-col">{left}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{right}</div>
       </div>
     )
   }
@@ -44,14 +44,14 @@ export function GoadLogSplitPane({
     <ResizablePanelGroup
       autoSaveId={GOAD_LOG_SPLIT_AUTOSAVE_ID}
       direction="horizontal"
-      className={cn("flex flex-1 min-h-0 w-full", className)}
+      className={cn("h-full min-h-0 w-full flex-1", className)}
     >
-      <ResizablePanel defaultSize={50} minSize={20} className="min-h-0 min-w-0">
-        {left}
+      <ResizablePanel defaultSize={50} minSize={20} className="h-full min-h-0 min-w-0">
+        <div className="flex h-full min-h-0 flex-col">{left}</div>
       </ResizablePanel>
-      <ResizableHandle withHandle className="w-2 shrink-0 bg-border/80 mx-0.5 rounded-sm max-w-[12px]" />
-      <ResizablePanel defaultSize={50} minSize={20} className="min-h-0 min-w-0">
-        {right}
+      <ResizableHandle withHandle className="mx-0.5 w-2 max-w-[12px] shrink-0 rounded-sm bg-border/80" />
+      <ResizablePanel defaultSize={50} minSize={20} className="h-full min-h-0 min-w-0">
+        <div className="flex h-full min-h-0 flex-col">{right}</div>
       </ResizablePanel>
     </ResizablePanelGroup>
   )

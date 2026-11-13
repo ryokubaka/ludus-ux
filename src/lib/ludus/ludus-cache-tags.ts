@@ -22,11 +22,6 @@ export function ludusGlobalCacheTag(resource: LudusCacheResource): string {
   return `ludus:${resource}`
 }
 
-/** Prefix for revalidateTag / updateTag to bust every resource under a scope. */
-export function ludusScopeCachePrefix(scopeTag: string): string {
-  return `ludus:${scopeTag}:`
-}
-
 export type LudusRangeCacheResource =
   | "rangeStatus"
   | "rangeLogHistory"
@@ -34,8 +29,21 @@ export type LudusRangeCacheResource =
   | "snapshots"
   | "rangeConfig"
 
+/**
+ * Scope-wide range tag. Paired with the per-range tag so a mutation without a
+ * known range ID can still refresh everything in the acting scope.
+ */
 export function ludusRangeCacheTag(scopeTag: string, resource: LudusRangeCacheResource): string {
   return `ludus:${resource}:${scopeTag}`
+}
+
+/** Per-range tag: invalidating one range no longer busts every range in the scope. */
+export function ludusRangeIdCacheTag(
+  scopeTag: string,
+  resource: LudusRangeCacheResource,
+  rangeId: string,
+): string {
+  return `ludus:${resource}:${scopeTag}:${rangeId}`
 }
 
 export function ludusGlobalRangeCacheTag(resource: LudusRangeCacheResource): string {

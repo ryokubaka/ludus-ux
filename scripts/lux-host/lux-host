@@ -54,9 +54,14 @@
 #   patch-adguard-host-dns           (no args; points AdGuard upstream at 192.0.2.254)
 #   patch-linux-reboot-wait         (no args; wait for SSH to drop after a Linux reboot)
 #   patch-adws-wait                  (no args; wait for ADWS before default OU creation)
+#   patch-windows-static-ip          (no args; longer Windows async startup; netsh if it fails)
+#   patch-windows-sysprep-netnative  (no args; drop .NET Native 2.2 only when installed)
 #   patch-router-single-clone        (no args; do not clone a second router; one VMID)
+#   ansible-speedups on|off          (systemd drop-in: pipelining and forks; no playbook edit)
 #   bridge-ageing <iface>            (set Linux/SDN bridge ageing_time to 0 / hub mode)
 #   release-refs <repo>              (vX.Y.Z heads and tags on this clone's remote)
+#   ludus-upgrade <version>          (GitLab package for that version, then --update)
+#   ludus-upgrade-log                (upgrade unit state and the last log lines)
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "lux-host: must run as root via sudo" >&2
   exit 1
@@ -597,6 +602,237 @@ patch_adws_wait() {
   printf 'status=ok\nchanged=yes\n'
 }
 
+# The Windows 8+ static-IP task starts async work and gives the named pipe 5
+# seconds. The error text says WIN_ASYNC_STARTUP_TIMEOUT and the hostvar
+# win_async_startup_timeout; Ansible reads ansible_win_async_startup_timeout
+# (env ANSIBLE_WIN_ASYNC_STARTUP_TIMEOUT) into async_startup_timeout.
+# Several Windows VMs at once lose that race, the task is ignored, and the
+# netsh fallback runs only for legacy Windows, so the guest stays on DHCP.
+# Give that task 120 seconds, and run the existing fallback when it failed.
+# LUX_WINDOWS_STATIC_IP_PLAYBOOK is for tests; sudo env_reset drops it.
+patch_windows_static_ip() {
+  local playbook
+  if [[ -n "${LUX_WINDOWS_STATIC_IP_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_WINDOWS_STATIC_IP_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-ip-and-hostname-windows.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/proxmox/configure-ip-and-hostname-windows.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  local stripped out
+  stripped=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-WIN-STATIC-IP$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-WIN-STATIC-IP$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  if ! awk '
+    function task_indent(s,    n) {
+      if (match(s, /^[[:space:]]*/)) n = RLENGTH
+      else n = 0
+      return n
+    }
+    function is_task(s) {
+      return s ~ /^[[:space:]]*- name:/
+    }
+    function next_task(start, limit,    i) {
+      for (i = start; i <= n; i++) {
+        if (is_task(line[i]) && task_indent(line[i]) <= limit) return i
+      }
+      return n + 1
+    }
+    {
+      line[++n] = $0
+    }
+    END {
+      modern = "Modern Method - Set up static IP address"
+      fallback = "Is fallback needed?"
+      modern_at = 0
+      fallback_at = 0
+      for (i = 1; i <= n; i++) {
+        if (!is_task(line[i])) continue
+        if (index(line[i], modern)) modern_at = i
+        if (index(line[i], fallback)) fallback_at = i
+      }
+      if (!modern_at) exit 2
+      mind = task_indent(line[modern_at])
+      modern_end = next_task(modern_at + 1, mind) - 1
+      reg = ""
+      for (i = modern_at + 1; i <= modern_end; i++) {
+        if (line[i] ~ /^[[:space:]]*register:[[:space:]]*[A-Za-z_][A-Za-z0-9_]*/) {
+          reg = line[i]
+          sub(/^[[:space:]]*register:[[:space:]]*/, "", reg)
+          sub(/[^A-Za-z0-9_].*$/, "", reg)
+          break
+        }
+      }
+      fallback_end = 0
+      if (fallback_at) fallback_end = next_task(fallback_at + 1, task_indent(line[fallback_at])) - 1
+      when_list = 0
+      when_expr = ""
+      when_pad = ""
+      for (i = 1; i <= n; i++) {
+        if (i == modern_at) {
+          print line[i]
+          pad = substr(line[i], 1, mind)
+          key = pad "  "
+          deep = key "  "
+          print key "# BEGIN LUX-WIN-STATIC-IP"
+          print key "vars:"
+          print deep "ansible_win_async_startup_timeout: 120"
+          print key "# END LUX-WIN-STATIC-IP"
+          continue
+        }
+        if (when_list) {
+          if (task_indent(line[i]) > length(when_pad) && line[i] ~ /^[[:space:]]*-[[:space:]]/) {
+            item = line[i]
+            sub(/^[[:space:]]*-[[:space:]]*/, "", item)
+            if (when_expr == "") when_expr = item
+            else when_expr = when_expr " and " item
+            continue
+          }
+          if (when_expr ~ /is failed/) print when_pad "when:"
+          else print when_pad "when: (" when_expr ") or " reg " is failed"
+          when_list = 0
+        }
+        if (reg != "" && fallback_at && i > fallback_at && i <= fallback_end && line[i] ~ /^[[:space:]]*when:/) {
+          if (line[i] ~ /^[[:space:]]*when:[[:space:]]*$/) {
+            when_list = 1
+            when_expr = ""
+            when_pad = substr(line[i], 1, task_indent(line[i]))
+            continue
+          }
+          expr = line[i]
+          sub(/^[[:space:]]*when:[[:space:]]*/, "", expr)
+          if (expr ~ /is failed/ || expr ~ /^[|>]/) {
+            print line[i]
+          } else {
+            print substr(line[i], 1, task_indent(line[i])) "when: (" expr ") or " reg " is failed"
+          }
+          continue
+        }
+        print line[i]
+      }
+      if (when_list) {
+        if (when_expr ~ /is failed/) print when_pad "when:"
+        else print when_pad "when: (" when_expr ") or " reg " is failed"
+      }
+    }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
+# Win11 23H2 generalize fails while removing Microsoft.NET.Native.Framework.2.2
+# (0x8007045b, shutdown already in progress). Ludus retries only the
+# "installed for a user, but not provisioned" message, so this package survives
+# and the success tag is never written. Remove that one package when it is
+# present, then reboot that VM before Start Sysprep. A VM without it does not
+# reboot. LUX_WINDOWS_SYSPREP_PLAYBOOK is for tests; sudo env_reset drops it.
+patch_windows_sysprep_netnative() {
+  local playbook
+  if [[ -n "${LUX_WINDOWS_SYSPREP_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_WINDOWS_SYSPREP_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "sysprep.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/windows/sysprep.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  local stripped task out indent line start_re
+  start_re='^[[:space:]]*- name: Start Sysprep[[:space:]]*$'
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-SYSPREP-NETNATIVE$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-SYSPREP-NETNATIVE$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$start_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  {
+    printf '%s# BEGIN LUX-SYSPREP-NETNATIVE\n' "$indent"
+    printf '%s- name: Remove Microsoft.NET.Native.Framework.2.2 before Sysprep\n' "$indent"
+    printf '%s  ansible.windows.win_powershell:\n' "$indent"
+    printf '%s    script: |\n' "$indent"
+    printf '%s      $ErrorActionPreference = '"'"'Continue'"'"'\n' "$indent"
+    printf '%s      $name = '"'"'Microsoft.NET.Native.Framework.2.2'"'"'\n' "$indent"
+    printf '%s      $installed = @()\n' "$indent"
+    printf '%s      $provisioned = @()\n' "$indent"
+    printf '%s      try { $installed = @(Get-AppxPackage -AllUsers -Name $name -ErrorAction SilentlyContinue) } catch {}\n' "$indent"
+    printf '%s      try { $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $name }) } catch {}\n' "$indent"
+    printf '%s      foreach ($package in $installed) {\n' "$indent"
+    printf '%s        try { Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction SilentlyContinue | Out-Null } catch {}\n' "$indent"
+    printf '%s      }\n' "$indent"
+    printf '%s      foreach ($package in $provisioned) {\n' "$indent"
+    printf '%s        try { Remove-AppxProvisionedPackage -Online -PackageName $package.PackageName -ErrorAction SilentlyContinue | Out-Null } catch {}\n' "$indent"
+    printf '%s      }\n' "$indent"
+    printf '%s      $present = (($installed.Count + $provisioned.Count) -gt 0)\n' "$indent"
+    printf '%s      $Ansible.Changed = [bool]$present\n' "$indent"
+    printf '%s      $Ansible.Result = @{ present = [bool]$present }\n' "$indent"
+    printf '%s  register: lux_sysprep_netnative\n' "$indent"
+    printf '%s  ignore_errors: true\n' "$indent"
+    printf '%s- name: Reboot after removing Microsoft.NET.Native.Framework.2.2\n' "$indent"
+    printf '%s  ansible.windows.win_reboot:\n' "$indent"
+    printf '%s  when: lux_sysprep_netnative.present | default(false) | bool\n' "$indent"
+    printf '%s# END LUX-SYSPREP-NETNATIVE\n' "$indent"
+  } > "$task"
+  if ! awk -v taskfile="$task" -v re="$start_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
 # Proxmox allows two VMs with the same name. A later network deploy clones
 # another router, then the VLAN task's jq prints every VMID ("144\n211") and
 # proxmox_nic rejects it. Skip the clone when one already exists, and keep a
@@ -824,6 +1060,69 @@ patch_chocolatey_openssh() {
   printf 'status=ok\nchanged=yes\n'
 }
 
+# Ansible connection speedups for Ludus range deploys. Writes a systemd drop-in
+# on the Ludus server unit so the server-side ansible-playbook runs with SSH
+# pipelining and a higher fork count. Env only — no Ludus playbook is edited.
+# The service restarts to pick up the env only when no range deploy is running;
+# otherwise the change applies on the next restart. `off` removes the drop-in.
+cmd_ansible_speedups() {
+  local mode="$1"
+  [[ "$mode" == "on" || "$mode" == "off" ]] || die "mode"
+  local unit=""
+  local u
+  for u in ludus ludus-server; do
+    if systemctl cat "$u" >/dev/null 2>&1; then unit="$u"; break; fi
+  done
+  if [[ -z "$unit" ]]; then
+    printf 'status=skipped\nreason=no_ludus_unit\n'
+    return 0
+  fi
+  local dir="/etc/systemd/system/${unit}.service.d"
+  if [[ -n "${LUX_ANSIBLE_SPEEDUPS_DROP_DIR:-}" ]]; then
+    dir=$LUX_ANSIBLE_SPEEDUPS_DROP_DIR
+    is_abs_path "$dir" || die "bad drop dir"
+    [[ "$dir" == /tmp/* ]] || die "bad drop dir"
+  fi
+  local drop="$dir/10-lux-ansible-speedups.conf"
+  local pending="$dir/10-lux-ansible-speedups.pending"
+  local changed=no
+  if [[ "$mode" == "off" ]]; then
+    if [[ -f "$drop" ]]; then rm -f "$drop"; changed=yes; fi
+  else
+    mkdir -p "$dir"
+    local body desired
+    body=$'[Service]\nEnvironment=ANSIBLE_PIPELINING=True\nEnvironment=ANSIBLE_FORKS=20\n'
+    desired=$(mktemp)
+    printf '%s' "$body" >"$desired"
+    if [[ ! -f "$drop" ]] || ! cmp -s "$desired" "$drop"; then
+      cat "$desired" >"$drop"
+      chmod 644 "$drop"
+      changed=yes
+    fi
+    rm -f "$desired"
+  fi
+  systemctl daemon-reload 2>/dev/null || true
+  printf 'unit=%s\n' "$unit"
+  printf 'drop_in=%s\n' "$drop"
+  printf 'changed=%s\n' "$changed"
+  # Apply now only when no range deploy is in flight; never interrupt a deploy.
+  if pgrep -f 'ansible-playbook.*/ranges/' >/dev/null 2>&1; then
+    if [[ "$changed" == yes ]]; then : >"$pending"; fi
+    printf 'restart=deferred\n'
+  elif [[ "$changed" == yes || -f "$pending" ]]; then
+    if systemctl try-restart "$unit" >/dev/null 2>&1; then
+      rm -f "$pending"
+      printf 'restart=done\n'
+    else
+      : >"$pending"
+      printf 'restart=failed\n'
+    fi
+  else
+    printf 'restart=unchanged\n'
+  fi
+  printf 'status=ok\nmode=%s\n' "$mode"
+}
+
 # Range VMs ask AdGuard on the router. The stock template forwards to public
 # resolvers. Point both lists at the Ludus host (192.0.2.254), which is where
 # the operator's internal forwarder lives. LUX_ADGUARD_TEMPLATE is for tests.
@@ -946,7 +1245,7 @@ shift || true
 
 case "$op" in
   version)
-    echo 5
+    echo 7
     ;;
   revision)
     [[ $# -eq 0 ]] || die "revision"
@@ -1633,9 +1932,21 @@ PY
     [[ $# -eq 0 ]] || die "patch-adws-wait"
     patch_adws_wait
     ;;
+  patch-windows-static-ip)
+    [[ $# -eq 0 ]] || die "patch-windows-static-ip"
+    patch_windows_static_ip
+    ;;
+  patch-windows-sysprep-netnative)
+    [[ $# -eq 0 ]] || die "patch-windows-sysprep-netnative"
+    patch_windows_sysprep_netnative
+    ;;
   patch-router-single-clone)
     [[ $# -eq 0 ]] || die "patch-router-single-clone"
     patch_router_single_clone
+    ;;
+  ansible-speedups)
+    [[ $# -eq 1 ]] || die "ansible-speedups"
+    cmd_ansible_speedups "$1"
     ;;
   bridge-ageing)
     # Security Onion sniff NICs need the range bridge in hub mode
@@ -1694,6 +2005,75 @@ PY
         /bin/bash -c "bash \"\$REPO/scripts/upgrade.sh\" \"\$TAG\" >> \"\$LOG\" 2>&1; echo \"LUX_UPGRADE_EXIT:\$?\" >> \"\$LOG\""
     fi
     echo started
+    ;;
+  ludus-upgrade)
+    # One version argument. The package URL is built here from that version.
+    # The binary must be a temp copy: --update refuses the installed path.
+    [[ $# -eq 1 ]] || die "ludus-upgrade"
+    ver="$1"
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || die "version"
+    [[ -f /etc/systemd/system/ludus.service ]] || die "not installed"
+    if systemctl is-active --quiet ludus-install.service 2>/dev/null; then
+      die "installing"
+    fi
+    if pgrep -x ansible-playbook >/dev/null 2>&1 || pgrep -x packer >/dev/null 2>&1; then
+      die "busy"
+    fi
+    if systemctl is-active --quiet lux-ludus-upgrade.service 2>/dev/null; then
+      die "running"
+    fi
+    command -v systemd-run >/dev/null 2>&1 || die "systemd-run"
+    command -v curl >/dev/null 2>&1 || die "curl"
+    log=/var/log/lux-ludus-upgrade.log
+    : >"$log" || die "log"
+    systemctl reset-failed lux-ludus-upgrade.service >/dev/null 2>&1 || true
+    systemd-run --unit=lux-ludus-upgrade --collect \
+      --setenv="LUDUS_VERSION=$ver" \
+      --setenv=LUDUS_UPGRADE_LOG="$log" \
+      /bin/bash -c 'set -euo pipefail
+ver="${LUDUS_VERSION:-}"
+log="${LUDUS_UPGRADE_LOG:-/var/log/lux-ludus-upgrade.log}"
+exec >>"$log" 2>&1
+tmp=""
+cleanup() {
+  code=$?
+  if [[ -n "$tmp" ]]; then rm -rf "$tmp"; fi
+  echo "LUDUS_UPGRADE_EXIT:${code}"
+}
+trap cleanup EXIT
+echo "=== Ludus upgrade to ${ver} started $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+[[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || exit 2
+if pgrep -x ansible-playbook >/dev/null 2>&1 || pgrep -x packer >/dev/null 2>&1; then
+  echo "Ansible or Packer is running"
+  exit 3
+fi
+base="https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/${ver}"
+tmp=$(mktemp -d)
+curl -fsSL "${base}/ludus-server-${ver}" -o "${tmp}/ludus-server-${ver}"
+curl -fsSL "${base}/ludus_${ver}_checksums.txt" -o "${tmp}/ludus_${ver}_checksums.txt"
+(
+  cd "$tmp"
+  grep -F "ludus-server-${ver}" "ludus_${ver}_checksums.txt" > check.txt
+  [[ -s check.txt ]]
+  sha256sum -c check.txt
+)
+sig=$(od -An -t x1 -N 4 "${tmp}/ludus-server-${ver}" | tr -d " \n")
+[[ "$sig" == "7f454c46" ]] || { echo "download is not a Ludus server binary"; exit 4; }
+install -m 0755 "${tmp}/ludus-server-${ver}" "${tmp}/ludus-server"
+"${tmp}/ludus-server" --update
+'
+    echo started
+    ;;
+  ludus-upgrade-log)
+    [[ $# -eq 0 ]] || die "ludus-upgrade-log"
+    if systemctl is-active --quiet lux-ludus-upgrade.service 2>/dev/null; then
+      echo "active=yes"
+    else
+      echo "active=no"
+    fi
+    if [[ -f /var/log/lux-ludus-upgrade.log ]]; then
+      tail -n 80 /var/log/lux-ludus-upgrade.log
+    fi
     ;;
   "")
     die "missing operation"

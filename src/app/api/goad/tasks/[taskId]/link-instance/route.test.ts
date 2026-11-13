@@ -10,7 +10,10 @@ vi.mock("@/lib/session/session", () => ({ resolveSession: vi.fn() }))
 vi.mock("@/lib/lux/lux-api-audit", () => ({ logLuxRouteAction: vi.fn() }))
 vi.mock("@/lib/logs/app-log", () => ({ writeAppLog: vi.fn() }))
 vi.mock("@/lib/settings/settings-store", () => ({ getSettings: () => ({ proxmoxSshUser: "ludus" }) }))
-vi.mock("@/lib/goad/goad-ssh", () => ({ listGoadInstances: vi.fn(async () => gate.instances) }))
+vi.mock("@/lib/goad/goad-ssh", () => ({
+  listGoadInstances: vi.fn(async () => gate.instances),
+  listGoadInstancesResult: vi.fn(async () => ({ ok: true, instances: gate.instances })),
+}))
 vi.mock("@/lib/goad/goad-task-store", () => ({
   listTasks: () => gate.tasks,
   getTask: (taskId: string) => gate.tasks.find((task) => task.id === taskId) ?? null,

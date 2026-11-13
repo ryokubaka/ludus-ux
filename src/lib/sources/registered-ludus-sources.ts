@@ -11,6 +11,30 @@ export interface RegisteredLudusSource {
   sharedCatalog?: boolean
 }
 
+/**
+ * Sources page, prefetch, and Range Builder share `queryKeys.sources`.
+ * The cache is `{ sources, available }`. An older builder write stored the array itself.
+ */
+export function sourcesQueryRows(data: unknown): Array<{
+  sourceID?: string
+  id?: string
+  name?: string
+  url?: string
+  ref?: string
+  Ref?: string
+  branch?: string
+  Branch?: string
+  gitRef?: string
+  git_ref?: string
+  published?: boolean
+  sharedCatalog?: boolean
+}> {
+  if (Array.isArray(data)) return data
+  if (!data || typeof data !== "object" || !("sources" in data)) return []
+  const rows = (data as { sources?: unknown }).sources
+  return Array.isArray(rows) ? rows : []
+}
+
 export function mapRegisteredSources(
   rows: Array<{
     sourceID?: string

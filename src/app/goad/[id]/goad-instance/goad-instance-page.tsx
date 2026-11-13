@@ -223,10 +223,9 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
           credentials: "include",
           headers: impersonationHeaders(),
         })
-        if (res.ok) {
-          const data = (await res.json()) as { instanceId?: string | null }
-          linked = typeof data.instanceId === "string" ? data.instanceId : null
-        }
+        if (!res.ok) return
+        const data = (await res.json()) as { instanceId?: string | null }
+        linked = typeof data.instanceId === "string" ? data.instanceId : null
       } catch {
         linked = null
       }
@@ -1282,7 +1281,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 basis-0 gap-6 w-full overflow-hidden">
+    <div className="flex h-full min-h-0 w-full flex-1 basis-0 flex-col gap-4 overflow-hidden">
       <GoadReassignDialog
         open={showReassign}
         instance={instance}
@@ -1328,7 +1327,7 @@ function GoadInstancePage({ routeInstanceId }: { routeInstanceId?: string }) {
         onDeleteInstanceOnly={handleDeleteInstanceOnly}
         onDestroy={handleDestroy}
       />
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <GoadInstanceTabTriggers
           activeTab={activeTab}
           isRunning={isRunning}

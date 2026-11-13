@@ -8,30 +8,43 @@ import {
   revalidateLudusScopeResource,
 } from "@/lib/ludus/ludus-cache-revalidate"
 import type { LudusRangeCacheResource } from "@/lib/ludus/ludus-cache-tags"
-import { ludusGlobalRangeCacheTag } from "@/lib/ludus/ludus-cache-tags"
+import { ludusRangeCacheTag, ludusRangeIdCacheTag } from "@/lib/ludus/ludus-cache-tags"
 import { revalidateTag } from "next/cache"
 import { invalidateInProcessLudusCachesAfterMutation } from "@/lib/ludus/ludus-swr-invalidate"
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
-function revalidateRangeCaches(scopeTag: string): void {
-  revalidateLudusResource("ranges")
+const RANGE_RESOURCES: LudusRangeCacheResource[] = [
+  "rangeStatus",
+  "rangeLogHistory",
+  "rangeLogEnrichment",
+  "snapshots",
+  "rangeConfig",
+]
+
+/**
+ * Invalidate range data for the acting scope only. A known range ID busts that
+ * range's tags; without one, the scope-wide tags cover every range in the
+ * scope. Cross-scope readers pick up the change through the short `cacheLife`
+ * TTL instead of a global revalidation herd.
+ */
+function revalidateRangeCaches(scopeTag: string, rangeId?: string | null): void {
   revalidateLudusScopeResource(scopeTag, "ranges")
-  const rangeResources: LudusRangeCacheResource[] = [
-    "rangeStatus",
-    "rangeLogHistory",
-    "rangeLogEnrichment",
-    "snapshots",
-    "rangeConfig",
-  ]
-  for (const resource of rangeResources) {
-    revalidateTag(ludusGlobalRangeCacheTag(resource), "max")
+  for (const resource of RANGE_RESOURCES) {
+    revalidateTag(
+      rangeId
+        ? ludusRangeIdCacheTag(scopeTag, resource, rangeId)
+        : ludusRangeCacheTag(scopeTag, resource),
+      "max",
+    )
   }
 }
 
 /**
  * Invalidate Next.js Ludus prefetch caches after a successful `/api/proxy` mutation.
- * Uses global tags so all effective scopes refresh on the next navigation.
+ * ACL-wide catalog resources (users, groups, templates, blueprints, ansible) keep
+ * their global tag so other scopes see the change. Range data is scoped to the
+ * acting user and, when known, the single range that was mutated.
  */
 export function revalidateAfterLudusProxyMutation(
   method: string,
@@ -40,6 +53,7 @@ export function revalidateAfterLudusProxyMutation(
     ResolvedSession,
     "username" | "impersonationUserId" | "apiKey" | "impersonationApiKey"
   >,
+  rangeId?: string | null,
 ): void {
   if (!MUTATING.has(method.toUpperCase())) return
 
@@ -81,14 +95,13 @@ export function revalidateAfterLudusProxyMutation(
   }
 
   if (path.startsWith("/range") || path.startsWith("/ranges") || path.startsWith("/snapshots")) {
-    revalidateRangeCaches(scopeTag)
+    revalidateRangeCaches(scopeTag, rangeId)
     invalidateInProcessLudusCachesAfterMutation(apiKey)
     return
   }
 
   if (path.startsWith("/testing")) {
-    revalidateTag(ludusGlobalRangeCacheTag("rangeLogEnrichment"), "max")
-    revalidateRangeCaches(scopeTag)
+    revalidateRangeCaches(scopeTag, rangeId)
     invalidateInProcessLudusCachesAfterMutation(apiKey)
   }
 }

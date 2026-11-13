@@ -49,6 +49,7 @@ describe("ansible speedups helper", () => {
   it("loads against the current host-patch module", async () => {
     const mod = await import("@/lib/ludus/ludus-ansible-speedups")
     expect(typeof mod.applyLudusAnsibleSpeedups).toBe("function")
+    expect(typeof mod.applyLudusWinAsyncTimeout).toBe("function")
   })
 })
 
@@ -744,6 +745,38 @@ describe("ansible-speedups", () => {
     expect(idle).toContain("changed=no")
     expect(idle).toContain("restart=done")
     expect(restart.trim()).toBe("ludus")
+    expect(again).toContain("restart=unchanged")
+  })
+})
+
+describe("win-async-timeout", () => {
+  it("sets the Windows async startup timeout on the Ludus service", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      bin="$dir/bin"
+      mkdir -p "$bin"
+      printf '%s\\n' '#!/bin/sh' 'case "$1" in cat) exit 0 ;; daemon-reload) exit 0 ;; try-restart) printf "%s\\n" "$2" >> "$LUX_RESTART_LOG"; exit 0 ;; *) exit 0 ;; esac' > "$bin/systemctl"
+      printf '%s\\n' '#!/bin/sh' 'exit 1' > "$bin/pgrep"
+      chmod +x "$bin/systemctl" "$bin/pgrep"
+      export PATH="$bin:$PATH" LUX_WIN_ASYNC_DROP_DIR="$dir/drop" LUX_RESTART_LOG="$dir/restart.log"
+      : > "$LUX_RESTART_LOG"
+      bash "$LUX_HOST_HELPER" win-async-timeout
+      echo "---CONF---"
+      cat "$dir/drop/20-lux-win-async-timeout.conf"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" win-async-timeout
+      `,
+    )
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0)
+    const first = result.stdout.split("---CONF---")[0] ?? ""
+    const conf = result.stdout.split("---CONF---")[1]?.split("---AGAIN---")[0] ?? ""
+    const again = result.stdout.split("---AGAIN---")[1] ?? ""
+    expect(first).toContain("changed=yes")
+    expect(first).toContain("restart=done")
+    expect(conf).toContain("Environment=ANSIBLE_WIN_ASYNC_STARTUP_TIMEOUT=120")
+    expect(again).toContain("changed=no")
     expect(again).toContain("restart=unchanged")
   })
 })

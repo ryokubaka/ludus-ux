@@ -58,6 +58,7 @@
 #   patch-windows-sysprep-netnative  (no args; drop .NET Native 2.2 only when installed)
 #   patch-router-single-clone        (no args; do not clone a second router; one VMID)
 #   ansible-speedups on|off          (systemd drop-in: pipelining and forks; no playbook edit)
+#   win-async-timeout                (systemd drop-in: 120s Windows async startup for every task)
 #   bridge-ageing <iface>            (set Linux/SDN bridge ageing_time to 0 / hub mode)
 #   release-refs <repo>              (vX.Y.Z heads and tags on this clone's remote)
 #   ludus-upgrade <version>          (GitLab package for that version, then --update)
@@ -609,6 +610,9 @@ patch_adws_wait() {
 # Several Windows VMs at once lose that race, the task is ignored, and the
 # netsh fallback runs only for legacy Windows, so the guest stays on DHCP.
 # Give that task 120 seconds, and run the existing fallback when it failed.
+# Other Windows async tasks, including Start Sysprep, take the same wait from
+# the systemd drop-in `win-async-timeout` writes. This task var stays so the
+# static-IP task still has 120 seconds if that service has not restarted yet.
 # LUX_WINDOWS_STATIC_IP_PLAYBOOK is for tests; sudo env_reset drops it.
 patch_windows_static_ip() {
   local playbook
@@ -1060,38 +1064,29 @@ patch_chocolatey_openssh() {
   printf 'status=ok\nchanged=yes\n'
 }
 
-# Ansible connection speedups for Ludus range deploys. Writes a systemd drop-in
-# on the Ludus server unit so the server-side ansible-playbook runs with SSH
-# pipelining and a higher fork count. Env only — no Ludus playbook is edited.
-# The service restarts to pick up the env only when no range deploy is running;
-# otherwise the change applies on the next restart. `off` removes the drop-in.
-cmd_ansible_speedups() {
-  local mode="$1"
-  [[ "$mode" == "on" || "$mode" == "off" ]] || die "mode"
-  local unit=""
+ludus_service_unit() {
   local u
   for u in ludus ludus-server; do
-    if systemctl cat "$u" >/dev/null 2>&1; then unit="$u"; break; fi
+    if systemctl cat "$u" >/dev/null 2>&1; then
+      printf '%s' "$u"
+      return 0
+    fi
   done
-  if [[ -z "$unit" ]]; then
-    printf 'status=skipped\nreason=no_ludus_unit\n'
-    return 0
-  fi
-  local dir="/etc/systemd/system/${unit}.service.d"
-  if [[ -n "${LUX_ANSIBLE_SPEEDUPS_DROP_DIR:-}" ]]; then
-    dir=$LUX_ANSIBLE_SPEEDUPS_DROP_DIR
-    is_abs_path "$dir" || die "bad drop dir"
-    [[ "$dir" == /tmp/* ]] || die "bad drop dir"
-  fi
-  local drop="$dir/10-lux-ansible-speedups.conf"
-  local pending="$dir/10-lux-ansible-speedups.pending"
+  return 1
+}
+
+# Writes or removes one systemd drop-in and restarts Ludus only when no range
+# deploy is running. A deploy in flight keeps the old process environment.
+sync_ludus_drop_in() {
+  local unit="$1" dir="$2" name="$3" mode="$4" body="$5"
+  local drop="$dir/$name"
+  local pending="$dir/${name}.pending"
   local changed=no
   if [[ "$mode" == "off" ]]; then
     if [[ -f "$drop" ]]; then rm -f "$drop"; changed=yes; fi
   else
     mkdir -p "$dir"
-    local body desired
-    body=$'[Service]\nEnvironment=ANSIBLE_PIPELINING=True\nEnvironment=ANSIBLE_FORKS=20\n'
+    local desired
     desired=$(mktemp)
     printf '%s' "$body" >"$desired"
     if [[ ! -f "$drop" ]] || ! cmp -s "$desired" "$drop"; then
@@ -1105,7 +1100,6 @@ cmd_ansible_speedups() {
   printf 'unit=%s\n' "$unit"
   printf 'drop_in=%s\n' "$drop"
   printf 'changed=%s\n' "$changed"
-  # Apply now only when no range deploy is in flight; never interrupt a deploy.
   if pgrep -f 'ansible-playbook.*/ranges/' >/dev/null 2>&1; then
     if [[ "$changed" == yes ]]; then : >"$pending"; fi
     printf 'restart=deferred\n'
@@ -1120,7 +1114,52 @@ cmd_ansible_speedups() {
   else
     printf 'restart=unchanged\n'
   fi
+}
+
+# Ansible connection speedups for Ludus range deploys. Writes a systemd drop-in
+# on the Ludus server unit so the server-side ansible-playbook runs with SSH
+# pipelining and a higher fork count. Env only — no Ludus playbook is edited.
+# The service restarts to pick up the env only when no range deploy is running;
+# otherwise the change applies on the next restart. `off` removes the drop-in.
+cmd_ansible_speedups() {
+  local mode="$1"
+  [[ "$mode" == "on" || "$mode" == "off" ]] || die "mode"
+  local unit
+  unit=$(ludus_service_unit) || {
+    printf 'status=skipped\nreason=no_ludus_unit\n'
+    return 0
+  }
+  local dir="/etc/systemd/system/${unit}.service.d"
+  if [[ -n "${LUX_ANSIBLE_SPEEDUPS_DROP_DIR:-}" ]]; then
+    dir=$LUX_ANSIBLE_SPEEDUPS_DROP_DIR
+    is_abs_path "$dir" || die "bad drop dir"
+    [[ "$dir" == /tmp/* ]] || die "bad drop dir"
+  fi
+  local body
+  body=$'[Service]\nEnvironment=ANSIBLE_PIPELINING=True\nEnvironment=ANSIBLE_FORKS=20\n'
+  sync_ludus_drop_in "$unit" "$dir" "10-lux-ansible-speedups.conf" "$mode" "$body"
   printf 'status=ok\nmode=%s\n' "$mode"
+}
+
+# Every Windows async task on a Ludus range deploy, including Start Sysprep.
+# The static-IP task also sets this on itself. A dead guest waits 120 seconds
+# before that startup fails. LUX_WIN_ASYNC_DROP_DIR is for tests.
+cmd_win_async_timeout() {
+  local unit
+  unit=$(ludus_service_unit) || {
+    printf 'status=skipped\nreason=no_ludus_unit\n'
+    return 0
+  }
+  local dir="/etc/systemd/system/${unit}.service.d"
+  if [[ -n "${LUX_WIN_ASYNC_DROP_DIR:-}" ]]; then
+    dir=$LUX_WIN_ASYNC_DROP_DIR
+    is_abs_path "$dir" || die "bad drop dir"
+    [[ "$dir" == /tmp/* ]] || die "bad drop dir"
+  fi
+  local body
+  body=$'[Service]\nEnvironment=ANSIBLE_WIN_ASYNC_STARTUP_TIMEOUT=120\n'
+  sync_ludus_drop_in "$unit" "$dir" "20-lux-win-async-timeout.conf" "on" "$body"
+  printf 'status=ok\n'
 }
 
 # Range VMs ask AdGuard on the router. The stock template forwards to public
@@ -1947,6 +1986,10 @@ PY
   ansible-speedups)
     [[ $# -eq 1 ]] || die "ansible-speedups"
     cmd_ansible_speedups "$1"
+    ;;
+  win-async-timeout)
+    [[ $# -eq 0 ]] || die "win-async-timeout"
+    cmd_win_async_timeout
     ;;
   bridge-ageing)
     # Security Onion sniff NICs need the range bridge in hub mode

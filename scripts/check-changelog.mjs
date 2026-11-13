@@ -5,6 +5,7 @@
 // a version that matches package.json, APP_VERSION, the README badge, and the
 // OpenAPI version.
 
+import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 
 const TAGS = ["Breaking", "Security", "Add", "Fix", "Improve", "Perf", "Remove", "Docs"]
@@ -13,6 +14,7 @@ const read = (file) => readFileSync(file, "utf8").replace(/\r\n/g, "\n")
 
 const releases = []
 let current = null
+let unreleased = null
 read("CHANGELOG.md")
   .split("\n")
   .forEach((line, i) => {
@@ -22,8 +24,13 @@ read("CHANGELOG.md")
       releases.push(current)
       return
     }
+    if (/^## Unreleased\s*$/.test(line)) {
+      unreleased = { version: "", line: i + 1, bullets: [] }
+      current = unreleased
+      return
+    }
     if (/^## /.test(line)) {
-      if (!/^## Unreleased\s*$/.test(line)) problems.push(`CHANGELOG.md:${i + 1}: header must be "## [X.Y.Z] - YYYY-MM-DD" or "## Unreleased"`)
+      problems.push(`CHANGELOG.md:${i + 1}: header must be "## [X.Y.Z] - YYYY-MM-DD" or "## Unreleased"`)
       current = null
       return
     }
@@ -105,6 +112,42 @@ if (releases.length > 0) {
   }
   for (const [where, version] of Object.entries(versions)) {
     if (version !== newest.version) problems.push(`${where}: version ${version ?? "(missing)"} does not match CHANGELOG ${newest.version}`)
+  }
+}
+
+if (unreleased) {
+  for (const bullet of unreleased.bullets) {
+    const at = `CHANGELOG.md:${bullet.line}`
+    const tags = [...bullet.text.matchAll(/\[(\w+)\]/g)].map((m) => m[1]).filter((t) => !/^\d/.test(t))
+    const parsed = /^- \[(\w+)\] \*\*(.+?)\*\*/.exec(bullet.text)
+    if (!parsed) problems.push(`${at}: bullet must start with "- [Tag] **Title**"`)
+    else if (!TAGS.includes(parsed[1])) problems.push(`${at}: unknown tag [${parsed[1]}] (use ${TAGS.join(", ")})`)
+    if (tags.filter((t) => TAGS.includes(t)).length > 1) problems.push(`${at}: more than one tag`)
+  }
+}
+
+const diffBase = process.env.LUX_CI_DIFF_BASE || ""
+if (diffBase) {
+  if (!/^[0-9a-f]{7,40}$/i.test(diffBase)) {
+    problems.push("LUX_CI_DIFF_BASE is not a commit sha")
+  } else {
+    const names = execFileSync("git", ["diff", "--name-only", `${diffBase}...HEAD`], { encoding: "utf8" })
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+    const product = names.filter((file) => {
+      if (file.endsWith(".test.ts") || file.endsWith(".test.tsx")) return false
+      if (file.startsWith("src/") || file.startsWith("docs/") || file.startsWith("docker/") || file.startsWith("scripts/lux-host/")) return true
+      return file === "README.md" || file === ".env.example" || file === "package.json"
+    })
+    if (product.length > 0) {
+      const diff = execFileSync("git", ["diff", "-U0", `${diffBase}...HEAD`, "--", "CHANGELOG.md"], { encoding: "utf8" })
+      const added = diff.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+      const bullets = added.filter((line) => /^\+\s*- \[(?:Breaking|Security|Add|Fix|Improve|Perf|Remove|Docs)\] \*\*/.test(line))
+      if (bullets.length === 0) {
+        problems.push("this change edits the product and adds no tagged CHANGELOG.md bullet")
+      }
+    }
   }
 }
 

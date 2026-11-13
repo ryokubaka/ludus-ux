@@ -58,6 +58,14 @@ const FINDINGS: Record<string, Finding> = {
       ],
     },
   },
+  "ids from the URL or body are one path segment before they reach a filesystem path": {
+    source: "review",
+    tests: {
+      "src/security/route-paths.test.ts": [
+        "keeps request ids out of filesystem paths until they are one segment",
+      ],
+    },
+  },
   "pending network: path segment and owner checks on read, write, handoff, and sink": {
     source: "review",
     tests: {
@@ -120,6 +128,9 @@ const FINDINGS: Record<string, Finding> = {
         "allows a login on an 8443:443 mapping even when the proxy dropped the port",
         "rejects a cross-site origin and an origin header that lies about a cross-site fetch",
       ],
+      "src/security/origin-gate.test.ts": [
+        "the proxy rejects a mutating cross-site request before the session gate",
+      ],
     },
   },
   "run-as-user refuses privileged accounts": {
@@ -179,6 +190,14 @@ const FINDINGS: Record<string, Finding> = {
   "GET handlers change no state": {
     source: "review",
     tests: { "src/security/route-audit.test.ts": ["changes no state in a GET handler"] },
+  },
+  "a security changelog entry names a regression test": {
+    source: "review",
+    tests: {
+      "src/security/finding-catalog.test.ts": [
+        "a security changelog entry in this change has a regression test",
+      ],
+    },
   },
   "admin branches re-check Ludus instead of the cookie": {
     source: "review",

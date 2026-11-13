@@ -15,7 +15,7 @@ Each bullet uses a single tag:
 
 ---
 
-## [1.6.0] - 2026-10-22
+## [1.6.0] - 2026-11-13
 
 **LUX**
 
@@ -28,6 +28,7 @@ Each bullet uses a single tag:
 - [Add] **Ansible speedups** — Settings → General → **Ansible speedups** (or `LUX_ANSIBLE_SPEEDUPS`, default on) applies SSH pipelining and a higher fork count (`ANSIBLE_PIPELINING=True`, `ANSIBLE_FORKS=20`) to Ludus and GOAD Ansible. Env only — no Ludus or GOAD playbook is edited. GOAD runs inherit the vars through the SSH session; Ludus range deploys get them from a systemd drop-in written by `lux-host ansible-speedups`, which restarts the Ludus service only when no range is deploying. Turn off if a guest's sudoers still requires a TTY.
 - [Add] **Per-route performance harness** — `e2e/perf-pages.spec.ts` records navigation timing, API request counts and statuses, p50/p95 per API path, server timing, and post-load polling for a fixed route list, and attaches `perf-pages.json` (`npm run test:perf:pages`).
 - [Fix] **Windows static IP** — Before a range deploy, LUX gives Ludus's Windows 8+ static-address task 120 seconds to open Ansible's named pipe, and runs the existing netsh fallback when that task fails. Several Windows VMs at once stayed on DHCP after the 5-second startup timeout. A Ludus update extracts a fresh play; the next deploy writes the edit again.
+- [Fix] **Windows async startup** — Ludus range deploys wait 120 seconds for every Windows async task, including Start Sysprep, via `ANSIBLE_WIN_ASYNC_STARTUP_TIMEOUT` on the Ludus service. The static-IP task still sets the same value on itself. The service restarts to pick up the env only when no range is deploying. A dead guest waits 120 seconds before that startup fails.
 - [Fix] **Windows sysprep** — Before a range deploy, LUX removes `Microsoft.NET.Native.Framework.2.2` when that package is installed, then reboots that VM, so generalize is not asked to remove it during shutdown. A Windows VM without the package is left alone. A Ludus update extracts a fresh play; the next deploy writes the edit again.
 - [Fix] **Blueprint install** — A required role counts as installed when this account's Ansible page lists that name, the directory name, or the one installed role that uses that directory. Deploy writes that listed name into the config before Ludus checks it, and if Ludus still rejects the blueprint name it tries the directory name. Install Ansible dependencies installs a role the blueprint install call leaves out. A successful report that only covers other roles no longer counts as the whole set.
 - [Fix] **Dashboard range state** — Persisted range fields come from PocketBase and live VMs come from Ludus. A missing field stays unset instead of becoming NEVER DEPLOYED, 0, or false. A loading or failed poll shows a loading or error state with a retry, not "No VMs deployed yet", and a short VM snapshot is merged for at most two polls so stale rows cannot accumulate. Auth failures show the error, and the stat cards show "Unavailable" instead of an invented state or VM count.
@@ -55,6 +56,10 @@ Each bullet uses a single tag:
 - [Perf] **Admin ownership fan-out** — The admin slow path joins the bulk range and user payloads locally, fetches details only for ranges still unowned, and runs at most six detail lookups at a time. Failed or skipped lookups are reported as partial data with a Retry action that bypasses the server cache.
 - [Perf] **Server caches** — In-process prefetch caches are capped and drop entries that stayed stale far past their TTL. Changing one range refreshes that range in the acting user's scope. A change without a range ID still refreshes the scope-wide range data.
 - [Perf] **Docker image build** — The Alpine upgrade runs before the app is copied, and the dependency install commits `node_modules` once. Rebuilding after a source change no longer downloads the Alpine index again or snapshots that tree for each extra install. A cold build is still mostly the Next.js webpack compile.
+
+**CI**
+
+- [Add] **Security checklist** — GitHub and GitLab test each item on the security checklist and tick that box on the pull request or merge request when the check passes. The live box stays open until `scripts/ci/live-security.sh` passes for that commit.
 
 ## [1.5.3] - 2026-11-05
 

@@ -76,8 +76,17 @@ post_status() {
 
 finish() {
   local code=$?
-  if [[ $code -eq 0 ]]; then post_status success "Live security suite passed"
-  else post_status failed "Live security suite failed"; fi
+  if [[ $code -eq 0 ]]; then
+    post_status success "Live security suite passed"
+    if [[ -z "$dirty" ]]; then
+      node scripts/ci/security-checklist.mjs mark-live pass || echo "Could not tick the live checklist item" >&2
+    fi
+  else
+    post_status failed "Live security suite failed"
+    if [[ -z "$dirty" ]]; then
+      node scripts/ci/security-checklist.mjs mark-live fail || echo "Could not update the live checklist item" >&2
+    fi
+  fi
   if declare -F lux_gate_cleanup >/dev/null; then lux_gate_cleanup; fi
   exit $code
 }

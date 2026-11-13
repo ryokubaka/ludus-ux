@@ -3,7 +3,7 @@ import "server-only"
 import { sshExec, sshExecAccount } from "@/lib/goad/goad-ssh"
 import { loadLuxHostScriptText, bundledLuxHostSha256 } from "@/lib/lux/lux-host-install"
 import { ensureLuxHostCurrent } from "@/lib/lux/lux-host-sync"
-import { applyLudusAnsibleSpeedups } from "@/lib/ludus/ludus-ansible-speedups"
+import { applyLudusAnsibleSpeedups, applyLudusWinAsyncTimeout } from "@/lib/ludus/ludus-ansible-speedups"
 import { getSettings } from "@/lib/settings/settings-store"
 import { mapWithConcurrency } from "@/lib/core/concurrency"
 import { TtlCache } from "@/lib/core/server-cache"
@@ -261,6 +261,8 @@ export async function ensureAdwsWait(playbookStamp = "unstamped"): Promise<HostP
  * reads ansible_win_async_startup_timeout. Several guests at once miss the
  * wait, the failure is ignored, and the netsh path runs only for legacy
  * Windows. Give the task 120 seconds, and run that fallback when it failed.
+ * Start Sysprep and the other Windows async tasks take that wait from the
+ * Ludus service environment, not from this task.
  */
 export async function ensureWindowsStaticIp(playbookStamp = "unstamped"): Promise<HostPlaybookPatch> {
   return applyHostPatch("patch-windows-static-ip", "windows-static-ip", playbookStamp)
@@ -347,6 +349,18 @@ export async function ensureRangeDeployHostPatches(
   }
   if (!routerClone.ok) {
     warnings.push(`Router clone edit skipped (${routerClone.error}). Deploy is continuing.`)
+  }
+  try {
+    const timeout = await applyLudusWinAsyncTimeout()
+    if (!timeout.ok) {
+      warnings.push(
+        `Windows async startup timeout skipped (${timeout.detail ?? "failed"}). Deploy is continuing.`,
+      )
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn(`[win-async-timeout] ${detail}`)
+    warnings.push(`Windows async startup timeout skipped (${detail}). Deploy is continuing.`)
   }
   try {
     const speedups = await applyLudusAnsibleSpeedups(getSettings().ludusAnsibleSpeedups)

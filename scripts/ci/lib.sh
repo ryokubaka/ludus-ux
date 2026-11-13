@@ -31,14 +31,19 @@ lux_npm_install() {
 
 # Base commit for "changes in this PR/MR". Empty on a push to main or locally.
 lux_diff_base() {
+  local base=""
   if [[ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]]; then
-    printf '%s' "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+    base="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
   elif [[ -n "${GITHUB_BASE_REF:-}" ]]; then
     git fetch --quiet --depth=200 origin "$GITHUB_BASE_REF" 2>/dev/null || true
-    git merge-base HEAD "origin/$GITHUB_BASE_REF" 2>/dev/null || true
+    base="$(git merge-base HEAD "origin/$GITHUB_BASE_REF" 2>/dev/null || true)"
   elif [[ -n "${LUX_CI_DIFF_BASE:-}" ]]; then
-    printf '%s' "$LUX_CI_DIFF_BASE"
+    base="$LUX_CI_DIFF_BASE"
   fi
+  if [[ -n "$base" ]] && ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+    git fetch --quiet --depth=200 origin "$base" 2>/dev/null || true
+  fi
+  printf '%s' "$base"
 }
 
 lux_have() {

@@ -71,6 +71,11 @@ export function revalidateAfterLudusProxyMutation(
   if (path.startsWith("/blueprints")) {
     revalidateLudusResource("blueprints")
     revalidateLudusScopeResource(scopeTag, "blueprints")
+    // Applying a blueprint writes that range's config. Other blueprint writes do not.
+    if (/^\/blueprints\/[^/]+\/apply$/.test(path)) {
+      revalidateRangeCaches(scopeTag, rangeId)
+      invalidateInProcessLudusCachesAfterMutation(apiKey)
+    }
     return
   }
 

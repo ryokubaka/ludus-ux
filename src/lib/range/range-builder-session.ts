@@ -4,6 +4,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import { toast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/ui/api"
 import { goadSidecarSyncBody } from "@/lib/ludus/ludus-extensions-config"
+import { canonicalRangeYaml } from "@/lib/range/range-builder-document"
 import { queryKeys } from "@/lib/ui/query-keys"
 
 export interface RangeBuilderDraft {
@@ -32,6 +33,20 @@ export function rememberRangeBuilderDraft(key: string, yaml: string, baseline: s
 
 export function clearRangeBuilderDraft(key: string): void {
   drafts.delete(key)
+}
+
+/**
+ * A draft stays only while the saved file is still the copy it was edited against.
+ * A blueprint apply changes that file, so the draft must not be drawn in its place.
+ */
+export function draftAppliesToSaved(draft: RangeBuilderDraft | null, savedCanonical: string): boolean {
+  if (!draft) return false
+  try {
+    if (canonicalRangeYaml(draft.baseline) !== savedCanonical) return false
+    return canonicalRangeYaml(draft.yaml) !== savedCanonical
+  } catch {
+    return false
+  }
 }
 
 /** Drop a draft only when it is the snapshot that just saved. Newer edits stay. */

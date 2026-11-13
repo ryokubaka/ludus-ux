@@ -6,6 +6,7 @@ import {
   rewriteRoleNameInConfig,
   roleSpellingsToTry,
 } from "@/lib/blueprints/blueprint-dependencies"
+import { canonicalRangeYaml } from "@/lib/range/range-builder-document"
 import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
 
 function isHttp404(error: string | undefined): boolean {
@@ -13,10 +14,54 @@ function isHttp404(error: string | undefined): boolean {
   return /HTTP 404\b/i.test(error) || /\b404 Not Found\b/i.test(error)
 }
 
+export function readLudusConfigYaml(data: unknown): string {
+  if (typeof data === "string") return data
+  if (!data || typeof data !== "object") return ""
+  const result = (data as { result?: unknown }).result
+  return typeof result === "string" ? result : ""
+}
+
 function extractConfigYaml(data: unknown): string {
-  const raw = data as { result?: string } | string | null | undefined
-  if (typeof raw === "string") return raw
-  return raw?.result ?? ""
+  return readLudusConfigYaml(data)
+}
+
+export type BlueprintCanvasYamlSource = "range" | "blueprint" | "unchanged"
+
+/**
+ * YAML the builder should draw after a blueprint apply.
+ * A range config that changed wins (role-name rewrites stay).
+ * When the range file is unchanged, the blueprint config is the picture.
+ */
+export function pickBlueprintCanvasYaml(
+  previousCanonical: string | null,
+  rangeYaml: string,
+  blueprintYaml: string,
+): { yaml: string; canonical: string; source: BlueprintCanvasYamlSource } {
+  const rangeCanonical = canonicalOrEmpty(rangeYaml)
+  const blueprintCanonical = canonicalOrEmpty(blueprintYaml)
+  if (rangeCanonical && rangeCanonical !== previousCanonical) {
+    return { yaml: rangeYaml.trim(), canonical: rangeCanonical, source: "range" }
+  }
+  if (blueprintCanonical && blueprintCanonical !== rangeCanonical) {
+    return { yaml: blueprintYaml.trim(), canonical: blueprintCanonical, source: "blueprint" }
+  }
+  if (rangeCanonical) {
+    return { yaml: rangeYaml.trim(), canonical: rangeCanonical, source: "unchanged" }
+  }
+  if (blueprintCanonical) {
+    return { yaml: blueprintYaml.trim(), canonical: blueprintCanonical, source: "blueprint" }
+  }
+  return { yaml: "", canonical: "", source: "unchanged" }
+}
+
+function canonicalOrEmpty(yaml: string): string {
+  const trimmed = yaml.trim()
+  if (!trimmed) return ""
+  try {
+    return canonicalRangeYaml(trimmed)
+  } catch {
+    return ""
+  }
 }
 
 export type BlueprintApplyMethod = "apply" | "config"

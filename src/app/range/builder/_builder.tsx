@@ -31,7 +31,7 @@ import { useRange } from "@/lib/range/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ludusApi } from "@/lib/ui/api"
-import { applyBlueprintToRange } from "@/lib/blueprints/blueprint-apply"
+import { applyBlueprintToRange, pickBlueprintCanvasYaml, readLudusConfigYaml } from "@/lib/blueprints/blueprint-apply"
 import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
 import { installedBlueprintMatchesSource, mapRegisteredSources, registeredSourceLabel, sourcesQueryRows } from "@/lib/sources/registered-ludus-sources"
 import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/sources/source-catalog-client"
@@ -39,8 +39,10 @@ import { postSourceInstall } from "@/lib/sources/source-install-client"
 import { blueprintPaletteFromSources } from "@/components/range/builder/builder-blueprints"
 import { extractArray, cn } from "@/lib/core/utils"
 import { inferOS } from "@/lib/range/range-vm-wizard"
+import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
 import {
   clearRangeBuilderDraft,
+  draftAppliesToSaved,
   rangeBuilderDraftKey,
   rangeBuilderSaveInFlight,
   readRangeBuilderDraft,
@@ -370,9 +372,8 @@ export function RangeBuilderPageClient() {
     const saved = canonicalRangeYaml(yaml)
     const draftKey = rangeBuilderDraftKey(scopeTag, rangeId)
     const draft = readRangeBuilderDraft(draftKey)
-    const draftIsEdit = draft != null && canonicalRangeYaml(draft.yaml) !== saved
-    if (draft && !draftIsEdit) clearRangeBuilderDraft(draftKey)
-    if (draftIsEdit && draft) {
+    // A draft is the previous file. A blueprint apply replaces that file, so the draft is not the diagram.
+    if (draftAppliesToSaved(draft, saved) && draft) {
       if (
         loadedRangeRef.current === rangeId &&
         appliedConfigRef.current === draft.yaml &&
@@ -389,6 +390,7 @@ export function RangeBuilderPageClient() {
       setAppliedRangeId(rangeId)
       return
     }
+    if (draft) clearRangeBuilderDraft(draftKey)
     if (loadedRangeRef.current === rangeId && baselineRef.current === saved) {
       setAppliedRangeId(rangeId)
       return
@@ -662,8 +664,39 @@ export function RangeBuilderPageClient() {
                 toast({ variant: "destructive", title: "Blueprint not loaded", description: res.error })
                 return
               }
+              const [rangeRes, blueprintRes] = await Promise.all([
+                ludusApi.getRangeConfig(selectedRangeId),
+                ludusApi.getBlueprintConfig(applyId),
+              ])
+              const rangeYaml = rangeRes.error ? "" : readLudusConfigYaml(rangeRes.data)
+              const blueprintYaml = blueprintRes.error
+                ? ""
+                : substituteRangeIdInConfig(readLudusConfigYaml(blueprintRes.data), selectedRangeId)
+              const picked = pickBlueprintCanvasYaml(baselineRef.current, rangeYaml, blueprintYaml)
+              if (picked.source === "blueprint") {
+                const uploaded = await ludusApi.setRangeConfig(picked.yaml, selectedRangeId, true)
+                if (uploaded.error) {
+                  toast({ variant: "destructive", title: "Blueprint not loaded", description: uploaded.error })
+                  return
+                }
+              }
+              // Drop the draft before the config query updates, or the canvas keeps the old diagram.
+              clearRangeBuilderDraft(rangeBuilderDraftKey(scopeTag, selectedRangeId))
               await queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId) })
               await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag) })
+              if (picked.canonical) {
+                queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), {
+                  rangeId: selectedRangeId,
+                  yaml: picked.yaml,
+                })
+              }
+              if (picked.source !== "unchanged") {
+                layoutOpsRef.current = []
+                layoutRef.current = {}
+                layoutHydratedRef.current = true
+                setLayout({})
+                persistLayout(selectedRangeId, {})
+              }
               setResetNonce((n) => n + 1)
               toast({ title: "Blueprint loaded", description: "Review the diagram, then deploy." })
             } catch (err) {
@@ -679,7 +712,7 @@ export function RangeBuilderPageClient() {
         },
       )
     },
-    [confirm, isGoad, queryClient, scopeTag, selectedRangeId, toast],
+    [confirm, isGoad, persistLayout, queryClient, scopeTag, selectedRangeId, toast],
   )
 
   const apply = useCallback((fn: (d: RangeDocument) => RangeDocument) => {

@@ -438,6 +438,23 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     setVmOffsets({})
   }, [resetNonce])
 
+  // A blueprint load replaces the nodes. Fit after that rebuild, not on the first paint.
+  const fitAfterReset = useRef(0)
+  useEffect(() => {
+    if (resetNonce === 0) return
+    fitAfterReset.current = resetNonce
+  }, [resetNonce])
+  useEffect(() => {
+    if (fitAfterReset.current === 0 || fitAfterReset.current !== resetNonce) return
+    if (nodes.length === 0) return
+    const token = resetNonce
+    const timer = window.setTimeout(() => {
+      void fitView({ duration: 200, padding: 0.2 })
+      if (fitAfterReset.current === token) fitAfterReset.current = 0
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [fitView, nodes, resetNonce])
+
   // Relative offsets from one grouping do not apply to the other.
   useEffect(() => {
     setVmOffsets({})

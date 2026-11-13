@@ -48,6 +48,16 @@ describe("revalidateAfterLudusProxyMutation", () => {
     revalidateAfterLudusProxyMutation("PATCH", "/blueprints/1", session)
     expect(revalidateLudusResource).toHaveBeenCalledWith("blueprints")
     expect(revalidateLudusScopeResource).toHaveBeenCalledWith("alice|self", "blueprints")
+    expect(revalidateTag).not.toHaveBeenCalled()
+  })
+
+  it("busts that range's config cache when a blueprint is applied", () => {
+    revalidateAfterLudusProxyMutation("POST", "/blueprints/goad/apply", session, "alice-RANGE-1234")
+    expect(revalidateLudusResource).toHaveBeenCalledWith("blueprints")
+    expect(revalidateTag).toHaveBeenCalledWith(
+      ludusRangeIdCacheTag("alice|self", "rangeConfig", "alice-RANGE-1234"),
+      "max",
+    )
   })
 
   it("revalidates templates on DELETE /templates/…", () => {

@@ -43,21 +43,49 @@ function isPosition(value: unknown): value is NodePosition {
   return Number.isFinite(v.x) && Number.isFinite(v.y)
 }
 
-function sanitizeLayout(value: unknown): RangeBuilderLayout {
-  const out: RangeBuilderLayout = {}
-  if (!value || typeof value !== "object") return out
-  for (const [key, pos] of Object.entries(value as Record<string, unknown>)) {
-    if (!key || !isPosition(pos)) continue
+const MAX_LAYOUT_NODES = 2000
+const MAX_NODE_ID_LENGTH = 512
+
+/** A node id may be stored. `__proto__`, `constructor`, and `prototype` are not names we will create. */
+function layoutNodeId(raw: string): string | null {
+  const id = raw.trim()
+  if (id.length < 1 || id.length > MAX_NODE_ID_LENGTH) return null
+  if (id === "__proto__" || id === "constructor" || id === "prototype") return null
+  return id
+}
+
+/**
+ * Copy positions without using the caller's string as a property name.
+ * `obj[key] =` would let a saved id such as `__proto__` replace the object's prototype.
+ * The id is only placed into the result by parsing JSON we just serialized.
+ */
+export function sanitizeRangeBuilderLayout(value: unknown): RangeBuilderLayout {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const parts: string[] = []
+  const seen = new Set<string>()
+  for (const [raw, pos] of Object.entries(value as Record<string, unknown>)) {
+    if (parts.length >= MAX_LAYOUT_NODES) break
+    const id = layoutNodeId(raw)
+    if (!id || seen.has(id) || !isPosition(pos)) continue
+    seen.add(id)
     const width = typeof pos.width === "number" && pos.width > 0 ? pos.width : undefined
     const height = typeof pos.height === "number" && pos.height > 0 ? pos.height : undefined
-    out[key] = {
+    const clean: NodePosition = {
       x: pos.x,
       y: pos.y,
       ...(width != null ? { width } : {}),
       ...(height != null ? { height } : {}),
     }
+    parts.push(`${JSON.stringify(id)}:${JSON.stringify(clean)}`)
   }
-  return out
+  if (parts.length === 0) return {}
+  try {
+    const parsed: unknown = JSON.parse(`{${parts.join(",")}}`)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+    return parsed as RangeBuilderLayout
+  } catch {
+    return {}
+  }
 }
 
 export function getRangeBuilderLayout(rangeId: string, username: string): RangeBuilderLayout {
@@ -70,7 +98,7 @@ export function getRangeBuilderLayout(rangeId: string, username: string): RangeB
     .get(rid, user) as { layout?: string } | undefined
   if (!row?.layout) return {}
   try {
-    return sanitizeLayout(JSON.parse(row.layout))
+    return sanitizeRangeBuilderLayout(JSON.parse(row.layout))
   } catch {
     return {}
   }
@@ -85,7 +113,7 @@ export function saveRangeBuilderLayout(
   const user = username.trim().toLowerCase()
   if (!rid || !user) return
   ensureTable()
-  const clean = sanitizeLayout(layout)
+  const clean = sanitizeRangeBuilderLayout(layout)
   getDb()
     .prepare(
       `INSERT INTO range_builder_layouts (range_id, username, layout, updated_at)

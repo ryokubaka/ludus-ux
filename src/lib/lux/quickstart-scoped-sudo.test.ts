@@ -58,13 +58,31 @@ esac
 if [[ "\${FAKE_APPLY}" == "1" && "$cmd" == "bash -c "* ]]; then
   unshare --user --map-root-user --mount bash -c '
     set -euo pipefail
+    # Ubuntu 26.04 points visudo through /etc/alternatives. The tmpfs below
+    # hides that link. Copy the real binary first. Prefer GNU visudo
+    # (visudo.ws): the sudoers file is for the Ludus host, which uses it.
+    visudo_bin=""
+    if [[ -x /usr/bin/visudo.ws ]]; then
+      visudo_bin=/usr/bin/visudo.ws
+    elif command -v visudo >/dev/null 2>&1; then
+      visudo_bin="$(command -v visudo)"
+    elif [[ -x /usr/sbin/visudo ]]; then
+      visudo_bin=/usr/sbin/visudo
+    fi
+    if [[ -n "$visudo_bin" ]]; then
+      visudo_bin="$(readlink -f "$visudo_bin")"
+    fi
     mount -t tmpfs tmpfs /etc
     mkdir -p /etc/sudoers.d
-    echo 'root:x:0:0:root:/root:/bin/bash' > /etc/passwd
-    echo 'root:x:0:' > /etc/group
+    printf "%s\n" "root:x:0:0:root:/root:/bin/bash" > /etc/passwd
+    printf "%s\n" "root:x:0:" > /etc/group
     mount -t tmpfs tmpfs /usr/local
     mkdir -p /usr/local/sbin
-    export PATH="/usr/sbin:/usr/bin:/bin"
+    if [[ -n "$visudo_bin" ]]; then
+      cp "$visudo_bin" /usr/local/sbin/visudo
+      chmod 755 /usr/local/sbin/visudo
+    fi
+    export PATH="/usr/local/sbin:/usr/sbin:/usr/bin:/bin"
     eval "$1"
     cat /etc/lux-host.update-key
   ' bash "$cmd" > ${JSON.stringify(posixPath(keyFile))}

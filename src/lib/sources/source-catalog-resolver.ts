@@ -122,6 +122,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 const catalogInflight = new Map<string, Promise<LudusSourceCatalog | null>>()
 
 function sourceCatalogShared(apiKey: string, sourceID: string): Promise<LudusSourceCatalog | null> {
+  // codeql[js/insufficient-password-hash] cache partition, not a stored password
   const cacheKey = `${createHash("sha256").update(apiKey).digest("hex")}\n${sourceID}`
   const pending = catalogInflight.get(cacheKey)
   if (pending) return pending

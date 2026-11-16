@@ -202,6 +202,7 @@ const SOURCE_LIST_TTL_MS = 30_000
 const sourceListCache = new Map<string, { at: number; rows: LudusSourceRow[] }>()
 
 function sourceListCacheKey(apiKey: string): string {
+  // codeql[js/insufficient-password-hash] cache partition, not a stored password
   return createHash("sha256").update(apiKey).digest("hex")
 }
 

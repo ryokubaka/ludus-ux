@@ -47,6 +47,18 @@ describe("CodeQL in-source suppressions", () => {
     expect([...idsCoveringLine(docker, options)]).toContain("js/file-access-to-http")
   })
 
+  it("covers the source-list and catalog cache keys", () => {
+    const list = sourceLines("src/lib/sources/ludus-source-client.ts")
+    const listHash = list.findIndex((line) => line.includes('createHash("sha256").update(apiKey)'))
+    expect(listHash).toBeGreaterThan(0)
+    expect([...idsCoveringLine(list, listHash + 1)]).toContain("js/insufficient-password-hash")
+
+    const catalog = sourceLines("src/lib/sources/source-catalog-resolver.ts")
+    const catalogHash = catalog.findIndex((line) => line.includes('createHash("sha256").update(apiKey)'))
+    expect(catalogHash).toBeGreaterThan(0)
+    expect([...idsCoveringLine(catalog, catalogHash + 1)]).toContain("js/insufficient-password-hash")
+  })
+
   it("stops at an ordinary comment, so a marker above that comment does not cover the code", () => {
     const lines = [
       "  // codeql[js/disabling-certificate-validation]",

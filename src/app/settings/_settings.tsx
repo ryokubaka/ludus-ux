@@ -10,8 +10,6 @@ import { Switch } from "@/components/ui/switch"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ReleasePager } from "@/components/settings/release-pager"
-import { RELEASE_PAGE_SIZE, releasePageIndex, releasePageSlice } from "@/components/settings/release-page"
 import {
   Dialog,
   DialogContent,
@@ -35,28 +33,15 @@ import {
   Trash2,
   RefreshCw,
   Save,
-  ChevronRight,
-  BookOpen,
-  Search,
-  X,
-  Plus,
-  Bug,
-  Minus,
-  ArrowRightLeft,
   ShieldAlert,
-  OctagonAlert,
-  Zap,
   Copy,
 } from "lucide-react"
-import type { LucideProps } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ludusApi } from "@/lib/ui/api"
 import { APP_VERSION, APP_VERSION_LABEL } from "@/lib/core/changelog"
 import { LudusReleasesPanel } from "@/components/settings/ludus-releases-panel"
 import { LuxReleasesPanel } from "@/components/settings/lux-releases-panel"
 import { SshHostKeysPanel } from "@/components/settings/ssh-host-keys-panel"
-import { cn } from "@/lib/core/utils"
-import { statusBadge } from "@/lib/ui/status-colors"
 import { useResolvedSession } from "@/hooks/use-resolved-session"
 import { useQuery } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/ui/query-keys"
@@ -97,49 +82,6 @@ interface SessionInfo {
   isAdmin: boolean
 }
 
-// ── Changelog parsing ──────────────────────────────────────────────────────
-
-type TagMeta = { label: string; className: string; Icon: React.FC<LucideProps> }
-
-const TAG_META: Record<string, TagMeta> = {
-  add:      { label: "Add",      Icon: Plus,           className: statusBadge("success") },
-  fix:      { label: "Fix",      Icon: Bug,            className: statusBadge("info") },
-  improve:  { label: "Enhance",  Icon: Zap,            className: statusBadge("warning") },
-  perf:     { label: "Perf",     Icon: Zap,            className: `${statusBadge("info")} border-primary/30 text-primary` },
-  security: { label: "Security", Icon: ShieldAlert,    className: statusBadge("error") },
-  remove:   { label: "Remove",   Icon: Minus,          className: statusBadge("aborted") },
-  breaking: { label: "Breaking", Icon: OctagonAlert,  className: statusBadge("error") },
-  docs:     { label: "Docs",     Icon: BookOpen,       className: statusBadge("neutral") },
-}
-
-/** Order for quick-filter chips (only tags present in the changelog are shown). */
-const TAG_FILTER_ORDER = [
-  "add",
-  "improve",
-  "fix",
-  "security",
-  "perf",
-  "docs",
-  "remove",
-  "breaking",
-] as const
-
-interface ParsedEntry {
-  tag: string
-  text: string
-}
-
-interface ParsedGroup {
-  name: string | null  // null = ungrouped (no **Header**)
-  entries: ParsedEntry[]
-}
-
-interface ParsedVersion {
-  title: string
-  date: string
-  groups: ParsedGroup[]
-}
-
 function isGitHubRepoUrl(repoUrl: string): boolean {
   try {
     const host = new URL(repoUrl).hostname.toLowerCase()
@@ -147,395 +89,6 @@ function isGitHubRepoUrl(repoUrl: string): boolean {
   } catch {
     return false
   }
-}
-
-function parseChangelog(md: string): ParsedVersion[] {
-  // Normalize newlines so `$`-anchored bullet regex matches (CRLF leaves `\r`
-  // on split lines; `.` does not match `\r`, so the match fails → 0 entries).
-  const text = md.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n")
-  const lines = text.split("\n")
-  const versions: ParsedVersion[] = []
-  let current: ParsedVersion | null = null
-  let currentGroup: ParsedGroup | null = null
-
-  for (const line of lines) {
-    if (line.startsWith("## ")) {
-      if (current) versions.push(current)
-      const title = line.replace(/^## /, "").trim()
-      const dateMatch = title.match(/(\d{4}-\d{2}-\d{2})/)
-      current = { title, date: dateMatch?.[1] ?? "", groups: [] }
-      currentGroup = null
-      continue
-    }
-    if (!current) continue
-    // **Group header** e.g. **LUX** or **GOAD**
-    const groupMatch = /^\*\*(.+?)\*\*$/.exec(line.trim())
-    if (groupMatch) {
-      currentGroup = { name: groupMatch[1], entries: [] }
-      current.groups.push(currentGroup)
-      continue
-    }
-    // - [Tag] Description  OR  - **[Tag]** description (markdown-bold tag)
-    const m = line.match(/^-\s+\*{0,2}\[([^\]]+)\]\*{0,2}\s+(.+)$/)
-    if (m) {
-      if (!currentGroup) {
-        currentGroup = { name: null, entries: [] }
-        current.groups.push(currentGroup)
-      }
-      currentGroup.entries.push({ tag: m[1].toLowerCase(), text: m[2].trim() })
-    }
-  }
-  if (current) versions.push(current)
-  return versions
-}
-
-function allEntries(v: ParsedVersion): ParsedEntry[] {
-  return v.groups.flatMap((g) => g.entries)
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function entryMatchesQuery(
-  entry: ParsedEntry,
-  groupName: string | null,
-  version: ParsedVersion,
-  q: string,
-): boolean {
-  const meta = TAG_META[entry.tag]
-  const haystacks = [
-    entry.text,
-    entry.tag,
-    meta?.label ?? "",
-    groupName ?? "",
-    version.title,
-    version.date,
-  ]
-  return haystacks.some((h) => h.toLowerCase().includes(q))
-}
-
-function filterChangelogByTag(versions: ParsedVersion[], tag: string | null): ParsedVersion[] {
-  if (!tag) return versions
-  const out: ParsedVersion[] = []
-  for (const v of versions) {
-    const groups: ParsedGroup[] = []
-    for (const g of v.groups) {
-      const entries = g.entries.filter((e) => e.tag === tag)
-      if (entries.length > 0) groups.push({ ...g, entries })
-    }
-    if (groups.length > 0) out.push({ ...v, groups })
-  }
-  return out
-}
-
-function changelogTagCounts(versions: ParsedVersion[]): Record<string, number> {
-  const acc: Record<string, number> = {}
-  for (const v of versions) {
-    for (const e of allEntries(v)) {
-      acc[e.tag] = (acc[e.tag] ?? 0) + 1
-    }
-  }
-  return acc
-}
-
-function filterChangelogVersions(versions: ParsedVersion[], query: string): ParsedVersion[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return versions
-
-  const out: ParsedVersion[] = []
-  for (const v of versions) {
-    const titleMatch = v.title.toLowerCase().includes(q) || v.date.toLowerCase().includes(q)
-    if (titleMatch) {
-      out.push(v)
-      continue
-    }
-
-    const groups: ParsedGroup[] = []
-    for (const g of v.groups) {
-      const groupNameMatch = (g.name ?? "").toLowerCase().includes(q)
-      const entries = groupNameMatch
-        ? g.entries
-        : g.entries.filter((e) => entryMatchesQuery(e, g.name, v, q))
-      if (entries.length > 0) groups.push({ ...g, entries })
-    }
-    if (groups.length > 0) out.push({ ...v, groups })
-  }
-  return out
-}
-
-function countFilteredEntries(versions: ParsedVersion[]): number {
-  return versions.reduce((s, v) => s + allEntries(v).length, 0)
-}
-
-function renderPlainWithHighlight(text: string, query: string, keyPrefix: string) {
-  const q = query.trim()
-  if (!q) return <>{text}</>
-  const re = new RegExp(`(${escapeRegExp(q)})`, "gi")
-  const parts = text.split(re)
-  const qLower = q.toLowerCase()
-  return (
-    <>
-      {parts.map((part, i) =>
-        part && part.toLowerCase() === qLower ? (
-          <mark key={`${keyPrefix}-${i}`} className="bg-primary/25 text-foreground rounded-sm px-0.5">
-            {part}
-          </mark>
-        ) : (
-          <span key={`${keyPrefix}-${i}`}>{part}</span>
-        ),
-      )}
-    </>
-  )
-}
-
-function renderInline(text: string, highlightQuery = "") {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/)
-  return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**"))
-      return (
-        <strong key={i} className="font-medium text-foreground">
-          {highlightQuery ? renderPlainWithHighlight(part.slice(2, -2), highlightQuery, `b-${i}`) : part.slice(2, -2)}
-        </strong>
-      )
-    if (part.startsWith("`") && part.endsWith("`"))
-      return (
-        <code key={i} className="text-primary text-[11px] bg-muted px-1 py-0.5 rounded">
-          {highlightQuery ? renderPlainWithHighlight(part.slice(1, -1), highlightQuery, `c-${i}`) : part.slice(1, -1)}
-        </code>
-      )
-    const lm = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
-    if (lm)
-      return (
-        <a key={i} href={lm[2]} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2 hover:text-primary/80">
-          {highlightQuery ? renderPlainWithHighlight(lm[1], highlightQuery, `l-${i}`) : lm[1]}
-        </a>
-      )
-    return highlightQuery ? (
-      <span key={i}>{renderPlainWithHighlight(part, highlightQuery, `t-${i}`)}</span>
-    ) : (
-      <span key={i}>{part}</span>
-    )
-  })
-}
-
-// ── Release notes section ──────────────────────────────────────────────────
-
-function ReleaseNotes() {
-  const [raw, setRaw] = useState<string | null>(null)
-  const [error, setError] = useState(false)
-  const [expanded, setExpanded] = useState<Record<number, boolean>>({ 0: true })
-  const [searchQuery, setSearchQuery] = useState("")
-  const [tagFilter, setTagFilter] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
-
-  useEffect(() => {
-    fetch("/api/changelog")
-      .then((r) => { if (!r.ok) throw new Error(); return r.text() })
-      .then(setRaw)
-      .catch(() => setError(true))
-  }, [])
-
-  const versions = useMemo(() => (raw ? parseChangelog(raw) : []), [raw])
-  const tagCountsAll = useMemo(() => changelogTagCounts(versions), [versions])
-  const filteredVersions = useMemo(() => {
-    let v = filterChangelogByTag(versions, tagFilter)
-    v = filterChangelogVersions(v, searchQuery)
-    return v
-  }, [versions, tagFilter, searchQuery])
-  const searchActive = searchQuery.trim().length > 0
-  const filterActive = searchActive || tagFilter != null
-  const matchCount = countFilteredEntries(filteredVersions)
-
-  useEffect(() => {
-    setPage(0)
-  }, [searchQuery, tagFilter])
-
-  useEffect(() => {
-    if (!filterActive) return
-    setExpanded(Object.fromEntries(filteredVersions.map((_, i) => [i, true])))
-  }, [filterActive, filteredVersions])
-
-  if (error) return <p className="text-sm text-destructive py-4 text-center">Could not load changelog.</p>
-  if (!raw) return (
-    <div className="flex items-center justify-center py-8 text-muted-foreground gap-2">
-      <Loader2 className="h-4 w-4 animate-spin" />
-      <span className="text-sm">Loading…</span>
-    </div>
-  )
-
-  const GROUP_COLORS: Record<string, string> = {
-    LUX:  "text-primary border-primary/40 bg-primary/10",
-    GOAD: "text-status-aborted border-orange-400/40 bg-orange-400/10",
-  }
-
-  const hl = searchQuery.trim()
-
-  return (
-    <div className="space-y-3">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-        <Input
-          type="text"
-          role="searchbox"
-          placeholder="Search release notes…"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="h-8 pl-8 pr-8 text-sm"
-          aria-label="Search release notes"
-        />
-        {searchQuery && (
-          <button
-            type="button"
-            onClick={() => setSearchQuery("")}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            aria-label="Clear search"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by change type">
-        <button
-          type="button"
-          onClick={() => setTagFilter(null)}
-          className={cn(
-            "text-[10px] font-medium px-2 py-0.5 rounded border transition-colors",
-            tagFilter === null
-              ? "border-primary/50 bg-primary/10 text-primary"
-              : "border-border text-muted-foreground hover:border-primary/30 hover:text-foreground",
-          )}
-        >
-          All
-        </button>
-        {TAG_FILTER_ORDER.map((tag) => {
-          const count = tagCountsAll[tag]
-          const meta = TAG_META[tag]
-          if (!count || !meta) return null
-          const selected = tagFilter === tag
-          return (
-            <button
-              key={tag}
-              type="button"
-              onClick={() => setTagFilter(selected ? null : tag)}
-              aria-pressed={selected}
-              className={cn(
-                "inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border transition-colors",
-                selected ? "ring-1 ring-primary/40" : "opacity-80 hover:opacity-100",
-                meta.className,
-              )}
-            >
-              <meta.Icon className="h-2.5 w-2.5" />
-              {meta.label}
-              <span className="opacity-70">{count}</span>
-            </button>
-          )
-        })}
-      </div>
-      {filterActive && (
-        <p className="text-xs text-muted-foreground">
-          {matchCount === 0
-            ? "No matching changes."
-            : `${matchCount} change${matchCount === 1 ? "" : "s"} in ${filteredVersions.length} version${filteredVersions.length === 1 ? "" : "s"}`}
-        </p>
-      )}
-      {filterActive && matchCount === 0 ? null : (
-    <div className="divide-y divide-border/40">
-      {releasePageSlice(filteredVersions, page).map((v, localIndex) => {
-        const vi = releasePageIndex(filteredVersions.length, page) * RELEASE_PAGE_SIZE + localIndex
-        const isOpen = filterActive || !!expanded[vi]
-        const entries = allEntries(v)
-        const tagCounts = entries.reduce<Record<string, number>>((acc, e) => {
-          acc[e.tag] = (acc[e.tag] ?? 0) + 1
-          return acc
-        }, {})
-        const hasGroups = v.groups.some((g) => g.name !== null)
-        return (
-          <div key={vi} className={vi === 0 ? "pb-3" : "py-3"}>
-            <button
-              type="button"
-              onClick={() => setExpanded((p) => ({ ...p, [vi]: !p[vi] }))}
-              className="w-full flex items-center gap-2 text-left py-1 hover:text-primary transition-colors group"
-              aria-expanded={isOpen}
-            >
-              <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground/60 transition-transform shrink-0 ${isOpen ? "rotate-90" : ""}`} />
-              <span className="text-sm font-semibold text-foreground group-hover:text-primary flex-1">
-                {hl ? renderPlainWithHighlight(v.title, hl, `title-${vi}`) : v.title}
-              </span>
-              <span className="text-xs text-muted-foreground/50 font-mono shrink-0">{entries.length} changes</span>
-              {vi === 0 && <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">Latest</Badge>}
-            </button>
-            {isOpen && (
-              <div className="mt-2 pl-5 space-y-1.5">
-                {/* Tag summary pills */}
-                <div className="flex flex-wrap gap-1 mb-3">
-                  {Object.entries(tagCounts).map(([tag, count]) => {
-                    const meta = TAG_META[tag]
-                    if (!meta) return null
-                    return (
-                      <span key={tag} className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border ${meta.className}`}>
-                        <meta.Icon className="h-2.5 w-2.5" />
-                        {meta.label} {count}
-                      </span>
-                    )
-                  })}
-                </div>
-                {/* Entries — grouped under LUX / GOAD labels when present */}
-                {hasGroups ? (
-                  <div className="space-y-3">
-                    {v.groups.map((group, gi) => (
-                      <div key={gi}>
-                        {group.name && (
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border tracking-wide ${GROUP_COLORS[group.name] ?? "text-muted-foreground border-border bg-muted"}`}>
-                              {group.name}
-                            </span>
-                            <div className="flex-1 h-px bg-border/40" />
-                          </div>
-                        )}
-                        <div className="space-y-1.5">
-                          {group.entries.map((entry, ei) => {
-                            const meta: TagMeta = TAG_META[entry.tag] ?? { label: entry.tag, Icon: ArrowRightLeft, className: "bg-muted text-muted-foreground border-border" }
-                            return (
-                              <div key={ei} className="flex items-start gap-2 text-xs">
-                                <span className={`inline-flex items-center gap-1 shrink-0 mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border leading-none ${meta.className}`}>
-                                  <meta.Icon className="h-2.5 w-2.5" />
-                                  {meta.label}
-                                </span>
-                                <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text, hl)}</span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {entries.map((entry, ei) => {
-                      const meta: TagMeta = TAG_META[entry.tag] ?? { label: entry.tag, Icon: ArrowRightLeft, className: "bg-muted text-muted-foreground border-border" }
-                      return (
-                        <div key={ei} className="flex items-start gap-2 text-xs">
-                          <span className={`inline-flex items-center gap-1 shrink-0 mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border leading-none ${meta.className}`}>
-                            <meta.Icon className="h-2.5 w-2.5" />
-                            {meta.label}
-                          </span>
-                          <span className="text-muted-foreground leading-relaxed">{renderInline(entry.text, hl)}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
-      )}
-      <ReleasePager page={page} count={filteredVersions.length} onPage={setPage} label="LUX release notes" />
-    </div>
-  )
 }
 
 // ── About tab ─────────────────────────────────────────────────────────────
@@ -557,7 +110,7 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
     <div className="space-y-4">
       <div className="grid gap-x-6 lg:grid-cols-2">
         <LudusReleasesPanel isAdmin={isAdmin} />
-        <div className="grid gap-4 lg:row-span-4 lg:[grid-template-rows:subgrid]">
+        <div className="grid gap-4 lg:row-span-3 lg:[grid-template-rows:subgrid]">
           <div className="flex h-full flex-wrap items-center gap-4 rounded-lg border border-border bg-card px-4 py-3">
             <div className="h-12 w-12 shrink-0 rounded-lg overflow-hidden border border-border/50">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -600,14 +153,6 @@ function AboutTab({ isAdmin }: { isAdmin: boolean }) {
             </div>
           </div>
           <LuxReleasesPanel isAdmin={isAdmin} />
-          <div className="flex h-full flex-col rounded-lg border border-border bg-card">
-            <div className="px-4 py-3 border-b border-border/50">
-              <span className="text-sm font-medium">Release notes</span>
-            </div>
-            <div className="px-4 py-3">
-              <ReleaseNotes />
-            </div>
-          </div>
         </div>
       </div>
     </div>

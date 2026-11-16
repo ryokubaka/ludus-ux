@@ -17,6 +17,19 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 
 ---
 
+## Unreleased
+
+**LUX**
+
+- [Fix] **Live security** — `scripts/ci/live-security.sh` prints each step, including the wait for the LUX under test, and stops if that host does not answer.
+
+## [1.6.2] - 2026-11-16
+
+**LUX**
+
+- [Fix] **Ludus upgrade** — Settings → About downloads that version's server package, checks it against the published `ludus-server` checksum, and installs it.
+- [Improve] **About releases** — Ludus and LUX each list a release and its notes together. The version this install is running stays in release order, open, and marked, including a LUX build that has no remote tag yet. Clicking a release row opens and closes its notes. Older releases stay closed until you open them. The upgrade log opens under the version, stays until it is closed, follows the latest line, and Expand makes it larger.
+
 ## [1.6.1] - 2026-11-16
 
 **LUX**

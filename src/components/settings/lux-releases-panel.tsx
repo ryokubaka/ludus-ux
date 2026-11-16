@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, ExternalLink, Loader2, RefreshCw } from "lucide-react"
+import { AlertTriangle, ChevronRight, ExternalLink, Loader2, RefreshCw } from "lucide-react"
+import { ChangelogNoteFilters, ChangelogVersionBody, useChangelogNotes } from "@/components/settings/changelog-notes"
+import { ReleaseRow } from "@/components/settings/release-row"
+import { InstalledReleaseMark, VersionLog } from "@/components/settings/version-log"
 import { VersionStatusCard, type VersionStatusState } from "@/components/settings/version-status-card"
 import { ReleasePager } from "@/components/settings/release-pager"
 import { releasePageSlice } from "@/components/settings/release-page"
@@ -19,9 +22,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/core/utils"
 import {
   LUX_VERSION_MANAGEMENT_SINCE,
+  isLuxReleaseTag,
   luxUpgradeFailureFromLog,
+  placeRunningLuxRelease,
   type LuxRelease,
   type LuxVersionRelation,
 } from "@/lib/lux/lux-version"
@@ -70,6 +76,9 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   const [switchingTag, setSwitchingTag] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<string | null>(null)
   const [logTail, setLogTail] = useState("")
+  const [logOpen, setLogOpen] = useState(false)
+  const [openNotes, setOpenNotes] = useState<Record<string, boolean>>({})
+  const notes = useChangelogNotes()
 
   const loadReleases = useCallback(async (refresh = false) => {
     const url = refresh ? "/api/lux/releases?refresh=1" : "/api/lux/releases"
@@ -104,6 +113,10 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
       cancelled = true
     }
   }, [loadReleases])
+
+  useEffect(() => {
+    setReleasePage(0)
+  }, [notes.searchQuery, notes.tagFilter])
 
   useEffect(() => {
     if (!isAdmin) return
@@ -196,6 +209,12 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
   }, [switchingTag])
 
   const latest = releases?.releases.find((r) => r.tag === releases.latestStable) ?? null
+  const pinned = releases ? placeRunningLuxRelease(releases.releases, releases.current) : []
+  const runningTag = releases && isLuxReleaseTag(`v${bareVersion(releases.current)}`) ? `v${bareVersion(releases.current)}` : ""
+  const shown = pinned.filter((release) => {
+    if (!notes.filterActive) return true
+    return notes.byVersion.has(bareVersion(release.tag))
+  })
   const canAct = isAdmin && !!host?.canSwitch && !switchingTag && !starting
   const status: VersionStatusState = switchingTag
     ? "working"
@@ -231,6 +250,8 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
         setSwitchError(body.error || "Could not start the version switch.")
         return
       }
+      setLogTail("")
+      setLogOpen(true)
       setSwitchingTag(pending.tag)
       setPending(null)
     } catch {
@@ -264,6 +285,7 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
         }
       />
       <div className="flex h-full flex-col rounded-lg border border-border bg-card">
+        {logOpen && <VersionLog text={logTail} label="Version log" onClose={() => setLogOpen(false)} />}
         {(loadError || releases?.error || switchError) && (
           <p className="px-4 pt-3 text-xs text-destructive">{switchError || loadError || releases?.error}</p>
         )}
@@ -307,6 +329,10 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
           </Button>
           {hostLoading && isAdmin && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
         </div>
+        <ChangelogNoteFilters notes={notes} />
+        {notes.error && (
+          <p className="px-4 pt-3 text-xs text-destructive">Could not load changelog.</p>
+        )}
         <div className="divide-y divide-border/40">
           {!releases && !loadError && (
             <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
@@ -314,63 +340,81 @@ export function LuxReleasesPanel({ isAdmin }: { isAdmin: boolean }) {
               <span className="text-sm">Checking this install&apos;s git remote…</span>
             </div>
           )}
-          {releases && releases.releases.length === 0 && (
-            <p className="px-4 py-6 text-sm text-muted-foreground text-center">No published releases found.</p>
+          {releases && pinned.length === 0 && (
+            <p className="px-4 py-6 text-center text-sm text-muted-foreground">No published releases found.</p>
           )}
-          {releasePageSlice(releases?.releases ?? [], releasePage).map((release) => (
-            <div key={release.tag} className="flex items-center gap-3 px-4 py-2">
-              <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="font-mono text-sm">{release.tag}</span>
-                {release.relation === "current" && <Badge variant="secondary">Current</Badge>}
+          {releases && pinned.length > 0 && shown.length === 0 && (
+            <p className="px-4 py-6 text-center text-sm text-muted-foreground">No matching changes.</p>
+          )}
+          {releasePageSlice(shown, releasePage).map((release) => {
+            const version = notes.byVersion.get(bareVersion(release.tag))
+            const installed = release.tag === runningTag
+            const isOpen = openNotes[release.tag] ?? (notes.filterActive || installed)
+            const when = release.publishedAt || version?.date || ""
+            return (
+              <ReleaseRow
+                key={release.tag}
+                installed={installed}
+                open={isOpen}
+                onToggle={() => setOpenNotes((prev) => ({ ...prev, [release.tag]: !isOpen }))}
+                label={`${isOpen ? "Hide" : "Show"} notes for ${release.tag}`}
+                actions={(
+                  <>
+                    {release.htmlUrl && (
+                      <Button variant="ghost" size="icon-sm" asChild>
+                        <a
+                          href={release.htmlUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          aria-label={release.unpublished ? `Branch ${release.tag}` : `Open ${release.tag}`}
+                          title={release.unpublished ? "Branch" : "Open release"}
+                        >
+                          <ExternalLink />
+                        </a>
+                      </Button>
+                    )}
+                    {isAdmin && release.relation !== "current" && (
+                      <Button
+                        size="sm"
+                        variant={release.relation === "downgrade" ? "outline" : "default"}
+                        disabled={!canAct}
+                        onClick={() => openConfirm(release)}
+                      >
+                        {relationLabel(release.relation)}
+                      </Button>
+                    )}
+                  </>
+                )}
+                notes={isOpen ? (
+                  version ? (
+                    <ChangelogVersionBody version={version} highlight={notes.searchQuery} />
+                  ) : (
+                    <p className="mt-2 pl-5 text-xs text-muted-foreground">No release notes for this version.</p>
+                  )
+                ) : null}
+              >
+                <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground/60 transition-transform", isOpen && "rotate-90")} />
+                <span className={cn("font-mono text-sm", installed && "font-medium text-primary")}>{release.tag}</span>
+                {installed && <InstalledReleaseMark />}
                 {release.unpublished && (
                   <Badge variant="outline" title="Branch with no GitHub release">
                     Unpublished
                   </Badge>
                 )}
                 {release.prerelease && <Badge variant="outline">Pre-release</Badge>}
-                {release.publishedAt && (
-                  <span className="text-xs text-muted-foreground">{release.publishedAt.slice(0, 10)}</span>
+                {when && (
+                  <span className="text-xs text-muted-foreground">{when.slice(0, 10)}</span>
                 )}
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                {release.htmlUrl && (
-                  <Button variant="ghost" size="icon-sm" asChild>
-                    <a
-                      href={release.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-label={release.unpublished ? `Branch ${release.tag}` : `Release notes for ${release.tag}`}
-                      title={release.unpublished ? "Branch" : "Release notes"}
-                    >
-                      <ExternalLink />
-                    </a>
-                  </Button>
-                )}
-                {isAdmin && release.relation !== "current" && (
-                  <Button
-                    size="sm"
-                    variant={release.relation === "downgrade" ? "outline" : "default"}
-                    disabled={!canAct}
-                    onClick={() => openConfirm(release)}
-                  >
-                    {relationLabel(release.relation)}
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
+              </ReleaseRow>
+            )
+          })}
         </div>
         <ReleasePager
           page={releasePage}
-          count={releases?.releases.length ?? 0}
+          count={shown.length}
           onPage={setReleasePage}
           label="LUX releases"
         />
-        {logTail && (switchingTag || switchError) && (
-          <pre className="mx-4 mb-4 max-h-40 overflow-auto overscroll-y-contain rounded-md border border-border bg-muted/40 p-3 text-xs leading-relaxed font-mono whitespace-pre-wrap">
-            {logTail}
-          </pre>
-        )}
         <Dialog open={!!pending} onOpenChange={(open) => { if (!open && !starting) setPending(null) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

@@ -208,7 +208,7 @@ Every upgrade and downgrade asks you to confirm first. The dialog covers the hos
 
 ### Ludus, from Settings → About
 
-The same page lists Ludus on the left. The version is the one the Ludus API reports, and the list is the [GitLab releases](https://gitlab.com/badsectorlabs/ludus/-/releases). An admin can upgrade to a newer stable release. LUX downloads that version's `ludus-server` package, checks `ludus_<version>_checksums.txt`, and runs the temp copy with `--update`. The installed binary cannot update itself. The upgrade refuses to start while Ansible or Packer is running, and while another install or upgrade is already running. The Ludus API drops until the service is back. LUX stays up, and the dashboard version refreshes on its own. This does not downgrade Ludus.
+The same page lists Ludus on the left. Each release row includes that release's notes. The version this install is running stays in release order, open, and marked. The version is the one the Ludus API reports, and the list is the [GitLab releases](https://gitlab.com/badsectorlabs/ludus/-/releases). An admin can upgrade to a newer stable release. LUX downloads `ludus-server-<version>`, checks it against the `ludus-server` line in `ludus_<version>_checksums.txt`, and runs that copy with `--update`. The installed binary cannot update itself. The upgrade refuses to start while Ansible or Packer is running, and while another install or upgrade is already running. The Ludus API drops until the service is back. LUX stays up, and the dashboard version refreshes on its own. This does not downgrade Ludus.
 
 ## Quick SSH sanity check
 

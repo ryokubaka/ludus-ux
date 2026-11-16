@@ -173,15 +173,7 @@ export function buildLuxReleasesSnapshot(
     })
   }
 
-  releases.sort((a, b) => {
-    const as = luxTagToSemver(a.tag)
-    const bs = luxTagToSemver(b.tag)
-    if (!as || !bs) return 0
-    const cmp = compareLuxSemver(bs, as)
-    if (cmp !== 0) return cmp
-    if (a.unpublished !== b.unpublished) return a.unpublished ? 1 : -1
-    return 0
-  })
+  releases.sort(byNewestRelease)
 
   const latestStable = releases.find((r) => !r.prerelease && !r.unpublished)?.tag ?? null
   const latestRel = latestStable ? luxVersionRelation(current, latestStable) : null
@@ -192,6 +184,42 @@ export function buildLuxReleasesSnapshot(
     updateAvailable: latestRel === "upgrade",
     releases,
   }
+}
+
+function byNewestRelease(a: LuxRelease, b: LuxRelease): number {
+  const as = luxTagToSemver(a.tag)
+  const bs = luxTagToSemver(b.tag)
+  if (!as || !bs) return 0
+  const cmp = compareLuxSemver(bs, as)
+  if (cmp !== 0) return cmp
+  if (a.unpublished !== b.unpublished) return a.unpublished ? 1 : -1
+  return 0
+}
+
+/**
+ * The running build keeps its place in version order, with its changelog,
+ * even when the clone remote has no tag for it yet.
+ */
+export function placeRunningLuxRelease(releases: readonly LuxRelease[], currentVersion: string): LuxRelease[] {
+  const bare = currentVersion.trim().replace(/^v/, "")
+  const tag = `v${bare}`
+  if (!isLuxReleaseTag(tag)) return [...releases]
+  const existing = releases.find((release) => release.tag === tag)
+  if (existing) {
+    return releases.map((release) => (release.tag === tag ? { ...release, relation: "current" } : release))
+  }
+  const row: LuxRelease = {
+    tag,
+    name: tag,
+    publishedAt: "",
+    htmlUrl: "",
+    notesExcerpt: "",
+    prerelease: false,
+    unpublished: false,
+    relation: "current",
+    losesVersionManagement: losesVersionManagement(tag),
+  }
+  return [...releases, row].sort(byNewestRelease)
 }
 
 export type LuxGitRemote = {

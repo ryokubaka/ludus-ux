@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildLuxReleasesSnapshot,
+  placeRunningLuxRelease,
   compareLuxSemver,
   excerptReleaseNotes,
   isLuxReleaseTag,
@@ -131,6 +132,28 @@ describe("lux-version", () => {
     expect(snap.releases[0]?.prerelease).toBe(true)
     expect(snap.releases[0]?.relation).toBe("upgrade")
     expect(snap.releases[0]?.unpublished).toBe(false)
+  })
+
+  it("puts a running build with no remote tag in version order", () => {
+    const snap = buildLuxReleasesSnapshot("1.6.2", [
+      { tag_name: "v1.6.1", draft: false, prerelease: false },
+      { tag_name: "v1.6.0", draft: false, prerelease: false },
+    ])
+    const placed = placeRunningLuxRelease(snap.releases, "1.6.2")
+    expect(placed.map((release) => release.tag)).toEqual(["v1.6.2", "v1.6.1", "v1.6.0"])
+    expect(placed[0]).toMatchObject({ relation: "current", unpublished: false, htmlUrl: "" })
+    expect(placed.filter((release) => release.tag === "v1.6.1")).toHaveLength(1)
+  })
+
+  it("leaves an older running release where that version belongs", () => {
+    const snap = buildLuxReleasesSnapshot("1.6.1", [
+      { tag_name: "v1.6.2", draft: false, prerelease: false },
+      { tag_name: "v1.6.1", draft: false, prerelease: false, html_url: "https://example.test/v1.6.1" },
+      { tag_name: "v1.6.0", draft: false, prerelease: false },
+    ])
+    const placed = placeRunningLuxRelease(snap.releases, "v1.6.1")
+    expect(placed.map((release) => release.tag)).toEqual(["v1.6.2", "v1.6.1", "v1.6.0"])
+    expect(placed[1]).toMatchObject({ relation: "current", htmlUrl: "https://example.test/v1.6.1" })
   })
 
   it("lists version branches that have no published release", () => {

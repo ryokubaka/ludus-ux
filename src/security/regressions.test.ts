@@ -211,6 +211,14 @@ const FINDINGS: Record<string, Finding> = {
       "src/security/upgrade-tag-pin.test.ts": ["verifies a tag only in a keyring that holds the trusted key"],
     },
   },
+  "source cache keys are partitions, not password hashes": {
+    source: "review",
+    tests: {
+      "src/lib/tooling/codeql-sarif-suppress.test.ts": [
+        "covers the source-list and catalog cache keys",
+      ],
+    },
+  },
   "CodeQL sinks from the v1.5.0 scan": {
     source: "review",
     tests: {

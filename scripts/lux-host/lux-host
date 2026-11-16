@@ -2055,7 +2055,9 @@ PY
     [[ $# -eq 1 ]] || die "ludus-upgrade"
     ver="$1"
     [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || die "version"
-    [[ -f /etc/systemd/system/ludus.service ]] || die "not installed"
+    # Tests point this at a stand-in unit file. The host default is the real unit.
+    unit="${LUX_LUDUS_UNIT:-/etc/systemd/system/ludus.service}"
+    [[ -f "$unit" ]] || die "not installed"
     if systemctl is-active --quiet ludus-install.service 2>/dev/null; then
       die "installing"
     fi
@@ -2067,20 +2069,21 @@ PY
     fi
     command -v systemd-run >/dev/null 2>&1 || die "systemd-run"
     command -v curl >/dev/null 2>&1 || die "curl"
-    log=/var/log/lux-ludus-upgrade.log
+    log="${LUX_LUDUS_UPGRADE_LOG:-/var/log/lux-ludus-upgrade.log}"
     : >"$log" || die "log"
-    systemctl reset-failed lux-ludus-upgrade.service >/dev/null 2>&1 || true
-    systemd-run --unit=lux-ludus-upgrade --collect \
-      --setenv="LUDUS_VERSION=$ver" \
-      --setenv=LUDUS_UPGRADE_LOG="$log" \
-      /bin/bash -c 'set -euo pipefail
-ver="${LUDUS_VERSION:-}"
-log="${LUDUS_UPGRADE_LOG:-/var/log/lux-ludus-upgrade.log}"
+    # systemd expands ${var} in ExecStart before bash runs. A script file keeps
+    # the package URL in bash, where $ver is the version argument.
+    body=$(mktemp) || die "script"
+    cat >"$body" <<'EOF'
+set -euo pipefail
+ver="${1:-}"
+log="${2:-/var/log/lux-ludus-upgrade.log}"
 exec >>"$log" 2>&1
 tmp=""
 cleanup() {
   code=$?
   if [[ -n "$tmp" ]]; then rm -rf "$tmp"; fi
+  rm -f -- "$0"
   echo "LUDUS_UPGRADE_EXIT:${code}"
 }
 trap cleanup EXIT
@@ -2092,19 +2095,28 @@ if pgrep -x ansible-playbook >/dev/null 2>&1 || pgrep -x packer >/dev/null 2>&1;
 fi
 base="https://gitlab.com/api/v4/projects/54052321/packages/generic/ludus/${ver}"
 tmp=$(mktemp -d)
-curl -fsSL "${base}/ludus-server-${ver}" -o "${tmp}/ludus-server-${ver}"
+# The package URL includes the version. The checksum file names that file ludus-server.
+curl -fsSL "${base}/ludus-server-${ver}" -o "${tmp}/ludus-server"
 curl -fsSL "${base}/ludus_${ver}_checksums.txt" -o "${tmp}/ludus_${ver}_checksums.txt"
 (
   cd "$tmp"
-  grep -F "ludus-server-${ver}" "ludus_${ver}_checksums.txt" > check.txt
-  [[ -s check.txt ]]
+  grep -E '^[[:xdigit:]]{64}[[:space:]]+\*?ludus-server$' "ludus_${ver}_checksums.txt" > check.txt || {
+    echo "checksum file has no ludus-server entry"
+    exit 1
+  }
   sha256sum -c check.txt
 )
-sig=$(od -An -t x1 -N 4 "${tmp}/ludus-server-${ver}" | tr -d " \n")
+sig=$(od -An -t x1 -N 4 "${tmp}/ludus-server" | tr -d " \n")
 [[ "$sig" == "7f454c46" ]] || { echo "download is not a Ludus server binary"; exit 4; }
-install -m 0755 "${tmp}/ludus-server-${ver}" "${tmp}/ludus-server"
+chmod 0755 "${tmp}/ludus-server"
 "${tmp}/ludus-server" --update
-'
+EOF
+    chmod 0700 "$body" || { rm -f -- "$body"; die "script"; }
+    systemctl reset-failed lux-ludus-upgrade.service >/dev/null 2>&1 || true
+    if ! systemd-run --unit=lux-ludus-upgrade --collect /bin/bash "$body" "$ver" "$log"; then
+      rm -f -- "$body"
+      die "systemd-run"
+    fi
     echo started
     ;;
   ludus-upgrade-log)

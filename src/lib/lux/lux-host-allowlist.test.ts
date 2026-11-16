@@ -111,6 +111,40 @@ describe("lux-host allowlist", () => {
     denied(["bridge-ageing", "../r4"])
   })
 
+  it("passes the Ludus version as an argument, not a systemd variable", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-ludus-up-"))
+    const unit = path.join(dir, "ludus.service")
+    const log = path.join(dir, "upgrade.log")
+    writeFileSync(unit, "")
+    const out = run(
+      ["ludus-upgrade", "2.3.10"],
+      "",
+      {
+        LUX_LUDUS_UNIT: posixPath(unit),
+        LUX_LUDUS_UPGRADE_LOG: posixPath(log),
+        TMPDIR: posixPath(dir),
+      },
+      {
+        systemctl: "#!/bin/sh\necho \"systemctl $*\" >> \"${LUX_HOST_STUB_LOG}\"\nif [ \"$1\" = is-active ]; then exit 1; fi\nexit 0\n",
+        pgrep: "#!/bin/sh\nexit 1\n",
+        // The default cat stub drops stdin, which is the upgrade script.
+        cat: "#!/bin/sh\nexec /bin/cat \"$@\"\n",
+      },
+    )
+    expect(out.status, out.stderr).toBe(0)
+    expect(out.stdout.trim()).toBe("started")
+    const started = out.log.split("\n").find((line) => line.includes("systemd-run")) ?? ""
+    expect(started).toContain("/bin/bash")
+    expect(started).toContain("2.3.10")
+    expect(started).not.toContain("LUDUS_VERSION")
+    expect(started).not.toContain("${")
+    const script = started.split(" /bin/bash ")[1]?.split(" ")[0] ?? ""
+    const body = readFileSync(script, "utf8")
+    expect(body).toContain("packages/generic/ludus/${ver}")
+    expect(body).toContain("ludus-server-${ver}")
+    expect(body).toContain("\\*?ludus-server$")
+  })
+
   it("logs, clock, and range reconcile", () => {
     expect(run(["date-epoch"]).log).toMatch(/date/)
     denied(["range-log", "read", "../so33"])

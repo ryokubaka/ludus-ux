@@ -55,7 +55,7 @@ post_status() {
     [[ "$state" == "failed" ]] && gh_state="failure"
     if [[ -n "$repo" ]]; then
       # Token on stdin, not in curl's argv.
-      printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl -fsS -o /dev/null -H @- \
+      printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" | curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null -H @- \
         -H "Accept: application/vnd.github+json" \
         -d "{\"state\":\"$gh_state\",\"context\":\"$STATUS_CONTEXT\",\"description\":\"$description\"}" \
         "https://api.github.com/repos/$repo/statuses/$sha" || echo "Could not post the GitHub status" >&2
@@ -72,7 +72,7 @@ post_status() {
       if [[ -n "${NODE_EXTRA_CA_CERTS:-}" && -f "${NODE_EXTRA_CA_CERTS}" ]]; then
         cacert=(--cacert "$NODE_EXTRA_CA_CERTS")
       fi
-      printf 'PRIVATE-TOKEN: %s\n' "$GITLAB_TOKEN" | curl -fsS -o /dev/null -H @- \
+      printf 'PRIVATE-TOKEN: %s\n' "$GITLAB_TOKEN" | curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null -H @- \
         "${cacert[@]}" \
         --data-urlencode "state=$gl_state" \
         --data-urlencode "name=$STATUS_CONTEXT" \
@@ -101,33 +101,51 @@ finish() {
   exit $code
 }
 trap finish EXIT
+lux_step "live security suite"
 post_status pending "Live security suite running"
 
 # --- Target -------------------------------------------------------------------
 wait_healthy() {
   local url="$1"
-  for _ in $(seq 1 120); do
-    curl -kfsS "$url/api/health" >/dev/null 2>&1 && return 0
-    sleep 3
+  local tries="${2:-120}"
+  lux_step "waiting for $url"
+  local i
+  for i in $(seq 1 "$tries"); do
+    if [[ "$i" == "1" ]]; then
+      if curl -kfsS --connect-timeout 3 --max-time 5 -o /dev/null "$url/api/health"; then
+        return 0
+      fi
+      echo "not answering yet" >&2
+    elif curl -kfsS --connect-timeout 3 --max-time 5 -o /dev/null "$url/api/health" 2>/dev/null; then
+      return 0
+    elif (( i % 5 == 0 )); then
+      echo "still waiting ($i/$tries)" >&2
+    fi
+    sleep 2
   done
   echo "LUX at $url did not become healthy" >&2
-  docker compose logs --no-color --tail=100 >&2 2>/dev/null || true
+  if [[ "${LUX_GATE_STARTED_STACK:-}" == "1" ]]; then
+    docker compose logs --no-color --tail=100 >&2 2>/dev/null || true
+  fi
   return 1
 }
 
 if [[ "${SECURITY_GATE_UPGRADE:-}" == "1" ]]; then
   # shellcheck source=upgrade-replay.sh
   . "$(dirname "$0")/upgrade-replay.sh"
+  LUX_GATE_STARTED_STACK=1
   lux_upgrade_replay
   export PLAYWRIGHT_BASE_URL="https://localhost"
 elif [[ -z "${PLAYWRIGHT_BASE_URL:-}" ]]; then
   test -f .env || { echo "No .env: set PLAYWRIGHT_BASE_URL, or create .env to build this checkout" >&2; exit 1; }
   lux_step "build and start this checkout"
+  LUX_GATE_STARTED_STACK=1
   docker compose up -d --build
   export PLAYWRIGHT_BASE_URL="https://localhost"
-  wait_healthy "$PLAYWRIGHT_BASE_URL"
+  wait_healthy "$PLAYWRIGHT_BASE_URL" 120
 else
-  wait_healthy "$PLAYWRIGHT_BASE_URL"
+  # The host is already supposed to be up. A short wait covers a restart.
+  wait_healthy "$PLAYWRIGHT_BASE_URL" 15
 fi
 
 # --- Checks -------------------------------------------------------------------

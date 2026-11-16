@@ -75,6 +75,11 @@ import {
   withRouterTemplateRequired,
 } from "@/lib/ludus/ludus-router-template"
 import { queryKeys } from "@/lib/ui/query-keys"
+import {
+  claimGoadBuilderDeploy,
+  readGoadBuilderDeploy,
+  type GoadBuilderDeployHandoff,
+} from "@/lib/goad/goad-builder-deploy"
 import { STALE } from "@/lib/ui/query-client"
 import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 
@@ -209,6 +214,12 @@ export function NewGoadInstancePageClient({
     staleTime: STALE.long,
   })
   const { ranges: accessibleRanges, selectRange, refreshRanges, selectedRangeId } = useRange()
+  const [autoDeploy, setAutoDeploy] = useState<GoadBuilderDeployHandoff | null>(null)
+  const [templatesLoaded, setTemplatesLoaded] = useState(false)
+  const [ansibleChecked, setAnsibleChecked] = useState(false)
+  const autoStartedRef = useRef(false)
+  const handleDeployRef = useRef<() => Promise<void>>(async () => {})
+  const ansiblePhaseRef = useRef<"idle" | "running" | "done">("idle")
   const { impersonation, impersonationHeaders } = useImpersonation()
   const shell = useShellSession()
   const [step, setStep] = useState(0)
@@ -226,6 +237,8 @@ export function NewGoadInstancePageClient({
   const [wizardVlans, setWizardVlans] = useState<number[]>([])
   const networkRulesRef = useRef(networkRules)
   networkRulesRef.current = networkRules
+  const builderRulesRef = useRef<NetworkRule[] | null>(null)
+  const builderReplacesConfigRef = useRef(false)
   const importedKeyRef = useRef("")
   const importedNamesRef = useRef<Set<string>>(new Set())
   const previewYamlRef = useRef("")
@@ -242,6 +255,7 @@ export function NewGoadInstancePageClient({
   const [generatedConfigYaml, setGeneratedConfigYaml] = useState("")
   const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
   const [configPreviewError, setConfigPreviewError] = useState<string | null>(null)
+  const [previewSettled, setPreviewSettled] = useState(false)
   const [ansibleDepsReady, setAnsibleDepsReady] = useState(true)
   const configYamlDirtyRef = useRef(false)
   const configYamlDirty = reviewConfigYaml !== generatedConfigYaml
@@ -278,6 +292,25 @@ export function NewGoadInstancePageClient({
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("rangeId")?.trim() ?? ""
     setPresetRangeId(id)
+  }, [])
+
+  // Range Builder already chose the lab and extensions. Start the same install this page runs.
+  useEffect(() => {
+    const handoff = readGoadBuilderDeploy()
+    if (!handoff) return
+    builderRulesRef.current = handoff.networkRules ?? null
+    builderReplacesConfigRef.current = handoff.replacesConfig === true
+    setSelectedLab(handoff.lab)
+    setSelectedExtensions(new Set(handoff.extensions))
+    setRangeMode("existing")
+    setSelectedExistingRange(handoff.rangeId)
+    setPresetRangeId(handoff.rangeId)
+    presetAppliedRef.current = true
+    if (selectedRangeId !== handoff.rangeId) selectRange(handoff.rangeId)
+    setStep(4)
+    setAutoDeploy(handoff)
+    // Apply once. A later range change must not jump back to review.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -353,6 +386,7 @@ export function NewGoadInstancePageClient({
         setTemplates(list)
       })
       .catch(() => {})
+      .finally(() => setTemplatesLoaded(true))
   }, [])
   const { lines, isRunning, exitCode, taskId: goadTaskId, run, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
@@ -548,9 +582,12 @@ export function NewGoadInstancePageClient({
   const applyPreviewYaml = useCallback((preview: string, rules: NetworkRule[], existingRangeYaml: string | null) => {
     previewYamlRef.current = preview
     existingYamlRef.current = existingRangeYaml
-    const merged = mergeGoadPreviewWithNetworkRules(preview, rules, existingRangeYaml, {
-      rulesAreComplete: importedKeyRef.current !== "",
-    })
+    const merged = mergeGoadPreviewWithNetworkRules(
+      preview,
+      rules,
+      builderReplacesConfigRef.current ? null : existingRangeYaml,
+      { rulesAreComplete: builderReplacesConfigRef.current || importedKeyRef.current !== "" },
+    )
     setGeneratedConfigYaml(merged)
     if (!configYamlDirtyRef.current) {
       setReviewConfigYaml(merged)
@@ -570,6 +607,7 @@ export function NewGoadInstancePageClient({
         body: JSON.stringify({
           lab: selectedLab,
           extensions: Array.from(selectedExtensions),
+          ...(rangeMode === "existing" && selectedExistingRange ? { rangeId: selectedExistingRange } : {}),
         }),
       })
       const data = (await res.json()) as { yaml?: string; error?: string }
@@ -582,13 +620,24 @@ export function NewGoadInstancePageClient({
       }
       const preview = data.yaml ?? ""
       const importKey = `${selectedLab}|${Array.from(selectedExtensions).sort().join(",")}|${rangeMode}|${selectedExistingRange}`
+      const seeded = builderRulesRef.current
       let rules = networkRulesRef.current
       if (importedKeyRef.current !== importKey) {
-        const importedBefore = importedNamesRef.current
-        const userKept = rules.filter((rule) => !rule.name.trim() || !importedBefore.has(rule.name.trim()))
-        const imported = combineWizardNetworkRules(existingRangeYaml, preview, [])
-        rules = combineWizardNetworkRules(existingRangeYaml, preview, userKept)
-        importedNamesRef.current = new Set(imported.map((rule) => rule.name.trim()).filter(Boolean))
+        if (builderReplacesConfigRef.current) {
+          rules = seeded ?? extractNetworkRules(preview, { fileOrder: true })
+          builderRulesRef.current = null
+          importedNamesRef.current = new Set(rules.map((rule) => rule.name.trim()).filter(Boolean))
+        } else if (seeded) {
+          rules = seeded
+          builderRulesRef.current = null
+          importedNamesRef.current = new Set(seeded.map((rule) => rule.name.trim()).filter(Boolean))
+        } else {
+          const importedBefore = importedNamesRef.current
+          const userKept = rules.filter((rule) => !rule.name.trim() || !importedBefore.has(rule.name.trim()))
+          const imported = combineWizardNetworkRules(existingRangeYaml, preview, [])
+          rules = combineWizardNetworkRules(existingRangeYaml, preview, userKept)
+          importedNamesRef.current = new Set(imported.map((rule) => rule.name.trim()).filter(Boolean))
+        }
         importedKeyRef.current = importKey
         setNetworkRules(rules)
       }
@@ -599,6 +648,7 @@ export function NewGoadInstancePageClient({
     } finally {
       setConfigPreviewLoading(false)
       setNetworkRulesLoading(false)
+      setPreviewSettled(true)
     }
   }, [selectedLab, selectedExtensions, rangeMode, selectedExistingRange, applyPreviewYaml])
 
@@ -1080,6 +1130,88 @@ export function NewGoadInstancePageClient({
     }
   }
 
+  handleDeployRef.current = handleDeploy
+
+  const onAnsibleReady = useCallback((ready: boolean) => {
+    setAnsibleDepsReady(ready)
+    if (!ready && ansiblePhaseRef.current === "idle") {
+      ansiblePhaseRef.current = "running"
+      return
+    }
+    if (ansiblePhaseRef.current === "running") {
+      ansiblePhaseRef.current = "done"
+      setAnsibleChecked(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!autoDeploy || autoStartedRef.current) return
+    if (step !== 4) {
+      autoStartedRef.current = true
+      claimGoadBuilderDeploy(autoDeploy.nonce)
+      setAutoDeploy(null)
+      return
+    }
+    if (catalogLoading) return
+    const labKnown = catalog?.labs.some((lab) => lab.name === autoDeploy.lab) === true
+    if (catalogError || (catalog != null && !labKnown)) {
+      autoStartedRef.current = true
+      claimGoadBuilderDeploy(autoDeploy.nonce)
+      setAutoDeploy(null)
+      setStep(0)
+      toast({
+        title: "Review the lab before deploying",
+        description: "That lab is not available. Pick one here, then deploy.",
+      })
+      return
+    }
+    if (!templatesLoaded || configPreviewLoading || !previewSettled) return
+    const previewReady = !configPreviewError && yamlValidation.valid && reviewConfigYaml.trim().length > 0
+    const selectionReady =
+      selectedLab === autoDeploy.lab &&
+      rangeMode === "existing" &&
+      selectedExistingRange === autoDeploy.rangeId
+    if (!selectionReady) return
+    const giveUp = !previewReady || !routerTemplateReady || (ansibleChecked && !ansibleDepsReady)
+    if (giveUp) {
+      autoStartedRef.current = true
+      claimGoadBuilderDeploy(autoDeploy.nonce)
+      setAutoDeploy(null)
+      toast({
+        title: "Review the lab before deploying",
+        description: "A template, Ansible role, or the generated configuration still needs attention.",
+      })
+      return
+    }
+    if (!ansibleChecked || !labKnown) return
+    if (!claimGoadBuilderDeploy(autoDeploy.nonce)) {
+      autoStartedRef.current = true
+      setAutoDeploy(null)
+      return
+    }
+    autoStartedRef.current = true
+    void handleDeployRef.current()
+  }, [
+    ansibleChecked,
+    ansibleDepsReady,
+    autoDeploy,
+    catalog,
+    catalogError,
+    catalogLoading,
+    configPreviewError,
+    configPreviewLoading,
+    previewSettled,
+    rangeMode,
+    reviewConfigYaml,
+    routerTemplateReady,
+    selectedExistingRange,
+    selectedLab,
+    step,
+    templatesLoaded,
+    toast,
+    yamlValidation.valid,
+  ])
+
   const handleStop = async () => {
     await stop()
     stopRangeStreaming()
@@ -1153,6 +1285,15 @@ export function NewGoadInstancePageClient({
           </div>
         ))}
       </div>
+
+      {autoDeploy && !showTerminal && (
+        <Alert>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <AlertDescription className="text-xs">
+            Starting {autoDeploy.lab} in <code className="font-mono">{autoDeploy.rangeId}</code>. This opens the lab deployment page.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Catalog error / not configured */}
       {catalogError && (
@@ -1672,7 +1813,7 @@ export function NewGoadInstancePageClient({
           <GoadAnsibleDependenciesPanel
             configYaml={reviewConfigYaml}
             enabled={!configPreviewLoading && !configPreviewError && !!reviewConfigYaml.trim()}
-            onReadyChange={setAnsibleDepsReady}
+            onReadyChange={onAnsibleReady}
           />
 
           {/* Template readiness summary */}
@@ -1751,6 +1892,7 @@ export function NewGoadInstancePageClient({
             <Button
               onClick={handleDeploy}
               disabled={
+                autoDeploy != null ||
                 isRunning ||
                 creatingRange ||
                 clearingRange ||

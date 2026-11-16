@@ -4,7 +4,9 @@ import {
   requirementsFromExtensionRoleRefs,
   extensionAnsibleDepsReady,
   extensionAnsibleState,
+  coerceAnsibleInstalledSets,
   parseAnsibleInstalledSets,
+  serializableAnsibleInstalled,
   withInstalling,
   withoutInstalling,
 } from "@/lib/goad/goad-dependency-service"
@@ -73,6 +75,18 @@ describe("extensionAnsibleState", () => {
     expect(
       extensionAnsibleState({ requiredRoles: ["geerlingguy.docker"] }, installed),
     ).toBe("ready")
+  })
+
+  it("does not crash when a reloaded cache restored the sets as plain objects", () => {
+    const restored = { roles: {}, collections: {} }
+    expect(coerceAnsibleInstalledSets(restored)).toBeNull()
+    expect(extensionAnsibleState({ requiredRoles: ["geerlingguy.docker"] }, restored as never)).toBe("unknown")
+    const saved = serializableAnsibleInstalled(
+      parseAnsibleInstalledSets([{ name: "geerlingguy.docker", type: "role", version: "" }]),
+    )
+    const again = coerceAnsibleInstalledSets(JSON.parse(JSON.stringify(saved)))
+    expect(again?.roles.has("geerlingguy.docker")).toBe(true)
+    expect(extensionAnsibleState({ requiredRoles: ["geerlingguy.docker"] }, again)).toBe("ready")
   })
 })
 

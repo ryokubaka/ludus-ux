@@ -106,6 +106,12 @@ export const queryKeys = {
   goadDomainMap: (scopeTag: string, lab: string, extensions: string) =>
     sc(scopeTag, ["goad", "domain-map", lab, extensions]),
   goadDomainCatalog: (scopeTag: string) => sc(scopeTag, ["goad", "domain-catalog"]),
+  goadCatalog: (scopeTag: string) => sc(scopeTag, ["goad", "catalog"]),
+  /** Rendered Ludus config for a lab the range builder is previewing. */
+  goadBuilderPreview: (scopeTag: string, rangeId: string, lab: string, extensions: string) =>
+    sc(scopeTag, ["goad", "builder-preview", rangeId, lab, extensions]),
+  /** Ansible inventory for the range builder's GOAD lab picker. Kept off the Ansible page cache. */
+  goadBuilderAnsible: (scopeTag: string) => sc(scopeTag, ["goad", "builder-ansible"]),
   goadTasks: () => ["goad", "tasks"] as const,
   /** Dashboard: poll tasks for one GOAD instance. */
   goadTasksForInstance: (scopeTag: string, instanceId: string) =>

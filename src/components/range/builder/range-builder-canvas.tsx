@@ -42,10 +42,12 @@ import type { RangeBuilderLayout } from "@/lib/range/range-builder-layout-store"
 import { builderNodeTypes } from "./builder-nodes"
 import { bindBuilderEdgeActivate, builderEdgeTypes } from "./builder-edge"
 import { FirewallRuleDialog } from "./firewall-rule-dialog"
+import { firewallRuleEnds } from "./firewall-rule-ends"
 import { domainVlanFromNodeId, hostDropTarget, type DropRect } from "./builder-move"
 import { laneKey, linkHandles, trustAcronym, trustLabel, trustLinks, type DiagramBox } from "./builder-routing"
 import { RangeBuilderInspector } from "./range-builder-inspector"
 import { RangeBuilderPalette } from "./range-builder-palette"
+import type { GoadLabPick } from "./goad-lab-picker"
 import {
   PALETTE_DND_MIME,
   type PaletteDragPayload,
@@ -122,6 +124,12 @@ export interface RangeBuilderCanvasProps {
   /** Extension VMs drawn before deploy. */
   pendingVmIds?: ReadonlySet<string>
   hasLudusSources: boolean
+  /** Labs and extensions for a range that is not a GOAD lab yet. */
+  goadPick: GoadLabPick | null
+  /** Changes when the diagram should be fitted again, such as a new GOAD lab. */
+  fitToken: string
+  /** Covers the diagram, not the palette, while the first GOAD picture is loading. */
+  diagramCover: string | null
 }
 
 function absoluteRect(nodes: readonly BuilderNode[], node: BuilderNode): DropRect {
@@ -394,6 +402,9 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     onLoadBlueprint,
     blueprintBusyId,
     hasLudusSources,
+    goadPick,
+    fitToken,
+    diagramCover,
   } = props
 
   const { screenToFlowPosition, getIntersectingNodes, getNodes, fitView } = useReactFlow()
@@ -417,7 +428,7 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const kindRef = useRef(kind)
 
-  const externalDefault = graph.networkDefaults.external_default
+  const externalDefault = graph.networkDefaults?.external_default
   const firewallBlocksInternet = externalDefault === "REJECT" || externalDefault === "DROP"
   const internet: InternetState | null = !statusLoaded
     ? firewallBlocksInternet
@@ -466,6 +477,28 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     const timer = setTimeout(() => fitView({ duration: 200 }), 60)
     return () => clearTimeout(timer)
   }, [kind, fitView])
+
+  // A new lab or extension set arrives after the nodes rebuild. Fit that picture.
+  const fitTokenSeen = useRef<string | undefined>(undefined)
+  const pendingFit = useRef<string | null>(null)
+  useEffect(() => {
+    if (fitTokenSeen.current === undefined) {
+      fitTokenSeen.current = fitToken
+      return
+    }
+    if (fitTokenSeen.current === fitToken) return
+    fitTokenSeen.current = fitToken
+    pendingFit.current = fitToken
+  }, [fitToken])
+  useEffect(() => {
+    if (pendingFit.current == null || nodes.length === 0) return
+    const token = pendingFit.current
+    const timer = window.setTimeout(() => {
+      void fitView({ duration: 200, padding: 0.2 })
+      if (pendingFit.current === token) pendingFit.current = null
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [fitToken, fitView, nodes])
 
   // Hide the first paint until the boxes have been measured and the view has been fitted.
   useEffect(() => {
@@ -786,9 +819,6 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
       route += 1
       return { type: "smoothstep" as const, pathOptions: { offset, borderRadius: 8 } }
     }
-    const resolveEndpoint = (value: VlanValue): string | null =>
-      typeof value === "number" ? vlanNodeId(value) : vlanEndpointNodeId(value)
-
     for (const vlan of graph.vlans) {
       const target = vlanNodeId(vlan.vlan)
       if (!nodeIds.has(target)) continue
@@ -838,20 +868,23 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     const paired = new Set<number>()
     graph.rules.forEach((rule, index) => {
       if (paired.has(index)) return
-      const src = resolveEndpoint(rule.vlan_src)
-      const dst = resolveEndpoint(rule.vlan_dst)
-      if (!src || !dst) return
-      if (!nodeIds.has(src) || !nodeIds.has(dst)) return
+      const ends = firewallRuleEnds(rule, graph.vms)
+      if (!ends || !nodeIds.has(ends.source) || !nodeIds.has(ends.target)) return
       const mirror = firewallMirrorIndex(graph.rules, index)
-      const bidirectional = mirror !== -1 && !paired.has(mirror)
+      const mirrorEnds = mirror === -1 ? null : firewallRuleEnds(graph.rules[mirror], graph.vms)
+      const bidirectional =
+        mirrorEnds != null &&
+        !paired.has(mirror) &&
+        mirrorEnds.source === ends.target &&
+        mirrorEnds.target === ends.source
       if (bidirectional) paired.add(mirror)
       const color = actionColor(rule.action)
-      const lane = takeLane(src, dst)
+      const lane = takeLane(ends.source, ends.target)
       builtEdges.push({
         id: bidirectional ? `fw:${index}+${mirror}` : `fw:${index}`,
         type: "corridor",
-        source: src,
-        target: dst,
+        source: ends.source,
+        target: ends.target,
         sourceHandle: lane.sourceHandle,
         targetHandle: lane.targetHandle,
         label: rule.name || `${rule.protocol}/${rule.ports}`,
@@ -861,7 +894,7 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
           mirrorIndex: bidirectional ? mirror : undefined,
           lane: lane.lane,
           shortLabel: rule.name ? `${rule.protocol}/${rule.ports}` : rule.action.slice(0, 3).toUpperCase(),
-          obstacles: obstaclesFor(src, dst),
+          obstacles: obstaclesFor(ends.source, ends.target),
         },
         markerEnd: { type: MarkerType.ArrowClosed, color },
         markerStart: bidirectional ? { type: MarkerType.ArrowClosed, color } : undefined,
@@ -1469,6 +1502,7 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
         selection={selection}
         onLoadBlueprint={onLoadBlueprint}
         onFocus={focus}
+        goadPick={goadPick}
       />
       <div ref={wrapperRef} className="relative min-w-0 flex-1" onDrop={onDrop} onDragOver={onDragOver}>
         <ReactFlow
@@ -1563,6 +1597,12 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
             </Panel>
           )}
         </ReactFlow>
+        {diagramCover && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-card px-6 text-center" role="status">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">{diagramCover}</p>
+          </div>
+        )}
       </div>
       </div>
       {!presented && (

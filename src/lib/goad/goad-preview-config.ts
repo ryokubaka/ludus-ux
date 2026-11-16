@@ -68,6 +68,11 @@ export function mergeGoadPreviewWithNetworkRules(
   return injectNetworkRules(yamlText, rules)
 }
 
+/** True when two rule lists would write the same configuration. */
+export function sameNetworkRules(a: readonly NetworkRule[], b: readonly NetworkRule[]): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 export function validateGoadConfigYaml(yamlText: string): { valid: boolean; error?: string } {
   if (!yamlText.trim()) {
     return { valid: false, error: "Configuration YAML is empty" }

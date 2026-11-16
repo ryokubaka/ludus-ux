@@ -27,11 +27,18 @@ import { STALE } from "@/lib/ui/query-client"
 import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { useImpersonation } from "@/lib/session/impersonation-context"
 import { addPlannedExtensionVms, overlayGoadDomains, pickGoadDirectory, type GoadDirectory, type NamedGoadDirectory } from "@/lib/goad/goad-domain-map"
+import { graphForGoadPreview } from "@/lib/goad/goad-preview-graph"
+import { mergeGoadPreviewWithNetworkRules, sameNetworkRules } from "@/lib/goad/goad-preview-config"
+import {
+  coerceAnsibleInstalledSets,
+  parseAnsibleInstalledSets,
+  serializableAnsibleInstalled,
+} from "@/lib/goad/goad-dependency-service"
 import { useRange } from "@/lib/range/range-context"
 import { useToast } from "@/hooks/use-toast"
 import { useConfirm } from "@/hooks/use-confirm"
 import { ludusApi } from "@/lib/ui/api"
-import { applyBlueprintToRange, pickBlueprintCanvasYaml, readLudusConfigYaml } from "@/lib/blueprints/blueprint-apply"
+import { applyBlueprintNetwork, applyBlueprintToRange, pickBlueprintCanvasYaml, readLudusConfigYaml } from "@/lib/blueprints/blueprint-apply"
 import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
 import { installedBlueprintMatchesSource, mapRegisteredSources, registeredSourceLabel, sourcesQueryRows } from "@/lib/sources/registered-ludus-sources"
 import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/sources/source-catalog-client"
@@ -55,13 +62,16 @@ import {
   serializeRangeDocument,
   canonicalRangeYaml,
   projectGraph,
+  setNetworkRules,
   validateGraph,
   hasBlockingFindings,
   documentHasRoles,
+  type BuilderGraph,
   type RangeDocument,
 } from "@/lib/range/range-builder-document"
+import { extractNetworkRules, type NetworkRule } from "@/lib/range/network-rules"
 import type { RangeBuilderLayout } from "@/lib/range/range-builder-layout-store"
-import type { RangeObject, TemplateObject } from "@/lib/core/types"
+import type { GoadCatalog, RangeObject, TemplateObject } from "@/lib/core/types"
 import {
   ludusRouterVmNameForTemplate,
   resolveRequiredRouterTemplateFromConfig,
@@ -78,6 +88,10 @@ import type {
   TemplateRow,
 } from "@/components/range/builder/builder-types"
 import { RangeBuilderCanvas, type RangeBuilderCanvasProps } from "@/components/range/builder/range-builder-canvas"
+import { goadPickCanDeploy, type GoadPickReadiness } from "@/components/range/builder/goad-lab-choice"
+import type { GoadLabPick } from "@/components/range/builder/goad-lab-picker"
+import { writeGoadBuilderDeploy } from "@/lib/goad/goad-builder-deploy"
+import { DeployApprovalDialog } from "@/components/range/builder/deploy-approval-dialog"
 
 function LoadingRange() {
   return (
@@ -153,6 +167,18 @@ function templateRows(data: TemplateObject[] | undefined): TemplateRow[] {
     })
 }
 
+const EMPTY_PREVIEW_GRAPH: BuilderGraph = {
+  vms: [],
+  vlans: [],
+  domains: [],
+  router: { present: false, vmName: null, hostname: null, template: null, ramGb: null, cpus: null },
+  rules: [],
+  networkDefaults: {},
+  rangeDefaults: {},
+  trusts: [],
+  dependsOn: [],
+}
+
 export function RangeBuilderPageClient() {
   const { toast } = useToast()
   const { selectedRangeId, ranges, loading: rangesLoading } = useRange()
@@ -171,6 +197,21 @@ export function RangeBuilderPageClient() {
   const [blueprintBusyId, setBlueprintBusyId] = useState<string | null>(null)
   const [deployStarted, setDeployStarted] = useState(false)
   const [kindChoice, setKindChoice] = useState<BuilderKind>("ludus")
+  const [goadLabPick, setGoadLabPick] = useState<string | null>(null)
+  const [goadExtPick, setGoadExtPick] = useState<string[]>([])
+  const [previewRuleEdit, setPreviewRuleEdit] = useState<{
+    rangeId: string
+    key: string
+    rules: NetworkRule[]
+    base: NetworkRule[]
+  } | null>(null)
+  const [deployApproval, setDeployApproval] = useState<{
+    title: string
+    note: string
+    yaml: string
+    confirmLabel: string
+    run: () => void
+  } | null>(null)
   const [goadEnabled, setGoadEnabled] = useState(true)
   const [layout, setLayout] = useState<RangeBuilderLayout>({})
   const [layoutRangeId, setLayoutRangeId] = useState<string | null>(null)
@@ -198,6 +239,8 @@ export function RangeBuilderPageClient() {
     setLayoutRangeId(null)
     setDeployStarted(false)
     setKindChoice("ludus")
+    setGoadLabPick(null)
+    setGoadExtPick([])
     setDepsReady(false)
     layoutHydratedRef.current = false
     layoutOpsRef.current = []
@@ -357,6 +400,8 @@ export function RangeBuilderPageClient() {
       setOriginalYaml("")
       setDeployStarted(false)
       setKindChoice("ludus")
+      setGoadLabPick(null)
+      setGoadExtPick([])
     }
     const cached = cachedConfig as unknown
     const yaml =
@@ -540,6 +585,10 @@ export function RangeBuilderPageClient() {
   // Installed extensions only. Pending ones are already in this payload, and a new
   // query key would blank the canvas behind the loading overlay.
   const goadExtensions = [...(goadState.instance?.extensions ?? [])].sort().join(",")
+  // A selected lab is not an instance yet. Preview its machines without writing range-config.
+  const previewLab =
+    builderSurface(rangeStatus) === "composer" && !isGoad && kindChoice === "goad" ? goadLabPick : null
+  const previewExtensionKey = goadExtPick.join(",")
   const domainMapQuery = useQuery({
     queryKey: queryKeys.goadDomainMap(scopeTag, goadLab, goadExtensions),
     enabled: goadLab.length > 0,
@@ -549,6 +598,37 @@ export function RangeBuilderPageClient() {
       const res = await fetch(`/api/goad/domain-map?${params}`, { headers: impersonationHeaders() })
       if (!res.ok) throw new Error("Could not read the GOAD domain map")
       return res.json() as Promise<GoadDirectory>
+    },
+  })
+  const previewMapQuery = useQuery({
+    queryKey: queryKeys.goadDomainMap(scopeTag, previewLab ?? "", previewExtensionKey),
+    enabled: !!previewLab,
+    staleTime: STALE.long,
+    queryFn: async (): Promise<GoadDirectory> => {
+      const params = new URLSearchParams({ lab: previewLab ?? "", extensions: previewExtensionKey })
+      const res = await fetch(`/api/goad/domain-map?${params}`, { headers: impersonationHeaders() })
+      if (!res.ok) throw new Error("Could not read the GOAD domain map")
+      return res.json() as Promise<GoadDirectory>
+    },
+  })
+  const previewConfigQuery = useQuery({
+    queryKey: queryKeys.goadBuilderPreview(scopeTag, selectedRangeId ?? "", previewLab ?? "", previewExtensionKey),
+    enabled: !!previewLab && !!selectedRangeId,
+    staleTime: STALE.long,
+    queryFn: async (): Promise<string> => {
+      const res = await fetch("/api/goad/preview-config", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...impersonationHeaders() },
+        body: JSON.stringify({
+          lab: previewLab,
+          extensions: previewExtensionKey ? previewExtensionKey.split(",") : [],
+          rangeId: selectedRangeId,
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { yaml?: string; error?: string }
+      if (!res.ok) throw new Error(data.error || "Could not preview this GOAD lab")
+      return data.yaml ?? ""
     },
   })
   const needsDomainGuess = goadLab.length === 0 && graph.vms.some((vm) => vm.os === "windows" && !vm.domainFqdn)
@@ -580,10 +660,68 @@ export function RangeBuilderPageClient() {
     return addPlannedExtensionVms(graph, planned, selectedRangeId ?? "")
   }, [goadDirectory, goadState.pendingExtensions, graph, selectedRangeId])
   const pendingVmIds = useMemo(() => new Set(stagedExtensions.pendingVmIds), [stagedExtensions])
-  const displayGraph = useMemo(
+  const savedGraph = useMemo(
     () => overlayGoadDomains(stagedExtensions.graph, goadDirectory, selectedRangeId ?? ""),
     [goadDirectory, selectedRangeId, stagedExtensions.graph],
   )
+  const previewSelection = previewLab ? `${previewLab}|${previewExtensionKey}` : null
+  const previewSettled =
+    previewSelection != null &&
+    previewConfigQuery.isFetched &&
+    !previewConfigQuery.isFetching &&
+    previewMapQuery.isFetched &&
+    !previewMapQuery.isFetching
+  const previewGraph = useMemo(() => {
+    if (!previewSettled || !previewConfigQuery.isSuccess) return null
+    try {
+      return graphForGoadPreview(previewConfigQuery.data ?? "", previewMapQuery.data ?? null, selectedRangeId ?? "")
+    } catch {
+      return null
+    }
+  }, [
+    previewConfigQuery.data,
+    previewConfigQuery.isSuccess,
+    previewMapQuery.data,
+    previewSettled,
+    selectedRangeId,
+  ])
+  // Keep the last drawn lab on screen while the next lab or extension is fetched.
+  // Falling back to the saved range flashes range-config.yml between those pictures.
+  const previewHold = useRef<{ rangeId: string; key: string; graph: BuilderGraph } | null>(null)
+  const previewRulesDocRef = useRef<{ key: string; doc: RangeDocument } | null>(null)
+  if (previewHold.current && previewHold.current.rangeId !== (selectedRangeId ?? "")) previewHold.current = null
+  if (previewLab && previewGraph && previewSelection && selectedRangeId) {
+    previewHold.current = { rangeId: selectedRangeId, key: previewSelection, graph: previewGraph }
+  }
+  const heldPreview =
+    previewLab && previewHold.current?.rangeId === selectedRangeId && !previewSettled
+      ? previewHold.current.graph
+      : null
+  let ruleEdit = previewRuleEdit
+  if (ruleEdit && ruleEdit.rangeId !== (selectedRangeId ?? "")) {
+    ruleEdit = null
+    setPreviewRuleEdit(null)
+    previewRulesDocRef.current = null
+  } else if (ruleEdit && previewSelection && ruleEdit.key !== previewSelection) {
+    ruleEdit = null
+    setPreviewRuleEdit(null)
+    previewRulesDocRef.current = null
+  }
+  const heldRuleKey = previewHold.current?.rangeId === selectedRangeId ? previewHold.current.key : null
+  const previewRules =
+    ruleEdit && (ruleEdit.key === previewSelection || (!previewGraph && ruleEdit.key === heldRuleKey))
+      ? ruleEdit.rules
+      : null
+  const showingGoadPreview = previewLab != null && previewGraph != null
+  const shownPreview = previewGraph ?? heldPreview ?? EMPTY_PREVIEW_GRAPH
+  const displayGraph = !previewLab
+    ? savedGraph
+    : previewRules
+      ? { ...shownPreview, rules: previewRules }
+      : shownPreview
+  const previewFitToken = !previewLab
+    ? "range"
+    : `${displayGraph.vms.map((vm) => vm.id).join(",")}|${displayGraph.domains.map((domain) => domain.fqdn).join(",")}`
   const domainMapPending =
     goadLab.length > 0 && !domainMapQuery.isError && domainMapQuery.data == null
   const catalogPending = needsDomainGuess && !domainCatalogQuery.isError && domainCatalogQuery.data == null
@@ -607,6 +745,32 @@ export function RangeBuilderPageClient() {
   const surface = builderSurface(rangeStatus)
   const kindLocked = surface === "viewer"
   const kind: BuilderKind = isGoad ? "goad" : kindLocked ? "ludus" : kindChoice
+  const pickingGoadLab = kind === "goad" && !isGoad
+  const goadCatalogQuery = useQuery({
+    queryKey: queryKeys.goadCatalog(scopeTag),
+    enabled: pickingGoadLab,
+    staleTime: STALE.long,
+    queryFn: async () => {
+      const res = await fetch("/api/goad/catalog", {
+        headers: impersonationHeaders(),
+        credentials: "include",
+      })
+      const data = (await res.json()) as GoadCatalog & { error?: string; message?: string }
+      if (!res.ok || data.error) throw new Error(data.error || "Could not load GOAD labs")
+      if (!data.configured) throw new Error(data.message || "GOAD is not configured")
+      return data
+    },
+  })
+  const goadAnsibleQuery = useQuery({
+    queryKey: queryKeys.goadBuilderAnsible(scopeTag),
+    enabled: pickingGoadLab,
+    staleTime: STALE.long,
+    queryFn: async () => {
+      const res = await ludusApi.listAnsible()
+      if (res.error) throw new Error(res.error)
+      return serializableAnsibleInstalled(parseAnsibleInstalledSets(res.data ?? []))
+    },
+  })
   const liveVms = useMemo((): LiveVmRow[] => {
     return (rangeStatus?.VMs ?? rangeStatus?.vms ?? []).map((vm) => {
       const ip = typeof vm.ip === "string" ? vm.ip.trim() : ""
@@ -673,8 +837,18 @@ export function RangeBuilderPageClient() {
                 ? ""
                 : substituteRangeIdInConfig(readLudusConfigYaml(blueprintRes.data), selectedRangeId)
               const picked = pickBlueprintCanvasYaml(baselineRef.current, rangeYaml, blueprintYaml)
-              if (picked.source === "blueprint") {
-                const uploaded = await ludusApi.setRangeConfig(picked.yaml, selectedRangeId, true)
+              const canvasYaml = applyBlueprintNetwork(picked.yaml, blueprintYaml)
+              let canvasCanonical = ""
+              let rangeCanonical = ""
+              try {
+                canvasCanonical = canvasYaml.trim() ? canonicalRangeYaml(canvasYaml) : ""
+                rangeCanonical = rangeYaml.trim() ? canonicalRangeYaml(rangeYaml) : ""
+              } catch {
+                canvasCanonical = canvasYaml.trim()
+                rangeCanonical = rangeYaml.trim()
+              }
+              if (canvasYaml.trim() && canvasCanonical !== rangeCanonical) {
+                const uploaded = await ludusApi.setRangeConfig(canvasYaml, selectedRangeId, true)
                 if (uploaded.error) {
                   toast({ variant: "destructive", title: "Blueprint not loaded", description: uploaded.error })
                   return
@@ -684,10 +858,10 @@ export function RangeBuilderPageClient() {
               clearRangeBuilderDraft(rangeBuilderDraftKey(scopeTag, selectedRangeId))
               await queryClient.invalidateQueries({ queryKey: queryKeys.rangeConfig(scopeTag, selectedRangeId) })
               await queryClient.invalidateQueries({ queryKey: queryKeys.blueprints(scopeTag) })
-              if (picked.canonical) {
+              if (canvasCanonical) {
                 queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), {
                   rangeId: selectedRangeId,
-                  yaml: picked.yaml,
+                  yaml: canvasYaml,
                 })
               }
               if (picked.source !== "unchanged") {
@@ -858,23 +1032,208 @@ export function RangeBuilderPageClient() {
     }
   }, [persistConfig, selectedRangeId, isGoad, doc, forceLudus, goadState.instanceId, queryClient, router, scopeTag, testingEnabled, toast])
 
+  const selectGoadLab = useCallback((name: string) => {
+    setGoadLabPick(name)
+    setGoadExtPick([])
+  }, [])
+  const toggleGoadExtension = useCallback((name: string) => {
+    setGoadExtPick((prev) => (prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]))
+  }, [])
+  const applyPreviewRules = useCallback((fn: (d: RangeDocument) => RangeDocument) => {
+    if (!previewSettled || !previewSelection || !selectedRangeId) return
+    const yaml = previewConfigQuery.data ?? ""
+    if (!yaml.trim()) return
+    const docKey = `${selectedRangeId}|${previewSelection}`
+    const base = previewRulesDocRef.current?.key === docKey
+      ? previewRulesDocRef.current.doc
+      : parseRangeDocument(yaml)
+    const next = fn(base)
+    const before = projectGraph(base)
+    const after = projectGraph(next)
+    const beforeIds = before.vms.map((vm) => vm.id).join("\0")
+    const afterIds = after.vms.map((vm) => vm.id).join("\0")
+    if (beforeIds !== afterIds || sameNetworkRules(before.rules, after.rules)) return
+    previewRulesDocRef.current = { key: docKey, doc: setNetworkRules(base, after.rules) }
+    setPreviewRuleEdit((current) => ({
+      rangeId: selectedRangeId,
+      key: previewSelection,
+      rules: after.rules,
+      base: current?.rangeId === selectedRangeId && current.key === previewSelection ? current.base : before.rules,
+    }))
+  }, [previewConfigQuery.data, previewSelection, previewSettled, selectedRangeId])
+  const ignorePreviewLayout = useCallback((_patch: RangeBuilderLayout) => {}, [])
+  const ignorePreviewRetarget = useCallback((_from: string, _to: string) => {}, [])
+  const ignorePreviewCompact = useCallback((_positions: RangeBuilderLayout) => {}, [])
+  const ignorePreviewClear = useCallback((_ids: string[]) => {}, [])
+  const emptyPreviewLayout = useMemo<RangeBuilderLayout>(() => ({}), [])
+  const { refetch: refetchGoadCatalog } = goadCatalogQuery
+  const retryGoadCatalog = useCallback(() => {
+    void refetchGoadCatalog()
+  }, [refetchGoadCatalog])
+  const ansibleInstalled = useMemo(
+    () =>
+      goadAnsibleQuery.isError
+        ? { roles: new Set<string>(), collections: new Set<string>() }
+        : coerceAnsibleInstalledSets(goadAnsibleQuery.data),
+    [goadAnsibleQuery.data, goadAnsibleQuery.isError],
+  )
+  const { refetch: refetchGoadAnsible } = goadAnsibleQuery
+  useEffect(() => {
+    if (goadAnsibleQuery.data == null || ansibleInstalled) return
+    void refetchGoadAnsible()
+  }, [ansibleInstalled, goadAnsibleQuery.data, refetchGoadAnsible])
+  const goadReadiness = useMemo((): GoadPickReadiness => ({
+    builtNames,
+    allNames,
+    ludusVersion,
+    templatesLoading,
+    ansible: ansibleInstalled,
+    ansibleLoading: pickingGoadLab && (goadAnsibleQuery.isLoading || ansibleInstalled == null),
+  }), [allNames, ansibleInstalled, builtNames, goadAnsibleQuery.isLoading, ludusVersion, pickingGoadLab, templatesLoading])
+  const pickedGoadLab = goadCatalogQuery.data?.labs.find((lab) => lab.name === goadLabPick) ?? null
+  const goadDeployGate = goadPickCanDeploy({
+    lab: pickedGoadLab,
+    selectedExtensions: goadExtPick,
+    extensions: goadCatalogQuery.data?.extensions ?? [],
+    readiness: goadReadiness,
+  })
+  const goadDeployReason = !pickingGoadLab
+    ? null
+    : goadCatalogQuery.isLoading
+      ? "GOAD labs are still loading."
+      : goadCatalogQuery.isError
+        ? "Could not load GOAD labs."
+        : goadDeployGate.reason
+  const goadPick = useMemo((): GoadLabPick | null => {
+    if (!pickingGoadLab) return null
+    return {
+      labs: goadCatalogQuery.data?.labs ?? [],
+      extensions: goadCatalogQuery.data?.extensions ?? [],
+      loading: goadCatalogQuery.isLoading,
+      error: goadCatalogQuery.isError
+        ? goadCatalogQuery.error instanceof Error
+          ? goadCatalogQuery.error.message
+          : "Could not load GOAD labs"
+        : null,
+      selectedLab: goadLabPick,
+      selectedExtensions: goadExtPick,
+      readiness: goadReadiness,
+      onSelectLab: selectGoadLab,
+      onToggleExtension: toggleGoadExtension,
+      onRetry: retryGoadCatalog,
+    }
+  }, [
+    goadCatalogQuery.data,
+    goadCatalogQuery.error,
+    goadCatalogQuery.isError,
+    goadCatalogQuery.isLoading,
+    goadExtPick,
+    goadLabPick,
+    goadReadiness,
+    pickingGoadLab,
+    retryGoadCatalog,
+    selectGoadLab,
+    toggleGoadExtension,
+  ])
+
+  const openDeployApproval = useCallback((approval: {
+    title: string
+    note: string
+    yaml: string
+    confirmLabel: string
+    run: () => void
+  }) => {
+    setDeployApproval(approval)
+  }, [])
+
   const handleDeploy = useCallback(() => {
     if (deployBusy || (testingEnabled && !forceLudus)) return
-    if (isGoad && goadState.pendingExtensions.length > 0) {
-      const names = goadState.pendingExtensions.join(", ")
-      confirm(
-        `Install ${names}? Those machines stay on the canvas as pending until the deploy finishes.`,
-        () => deployPendingExtensions(),
-      )
+    if (pickingGoadLab) {
+      if (!selectedRangeId || !pickedGoadLab || goadDeployReason) return
+      const previewYaml = previewConfigQuery.data ?? ""
+      if (!previewSettled || !previewYaml.trim()) {
+        toast({
+          title: "The lab configuration is still loading",
+          description: "Wait until the canvas finishes drawing, then deploy.",
+        })
+        return
+      }
+      const catalogExtensions = goadCatalogQuery.data?.extensions ?? []
+      const names = goadExtPick.filter((name) => catalogExtensions.some((ext) => ext.name === name))
+      const goadRules = previewRules ?? extractNetworkRules(previewYaml, { fileOrder: true })
+      const yaml = mergeGoadPreviewWithNetworkRules(previewYaml, goadRules, null, { rulesAreComplete: true })
+      const leftOut = configYaml !== originalYaml
+        ? " Unsaved Ludus builder edits are left out of this configuration."
+        : ""
+      openDeployApproval({
+        title: `Deploy ${pickedGoadLab.name}`,
+        note: `This deploys the Ludus range, then applies the GOAD configuration.${leftOut}`,
+        yaml,
+        confirmLabel: "Deploy",
+        run: () => {
+          const handoff = writeGoadBuilderDeploy({
+            rangeId: selectedRangeId,
+            lab: pickedGoadLab.name,
+            extensions: names,
+            networkRules: goadRules,
+            replacesConfig: true,
+          })
+          if (!handoff) {
+            toast({
+              variant: "destructive",
+              title: "Could not start the GOAD deploy",
+              description: "The lab choice could not be saved for the deployment page.",
+            })
+            return
+          }
+          router.push(`/goad/new?rangeId=${encodeURIComponent(selectedRangeId)}`)
+        },
+      })
       return
     }
-    confirm(
-      isGoad
-        ? "Save firewall rules and deploy the network tag? Lab VMs are unchanged."
-        : "Save the range configuration and start a full deploy?",
-      doDeploy,
-    )
-  }, [confirm, deployBusy, deployPendingExtensions, doDeploy, forceLudus, goadState.pendingExtensions, isGoad, testingEnabled])
+    if (isGoad && goadState.pendingExtensions.length > 0) {
+      const names = goadState.pendingExtensions.join(", ")
+      openDeployApproval({
+        title: `Install ${names}`,
+        note: "Approve this configuration. Deploy saves it, then installs those extensions. The machines stay pending until that finishes.",
+        yaml: configYaml,
+        confirmLabel: "Deploy",
+        run: () => { void deployPendingExtensions() },
+      })
+      return
+    }
+    openDeployApproval({
+      title: isGoad ? "Deploy firewall rules" : "Deploy this range",
+      note: isGoad
+        ? "Approve this configuration. Deploy saves it and deploys the network tag. Lab VMs are unchanged."
+        : "Approve this configuration. Deploy saves it and starts a full deploy.",
+      yaml: configYaml,
+      confirmLabel: "Deploy",
+      run: () => { void doDeploy() },
+    })
+  }, [
+    configYaml,
+    deployBusy,
+    deployPendingExtensions,
+    doDeploy,
+    forceLudus,
+    goadCatalogQuery.data?.extensions,
+    goadDeployReason,
+    goadExtPick,
+    goadState.pendingExtensions,
+    isGoad,
+    openDeployApproval,
+    originalYaml,
+    pickedGoadLab,
+    pickingGoadLab,
+    previewConfigQuery.data,
+    previewRules,
+    previewSettled,
+    router,
+    selectedRangeId,
+    testingEnabled,
+    toast,
+  ])
 
   const handleReset = useCallback(() => {
     confirm("Discard unsaved changes and restore the last saved configuration?", () => {
@@ -942,6 +1301,19 @@ export function RangeBuilderPageClient() {
       <Card className="flex-shrink-0">
         <CardContent className="space-y-2 p-3">
           <ConfirmBar pending={pendingAction} onConfirm={commitConfirm} onCancel={cancelConfirm} />
+          <DeployApprovalDialog
+            open={deployApproval != null}
+            title={deployApproval?.title ?? ""}
+            note={deployApproval?.note ?? ""}
+            yaml={deployApproval?.yaml ?? ""}
+            confirmLabel={deployApproval?.confirmLabel ?? "Deploy"}
+            onCancel={() => setDeployApproval(null)}
+            onApprove={() => {
+              const run = deployApproval?.run
+              setDeployApproval(null)
+              run?.()
+            }}
+          />
           <div className="flex flex-wrap items-center gap-2">
             {(goadEnabled || isGoad) && (
               <div role="group" aria-label="Deployment type" className="flex rounded-md border border-border bg-muted/40 p-0.5">
@@ -998,12 +1370,20 @@ export function RangeBuilderPageClient() {
             </Button>
             <Button
               onClick={handleDeploy}
-              disabled={deployBusy || !!pendingAction || hasErrors || !depsReady || deployBlockedByTesting}
-              title={deployBlockedByTesting ? "Check Allow save and deploy while testing before deploying." : undefined}
-              variant={deployBusy || deployBlockedByTesting ? "secondary" : "default"}
+              disabled={
+                pickingGoadLab
+                  ? deployBusy || !!pendingAction || !!deployApproval || deployBlockedByTesting || goadDeployReason != null
+                  : deployBusy || !!pendingAction || !!deployApproval || hasErrors || !depsReady || deployBlockedByTesting
+              }
+              title={
+                deployBlockedByTesting
+                  ? "Check Allow save and deploy while testing before deploying."
+                  : goadDeployReason ?? undefined
+              }
+              variant={deployBusy || deployBlockedByTesting || (pickingGoadLab && goadDeployReason != null) ? "secondary" : "default"}
             >
               {deployBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              {deployBusy ? "Deploying…" : extensionPending ? "Deploy extension" : isGoad ? "Deploy Firewall" : "Deploy"}
+              {deployBusy ? "Deploying…" : extensionPending ? "Deploy extension" : isGoad ? "Deploy Firewall" : pickingGoadLab ? "Deploy GOAD" : "Deploy"}
             </Button>
             {(deployStarted || deployBusy) && (
               <Button asChild variant="outline">
@@ -1074,8 +1454,15 @@ export function RangeBuilderPageClient() {
             <Alert>
               <Info className="h-4 w-4" />
               <AlertDescription className="text-xs">
-                GOAD mode deploys a lab into this range. Use Deploy as GOAD on the left to pick the lab.
-                Domain boxes sit inside each subnet, the same as a Ludus range.
+                {previewConfigQuery.isError
+                  ? previewConfigQuery.error instanceof Error
+                    ? previewConfigQuery.error.message
+                    : "Could not draw this GOAD lab."
+                  : previewLab && previewConfigQuery.isFetching && !showingGoadPreview
+                    ? `Drawing ${previewLab}…`
+                    : showingGoadPreview
+                      ? `The canvas shows ${previewLab}${goadExtPick.length > 0 ? ` with ${goadExtPick.join(", ")}` : ""}. Switch to Ludus to restore this range. Deploy is what saves the lab.`
+                      : "Pick a GOAD lab and any extensions on the left. The canvas draws that lab. Deploy starts it in this range and opens its deployment page."}
               </AlertDescription>
             </Alert>
           )}
@@ -1114,19 +1501,29 @@ export function RangeBuilderPageClient() {
             <RangeBuilderCanvasMount
               doc={doc}
               graph={displayGraph}
-              apply={apply}
-              findings={findings}
+              apply={previewLab ? applyPreviewRules : apply}
+              findings={previewLab ? [] : findings}
               rangeNumber={rangeNumber}
               builtTemplates={builtTemplates}
               allTemplates={templates}
               templatesLoading={templatesLoading}
               goad={goadState.context}
               locked={isGoad}
-              layout={layout}
-              onLayoutChange={onLayoutChange}
-              onLayoutRetarget={onLayoutRetarget}
-              onLayoutCompact={onLayoutCompact}
-              onLayoutClearSizes={onLayoutClearSizes}
+              layout={previewLab ? emptyPreviewLayout : layout}
+              onLayoutChange={previewLab ? ignorePreviewLayout : onLayoutChange}
+              onLayoutRetarget={previewLab ? ignorePreviewRetarget : onLayoutRetarget}
+              onLayoutCompact={previewLab ? ignorePreviewCompact : onLayoutCompact}
+              onLayoutClearSizes={previewLab ? ignorePreviewClear : onLayoutClearSizes}
+              fitToken={previewFitToken}
+              diagramCover={
+                previewLab && !previewGraph && !heldPreview
+                  ? previewConfigQuery.isError
+                    ? previewConfigQuery.error instanceof Error
+                      ? previewConfigQuery.error.message
+                      : "Could not draw this GOAD lab."
+                    : `Drawing ${previewLab}…`
+                  : null
+              }
               notify={toast}
               testingEnabled={testingEnabled}
               statusLoaded={rangeStatus != null}
@@ -1143,6 +1540,7 @@ export function RangeBuilderPageClient() {
               blueprintBusyId={blueprintBusyId}
               hasLudusSources={loadedSources.length > 0}
               onLoadBlueprint={loadBlueprint}
+              goadPick={goadPick}
             />
           )}
         </CardContent>

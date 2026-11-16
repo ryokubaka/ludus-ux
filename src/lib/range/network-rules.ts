@@ -331,6 +331,23 @@ export function extractNetworkSection(yamlText: string): NetworkSnapshot | null 
  * Replace `network:` in YAML with the given snapshot (typically restored after GOAD).
  * If `network` is null, returns `yamlText` unchanged.
  */
+/**
+ * The blueprint or lab owns `network:`.
+ * A snapshot replaces the block. No snapshot removes it, including rules that were already there.
+ */
+export function replaceNetworkSection(yamlText: string, network: NetworkSnapshot | null): string {
+  let doc: Record<string, unknown>
+  try {
+    const parsed = yaml.load(yamlText)
+    doc = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    doc = {}
+  }
+  if (network == null) delete doc.network
+  else doc.network = structuredClone(network) as Record<string, unknown>
+  return yaml.dump(doc, YAML_DUMP_OPTS)
+}
+
 export function applyNetworkSection(yamlText: string, network: NetworkSnapshot | null): string {
   if (network == null) return yamlText
   let doc: Record<string, unknown>
@@ -515,8 +532,8 @@ export function networkSectionEqual(
 function firewallIdentity(rule: NetworkRule, swapped: boolean): string {
   const src = swapped ? rule.vlan_dst : rule.vlan_src
   const dst = swapped ? rule.vlan_src : rule.vlan_dst
-  // Octets stay off this key. The diagram draws the VLAN boxes, so a host-specific
-  // rule and its reverse still share one line.
+  // Octets stay off this key. Pairing is by VLAN, protocol, ports, and action.
+  // The canvas uses a pair only when the drawn ends are opposites.
   return [rule.protocol, rule.ports, rule.action, String(src), String(dst)].join("|")
 }
 
@@ -528,8 +545,7 @@ function sameNameOpposite(rule: NetworkRule, other: NetworkRule): boolean {
 
 /**
  * Index of the rule that allows the same traffic in the opposite direction, or -1.
- * A shared name with the VLANs swapped counts too: the canvas draws VLAN to VLAN,
- * and two differently worded port lists were still one rule on the diagram.
+ * A shared name with the VLANs swapped counts too.
  */
 export function firewallMirrorIndex(rules: readonly NetworkRule[], index: number): number {
   const rule = rules[index]

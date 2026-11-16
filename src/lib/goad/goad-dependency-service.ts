@@ -35,19 +35,48 @@ export function parseAnsibleInstalledSets(items: AnsibleItem[]): AnsibleInstalle
   return { roles, collections }
 }
 
+function asNameSet(value: unknown): Set<string> | null {
+  if (value instanceof Set) return value as Set<string>
+  if (!Array.isArray(value)) return null
+  return new Set(value.filter((item): item is string => typeof item === "string"))
+}
+
+/**
+ * Sets do not survive the query cache. A reload restores `{}`, and calling
+ * `.has` on that object crashes the lab picker. Arrays and live Sets are valid.
+ */
+export function coerceAnsibleInstalledSets(value: unknown): AnsibleInstalledSets | null {
+  if (!value || typeof value !== "object") return null
+  const rec = value as { roles?: unknown; collections?: unknown }
+  const roles = asNameSet(rec.roles)
+  const collections = asNameSet(rec.collections)
+  if (!roles || !collections) return null
+  return { roles, collections }
+}
+
+/** Names the query cache can store. `JSON.stringify` turns a Set into `{}`. */
+export function serializableAnsibleInstalled(sets: AnsibleInstalledSets): {
+  roles: string[]
+  collections: string[]
+} {
+  return { roles: [...sets.roles], collections: [...sets.collections] }
+}
+
 /** Missing galaxy role/collection names for an extension catalog entry. */
 export function extensionMissingAnsibleRoles(
   ext: { requiredRoles?: string[] },
   ansibleInstalled: AnsibleInstalledSets | null,
 ): string[] {
-  const refs = ext.requiredRoles ?? []
-  if (refs.length === 0 || !ansibleInstalled) return []
+  const refs = Array.isArray(ext.requiredRoles)
+    ? ext.requiredRoles.filter((ref): ref is string => typeof ref === "string")
+    : []
+  const installed = coerceAnsibleInstalledSets(ansibleInstalled)
+  if (refs.length === 0 || !installed) return []
   const missing: string[] = []
   for (const ref of refs) {
     for (const req of roleRefToRequirements(ref)) {
-      const installed =
-        req.kind === "role" ? ansibleInstalled.roles : ansibleInstalled.collections
-      if (!installed.has(req.name)) missing.push(req.name)
+      const names = req.kind === "role" ? installed.roles : installed.collections
+      if (!names.has(req.name)) missing.push(req.name)
     }
   }
   return [...new Set(missing)]
@@ -57,9 +86,9 @@ export function extensionAnsibleDepsReady(
   ext: { requiredRoles?: string[] },
   ansibleInstalled: AnsibleInstalledSets | null,
 ): boolean {
-  const refs = ext.requiredRoles ?? []
+  const refs = Array.isArray(ext.requiredRoles) ? ext.requiredRoles : []
   if (refs.length === 0) return true
-  if (!ansibleInstalled) return false
+  if (!coerceAnsibleInstalledSets(ansibleInstalled)) return false
   return extensionMissingAnsibleRoles(ext, ansibleInstalled).length === 0
 }
 
@@ -75,9 +104,9 @@ export function extensionAnsibleState(
   ansibleInstalled: AnsibleInstalledSets | null,
   loading = false,
 ): ExtensionAnsibleState {
-  const refs = ext.requiredRoles ?? []
+  const refs = Array.isArray(ext.requiredRoles) ? ext.requiredRoles : []
   if (refs.length === 0) return "ready"
-  if (loading || !ansibleInstalled) return "unknown"
+  if (loading || !coerceAnsibleInstalledSets(ansibleInstalled)) return "unknown"
   return extensionMissingAnsibleRoles(ext, ansibleInstalled).length === 0 ? "ready" : "missing"
 }
 

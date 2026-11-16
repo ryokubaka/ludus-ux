@@ -7,6 +7,7 @@ import {
   roleSpellingsToTry,
 } from "@/lib/blueprints/blueprint-dependencies"
 import { canonicalRangeYaml } from "@/lib/range/range-builder-document"
+import { extractNetworkSection, replaceNetworkSection } from "@/lib/range/network-rules"
 import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
 
 function isHttp404(error: string | undefined): boolean {
@@ -52,6 +53,19 @@ export function pickBlueprintCanvasYaml(
     return { yaml: blueprintYaml.trim(), canonical: blueprintCanonical, source: "blueprint" }
   }
   return { yaml: "", canonical: "", source: "unchanged" }
+}
+
+/**
+ * The machines may come from the applied range file, so a role-name rewrite stays.
+ * The network block comes only from the blueprint. A blueprint with no network block
+ * drops firewall rules that were already on the range.
+ */
+export function applyBlueprintNetwork(configYaml: string, blueprintYaml: string): string {
+  const blueprint = blueprintYaml.trim()
+  if (!blueprint) return configYaml.trim()
+  const config = configYaml.trim()
+  if (!config) return blueprint
+  return replaceNetworkSection(config, extractNetworkSection(blueprint))
 }
 
 function canonicalOrEmpty(yaml: string): string {

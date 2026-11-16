@@ -1,7 +1,6 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import Link from "next/link"
 import {
   Search,
   Monitor,
@@ -23,6 +22,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/core/utils"
 import type { GoadExtensionDef } from "@/lib/core/types"
 import type { BuilderGraph } from "@/lib/range/range-builder-document"
+import { GoadLabPicker, type GoadLabPick } from "./goad-lab-picker"
 import {
   PALETTE_DND_MIME,
   groupTemplates,
@@ -57,6 +57,8 @@ interface PaletteProps {
   selection: BuilderSelection
   onLoadBlueprint: (blueprint: BlueprintPaletteItem) => void
   onFocus: (selection: BuilderSelection) => void
+  /** Set while GOAD is selected on a range that is not a lab yet. */
+  goadPick: GoadLabPick | null
 }
 
 function setDrag(e: React.DragEvent, payload: PaletteDragPayload) {
@@ -90,6 +92,7 @@ export function RangeBuilderPalette({
   selection,
   onLoadBlueprint,
   onFocus,
+  goadPick,
 }: PaletteProps) {
   return (
     <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-border bg-background">
@@ -101,7 +104,7 @@ export function RangeBuilderPalette({
             : kind === "goad"
               ? goad
                 ? "Drag a GOAD extension onto the canvas. It stays pending until deploy."
-                : "Deploy a GOAD lab into this range, or load a blueprint first."
+                : "Pick a GOAD lab and the extensions to install with it. Deploy opens that lab's deployment."
               : "Load a blueprint from a Ludus source, or drag a template onto the canvas."}
         </p>
       </div>
@@ -118,7 +121,7 @@ export function RangeBuilderPalette({
           />
         )}
 
-        {goad == null && (
+        {kind === "ludus" && goad == null && (
           <BlueprintList
             blueprints={blueprints}
             loading={blueprintsLoading}
@@ -137,7 +140,7 @@ export function RangeBuilderPalette({
         )}
 
         {kind === "goad" && goad && <ExtensionSection goad={goad} />}
-        {kind === "goad" && !goad && <GoadDeployCard rangeId={rangeId} />}
+        {kind === "goad" && !goad && goadPick && <GoadLabPicker pick={goadPick} />}
       </div>
     </aside>
   )
@@ -425,21 +428,6 @@ function TemplateSection({
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-function GoadDeployCard({ rangeId }: { rangeId: string }) {
-  return (
-    <div className="border-b border-border p-3">
-      <SectionLabel>GOAD</SectionLabel>
-      <p className="text-xs text-muted-foreground">
-        A GOAD lab supplies the machines, domains, and trusts, and replaces what is already in this range.
-        Firewall rules stay editable here after Provide.
-      </p>
-      <Button asChild className="mt-2 w-full" size="sm">
-        <Link href={`/goad/new?rangeId=${encodeURIComponent(rangeId)}`}>Deploy as GOAD</Link>
-      </Button>
     </div>
   )
 }

@@ -17,6 +17,12 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 
 ---
 
+## [1.6.1] - 2026-11-16
+
+**LUX**
+
+- [Improve] **Range Builder GOAD** — On a range that has not been deployed, GOAD lists the labs and extensions and draws them on the canvas. Ludus restores the saved diagram. Firewall rules you draw stay on the canvas. A GOAD lab or a blueprint replaces the configuration and does not keep the previous firewall rules. Deploy asks you to approve that configuration. A GOAD deploy runs the Ludus range, then the GOAD configuration, and opens the lab deployment page.
+
 ## [1.6.0] - 2026-11-13
 
 **LUX**

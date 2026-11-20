@@ -21,6 +21,7 @@
 #   qm-config <vmid>
 #   qm-shutdown <vmid>
 #   qm-start <vmid>
+#   qm-template <vmid> <name>         (stop that named VM and convert it to a template)
 #   qm-rollback <vmid> <snap>
 #   qm-enroll-efi <vmid>
 #   testing-rollback <vmid> <node> <snap>
@@ -34,8 +35,10 @@
 #   b64-append <id> <chunk>
 #   b64-finish <id> <dest>
 #   b64-abort <id>
-#   ludus-template-add <dir> <apiKey>
-#   ludus-template-rm <name> <apiKey>
+#   ludus-template-add <dir>          (API key on stdin, one line)
+#   ludus-template-rm <name>          (API key on stdin, one line)
+#   guest-ansible <rangeId> <host> <module>
+#                                 (API key on the first stdin line, command after it)
 #   template-purge <list-name> [alias...]
 #   sources-repair [id]
 #   ansible-home <user>
@@ -54,9 +57,12 @@
 #   patch-adguard-host-dns           (no args; points AdGuard upstream at 192.0.2.254)
 #   patch-linux-reboot-wait         (no args; wait for SSH to drop after a Linux reboot)
 #   patch-adws-wait                  (no args; wait for ADWS before default OU creation)
+#   patch-dns-cache                  (no args; load DnsServer before Set-DnsServerCache)
+#   patch-dns-server                 (no args; install the DNS Server role before forwarding)
 #   patch-windows-static-ip          (no args; longer Windows async startup; netsh if it fails)
 #   patch-windows-sysprep-netnative  (no args; drop .NET Native 2.2 only when installed)
 #   patch-router-single-clone        (no args; do not clone a second router; one VMID)
+#   chocolatey-checksums on|off      (group_vars: ignore_chocolatey_checksums for every deploy)
 #   ansible-speedups on|off          (systemd drop-in: pipelining and forks; no playbook edit)
 #   win-async-timeout                (systemd drop-in: 120s Windows async startup for every task)
 #   bridge-ageing <iface>            (set Linux/SDN bridge ageing_time to 0 / hub mode)
@@ -241,7 +247,7 @@ verify_update_hmac() {
   local raw="$1" dest="$2"
   [[ -f /etc/lux-host.update-key ]] || die "update key"
   assert_not_symlink /etc/lux-host.update-key
-  python3 - "$raw" "$dest" <<'PY' || die "hmac"
+  python3 - "$raw" "$dest" <<'LUX_HMAC_PY' || die "hmac"
 import hmac, hashlib, sys
 raw = open(sys.argv[1], "rb").read()
 nl = raw.find(b"\n")
@@ -260,7 +266,7 @@ got = hmac.new(key, body, hashlib.sha256).hexdigest()
 if not hmac.compare_digest(got, mac):
     sys.exit(3)
 open(sys.argv[2], "wb").write(body)
-PY
+LUX_HMAC_PY
 }
 
 read_upgrade_script_body() {
@@ -310,7 +316,7 @@ select_upgrade_script() {
 # LUX build can change the script. LUX_DEBIAN11_APT_PLAYBOOK is for tests;
 # sudo env_reset drops it. Production always edits the Ludus playbook path.
 debian11_archive_guest_script() {
-  cat <<'EOF'
+  cat <<'LUX_DEBIAN11_EOF'
 set -eu
 root=${LUX_APT_ROOT:-}
 osrel="${root}/etc/os-release"
@@ -380,7 +386,7 @@ while IFS= read -r f; do
     "$f"
 done < "$files"
 apt-get update
-EOF
+LUX_DEBIAN11_EOF
 }
 
 patch_debian11_security_archive() {
@@ -582,6 +588,153 @@ patch_adws_wait() {
     printf '%s  delay: 15\n' "$indent"
     printf '%s  until: lux_adws_ready.rc == 0\n' "$indent"
     printf '%s# END LUX-ADWS-WAIT\n' "$indent"
+  } > "$task"
+  if ! awk -v taskfile="$task" -v re="$wait_re" '
+    !inserted && $0 ~ re {
+      while ((getline line < taskfile) > 0) print line
+      close(taskfile)
+      inserted=1
+    }
+    { print }
+    END { if (!inserted) exit 2 }
+  ' "$stripped" > "$out"; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  if cmp -s "$out" "$playbook"; then
+    printf 'status=ok\nchanged=no\n'
+    return 0
+  fi
+  cat "$out" > "$playbook"
+  printf 'status=ok\nchanged=yes\n'
+}
+
+# Set-DnsServerCache runs in win_shell. That shell does not autoload DnsServer,
+# so the cmdlet is missing even after Add-DnsServerForwarder succeeded in
+# win_powershell. Run it the same way and import the module first.
+patch_dns_cache() {
+  local playbook
+  if [[ -n "${LUX_DNS_CACHE_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_DNS_CACHE_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-dc.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/windows/configure-dc.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  python3 - "$playbook" <<'LUX_DNS_PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = (
+    "- name: Set the DNS Cache time to 2 seconds (helps DNS blocks at the router be more effective)\n"
+    "  ansible.windows.win_shell: |\n"
+    "    Set-DnsServerCache -MaxTTL 00:00:02\n"
+)
+new = (
+    "- name: Set the DNS Cache time to 2 seconds (helps DNS blocks at the router be more effective)\n"
+    "  ansible.windows.win_powershell:\n"
+    "    script: |\n"
+    "      Import-Module DnsServer\n"
+    "      Set-DnsServerCache -MaxTTL 00:00:02\n"
+)
+if new in text:
+    print("status=ok")
+    print("changed=no")
+    raise SystemExit(0)
+if old not in text:
+    print("status=skipped")
+    print("reason=task")
+    raise SystemExit(0)
+path.write_text(text.replace(old, new, 1))
+print("status=ok")
+print("changed=yes")
+LUX_DNS_PY
+}
+
+# Domain promotion with install_dns is skipped once the domain exists. A DC
+# that was promoted without the DNS Server role never answers on port 53, and
+# members fail to join with "the specified domain could not be contacted."
+# Install the role and create the domain zone before the forwarder task.
+patch_dns_server() {
+  local playbook indent line wait_re
+  if [[ -n "${LUX_DNS_SERVER_PLAYBOOK:-}" ]]; then
+    playbook=$LUX_DNS_SERVER_PLAYBOOK
+    is_abs_path "$playbook" || die "bad playbook path"
+    [[ "$playbook" == /tmp/* ]] || die "bad playbook path"
+    [[ "$(basename -- "$playbook")" == "configure-dc.yml" ]] || die "bad playbook path"
+  else
+    playbook=/opt/ludus/ansible/range-management/tasks/windows/configure-dc.yml
+    if [[ -e "$playbook" || -L "$playbook" ]]; then
+      realpath_under "$playbook" /opt/ludus/ansible >/dev/null
+    fi
+  fi
+  if [[ ! -f "$playbook" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  assert_not_symlink "$playbook"
+  wait_re='^[[:space:]]*- name:[[:space:]]*"?Configure DNS forwarding"?[[:space:]]*$'
+  local stripped task out
+  stripped=$(mktemp)
+  task=$(mktemp)
+  out=$(mktemp)
+  # shellcheck disable=SC2064
+  trap "rm -f $(printf '%q' "$stripped") $(printf '%q' "$task") $(printf '%q' "$out")" RETURN
+  awk '
+    /^[[:space:]]*# BEGIN LUX-DNS-SERVER$/ { skip=1; next }
+    /^[[:space:]]*# END LUX-DNS-SERVER$/ { skip=0; next }
+    skip { next }
+    { print }
+  ' "$playbook" > "$stripped"
+  line=$(grep -E "$wait_re" "$stripped" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf 'status=skipped\nreason=task\n'
+    return 0
+  fi
+  indent=${line%%-*}
+  {
+    printf '%s# BEGIN LUX-DNS-SERVER\n' "$indent"
+    printf '%s- name: Install the DNS Server role\n' "$indent"
+    printf '%s  ansible.windows.win_feature:\n' "$indent"
+    printf '%s    name: DNS\n' "$indent"
+    printf '%s    include_management_tools: true\n' "$indent"
+    printf '%s    state: present\n' "$indent"
+    printf '%s  register: lux_dns_role\n' "$indent"
+    printf '%s- name: Reboot after installing the DNS Server role\n' "$indent"
+    printf '%s  ansible.windows.win_reboot:\n' "$indent"
+    printf '%s    reboot_timeout: 600\n' "$indent"
+    printf '%s  when: lux_dns_role.reboot_required | default(false)\n' "$indent"
+    printf '%s- name: Serve the domain zone\n' "$indent"
+    printf '%s  ansible.windows.win_powershell:\n' "$indent"
+    printf '%s    script: |\n' "$indent"
+    printf '%s      Import-Module DnsServer\n' "$indent"
+    printf '%s      $zone = "{{ netbios_name }}.{{ fqdn_tail }}"\n' "$indent"
+    printf '%s      $changed = $false\n' "$indent"
+    printf '%s      if (-not (Get-DnsServerZone -Name $zone -ErrorAction SilentlyContinue)) {\n' "$indent"
+    printf '%s        Add-DnsServerPrimaryZone -Name $zone -ReplicationScope Domain -DynamicUpdate Secure\n' "$indent"
+    printf '%s        $changed = $true\n' "$indent"
+    printf '%s      }\n' "$indent"
+    printf '%s      $msdcs = "_msdcs.$zone"\n' "$indent"
+    printf '%s      if (-not (Get-DnsServerZone -Name $msdcs -ErrorAction SilentlyContinue)) {\n' "$indent"
+    printf '%s        Add-DnsServerPrimaryZone -Name $msdcs -ReplicationScope Forest -DynamicUpdate Secure\n' "$indent"
+    printf '%s        $changed = $true\n' "$indent"
+    printf '%s      }\n' "$indent"
+    printf '%s      if ($changed) {\n' "$indent"
+    printf '%s        Restart-Service DNS\n' "$indent"
+    printf '%s        Restart-Service Netlogon\n' "$indent"
+    printf '%s        ipconfig /registerdns | Out-Null\n' "$indent"
+    printf '%s      }\n' "$indent"
+    printf '%s      $Ansible.Changed = $changed\n' "$indent"
+    printf '%s# END LUX-DNS-SERVER\n' "$indent"
   } > "$task"
   if ! awk -v taskfile="$task" -v re="$wait_re" '
     !inserted && $0 ~ re {
@@ -944,7 +1097,7 @@ patch_router_single_clone() {
 # session can see choco.exe. LUX_CHOCOLATEY_PLAYBOOK is for tests only.
 chocolatey_openssh_tasks() {
   local indent="$1"
-  cat <<'EOF' | sed "s/^/${indent}/"
+  cat <<'LUX_CHOCO_TASKS_EOF' | sed "s/^/${indent}/"
 # BEGIN LUX-CHOCOLATEY-OPENSSH
 - name: LUX install Chocolatey before the module bootstrap
   win_shell: |
@@ -982,7 +1135,7 @@ chocolatey_openssh_tasks() {
     reboot_timeout: 900
   when: lux_choco_bootstrap.rc | default(0) | int == 10
 # END LUX-CHOCOLATEY-OPENSSH
-EOF
+LUX_CHOCO_TASKS_EOF
 }
 
 patch_chocolatey_openssh() {
@@ -1114,6 +1267,100 @@ sync_ludus_drop_in() {
   else
     printf 'restart=unchanged\n'
   fi
+}
+
+# Additional-tools installs read ignore_chocolatey_checksums. Write it where
+# Ansible loads group_vars for every range deploy, including the Ludus CLI.
+# `on` sets the variable true. `off` removes only the LUX block. Sysinternals
+# stays ignore_checksums: true in the playbook either way.
+# LUX_CHOCOLATEY_VARS_ROOT is for tests and must stay under /tmp.
+cmd_chocolatey_checksums() {
+  local mode="$1"
+  [[ "$mode" == "on" || "$mode" == "off" ]] || die "mode"
+  local root="/opt/ludus/ansible/range-management"
+  local prefix="/opt/ludus"
+  if [[ -n "${LUX_CHOCOLATEY_VARS_ROOT:-}" ]]; then
+    root=$LUX_CHOCOLATEY_VARS_ROOT
+    prefix="/tmp"
+    is_abs_path "$root" || die "bad vars root"
+    [[ "$root" == /tmp/* ]] || die "bad vars root"
+    mkdir -p "$root"
+  elif [[ ! -d "$root" ]]; then
+    printf 'status=skipped\nreason=missing\n'
+    return 0
+  fi
+  realpath_under "$root" "$prefix" >/dev/null
+  local gvars="$root/group_vars"
+  if [[ -L "$gvars" ]]; then die "symlink"; fi
+  mkdir -p "$gvars"
+  if [[ -d "$gvars/all" ]]; then
+    if [[ -L "$gvars/all" ]]; then die "symlink"; fi
+    local fragment="$gvars/all/zz-lux-chocolatey-checksums.yml"
+    if [[ -L "$fragment" ]]; then die "symlink"; fi
+    if [[ "$mode" == "off" ]]; then
+      if [[ -f "$fragment" ]]; then
+        rm -f "$fragment"
+        printf 'status=ok\nchanged=yes\nmode=off\n'
+      else
+        printf 'status=ok\nchanged=no\nmode=off\n'
+      fi
+      return 0
+    fi
+    local desired
+    desired=$(mktemp)
+    printf '%s\n' '---' 'ignore_chocolatey_checksums: true' > "$desired"
+    if [[ -f "$fragment" ]] && cmp -s "$desired" "$fragment"; then
+      rm -f "$desired"
+      printf 'status=ok\nchanged=no\nmode=on\n'
+      return 0
+    fi
+    cat "$desired" > "$fragment"
+    chmod 644 "$fragment"
+    rm -f "$desired"
+    printf 'status=ok\nchanged=yes\nmode=on\n'
+    return 0
+  fi
+  local all="$gvars/all.yml"
+  if [[ -e "$all" || -L "$all" ]]; then
+    assert_not_symlink "$all"
+  fi
+  python3 - "$all" "$mode" <<'LUX_CHKSUM_PY'
+import pathlib, sys
+path, mode = sys.argv[1], sys.argv[2]
+file = pathlib.Path(path)
+old = file.read_text() if file.exists() else ""
+begin = "# BEGIN LUX-CHOCOLATEY-CHECKSUMS"
+end = "# END LUX-CHOCOLATEY-CHECKSUMS"
+out = []
+skip = False
+for line in old.splitlines():
+    if line == begin:
+        skip = True
+        continue
+    if line == end:
+        skip = False
+        continue
+    if not skip:
+        out.append(line)
+while out and out[-1] == "":
+    out.pop()
+if mode == "on":
+    if out:
+        out.append("")
+    out.extend([begin, "ignore_chocolatey_checksums: true", end])
+new = ("\n".join(out) + "\n") if out else ""
+if new == old:
+    sys.stdout.write("changed=no\n")
+else:
+    if new:
+        file.write_text(new)
+        file.chmod(0o644)
+    elif file.exists():
+        file.unlink()
+    sys.stdout.write("changed=yes\n")
+LUX_CHKSUM_PY
+  [[ $? -eq 0 ]] || die "checksums"
+  printf 'status=ok\nmode=%s\n' "$mode"
 }
 
 # Ansible connection speedups for Ludus range deploys. Writes a systemd drop-in
@@ -1284,7 +1531,7 @@ shift || true
 
 case "$op" in
   version)
-    echo 7
+    echo 9
     ;;
   revision)
     [[ $# -eq 0 ]] || die "revision"
@@ -1305,6 +1552,10 @@ case "$op" in
     [[ -s "$tmp" ]] || die "empty"
     [[ "$(wc -c < "$tmp")" -le 524353 ]] || die "too large"
     verify_update_hmac "$tmp" "$body"
+    # A CR on a heredoc closer does not match, so the closer swallows the
+    # command case and the next ;; is a syntax error.
+    tr -d '\r' < "$body" > "$body.lf"
+    mv "$body.lf" "$body"
     head -n 1 "$body" | grep -qx '#!/bin/bash' || die "shebang"
     grep -q 'lux-host: must run as root via sudo' "$body" || die "marker"
     grep -q 'self-update)' "$body" || die "marker"
@@ -1407,6 +1658,26 @@ case "$op" in
     [[ $# -eq 1 ]] || die "vmid"
     is_vmid "$1" || die "vmid"
     exec qm start "$1"
+    ;;
+  qm-template)
+    # Ludus clones only Proxmox templates. A Packer VM that finished without
+    # `qm template` still has the template name and is not built.
+    [[ $# -eq 2 ]] || die "qm-template"
+    is_vmid "$1" || die "vmid"
+    [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]] || die "name"
+    cfg=$(qm config "$1") || die "config"
+    cfg_name=$(printf '%s\n' "$cfg" | awk -F': ' '$1 == "name" { print $2; exit }')
+    [[ "$cfg_name" == "$2" ]] || die "name"
+    if printf '%s\n' "$cfg" | grep -q '^template: 1$'; then
+      printf 'already=yes\n'
+      exit 0
+    fi
+    state=$(qm status "$1" | awk '{ print $2 }')
+    if [[ "$state" == "running" ]]; then
+      qm shutdown "$1" --timeout 90 || qm stop "$1" || die "stop"
+    fi
+    qm template "$1" || die "template"
+    printf 'already=no\n'
     ;;
   qm-rollback)
     [[ $# -eq 2 ]] || die "rollback"
@@ -1541,6 +1812,280 @@ case "$op" in
     [[ $# -eq 1 ]] || die "id"
     is_uuid "$1" || die "id"
     rm -f "/tmp/lux-host-b64/$1"
+    ;;
+  guest-ansible)
+    # Run one Ansible module against one inventory host in a range the API key
+    # can read. The command is the body of one playbook task, not an ad-hoc
+    # @file argument and not a shell string. The key is a curl header file.
+    [[ $# -eq 3 ]] || die "guest-ansible"
+    is_range_id "$1" || die "range"
+    [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || die "host"
+    case "$3" in
+      ansible.builtin.shell|ansible.windows.win_shell) ;;
+      *) die "module" ;;
+    esac
+    IFS= read -r key || die "api key"
+    key="${key//$'\r'/}"
+    [[ "$key" =~ ^[A-Za-z0-9._~+/=:@!-]{8,512}$ ]] || die "api key"
+    range_id="$1"
+    limit="$2"
+    module="$3"
+    cmdf="$(mktemp)"
+    hdr="$(mktemp)"
+    raw="$(mktemp)"
+    inv="$(mktemp)"
+    play="$(mktemp)"
+    trap 'rm -f "$cmdf" "$hdr" "$raw" "$inv" "$play" "${inv}.which" "${inv}.limit" "${inv}.ini" "${inv}.yml"' EXIT
+    head -c 16385 > "$cmdf" || true
+    [[ -s "$cmdf" ]] || die "empty command"
+    [[ "$(wc -c < "$cmdf")" -le 16384 ]] || die "command too large"
+    printf 'X-API-KEY: %s\n' "$key" > "$hdr"
+    chmod 600 "$hdr" "$cmdf" "$play"
+    code="$(curl -skS --max-time 30 -o "$raw" -w '%{http_code}' --header @"$hdr" \
+      "https://127.0.0.1:8080/api/v2/range/ansibleinventory?rangeID=${range_id}")" || die "inventory"
+    code="${code//$'\r'/}"
+    code="${code//$'\n'/}"
+    [[ "$code" == "200" ]] || die "inventory http"
+    python3 - "$raw" "$inv" "$cmdf" "$play" "$limit" "$module" <<'PY'
+import json, os, re, shlex, sys
+raw_path, inv_base, cmd_path, play_path, limit, module = sys.argv[1:7]
+raw = open(raw_path, encoding="utf-8", errors="replace").read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(2)
+if isinstance(data, dict):
+    text = data.get("result", data.get("inventory", ""))
+else:
+    text = data
+if not isinstance(text, str) or not text.strip():
+    sys.exit(2)
+def strip_ansible_noise(body):
+    kept = []
+    for line in body.splitlines():
+        if re.match(r"^\[(WARNING|ERROR|DEPRECATION)\]:", line.strip()):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip() + "\n"
+
+text = strip_ansible_noise(text)
+host_re = re.compile(r"(^|[^A-Za-z0-9_.\-\[\]])" + re.escape(limit) + r"([^A-Za-z0-9_.\-\[\]]|$)")
+if not host_re.search(text):
+    sys.exit(3)
+local_re = re.compile(r"ansible_connection\s*[:=]\s*['\"]?local\b", re.I)
+for line in text.splitlines():
+    if host_re.search(line) and local_re.search(line):
+        sys.exit(4)
+cmd = open(cmd_path, encoding="utf-8", errors="replace").read()
+if "\x00" in cmd or not cmd.strip():
+    sys.exit(2)
+
+def yaml_scalar(value):
+    text = str(value)
+    if text == "" or re.search(r"[:#\[\]\{\}&*!|>'\"%@`,\n]", text) or text.strip() != text:
+        return json.dumps(text)
+    if text.lower() in ("true", "false", "null", "yes", "no"):
+        return json.dumps(text)
+    return text
+
+def yaml_key(key):
+    if re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", key):
+        return key
+    return json.dumps(key)
+
+def safe_host(name):
+    # Ansible expands [begin:end] in host names for both INI and YAML inventories.
+    if "[" not in name and "]" not in name:
+        return name
+    return name.replace("[", "_").replace("]", "_")
+
+def looks_like_yaml(body):
+    meaningful = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] in "#;":
+            continue
+        meaningful.append(stripped)
+    if not meaningful:
+        return False
+    if meaningful[0] in ("---", "...") or meaningful[0].endswith(":") or ": " in meaningful[0]:
+        sections = sum(1 for line in meaningful if line.startswith("[") and line.endswith("]"))
+        mappings = sum(1 for line in meaningful if line.endswith(":") or ": " in line)
+        return mappings > sections
+    return False
+
+def parse_scalar(value):
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        text = text[1:-1]
+    return text
+
+def ini_to_yaml(body):
+    children = {}
+    loose = {}
+    group = None
+    mode = "hosts"
+
+    def ensure(name):
+        children.setdefault(name, {"hosts": {}, "vars": {}, "children": []})
+        return children[name]
+
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            title = line[1:-1].strip()
+            if ":" in title:
+                name, kind = title.split(":", 1)
+                group = name.strip() or "ungrouped"
+                mode = kind.strip() or "hosts"
+            else:
+                group = title or "ungrouped"
+                mode = "hosts"
+            ensure(group)
+            continue
+        target = ensure(group or "ungrouped")
+        if mode == "vars":
+            if "=" in line:
+                key, value = line.split("=", 1)
+                target["vars"][key.strip()] = parse_scalar(value)
+            continue
+        if mode == "children":
+            target["children"].append(line)
+            ensure(line)
+            continue
+        try:
+            tokens = shlex.split(line, comments=True, posix=True)
+        except ValueError:
+            tokens = line.split()
+        if not tokens:
+            continue
+        host = safe_host(tokens[0])
+        variables = {}
+        for token in tokens[1:]:
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            variables[key] = parse_scalar(value)
+        if group is None:
+            loose[host] = variables
+        else:
+            target["hosts"][host] = variables
+
+    lines = ["all:"]
+    if loose:
+        lines.append("  hosts:")
+        for host, variables in loose.items():
+            lines.append("    %s:" % yaml_key(host))
+            if variables:
+                for key, value in variables.items():
+                    lines.append("      %s: %s" % (yaml_key(key), yaml_scalar(value)))
+            else:
+                lines.append("      {}")
+    if children:
+        lines.append("  children:")
+        for name, spec in children.items():
+            lines.append("    %s:" % yaml_key(name))
+            if spec["vars"]:
+                lines.append("      vars:")
+                for key, value in spec["vars"].items():
+                    lines.append("        %s: %s" % (yaml_key(key), yaml_scalar(value)))
+            if spec["hosts"]:
+                lines.append("      hosts:")
+                for host, variables in spec["hosts"].items():
+                    lines.append("        %s:" % yaml_key(host))
+                    if variables:
+                        for key, value in variables.items():
+                            lines.append("          %s: %s" % (yaml_key(key), yaml_scalar(value)))
+                    else:
+                        lines.append("          {}")
+            if spec["children"]:
+                lines.append("      children:")
+                for child in spec["children"]:
+                    lines.append("        %s: {}" % yaml_key(child))
+    if len(lines) == 1:
+        sys.exit(2)
+    return "\n".join(lines) + "\n"
+
+def neutralize_yaml_hosts(body):
+    lines = []
+    for line in body.splitlines():
+        match = re.match(r"^(\s*)([\"']?)(.+?)\2:\s*$", line)
+        if match and "[" in match.group(3):
+            lines.append("%s%s:" % (match.group(1), yaml_key(safe_host(match.group(3)))))
+        else:
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+inventory = neutralize_yaml_hosts(text) if looks_like_yaml(text) else ini_to_yaml(text)
+inv_path = inv_base + ".yml"
+
+def write_private(path, body):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        if os.stat(path).st_mode & 0o077:
+            sys.exit(2)
+        os.write(fd, body.encode("utf-8"))
+    finally:
+        os.close(fd)
+
+conn = "winrm" if module == "ansible.windows.win_shell" else "ssh"
+if module not in ("ansible.windows.win_shell", "ansible.builtin.shell"):
+    sys.exit(2)
+
+def yaml_block(value, indent):
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    if text.endswith("\n"):
+        text = text[:-1]
+    pad = " " * indent
+    return "\n".join(pad + line for line in text.split("\n"))
+
+host = safe_host(limit)
+playbook = "\n".join([
+    "- hosts: %s" % yaml_key(host),
+    "  gather_facts: false",
+    "  vars:",
+    "    ansible_connection: %s" % conn,
+    "  tasks:",
+    "    - name: luxai guest command",
+    "      %s: |" % module,
+    yaml_block(cmd, 8),
+    "      register: luxai_guest",
+    "      changed_when: false",
+    "      failed_when: luxai_guest.rc | default(0) | int != 0",
+    "    - name: luxai guest output",
+    "      ansible.builtin.debug:",
+    "      args:",
+    "        msg: \"{{ (luxai_guest.stdout | default('')) ~ (luxai_guest.stderr | default('')) }}\"",
+]) + "\n"
+write_private(play_path, playbook)
+write_private(inv_path, inventory if inventory.endswith("\n") else inventory + "\n")
+write_private(inv_base + ".which", inv_path)
+write_private(inv_base + ".limit", host)
+PY
+    py=$?
+    if [[ "$py" -eq 3 ]]; then die "host not in inventory"; fi
+    if [[ "$py" -eq 4 ]]; then die "local connection"; fi
+    [[ "$py" -eq 0 ]] || die "inventory"
+    inv_file=""
+    limit_safe=""
+    # read returns 1 when the file has no trailing newline, after it has stored the line.
+    IFS= read -r inv_file < "${inv}.which" || true
+    IFS= read -r limit_safe < "${inv}.limit" || true
+    [[ -n "$inv_file" ]] || die "inventory"
+    [[ -n "$limit_safe" ]] || die "host"
+    [[ "$inv_file" == "${inv}.yml" ]] || die "inventory"
+    [[ "$limit_safe" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || die "host"
+    [[ -s "$play" ]] || die "playbook"
+    command -v ansible-playbook >/dev/null 2>&1 || die "ansible-playbook"
+    # The task body is the script. An @file argument was executed as PowerShell.
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 180 ansible-playbook -i "$inv_file" "$play"
+    else
+      ansible-playbook -i "$inv_file" "$play"
+    fi
     ;;
   ludus-template-add)
     [[ $# -eq 1 ]] || die "template-add"
@@ -1857,7 +2402,7 @@ case "$op" in
     chmod 644 "$dest"
     ;;
   proxmox-token)
-    python3 - <<'PY'
+    python3 - <<'LUX_TOKEN_PY'
 import sys
 url = node = host = secret = ""
 try:
@@ -1887,7 +2432,7 @@ if not url or not secret:
     print("ERR missing proxmox_url or token secret", file=sys.stderr)
     sys.exit(3)
 print("|".join([url, "root@pam", token_id, secret, node, host]))
-PY
+LUX_TOKEN_PY
     ;;
   read-ludus-requirements)
     [[ $# -eq 0 ]] || die "read-ludus-requirements"
@@ -1971,6 +2516,14 @@ PY
     [[ $# -eq 0 ]] || die "patch-adws-wait"
     patch_adws_wait
     ;;
+  patch-dns-cache)
+    [[ $# -eq 0 ]] || die "patch-dns-cache"
+    patch_dns_cache
+    ;;
+  patch-dns-server)
+    [[ $# -eq 0 ]] || die "patch-dns-server"
+    patch_dns_server
+    ;;
   patch-windows-static-ip)
     [[ $# -eq 0 ]] || die "patch-windows-static-ip"
     patch_windows_static_ip
@@ -1982,6 +2535,10 @@ PY
   patch-router-single-clone)
     [[ $# -eq 0 ]] || die "patch-router-single-clone"
     patch_router_single_clone
+    ;;
+  chocolatey-checksums)
+    [[ $# -eq 1 ]] || die "chocolatey-checksums"
+    cmd_chocolatey_checksums "$1"
     ;;
   ansible-speedups)
     [[ $# -eq 1 ]] || die "ansible-speedups"
@@ -2074,7 +2631,7 @@ PY
     # systemd expands ${var} in ExecStart before bash runs. A script file keeps
     # the package URL in bash, where $ver is the version argument.
     body=$(mktemp) || die "script"
-    cat >"$body" <<'EOF'
+    cat >"$body" <<'LUX_UPGRADE_EOF'
 set -euo pipefail
 ver="${1:-}"
 log="${2:-/var/log/lux-ludus-upgrade.log}"
@@ -2110,7 +2667,7 @@ sig=$(od -An -t x1 -N 4 "${tmp}/ludus-server" | tr -d " \n")
 [[ "$sig" == "7f454c46" ]] || { echo "download is not a Ludus server binary"; exit 4; }
 chmod 0755 "${tmp}/ludus-server"
 "${tmp}/ludus-server" --update
-EOF
+LUX_UPGRADE_EOF
     chmod 0700 "$body" || { rm -f -- "$body"; die "script"; }
     systemctl reset-failed lux-ludus-upgrade.service >/dev/null 2>&1 || true
     if ! systemd-run --unit=lux-ludus-upgrade --collect /bin/bash "$body" "$ver" "$log"; then
@@ -2129,6 +2686,32 @@ EOF
     if [[ -f /var/log/lux-ludus-upgrade.log ]]; then
       tail -n 80 /var/log/lux-ludus-upgrade.log
     fi
+    ;;
+  self-update)
+    # Replace this helper and its sudoers rule. The body is stdin, not argv:
+    # one base64 line for the script, one for sudoers, then the update key.
+    [[ $# -eq 0 ]] || die "self-update"
+    IFS= read -r helper_b64 || die "helper"
+    IFS= read -r sudoers_b64 || die "sudoers"
+    key=$(cat)
+    key="${key//$'\r'/}"
+    key="${key//$'\n'/}"
+    [[ "$helper_b64" =~ ^[A-Za-z0-9+/=]+$ ]] || die "helper"
+    [[ "$sudoers_b64" =~ ^[A-Za-z0-9+/=]+$ ]] || die "sudoers"
+    [[ "$key" =~ ^[0-9a-f]{64}$ ]] || die "update key"
+    umask 077
+    stage="$(mktemp -d)"
+    printf '%s' "$helper_b64" | base64 -d > "$stage/lux-host" || die "helper"
+    printf '%s' "$sudoers_b64" | base64 -d > "$stage/sudoers" || die "sudoers"
+    bash -n "$stage/lux-host" || die "helper"
+    visudo -cf "$stage/sudoers" || die "sudoers"
+    install -o root -g root -m 755 "$stage/lux-host" /usr/local/sbin/lux-host
+    install -o root -g root -m 440 "$stage/sudoers" /etc/sudoers.d/lux-host
+    printf '%s' "$key" > /etc/lux-host.update-key
+    chown root:root /etc/lux-host.update-key
+    chmod 600 /etc/lux-host.update-key
+    rm -rf "$stage"
+    echo installed
     ;;
   "")
     die "missing operation"

@@ -165,3 +165,7 @@ LUX builds the binary and installs `bagelByt3s.ludushound` from the local collec
 6. Pick or create a Ludus range → **Generate YAML** → confirm templates are built → **Deploy range**
 
 Live Neo4j must already contain SharpHound data (or use FilesMap / Attack Path instead).
+
+## LUXAI
+
+LUXAI is optional and off by default. An admin connects a local OpenAI-compatible server, Claude, Cursor, or another HTTPS provider on the LUXAI page. The signed-in user asks it to read and change ranges they can already access. Each chat runs on its own, and more than one can run at the same time. Pause, stop, steer, and interrupt apply while that chat is answering. A request to deploy a GOAD lab checks the catalog on this server and asks for extensions before Apply starts the install. Firewall rules from that form are written onto the range and restored after the install. A change is a proposal until they press Apply. Range config can be reverted from the same card. Guest shell on a VM is a confirmed Ansible module and is written down so the operator can see it; LUX does not invent an inverse command. Connection steps are in [LUXAI](luxai.md).

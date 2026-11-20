@@ -214,6 +214,7 @@ function RuleRow({
         </div>
         <ActionBadge action={rule.action} />
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           className="h-6 w-6 flex-shrink-0 text-muted-foreground hover:text-destructive"
@@ -499,12 +500,12 @@ export function NetworkRulesEditor({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" onClick={addRule}>
+        <Button type="button" variant="outline" size="sm" onClick={addRule}>
           <Plus className="h-4 w-4" />
           Add Rule
         </Button>
         {showApplyButton && onApply && rules.length > 0 && (
-          <Button variant="default" size="sm" onClick={onApply}>
+          <Button type="button" variant="default" size="sm" onClick={onApply}>
             Apply to Config
           </Button>
         )}

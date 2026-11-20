@@ -19,6 +19,7 @@ LUX is the web UI for a Ludus cyber range. The browser talks to this Next.js app
 | Question | File |
 |---|---|
 | What a feature does | `docs/features.md`, `docs/workflows.md` |
+| Look, labels, and forms | `docs/DESIGN.md` |
 | Install, upgrade, env | `docs/getting-started.md`, `docs/environment.md`, `.env.example` |
 | SSH, lux-host, consoles | `docs/ssh-and-auth.md` |
 | HTTP routes | `docs/openapi.yaml` |

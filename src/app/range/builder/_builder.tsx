@@ -45,6 +45,9 @@ import { fetchSourceCatalog, sourceCatalogItems } from "@/lib/sources/source-cat
 import { postSourceInstall } from "@/lib/sources/source-install-client"
 import { blueprintPaletteFromSources } from "@/components/range/builder/builder-blueprints"
 import { extractArray, cn } from "@/lib/core/utils"
+import { markTemplatesFromProxmox } from "@/lib/proxmox/proxmox-template-guests"
+import { fetchProxmoxGuests } from "@/lib/templates/template-proxmox-client"
+import { TemplateBuildHelp } from "@/components/range/builder/template-build-help"
 import { inferOS } from "@/lib/range/range-vm-wizard"
 import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
 import {
@@ -58,6 +61,7 @@ import {
   subscribeRangeBuilderSaves,
 } from "@/lib/range/range-builder-session"
 import {
+  BLANK_RANGE_YAML,
   parseRangeDocument,
   serializeRangeDocument,
   canonicalRangeYaml,
@@ -163,7 +167,12 @@ function templateRows(data: TemplateObject[] | undefined): TemplateRow[] {
     .map((t) => {
       const { isWindows, isLinux } = inferOS(t.name)
       const os = t.os ?? (isWindows ? "windows" : isLinux ? "linux" : "other")
-      return { name: t.name, built: t.built === true, os: os as TemplateRow["os"] }
+      return {
+        name: t.name,
+        built: t.built === true,
+        os: os as TemplateRow["os"],
+        proxmox: t.proxmox,
+      }
     })
 }
 
@@ -285,7 +294,14 @@ export function RangeBuilderPageClient() {
       if (res.error) throw new Error(res.error)
       return extractArray<TemplateObject>(res.data as unknown)
     },
-    staleTime: STALE.long,
+    staleTime: STALE.short,
+  })
+
+  const { data: proxmoxGuests = [] } = useQuery({
+    queryKey: queryKeys.proxmoxTemplateGuests(scopeTag),
+    queryFn: fetchProxmoxGuests,
+    staleTime: STALE.short,
+    retry: false,
   })
 
   const { data: versionData } = useQuery({
@@ -416,6 +432,24 @@ export function RangeBuilderPageClient() {
     if (!rangeId || yaml == null) return
     const saved = canonicalRangeYaml(yaml)
     const draftKey = rangeBuilderDraftKey(scopeTag, rangeId)
+    let startBlank = false
+    try {
+      startBlank = sessionStorage.getItem("lux-builder-blank") === rangeId
+      if (startBlank) sessionStorage.removeItem("lux-builder-blank")
+    } catch {
+      startBlank = false
+    }
+    if (startBlank) {
+      const blank = canonicalRangeYaml(BLANK_RANGE_YAML)
+      setDoc(parseRangeDocument(blank))
+      setOriginalYaml(saved)
+      rememberRangeBuilderDraft(draftKey, blank, saved)
+      loadedRangeRef.current = rangeId
+      appliedConfigRef.current = blank
+      baselineRef.current = saved
+      setAppliedRangeId(rangeId)
+      return
+    }
     const draft = readRangeBuilderDraft(draftKey)
     // A draft is the previous file. A blueprint apply replaces that file, so the draft is not the diagram.
     if (draftAppliesToSaved(draft, saved) && draft) {
@@ -514,8 +548,18 @@ export function RangeBuilderPageClient() {
     if (depsReady) setDepsReady(false)
   }
 
-  const templates = useMemo(() => templateRows(templatesData), [templatesData])
+  const templates = useMemo(
+    () => templateRows(markTemplatesFromProxmox(templatesData ?? [], proxmoxGuests)),
+    [proxmoxGuests, templatesData],
+  )
   const builtNames = useMemo(() => new Set(templates.filter((t) => t.built).map((t) => t.name)), [templates])
+  const missingBuilderTemplates = useMemo(() => {
+    const names = new Set<string>()
+    for (const vm of graph.vms) {
+      if (vm.template && !builtNames.has(vm.template)) names.add(vm.template)
+    }
+    return [...names]
+  }, [builtNames, graph.vms])
   const allNames = useMemo(() => new Set(templates.map((t) => t.name)), [templates])
   const builtTemplates = useMemo(() => templates.filter((t) => t.built), [templates])
 
@@ -1385,6 +1429,13 @@ export function RangeBuilderPageClient() {
               {deployBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               {deployBusy ? "Deploying…" : extensionPending ? "Deploy extension" : isGoad ? "Deploy Firewall" : pickingGoadLab ? "Deploy GOAD" : "Deploy"}
             </Button>
+            {missingBuilderTemplates.map((name) => (
+              <TemplateBuildHelp
+                key={name}
+                name={name}
+                row={templates.find((template) => template.name === name)}
+              />
+            ))}
             {(deployStarted || deployBusy) && (
               <Button asChild variant="outline">
                 <Link href="/logs">Range Logs</Link>

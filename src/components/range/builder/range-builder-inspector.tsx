@@ -28,6 +28,7 @@ import {
   updateVmRaw,
   removeVm,
   renumberVlan,
+  moveVmToVlan,
   setDomainMembership,
   renameDomain,
   setRangeDefaults,
@@ -62,6 +63,7 @@ import {
   type RouterDetails,
 } from "./builder-types"
 import { trustLabel, trustLinks } from "./builder-routing"
+import { TemplateBuildHelp } from "./template-build-help"
 
 interface InspectorProps {
   selection: BuilderSelection
@@ -69,11 +71,17 @@ interface InspectorProps {
   doc: RangeDocument
   apply: (fn: (doc: RangeDocument) => RangeDocument) => void
   builtTemplates: TemplateRow[]
+  templates: TemplateRow[]
   locked: boolean
+  /** GOAD owns VLAN numbers and domain membership. Firewall rules stay editable. */
+  structureLocked?: boolean
+  /** Domains that exist on the canvas, including ones that do not have a domain controller yet. */
+  domainChoices?: { fqdn: string; vlan: number | null }[]
   rangeNumber: number | null
   onClose: () => void
   onVmRenamed: (oldId: string, newId: string) => void
   onDomainRenamed: (oldFqdn: string, newFqdn: string) => void
+  onVlanRenumbered?: (oldVlan: number, newVlan: number) => void
   routerDetails: RouterDetails
   rangeId: string
   findings: Finding[]
@@ -95,9 +103,11 @@ export function RangeBuilderInspector(props: InspectorProps) {
     <aside className="flex h-full w-[340px] flex-col border-l border-border bg-background">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <h2 className="text-sm font-semibold">{titleFor(selection)}</h2>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close inspector">
-          <X className="h-4 w-4" />
-        </Button>
+        {selection.kind !== "none" && (
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} aria-label="Close inspector">
+            <X className="h-4 w-4" />
+          </Button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <InspectorBody {...props} />
@@ -154,9 +164,16 @@ function InspectorBody(props: InspectorProps) {
 
 function Empty() {
   return (
-    <p className="text-sm text-muted-foreground">
-      Select a node or edge on the canvas to edit it.
-    </p>
+    <div className="space-y-2 text-sm text-muted-foreground">
+      <p>Select a box or a line to edit it. A piece snaps back when it is not inside the box it belongs in.</p>
+      <ul className="list-disc space-y-1 pl-4 text-xs">
+        <li>Drag a network from the left onto the canvas. That is a VLAN. Machines live inside it.</li>
+        <li>Drop a machine on a VLAN. Dropping it on empty canvas snaps it back.</li>
+        <li>Drag a domain onto a VLAN. It can sit there before it has a domain controller.</li>
+        <li>A Windows machine joins a domain from its Domain membership list, or by dropping it on that domain box. Its VLAN follows the domain.</li>
+        <li>The GOAD tab draws the lab. Domain membership and VLAN numbers come from GOAD, so those fields stay locked.</li>
+      </ul>
+    </div>
   )
 }
 
@@ -192,13 +209,14 @@ function FindingNotes({ findings }: { findings: Finding[] }) {
   )
 }
 
-function LockedBanner() {
+function LockedBanner({ preview }: { preview?: boolean }) {
   return (
     <Alert className="mb-3">
       <Info className="h-4 w-4" />
       <AlertDescription className="text-xs">
-        This range is a GOAD lab. VM, domain, trust, and VLAN fields are read-only — the next Provide
-        rewrites them from GOAD templates. Firewall rules stay editable.
+        {preview
+          ? "This drawing is a GOAD lab. Domain membership and VLAN numbers come from the lab, so they stay locked. Firewall rules stay editable. Switch to the Ludus tab to build a range of your own."
+          : "This range is a GOAD lab. VM, domain, trust, and VLAN fields are read-only — the next Provide rewrites them from GOAD templates. Firewall rules stay editable."}
       </AlertDescription>
     </Alert>
   )
@@ -220,12 +238,17 @@ function VmInspector({
   graph,
   apply,
   builtTemplates,
+  templates,
   locked,
+  structureLocked: structureLockedProp,
+  domainChoices,
   onClose,
   onVmRenamed,
   rangeId,
   findings,
+  rangeNumber,
 }: InspectorProps & { vm: BuilderVm }) {
+  const structureLocked = structureLockedProp || locked
   const disabled = locked
   const update = (patch: Record<string, unknown>) => apply((d) => updateVmRaw(d, vm.id, patch))
   const [nameDraft, setNameDraft] = useState(() => expandRangeId(vm.vmName, rangeId))
@@ -244,8 +267,14 @@ function VmInspector({
   const hostFindings = findings.filter((finding) => finding.nodeId === vm.id)
   return (
     <div className="space-y-3">
-      {locked && <LockedBanner />}
+      {structureLocked && <LockedBanner preview={!locked} />}
       <FindingNotes findings={hostFindings} />
+      {vm.template && !builtTemplates.some((template) => template.name === vm.template) && (
+        <TemplateBuildHelp
+          name={vm.template}
+          row={templates.find((template) => template.name === vm.template)}
+        />
+      )}
       <Field label="Template">
         <Select
           value={vm.template}
@@ -308,15 +337,15 @@ function VmInspector({
             type="number"
             className="h-8 text-sm"
             value={vlanDraft}
-            disabled={disabled}
+            disabled={structureLocked}
             onChange={(e) => setVlanDraft(e.target.value)}
             onBlur={() => {
               const n = parseInt(vlanDraft, 10)
-              if (!Number.isFinite(n) || n === vm.vlan) {
+              if (!Number.isFinite(n) || n < 2 || n > 255 || n === vm.vlan) {
                 setVlanDraft(String(vm.vlan))
                 return
               }
-              update({ vlan: n })
+              apply((d) => moveVmToVlan(d, vm.id, n, undefined, rangeNumber))
             }}
           />
         </Field>
@@ -360,7 +389,14 @@ function VmInspector({
       </div>
 
       {vm.os === "windows" && (
-        <DomainRoleField vm={vm} graph={graph} apply={apply} disabled={disabled} />
+        <DomainRoleField
+          vm={vm}
+          graph={graph}
+          apply={apply}
+          disabled={structureLocked}
+          choices={domainChoices ?? []}
+          rangeNumber={rangeNumber}
+        />
       )}
 
       {vm.os === "windows" && (
@@ -452,14 +488,26 @@ function DomainRoleField({
   graph,
   apply,
   disabled,
+  choices,
+  rangeNumber,
 }: {
   vm: BuilderVm
   graph: BuilderGraph
   apply: InspectorProps["apply"]
   disabled: boolean
+  choices: { fqdn: string; vlan: number | null }[]
+  rangeNumber: number | null
 }) {
-  const fqdns = graph.domains.map((d) => d.fqdn)
-  const value = vm.domainFqdn ? `${vm.domainFqdn}|${vm.domainRole}` : "none"
+  const listed = new Map<string, number | null>()
+  for (const domain of graph.domains) {
+    const member = graph.vms.find((item) => item.domainFqdn === domain.fqdn)
+    listed.set(domain.fqdn, member?.vlan ?? null)
+  }
+  for (const choice of choices) {
+    if (!listed.has(choice.fqdn)) listed.set(choice.fqdn, choice.vlan)
+  }
+  if (vm.domainFqdn && !listed.has(vm.domainFqdn)) listed.set(vm.domainFqdn, vm.vlan)
+  const fqdns = [...listed.keys()].sort((a, b) => a.localeCompare(b))
   return (
     <Field label="Domain membership">
       <div className="grid grid-cols-2 gap-2">
@@ -467,8 +515,24 @@ function DomainRoleField({
           value={vm.domainFqdn ?? "__none__"}
           disabled={disabled}
           onValueChange={(v) => {
-            if (v === "__none__") apply((d) => setDomainMembership(d, vm.id, null, "none"))
-            else apply((d) => setDomainMembership(d, vm.id, v, vm.domainRole === "none" ? "member" : vm.domainRole))
+            if (v === "__none__") {
+              apply((d) => setDomainMembership(d, vm.id, null, "none"))
+              return
+            }
+            const vlan = listed.get(v) ?? null
+            const domain = graph.domains.find((item) => item.fqdn === v)
+            const keepsPrimary = vm.domainFqdn === v && vm.domainRole === "primary-dc"
+            const role: DomainRole =
+              keepsPrimary || !domain?.primaryDcVmId || domain.primaryDcVmId === vm.id
+                ? vm.domainRole === "primary-dc" || vm.domainRole === "alt-dc"
+                  ? vm.domainRole
+                  : "member"
+                : "member"
+            apply((d) => {
+              const joined = setDomainMembership(d, vm.id, v, role)
+              if (vlan == null || vlan === vm.vlan) return joined
+              return moveVmToVlan(joined, vm.id, vlan, undefined, rangeNumber)
+            })
           }}
         >
           <SelectTrigger className="h-8 text-xs">
@@ -497,7 +561,7 @@ function DomainRoleField({
         </Select>
       </div>
       <p className="text-[10px] text-muted-foreground">
-        Type an FQDN in the domain inspector to create a new domain, then assign members here.
+        Every domain on the canvas is listed, including one that does not have a domain controller yet. Choosing one moves this machine into that domain and onto its VLAN.
       </p>
     </Field>
   )
@@ -819,38 +883,65 @@ function RoleVarField({
 
 // ── VLAN ──────────────────────────────────────────────────────────────────────
 
-function VlanInspector({ vlan, graph, apply, locked, rangeNumber, onClose }: InspectorProps & { vlan: number }) {
+function VlanInspector({
+  vlan,
+  graph,
+  apply,
+  locked,
+  structureLocked: structureLockedProp,
+  rangeNumber,
+  onClose,
+  onVlanRenumbered,
+}: InspectorProps & { vlan: number }) {
+  const structureLocked = structureLockedProp || locked
   const [value, setValue] = useState(String(vlan))
+  const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     setValue(String(vlan))
+    setError(null)
   }, [vlan])
   const members = graph.vlans.find((v) => v.vlan === vlan)?.vmIds ?? []
+  const commit = () => {
+    const n = parseInt(value, 10)
+    if (structureLocked) return
+    if (!Number.isFinite(n) || n < 2 || n > 255) {
+      setError("Use a VLAN number from 2 to 255.")
+      return
+    }
+    setError(null)
+    if (n === vlan) return
+    apply((d) => renumberVlan(d, vlan, n, rangeNumber))
+    onVlanRenumbered?.(vlan, n)
+  }
   return (
     <div className="space-y-3">
-      {locked && <LockedBanner />}
+      {structureLocked && <LockedBanner preview={!locked} />}
       <Field label="VLAN id (2–255)">
         <div className="flex gap-1.5">
           <Input
             type="number"
             className="h-8 text-sm"
             value={value}
-            disabled={locked}
-            onChange={(e) => setValue(e.target.value)}
+            disabled={structureLocked}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setError(null)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit()
+            }}
           />
           <Button
             size="sm"
             variant="outline"
             className="h-8"
-            disabled={locked}
-            onClick={() => {
-              const n = parseInt(value, 10)
-              if (locked || !Number.isFinite(n) || n === vlan) return
-              apply((d) => renumberVlan(d, vlan, n, rangeNumber))
-            }}
+            disabled={structureLocked}
+            onClick={commit}
           >
-            Apply
+            Save
           </Button>
         </div>
+        {error && <p className="text-[11px] text-destructive">{error}</p>}
       </Field>
       <p className="text-xs text-muted-foreground">
         {members.length} VM{members.length === 1 ? "" : "s"} on this VLAN. Renumbering updates every
@@ -875,13 +966,24 @@ function DomainInspector({
   graph,
   apply,
   locked,
+  structureLocked: structureLockedProp,
   onDomainRenamed,
   findings,
 }: InspectorProps & { fqdn: string }) {
+  const structureLocked = structureLockedProp || locked
   const [name, setName] = useState(fqdn)
   useEffect(() => {
     setName(fqdn)
   }, [fqdn])
+  const saveName = () => {
+    const next = name.trim()
+    if (structureLocked || !next || next === fqdn) {
+      setName(fqdn)
+      return
+    }
+    apply((d) => renameDomain(d, fqdn, next))
+    onDomainRenamed(fqdn, next)
+  }
   const defaults = graph.rangeDefaults
   const setDefault = (key: string, value: string) => apply((d) => setRangeDefaults(d, { [key]: value || undefined }))
 
@@ -891,49 +993,52 @@ function DomainInspector({
   )
   return (
     <div className="space-y-3">
-      {locked && <LockedBanner />}
+      {structureLocked && <LockedBanner preview={!locked} />}
       <FindingNotes findings={domainFindings} />
       <Field label="Domain FQDN">
         <div className="flex gap-1.5">
           <Input
             className="h-8 text-sm font-mono"
             value={name}
-            disabled={locked}
+            disabled={structureLocked}
             onChange={(e) => setName(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveName()
+            }}
           />
           <Button
             size="sm"
             variant="outline"
             className="h-8"
-            disabled={locked}
-            onClick={() => {
-              const next = name.trim()
-              if (!next || next === fqdn) return
-              apply((d) => renameDomain(d, fqdn, next))
-              onDomainRenamed(fqdn, next)
-            }}
+            disabled={structureLocked}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={saveName}
           >
-            Rename
+            Save
           </Button>
         </div>
       </Field>
+      <p className="text-[11px] text-muted-foreground">
+        A domain can sit on a VLAN before it has a domain controller. Add a Windows VM and set its role to primary-dc when you are ready.
+      </p>
 
       <div className="rounded-md border border-border p-2 space-y-2">
         <p className="text-[11px] font-semibold uppercase text-muted-foreground">
           Range defaults (all domains)
         </p>
-        <DefaultText label="Domain admin" k="ad_domain_admin" defaults={defaults} onSet={setDefault} disabled={locked} />
-        <DefaultText label="Domain admin password" k="ad_domain_admin_password" defaults={defaults} onSet={setDefault} disabled={locked} />
-        <DefaultText label="Domain user" k="ad_domain_user" defaults={defaults} onSet={setDefault} disabled={locked} />
-        <DefaultText label="Domain user password" k="ad_domain_user_password" defaults={defaults} onSet={setDefault} disabled={locked} />
-        <DefaultText label="Safe mode password" k="ad_domain_safe_mode_password" defaults={defaults} onSet={setDefault} disabled={locked} />
+        <DefaultText label="Domain admin" k="ad_domain_admin" defaults={defaults} onSet={setDefault} disabled={structureLocked} />
+        <DefaultText label="Domain admin password" k="ad_domain_admin_password" defaults={defaults} onSet={setDefault} disabled={structureLocked} />
+        <DefaultText label="Domain user" k="ad_domain_user" defaults={defaults} onSet={setDefault} disabled={structureLocked} />
+        <DefaultText label="Domain user password" k="ad_domain_user_password" defaults={defaults} onSet={setDefault} disabled={structureLocked} />
+        <DefaultText label="Safe mode password" k="ad_domain_safe_mode_password" defaults={defaults} onSet={setDefault} disabled={structureLocked} />
         <DefaultSelect
           label="Domain functional level"
           k="ad_domain_functional_level"
           defaults={defaults}
           options={FUNCTIONAL_LEVELS}
           onSet={setDefault}
-          disabled={locked}
+          disabled={structureLocked}
         />
         <DefaultSelect
           label="Forest functional level"
@@ -941,7 +1046,7 @@ function DomainInspector({
           defaults={defaults}
           options={FUNCTIONAL_LEVELS}
           onSet={setDefault}
-          disabled={locked}
+          disabled={structureLocked}
         />
       </div>
       <p className="text-[10px] text-muted-foreground">

@@ -31,7 +31,7 @@ const nextConfig = {
   // Cache Components landed here before Partial Prefetching existed.
   // false keeps that prefetch behavior. The next major enables both.
   partialPrefetching: false,
-  serverExternalPackages: ["ssh2", "better-sqlite3"],
+  serverExternalPackages: ["ssh2", "better-sqlite3", "@cursor/sdk"],
   typescript: {
     ignoreBuildErrors: false,
   },
@@ -41,7 +41,7 @@ const nextConfig = {
       if (!Array.isArray(config.externals)) {
         config.externals = [config.externals]
       }
-      config.externals.push("ssh2")
+      config.externals.push("ssh2", "@cursor/sdk")
     }
     config.ignoreWarnings = [
       ...(config.ignoreWarnings || []),

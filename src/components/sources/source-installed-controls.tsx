@@ -2,10 +2,12 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useQueryClient } from "@tanstack/react-query"
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/hooks/use-toast"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import {
   formatVersionTransition,
   isMissingOrUnknownVersion,
@@ -13,6 +15,7 @@ import {
 } from "@/lib/sources/source-catalog-presence"
 import type { InstalledSourceMatch } from "@/lib/sources/source-installed-match"
 import { postSourceInstall } from "@/lib/sources/source-install-client"
+import { queryKeys } from "@/lib/ui/query-keys"
 
 /** Repo origin link for content matched to a registered Ludus source. */
 export function SourceRepoLink({ match }: { match: InstalledSourceMatch }) {
@@ -67,6 +70,8 @@ export function SourceSyncControls({
   onResynced?: () => void
 }) {
   const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
   const [busy, setBusy] = useState(false)
   const transition = formatVersionTransition(match.installedVersion, match.catalogVersion)
   const outOfSync = match.upgradeAvailable
@@ -93,6 +98,8 @@ export function SourceSyncControls({
           }
         : undefined
       await postSourceInstall(match.sourceId, match.selection, { force: true, versions })
+      // Pins live on the source catalog response. The page list refresh does not reload them.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.sources(scopeTag) })
       toast({ title: "Re-synced", description: match.catalogName })
       onResynced?.()
     } catch (err) {
@@ -109,8 +116,8 @@ export function SourceSyncControls({
         className="text-[10px]"
         title={
           outOfSync
-            ? transition || "Catalog version differs from installed (or installed version unknown)"
-            : "Installed version matches source catalog"
+            ? transition || "Catalog version differs from the installed version"
+            : "Installed version matches this source"
         }
       >
         {outOfSync ? "Out of sync" : "In sync"}

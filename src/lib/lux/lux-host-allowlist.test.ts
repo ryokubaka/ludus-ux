@@ -92,7 +92,7 @@ describe("lux-host allowlist", () => {
   })
 
   it("settings and credential probe", () => {
-    expect(run(["version"]).stdout.trim()).toBe("7")
+    expect(run(["version"]).stdout.trim()).toBe("9")
     denied(["ludus-upgrade"])
     denied(["ludus-upgrade", "v2.3.10"])
     denied(["ludus-upgrade", "2.3.10;id"])
@@ -109,6 +109,9 @@ describe("lux-host allowlist", () => {
     denied(["bridge-ageing", "eth0"])
     denied(["bridge-ageing", "r4;id"])
     denied(["bridge-ageing", "../r4"])
+    denied(["chocolatey-checksums"])
+    denied(["chocolatey-checksums", "maybe"])
+    denied(["chocolatey-checksums", "on", "extra"])
   })
 
   it("passes the Ludus version as an argument, not a systemd variable", () => {
@@ -182,6 +185,9 @@ describe("lux-host allowlist", () => {
     denied(["testing-rollback", "108", "node;id", "clean"])
     denied(["testing-enroll", "108", "minipve", "2"])
     denied(["qm-start", "-1"])
+    denied(["qm-template"])
+    denied(["qm-template", "0", "securityonion-3.3-x64-template"])
+    denied(["qm-template", "282", "bad name"])
   })
 
   it("templates, packer files, and source ownership", () => {
@@ -335,6 +341,63 @@ describe("lux-host allowlist", () => {
     expect(started.log).not.toContain("from-stdin")
     expect(started.log).not.toContain(path.join(repo, "scripts/upgrade.sh"))
     expect(started.log).toContain('bash "$LUX_UPGRADE_SCRIPT"')
+  })
+
+  it("guest-ansible keeps the API key out of argv and does not shell the command", () => {
+    const key = "luxuser.SECRETapikey123"
+    const command = "Get-Date; $(id)"
+    denied(["guest-ansible"])
+    denied(["guest-ansible", "../range", "DC01", "ansible.windows.win_shell"], `${key}\n${command}\n`)
+    denied(["guest-ansible", "goad-meow", "DC01;id", "ansible.windows.win_shell"], `${key}\n${command}\n`)
+    denied(["guest-ansible", "goad-meow", "DC01", "ansible.builtin.raw"], `${key}\n${command}\n`)
+    const out = run(
+      ["guest-ansible", "goad-meow", "DC01", "ansible.windows.win_shell"],
+      `${key}\n${command}\n`,
+      {},
+      {
+        curl: `#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  if [ "$prev" = "--header" ]; then
+    case "$arg" in
+      @*)
+        if grep -q SECRETapikey "\${arg#@}"; then echo header-ok >> "$LUX_HOST_STUB_LOG"; fi
+        ;;
+    esac
+  fi
+  case "$arg" in
+    *SECRETapikey*) echo key-in-argv >> "$LUX_HOST_STUB_LOG" ;;
+  esac
+  prev="$arg"
+done
+printf '%s' '{"result":"[windows]\\nDC01 ansible_host=10.2.10.10 ansible_connection=winrm\\n"}' > "$out"
+printf '200'
+`,
+        python3: "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n",
+        "ansible-playbook": `#!/bin/sh
+echo "ansible-playbook $*" >> "$LUX_HOST_STUB_LOG"
+play=""
+for arg in "$@"; do
+  play="$arg"
+done
+printf 'PLAY %s\\n' "$(/bin/cat "$play")" >> "$LUX_HOST_STUB_LOG"
+`,
+        timeout: "#!/bin/sh\nshift\nexec \"$@\"\n",
+      },
+    )
+    expect(out.status, `${out.stderr}\n${out.stdout}\n${out.log}`).toBe(0)
+    expect(out.log).toContain("header-ok")
+    expect(out.log).not.toContain("key-in-argv")
+    expect(out.log).not.toContain(key)
+    expect(out.log).toContain("ansible-playbook")
+    expect(out.log).toContain("ansible.windows.win_shell")
+    expect(out.log).toContain("Get-Date; $(id)")
+    expect(out.log).toContain("ansible_connection: winrm")
+    expect(out.log).not.toContain("_raw_params")
+    expect(out.log).not.toContain("-a @")
+    expect(out.log).not.toContain("uid=")
   })
 })
 

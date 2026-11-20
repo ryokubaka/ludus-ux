@@ -8,6 +8,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 COPY vendor/braces ./vendor/braces
+COPY vendor/picomatch ./vendor/picomatch
 # One layer so the builder snapshots node_modules once. Separate npm installs
 # each committed that tree again and dominated a cold `docker compose up --build`.
 # Do not add RUN --mount=type=cache: GitLab builds this file with Kaniko 1.23,

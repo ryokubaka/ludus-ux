@@ -191,6 +191,22 @@ const FINDINGS: Record<string, Finding> = {
     source: "review",
     tests: { "src/security/route-audit.test.ts": ["changes no state in a GET handler"] },
   },
+  "Next.js 16.4.5 and ws 8.23.0 close the November 2026 advisories": {
+    source: "advisory",
+    tests: {
+      "src/security/dependency-pins.test.ts": [
+        "pins Next.js at 16.4.5 or newer and ws at 8.23.0 or newer",
+      ],
+    },
+  },
+  "picomatch 4.0.8 collapses a repeated star extglob": {
+    source: "advisory",
+    tests: {
+      "src/security/dependency-pins.test.ts": [
+        "uses the vendored picomatch that compiles a repeated star extglob once",
+      ],
+    },
+  },
   "a security changelog entry names a regression test": {
     source: "review",
     tests: {

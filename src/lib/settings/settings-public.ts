@@ -15,6 +15,7 @@ export const PUBLIC_SETTINGS_KEYS = [
   "ludusAnsibleVerbose",
   "ludusAnsibleSpeedups",
   "useLudusHostDns",
+  "ignoreChocolateyChecksums",
 ] as const
 
 export type PublicSettingsKey = (typeof PUBLIC_SETTINGS_KEYS)[number]
@@ -46,6 +47,7 @@ export function toPublicSettings(
     ludusAnsibleVerbose: settings.ludusAnsibleVerbose,
     ludusAnsibleSpeedups: settings.ludusAnsibleSpeedups,
     useLudusHostDns: settings.useLudusHostDns,
+    ignoreChocolateyChecksums: settings.ignoreChocolateyChecksums,
   }
   if (!opts.isAdmin) return base
   return {

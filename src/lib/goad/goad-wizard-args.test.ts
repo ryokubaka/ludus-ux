@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   buildGoadWizardInstallArgs,
+  isGoadCatalogName,
   extractGoadInstanceIdFromOutput,
   goadExecuteOutputLooksFailed,
   inferGoadLabName,
@@ -23,6 +24,13 @@ describe("goad-wizard-args", () => {
   it("keeps the last loaded instance when a default is printed first", () => {
     const log = "[+] Instance old-lab loaded\n[+] Instance new-lab loaded"
     expect(extractGoadInstanceIdFromOutput(log)).toBe("new-lab")
+  })
+
+  it("rejects a lab or extension that is not a catalog name", () => {
+    expect(isGoadCatalogName("GOAD-Mini")).toBe(true)
+    expect(isGoadCatalogName("GOAD;id")).toBe(false)
+    expect(() => buildGoadWizardInstallArgs("GOAD;id", [])).toThrow(/catalog name/)
+    expect(() => buildGoadWizardInstallArgs("GOAD", ["bad;ext"])).toThrow(/catalog name/)
   })
 
   it("fresh no extensions → -l install", () => {

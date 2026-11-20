@@ -65,6 +65,7 @@ interface Settings {
   ludusAnsibleVerbose: boolean
   ludusAnsibleSpeedups: boolean
   useLudusHostDns: boolean
+  ignoreChocolateyChecksums: boolean
   /** New value typed by the admin. The server never sends the stored key. */
   rootApiKey?: string
   rootApiKeySet?: boolean
@@ -585,6 +586,7 @@ function SettingsContent() {
                 <p className="text-xs text-muted-foreground">
                   Required for user/group management. Found at{" "}
                   <code className="text-primary">{draft?.ludusInstallPath || "<LUDUS_INSTALL_PATH>"}/install/root-api-key</code> on the server.
+                  LUX also sends this value as the PocketBase password for root@ludus.internal. Ludus sets that password only when it first creates the root user. A valid key can still be rejected there after the key changes, or when that first write did not re-read the key file.
                 </p>
                 {draft?.rootApiKeyOverriddenByEnv ? (
                   <Alert variant="default" className="mt-2 border-status-warning/40 bg-status-warning/10">
@@ -658,6 +660,22 @@ function SettingsContent() {
                 <Switch
                   checked={draft?.useLudusHostDns ?? false}
                   onCheckedChange={(v) => setDraft((d) => d ? { ...d, useLudusHostDns: v } : d)}
+                  disabled={!session?.isAdmin}
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Ignore Chocolatey checksums</p>
+                  <p className="text-xs text-muted-foreground">
+                    Additional-tools installs skip package checksums on every Ludus deploy, including
+                    the CLI. A vendor can replace an installer without publishing a new package, and
+                    that mismatch fails the whole install. Saving writes this on the Ludus host.
+                    Sysinternals already skips its checksum.
+                  </p>
+                </div>
+                <Switch
+                  checked={draft?.ignoreChocolateyChecksums ?? false}
+                  onCheckedChange={(v) => setDraft((d) => d ? { ...d, ignoreChocolateyChecksums: v } : d)}
                   disabled={!session?.isAdmin}
                 />
               </div>

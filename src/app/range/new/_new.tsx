@@ -48,6 +48,7 @@ import { BlueprintDependenciesPanel } from "@/components/blueprints/blueprint-de
 import { checkBlueprintDependencies } from "@/lib/blueprints/blueprint-dependency-service"
 import { applyBlueprintToRange } from "@/lib/blueprints/blueprint-apply"
 import { substituteRangeIdInConfig } from "@/lib/templates/range-config-templates"
+import { BLANK_RANGE_YAML } from "@/lib/range/range-builder-document"
 import { registerLuxDeployTagRun } from "@/lib/lux/register-lux-deploy-tag-run"
 import { queryKeys } from "@/lib/ui/query-keys"
 import { STALE } from "@/lib/ui/query-client"
@@ -436,6 +437,16 @@ export function NewRangePageClient() {
       await refreshRanges()
       toast({ title: "Range created", description: `Range ${rangeId} created successfully` })
       if (configMethod === "builder") {
+        try {
+          sessionStorage.setItem("lux-builder-blank", rangeId)
+        } catch {
+          /* the builder still opens the saved file */
+        }
+        try {
+          await ludusApi.setRangeConfig(BLANK_RANGE_YAML, rangeId, true)
+        } catch {
+          /* a rejected empty file still opens blank; the draft keeps it */
+        }
         openRangeBuilder(rangeId)
         setCreating(false)
         return

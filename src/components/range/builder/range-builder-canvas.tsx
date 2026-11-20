@@ -64,6 +64,7 @@ import {
   endpointNodeId,
   ROUTER_NODE_ID,
   VLAN_GROUP_WIDTH,
+  VLAN_HEADER,
   vlanGroupHeight,
   savedBoxSize,
   layoutDomainMembers,
@@ -576,23 +577,25 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
         domainSize.set(vm.domainFqdn, { width: saved.width, height: saved.height })
       }
       const savedVlan = layout[id]
+      const pinnedEmpty = placeholderDomains.filter((fqdn) => domainPins[fqdn] === vlan.vlan)
       const stack = layoutVlanStack(members, {
         width: savedVlan?.width && savedVlan.width > 0 ? savedVlan.width : undefined,
         height: savedVlan?.height && savedVlan.height > 0 ? savedVlan.height : undefined,
         domainSize,
         layoutLinks: domainLayoutLinks(graph),
       })
-      stacksBottom = Math.max(stacksBottom, vlanPos.y + stack.height)
+      const vlanHeight = stack.height + pinnedEmpty.length * 92
+      stacksBottom = Math.max(stacksBottom, vlanPos.y + vlanHeight)
       built.push({
         id,
         type: "vlan",
         position: vlanPos,
         zIndex: 0,
         width: stack.width,
-        height: stack.height,
+        height: vlanHeight,
         initialWidth: stack.width,
-        initialHeight: stack.height,
-        style: { width: stack.width, height: stack.height },
+        initialHeight: vlanHeight,
+        style: { width: stack.width, height: vlanHeight },
         data: {
           kind: "vlan",
           vlan: vlan.vlan,
@@ -665,7 +668,8 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     placeholderVlans.forEach((v, index) => {
       if (realVlans.has(v)) return
       const id = vlanNodeId(v)
-      const height = vlanGroupHeight(0)
+      const pinnedHere = placeholderDomains.filter((fqdn) => domainPins[fqdn] === v).length
+      const height = Math.max(vlanGroupHeight(0), VLAN_HEADER + 12 + pinnedHere * 92)
       const placeholderSize = savedBoxSize(layout, id, VLAN_GROUP_WIDTH, height)
       built.push({
         id,
@@ -738,13 +742,17 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
         subnet: null,
       }
       if (home) {
-        const homeHeight = px(home.height, 120)
+        const siblings = placeholderDomains.filter((item) => domainPins[item] === pin)
+        const slot = Math.max(0, siblings.indexOf(fqdn))
         built.push({
           id,
           type: "domain",
           parentId: home.id,
           zIndex: 1,
-          position: vmOffsets[id] ?? { x: 12, y: Math.max(48, homeHeight - placeholderSize.height - 12) },
+          position: vmOffsets[id] ?? {
+            x: 12,
+            y: VLAN_HEADER + 8 + slot * (placeholderSize.height + 8),
+          },
           width: placeholderSize.width,
           height: placeholderSize.height,
           initialWidth: placeholderSize.width,
@@ -1069,12 +1077,42 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
     [onLayoutRetarget],
   )
 
+  const onVlanRenumbered = useCallback(
+    (oldVlan: number, newVlan: number) => {
+      if (oldVlan === newVlan) return
+      setPlaceholderVlans((prev) => prev.map((vlan) => (vlan === oldVlan ? newVlan : vlan)))
+      setSelection((sel) =>
+        sel.kind === "vlan" && sel.vlan === oldVlan ? { kind: "vlan", vlan: newVlan } : sel,
+      )
+      onLayoutRetarget(vlanNodeId(oldVlan), vlanNodeId(newVlan))
+    },
+    [onLayoutRetarget],
+  )
+
+  const domainChoices = useMemo(() => {
+    const byFqdn = new Map<string, number | null>()
+    for (const domain of graph.domains) {
+      const member = graph.vms.find((vm) => vm.domainFqdn === domain.fqdn)
+      byFqdn.set(domain.fqdn, member?.vlan ?? null)
+    }
+    for (const fqdn of placeholderDomains) {
+      if (!byFqdn.has(fqdn)) byFqdn.set(fqdn, domainPins[fqdn] ?? null)
+    }
+    return [...byFqdn.entries()].map(([fqdn, vlan]) => ({ fqdn, vlan }))
+  }, [domainPins, graph.domains, graph.vms, placeholderDomains])
+
   const onDomainRenamed = useCallback(
     (oldFqdn: string, newFqdn: string) => {
       if (!newFqdn || oldFqdn === newFqdn) return
       setPlaceholderDomains((prev) => {
         if (!prev.includes(oldFqdn)) return prev
         return [...new Set(prev.map((fqdn) => (fqdn === oldFqdn ? newFqdn : fqdn)))]
+      })
+      setDomainPins((prev) => {
+        if (!(oldFqdn in prev)) return prev
+        const next = { ...prev, [newFqdn]: prev[oldFqdn] }
+        delete next[oldFqdn]
+        return next
       })
       setSelection((sel) =>
         sel.kind === "domain" && sel.fqdn === oldFqdn ? { kind: "domain", fqdn: newFqdn } : sel,
@@ -1229,6 +1267,13 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
           savePosition()
           return
         case "snap":
+          notify({
+            title: "Snapped back",
+            description:
+              data.kind === "domain"
+                ? "Put the domain's center inside a VLAN. It can sit there before it has a domain controller."
+                : "Drop the machine inside a VLAN or a domain box. Outside those boxes it snaps back.",
+          })
           setVmOffsets((prev) => ({ ...prev }))
           return
         case "join-domain": {
@@ -1611,23 +1656,25 @@ function RangeBuilderFlow(props: RangeBuilderCanvasProps) {
           <p className="text-sm text-muted-foreground">Loading range</p>
         </div>
       )}
-      {selection.kind !== "none" && (
-        <RangeBuilderInspector
+      <RangeBuilderInspector
           selection={selection}
           graph={graph}
           doc={doc}
           apply={apply}
           builtTemplates={builtTemplates}
+          templates={allTemplates}
           locked={locked && selectionIsLabOwned(selection, graph, goad)}
+          structureLocked={kind === "goad" || (locked && selectionIsLabOwned(selection, graph, goad))}
+          domainChoices={domainChoices}
           rangeNumber={rangeNumber}
           onClose={() => setSelection({ kind: "none" })}
           onVmRenamed={onVmRenamed}
           onDomainRenamed={onDomainRenamed}
+          onVlanRenumbered={onVlanRenumbered}
           routerDetails={routerDetails}
           rangeId={rangeId}
           findings={findings}
         />
-      )}
       <FirewallRuleDialog
         rule={pendingRule}
         vlans={graph.vlans.map((vlan) => vlan.vlan)}

@@ -26,6 +26,11 @@ import {
 } from "@/lib/ludus/ludus-router-template"
 import { ensureRangeDeployHostPatches } from "@/lib/range/range-deploy-host-patches"
 import { serverTimingHeader } from "@/lib/lux/server-timing"
+import {
+  ensureHubModeForPowerOn,
+  lookupRangeNumber,
+  releaseRangeVnet,
+} from "@/lib/sdn/range-vnet-control"
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
 
@@ -151,6 +156,14 @@ async function handler(
     }
     mark("preflight", preflightStart)
 
+    let releasedRangeNumber: number | null = null
+    if (request.method === "DELETE" && basePath === "/range") {
+      const deletingRangeID = request.nextUrl.searchParams.get("rangeID")?.trim() ?? ""
+      if (deletingRangeID && effectiveApiKey) {
+        releasedRangeNumber = await lookupRangeNumber(deletingRangeID, effectiveApiKey).catch(() => null)
+      }
+    }
+
     const upstreamStart = performance.now()
     const result = await ludusRequest(fullPath, {
       method: request.method,
@@ -218,6 +231,18 @@ async function handler(
       if (linuxUser && shouldRepairAnsibleHomeAfterProxyMutation(request.method, basePath, body)) {
         await ensureAnsibleHomeLayoutAsRoot(linuxUser, { verify: true })
         console.info(formatAnsibleHomeRepairLogLine(linuxUser))
+      }
+      const poweredRangeID = request.nextUrl.searchParams.get("rangeID")?.trim() ?? ""
+      if (poweredRangeID && request.method === "PUT" && basePath === "/range/poweron" && effectiveApiKey) {
+        void ensureHubModeForPowerOn(poweredRangeID, effectiveApiKey).catch((err) => {
+          console.error("[range-vnet] hub:", err instanceof Error ? err.message : String(err))
+        })
+      }
+      if (releasedRangeNumber != null) {
+        const rangeNumber = releasedRangeNumber
+        void releaseRangeVnet(rangeNumber).catch((err) => {
+          console.error("[range-vnet] release:", err instanceof Error ? err.message : String(err))
+        })
       }
     }
 

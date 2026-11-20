@@ -1,0 +1,12 @@
+{
+  "name": "picomatch",
+  "version": "4.0.8",
+  "description": "picomatch 4.0.7 with single-branch repeated extglobs compiled once, so patterns such as +(*) cannot stall the process (GHSA-fc5q-39xc-vjpf).",
+  "license": "MIT",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "posix.js",
+    "lib"
+  ]
+}

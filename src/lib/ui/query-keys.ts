@@ -39,6 +39,7 @@ export const queryKeys = {
 
   // ── Templates ─────────────────────────────────────────────────────────────
   templates: (scopeTag: string) => sc(scopeTag, ["templates"]),
+  proxmoxTemplateGuests: (scopeTag: string) => sc(scopeTag, ["templates", "proxmox-guests"]),
   templateStatus: (scopeTag: string) => sc(scopeTag, ["templates", "status"]),
   templateLogHistory: (scopeTag: string) => sc(scopeTag, ["templates", "logs", "history"]),
 

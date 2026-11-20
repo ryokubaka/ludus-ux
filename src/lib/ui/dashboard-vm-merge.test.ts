@@ -91,21 +91,22 @@ describe("mergeVmUnionPreferNext", () => {
   it("prefers next over prev for same identity", () => {
     const prev = [makeVM({ proxmoxID: 1, ip: "10.0.0.1" })]
     const next = [makeVM({ proxmoxID: 1, ip: "10.0.0.2" })]
-    const result = mergeVmUnionPreferNext(prev, next, false)
+    const result = mergeVmUnionPreferNext(prev, next)
     expect(result[0].ip).toBe("10.0.0.2")
   })
 
-  it("marks stale VMs as powered off with stalePowerPessimistic", () => {
-    const prev = [makeVM({ proxmoxID: 1, poweredOn: true })]
+  it("keeps the last known power state for a VM this poll did not include", () => {
+    const prev = [makeVM({ proxmoxID: 1, poweredOn: true, powerState: "running" })]
     const next: VMObject[] = []
-    const result = mergeVmUnionPreferNext(prev, next, true)
-    expect(result[0].poweredOn).toBe(false)
+    const result = mergeVmUnionPreferNext(prev, next)
+    expect(result[0].poweredOn).toBe(true)
+    expect(result[0].powerState).toBe("running")
   })
 
   it("merges VMs from both lists", () => {
     const prev = [makeVM({ proxmoxID: 1 })]
     const next = [makeVM({ proxmoxID: 2 })]
-    const result = mergeVmUnionPreferNext(prev, next, false)
+    const result = mergeVmUnionPreferNext(prev, next)
     expect(result).toHaveLength(2)
   })
 })
@@ -157,6 +158,7 @@ describe("resolveVmListForRangeQuery", () => {
     expect(result.vms.length).toBeGreaterThanOrEqual(2)
     expect(result.merged).toBe(true)
     expect(result.unconfirmedVmKeys).toEqual(["p:2"])
+    expect(result.vms.find((vm) => vm.proxmoxID === 2)?.poweredOn).toBe(true)
   })
 
   it("keeps prev VMs during transient gap when DEPLOYING and newVMs is empty", () => {

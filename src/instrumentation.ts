@@ -17,5 +17,7 @@ export async function register() {
     startSourceAutoSyncLoop()
     const { startDeployLogClockLoop } = await import("@/lib/logs/deploy-log-clock-recorder")
     startDeployLogClockLoop()
+    const { startRangeVnetLoop } = await import("@/lib/sdn/range-vnet-control")
+    startRangeVnetLoop()
   }
 }

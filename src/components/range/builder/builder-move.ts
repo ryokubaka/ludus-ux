@@ -83,12 +83,20 @@ export function hostDropTarget(args: {
   return vmDrop(args, center)
 }
 
+function centerOf(rect: DropRect): { x: number; y: number } {
+  return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+}
+
 function domainDrop(args: {
   rect: DropRect
   parentId: string | null
   vlans: readonly VlanTarget[]
 }): HostDrop {
+  const center = centerOf(args.rect)
   const parent = args.vlans.find((vlan) => vlan.id === args.parentId) ?? null
+  const inside = args.vlans.find((vlan) => contains(vlan, center.x, center.y)) ?? null
+  // A domain box can sit on a VLAN before it has a domain controller or any members.
+  if (inside && inside.id !== args.parentId) return { kind: "move-domain", toVlan: inside.vlan }
   const parentRatio = parent ? overlapRatio(args.rect, parent) : 0
   let best: VlanTarget | null = null
   let bestRatio = 0
@@ -103,7 +111,7 @@ function domainDrop(args: {
   if (best && bestRatio >= 0.35 && (parent == null || bestRatio > parentRatio)) {
     return { kind: "move-domain", toVlan: best.vlan }
   }
-  if (args.parentId && parentRatio < 0.2) return { kind: "snap" }
+  if (parent && !contains(parent, center.x, center.y)) return { kind: "snap" }
   return { kind: "stay" }
 }
 

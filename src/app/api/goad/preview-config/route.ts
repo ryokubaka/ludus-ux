@@ -11,12 +11,7 @@ import { sshExec, isGoadConfigured } from "@/lib/goad/goad-ssh"
 import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad/goad-preview-config-py"
 import { resolveGoadPath } from "@/lib/core/runtime-paths"
 import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
-
-const GOAD_CATALOG_NAME = /^[A-Za-z0-9_-]{1,64}$/
-
-function isGoadCatalogName(value: string): boolean {
-  return GOAD_CATALOG_NAME.test(value)
-}
+import { isGoadCatalogName } from "@/lib/goad/goad-wizard-args"
 
 export async function POST(request: NextRequest) {
   const session = await resolveSession(request)

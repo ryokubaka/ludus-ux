@@ -3,9 +3,12 @@
 import { useState, useEffect, useCallback, useMemo, Fragment, useRef } from "react"
 import Link from "next/link"
 import { previewSlice, ShowAllBar } from "@/components/ui/show-all-bar"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { queryKeys } from "@/lib/ui/query-keys"
+import { markTemplatesFromProxmox } from "@/lib/proxmox/proxmox-template-guests"
+import { fetchProxmoxGuests } from "@/lib/templates/template-proxmox-client"
+import { TemplateBuildHelp } from "@/components/range/builder/template-build-help"
 import { STALE } from "@/lib/ui/query-client"
 import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -48,6 +51,7 @@ import { useConfirm } from "@/hooks/use-confirm"
 import { ConfirmBar } from "@/components/ui/confirm-bar"
 import {
   buildCatalogTemplatePresenceMap,
+  catalogMatchesInstalledName,
   getCatalogTemplatePresence,
   resolveInstalledTemplateName,
   type CatalogTemplatePresence,
@@ -84,14 +88,20 @@ function AddFromSource({
   templatePresence,
   ludusTemplates,
   onAdded,
+  startOpen = false,
+  wantedNames = [],
 }: {
   templatePresence: Map<string, CatalogTemplatePresence>
   ludusTemplates: Array<{ name: string; built: boolean; version?: string }>
   onAdded: () => void
+  /** Open the catalog when Range Builder sent the user here to add a template. */
+  startOpen?: boolean
+  wantedNames?: string[]
 }) {
   const { toast } = useToast()
   const scopeTag = useEffectiveScopeTag()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(startOpen)
+  const wantedPicked = useRef(false)
   const [registeredSourceId, setRegisteredSourceId] = useState("")
   const [sourceTemplates, setSourceTemplates] = useState<SourceTemplate[]>([])
   const [loadingSource, setLoadingSource] = useState(false)
@@ -160,6 +170,29 @@ function AddFromSource({
     void fetchSource()
   }, [open, registeredSourceId, fetchSource])
 
+  useEffect(() => {
+    if (startOpen) setOpen(true)
+  }, [startOpen])
+
+  useEffect(() => {
+    if (sourceTemplates.length === 0) {
+      wantedPicked.current = false
+      return
+    }
+    if (wantedPicked.current || wantedNames.length === 0) return
+    const names = sourceTemplates
+      .filter((template) =>
+        wantedNames.some(
+          (wanted) => template.name === wanted || catalogMatchesInstalledName(template.name, wanted),
+        ),
+      )
+      .filter((template) => getCatalogTemplatePresence(template.name, templatePresence) !== "built")
+      .map((template) => template.name)
+    if (names.length === 0) return
+    wantedPicked.current = true
+    setSelected(new Set(names))
+  }, [sourceTemplates, wantedNames, templatePresence])
+
   const toggleSelect = (name: string) => {
     setSelected((prev) => {
       const next = new Set(prev)
@@ -207,6 +240,11 @@ function AddFromSource({
   const sharedCatalog = registeredSources.find((s) => s.id === registeredSourceId)?.sharedCatalog === true
   const alreadyAdded = sourceTemplates.filter((t) => presenceOf(t.name) === "added")
   const alreadyBuilt = sourceTemplates.filter((t) => presenceOf(t.name) === "built")
+  const wantedInCatalog = wantedNames.filter((wanted) =>
+    sourceTemplates.some(
+      (template) => template.name === wanted || catalogMatchesInstalledName(template.name, wanted),
+    ),
+  )
 
   return (
     <Card>
@@ -220,6 +258,16 @@ function AddFromSource({
 
       {open && (
         <CardContent className="space-y-4">
+          {wantedNames.length > 0 && catalogReady && wantedInCatalog.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {wantedNames.join(", ")} is not in this source. Choose another source, then add it and build it.
+            </p>
+          )}
+          {wantedInCatalog.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Range Builder needs {wantedInCatalog.join(", ")}. It is selected below. Add it, then build it from the template list.
+            </p>
+          )}
           {sourcesFetched && registeredSources.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               No sources yet.{" "}
@@ -452,6 +500,16 @@ export function TemplatesPageClient() {
   const [showLogs, setShowLogs] = useState(false)
   const buildLogsRef = useRef<HTMLDivElement>(null)
   const [filterBuilt, setFilterBuilt] = useState<"all" | "built" | "added">("all")
+  const searchParams = useSearchParams()
+  const buildGuide = useMemo(
+    () => searchParams.getAll("build").map((name) => name.trim()).filter(Boolean),
+    [searchParams],
+  )
+  const addGuide = useMemo(
+    () => searchParams.getAll("add").map((name) => name.trim()).filter(Boolean),
+    [searchParams],
+  )
+  const buildGuideApplied = useRef(false)
 
   // ── Build history ─────────────────────────────────────────────────────────
   const [buildHistoryOpen, setBuildHistoryOpen] = useState(false)
@@ -501,6 +559,17 @@ export function TemplatesPageClient() {
     staleTime: STALE.long,
   })
 
+  const { data: proxmoxGuests = [] } = useQuery({
+    queryKey: queryKeys.proxmoxTemplateGuests(scopeTag),
+    queryFn: fetchProxmoxGuests,
+    staleTime: STALE.short,
+    retry: false,
+  })
+  const listed = useMemo(
+    () => markTemplatesFromProxmox(templates, proxmoxGuests),
+    [proxmoxGuests, templates],
+  )
+
   const templateInstalled = useMemo(
     () => templates.map((t) => ({ name: t.name, version: t.version })),
     [templates],
@@ -513,6 +582,19 @@ export function TemplatesPageClient() {
   // Names of every template currently known to Ludus. Used to decide which
   // rows in /templates/logs/history are actual packer builds vs range deploys.
   const templateNames = useMemo(() => new Set(templates.map((t) => t.name)), [templates])
+
+  useEffect(() => {
+    if (loading || buildGuideApplied.current || buildGuide.length === 0) return
+    const unbuilt = buildGuide.filter((name) => listed.some((template) => template.name === name && !template.built))
+    if (unbuilt.length === 0) return
+    buildGuideApplied.current = true
+    setFilterBuilt("all")
+    setSelectedTemplates(new Set(unbuilt))
+    const first = unbuilt[0]
+    window.setTimeout(() => {
+      document.getElementById(`template-row-${first}`)?.scrollIntoView({ block: "center" })
+    }, 0)
+  }, [loading, buildGuide, listed])
 
   const visibleBuildHistory = useMemo(() => {
     if (buildHistoryShowAll) return buildHistory
@@ -696,7 +778,7 @@ export function TemplatesPageClient() {
       `tpl-delete:${name}`,
     )
 
-  const filtered = templates
+  const filtered = listed
     .filter((t) => {
       if (filterBuilt === "built") return t.built
       if (filterBuilt === "added") return !t.built
@@ -704,10 +786,10 @@ export function TemplatesPageClient() {
     })
     .sort((a, b) => a.name.localeCompare(b.name))
 
-  const builtCount = templates.filter((t) => t.built).length
+  const builtCount = listed.filter((t) => t.built).length
   const templatePresence = useMemo(
-    () => buildCatalogTemplatePresenceMap(templates),
-    [templates],
+    () => buildCatalogTemplatePresenceMap(listed),
+    [listed],
   )
 
   return (
@@ -800,10 +882,43 @@ export function TemplatesPageClient() {
       )}
 
       {/* Add from Source */}
+      {(buildGuide.length > 0 || addGuide.length > 0) && (
+        <Card>
+          <CardContent className="space-y-2 p-4 text-sm">
+            {buildGuide.length > 0 && (
+              <p>
+                Range Builder needs {buildGuide.join(", ")} built. The unbuilt ones are selected. Build them to finish installing.
+              </p>
+            )}
+            {addGuide.length > 0 && (
+              <p>
+                Range Builder needs {addGuide.join(", ")}. Add it from a source below, then build it from the template list.
+              </p>
+            )}
+            {buildGuide.some((name) => listed.some((template) => template.name === name && !template.built && template.proxmox !== "vm")) && (
+              <Button
+                size="sm"
+                disabled={building || !!pendingAction}
+                onClick={() =>
+                  handleBuild(
+                    buildGuide.filter((name) => listed.some((template) => template.name === name && !template.built && template.proxmox !== "vm")),
+                  )
+                }
+              >
+                <Play className="h-4 w-4" />
+                Build missing template{buildGuide.length === 1 ? "" : "s"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <AddFromSource
         templatePresence={templatePresence}
         ludusTemplates={templates}
         onAdded={() => queryClient.invalidateQueries({ queryKey: queryKeys.templates(scopeTag) })}
+        startOpen={addGuide.length > 0}
+        wantedNames={addGuide}
       />
 
       {/* Build History */}
@@ -969,10 +1084,13 @@ export function TemplatesPageClient() {
                       return (
                         <Fragment key={template.name}>
                           <tr
+                            id={`template-row-${template.name}`}
                             className={cn(
                               "border-b border-border/50 last:border-0 hover:bg-muted/30 transition-colors",
                               selectedTemplates.has(template.name) && "bg-primary/5",
                               rowHasPending && "bg-yellow-500/5",
+                              (buildGuide.includes(template.name) || addGuide.includes(template.name)) &&
+                                "ring-1 ring-inset ring-primary/40",
                             )}
                           >
                             <td className="p-3">
@@ -1012,6 +1130,11 @@ export function TemplatesPageClient() {
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                   <span className="text-xs">Built</span>
                                 </div>
+                              ) : template.proxmox === "vm" ? (
+                                <div className="flex items-center gap-1.5 text-status-warning">
+                                  <AlertTriangle className="h-3.5 w-3.5" />
+                                  <span className="text-xs">VM, not a template</span>
+                                </div>
                               ) : (
                                 <div className="flex items-center gap-1.5 text-status-warning">
                                   <AlertTriangle className="h-3.5 w-3.5" />
@@ -1021,14 +1144,19 @@ export function TemplatesPageClient() {
                             </td>
                             <td className="p-3">
                               <div className="flex items-center justify-end gap-1">
-                                <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  onClick={() => handleBuild([template.name])}
-                                  disabled={building || (!!pendingAction && !rowHasPending)}
-                                >
-                                  <Play className="h-3 w-3 text-status-success" />
-                                </Button>
+                                {template.proxmox === "vm" ? (
+                                  <TemplateBuildHelp name={template.name} row={{ name: template.name, built: false, os: template.os ?? "other", proxmox: "vm" }} quiet />
+                                ) : (
+                                  <Button
+                                    size="icon-sm"
+                                    variant="ghost"
+                                    onClick={() => handleBuild([template.name])}
+                                    disabled={building || template.built || (!!pendingAction && !rowHasPending)}
+                                    title={template.built ? "Already built" : "Build"}
+                                  >
+                                    <Play className="h-3 w-3 text-status-success" />
+                                  </Button>
+                                )}
                                 <Button
                                   size="icon-sm"
                                   variant="ghost"

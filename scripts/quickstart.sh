@@ -598,26 +598,35 @@ lux_offer_scoped_host_sudo() {
 
   local -a SSH_BASE=( -o StrictHostKeyChecking=accept-new -p "$LUDUS_SSH_PORT" )
   local remote="${target_user}@${LUDUS_SSH_HOST}"
-  local update_key install_body wrote_key=0
+  local update_key install_body install_cmd wrote_key=0
   update_key="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  # helper base64, sudoers base64, then the update key. None of these go on the command line.
   install_body="$(cat <<'EOS'
 set -euo pipefail
 umask 077
-printf '%s' "$1" | base64 -d > /usr/local/sbin/lux-host
+IFS= read -r helper_b64
+IFS= read -r sudoers_b64
+printf '%s' "$helper_b64" | base64 -d > /usr/local/sbin/lux-host
 chown root:root /usr/local/sbin/lux-host
 chmod 755 /usr/local/sbin/lux-host
 tmp="$(mktemp)"
-printf '%s' "$2" | base64 -d > "$tmp"
+printf '%s' "$sudoers_b64" | base64 -d > "$tmp"
 visudo -cf "$tmp"
 install -o root -g root -m 440 "$tmp" /etc/sudoers.d/lux-host
 rm -f "$tmp"
 key=$(cat)
+key="${key//$'\r'/}"
+key="${key//$'\n'/}"
 [[ "$key" =~ ^[0-9a-f]{64}$ ]]
 printf '%s' "$key" > /etc/lux-host.update-key
 chown root:root /etc/lux-host.update-key
 chmod 600 /etc/lux-host.update-key
 EOS
 )"
+  install_cmd="bash -c $(printf '%q' "$install_body")"
+  lux_send_install() {
+    printf '%s\n%s\n%s' "$helper_b64" "$sudoers_b64" "$update_key"
+  }
 
   local ssh_mode="none"
   if [[ -s "$KEY_DIR/id_rsa" ]] && ssh "${SSH_BASE[@]}" -o BatchMode=yes -i "$KEY_DIR/id_rsa" "$remote" true; then
@@ -648,10 +657,8 @@ EOS
   }
 
   echo "Installing /usr/local/sbin/lux-host and /etc/sudoers.d/lux-host on ${remote}…"
-  local install_cmd
-  install_cmd="bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
   if lux_ssh_as_target "test \"\$(id -u)\" -eq 0"; then
-    if ! printf '%s' "$update_key" | lux_ssh_as_target "$install_cmd"; then
+    if ! lux_send_install | lux_ssh_as_target "$install_cmd"; then
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
     fi
@@ -666,7 +673,7 @@ EOS
       echo "Skipped." >&2
       return 0
     fi
-    if ! printf '%s\n%s' "$sudo_pw" "$update_key" | lux_ssh_as_target "sudo -S -p '' $install_cmd"; then
+    if ! { printf '%s\n' "$sudo_pw"; lux_send_install; } | lux_ssh_as_target "sudo -S -p '' $install_cmd"; then
       unset sudo_pw
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
@@ -674,15 +681,13 @@ EOS
     unset sudo_pw
     wrote_key=1
   elif lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host true"; then
-    local helper_cmd
-    helper_cmd="bash -c $(printf '%q' "$install_body") bash $(printf '%q' "$helper_b64") $(printf '%q' "$sudoers_b64")"
-    if ! lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host $(printf '%q' "$helper_cmd")"; then
+    if ! lux_send_install | lux_ssh_as_target "sudo -n /usr/local/sbin/lux-host self-update"; then
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
     fi
   elif lux_ssh_as_target "sudo -n true"; then
     echo "This account already has passwordless sudo for all commands. Installing the helper anyway."
-    if ! printf '%s' "$update_key" | lux_ssh_as_target "sudo -n $install_cmd"; then
+    if ! lux_send_install | lux_ssh_as_target "sudo -n $install_cmd"; then
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1
     fi
@@ -695,7 +700,7 @@ EOS
       echo "Skipped. No sudo password, so the rule was not installed." >&2
       return 0
     fi
-    if ! printf '%s\n%s' "$sudo_pw" "$update_key" | lux_ssh_as_target "sudo -S -p '' $install_cmd"; then
+    if ! { printf '%s\n' "$sudo_pw"; lux_send_install; } | lux_ssh_as_target "sudo -S -p '' $install_cmd"; then
       unset sudo_pw
       echo "sudoers install failed. See docs/ssh-and-auth.md." >&2
       return 1

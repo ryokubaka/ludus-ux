@@ -9,7 +9,9 @@ Start with the [project README](../README.md) for a short overview, then use the
 | [Getting started](getting-started.md) | Requirements, Docker, install (quickstart or manual), upgrade |
 | [SSH and authentication](ssh-and-auth.md) | Host SSH for any user, lux-host, consoles, admin API URL, SSH keys |
 | [Environment variables](environment.md) | `.env`, Compose mounts, TLS, DNS |
-| [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, etc.) |
+| [Features](features.md) | What the UI covers (ranges, GOAD, admin, impersonation, LUXAI, etc.) |
+| [LUXAI](luxai.md) | In-app range assistant, model providers, and why there is no LUX MCP |
+| [Design](DESIGN.md) | Color, type, controls, and the words on a form |
 | [Templates](templates.md) | Packer template builds in LUX, add-from-source, Proxmox ACL troubleshooting |
 | [Architecture](architecture.md) | Stack, request flow, GOAD task diagram, design notes |
 | [Performance audit](performance-audit.md) | Phase 1 audit: request lifecycle, bottlenecks, caching, data-integrity risks, baseline plan |

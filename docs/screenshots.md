@@ -1,70 +1,80 @@
 # Screenshots
 
-Screenshots follow roughly the same flow as [Features](features.md): range operations first, then infrastructure, snapshots & testing, GOAD, admin, and identity. The hero logo in the main README is [`images/lux_logo_large.jpeg`](../images/lux_logo_large.jpeg); the square mark is at the end of this page.
+Screenshots from LUX 1.7.0, in the same order as the sidebar. They are also on the [main README](../README.md#screenshots). The hero logo is [`images/lux_logo_large.jpeg`](../images/lux_logo_large.jpeg); the square mark is at the end of this page.
+
+## Sign in
+
+![Sign in](../images/login.png)
 
 ## Range operations
 
-**Dashboard** — VM table, range state, deploy / abort, deploy logs.
+**Dashboard** — VM table, range state, and cluster stats.
 
 ![Dashboard](../images/dashboard.png)
 
-**Range config** — Monaco YAML editor, selective tags, live logs.
+**Dashboard during a deploy** — live Ansible output on the range page.
 
-![Range config](../images/rangeconfig.png)
+![Dashboard during a deploy](../images/dashboard-deploying.png)
 
-**New range** — wizard / deploy flow.
+**Deploy new range** — config method, then the wizard.
 
-![New range](../images/newrange-1.png)
+![Deploy new range](../images/newrange.png)
 
-**Range logs** — standalone SSE viewer, download, clear.
+**Range builder** — networks, domains, and firewall rules on the canvas.
 
-![Range logs](../images/rangelogs.png)
+![Range builder](../images/range-builder.png)
 
-## VM access
+**Configuration** — Monaco YAML editor for `range-config.yml`.
 
-**Console in browser** — noVNC session.
-
-![Console in browser](../images/consoleinbrowser.png)
-
-## Infrastructure
+![Range configuration](../images/rangeconfig.png)
 
 **Templates** — Packer templates.
 
 ![Templates](../images/templates.png)
 
-**Blueprints** — save, share, apply configs.
+**Testing mode**
 
-![Blueprints](../images/blueprints.png)
+![Testing mode](../images/testing-off.png)
 
-**Ansible roles & collections** — Galaxy-style add / list / remove.
-
-![Ansible roles and collections](../images/ansiblerolescollections.png)
-
-## Snapshots & testing mode
-
-**Snapshots** — per-VM and range-wide snapshot tools.
+**Snapshots** — per-VM snapshot list.
 
 ![Snapshots](../images/snapshots.png)
 
-**Testing mode** — disabled, enabled, and in-progress states.
+**Blueprints**
 
-![Testing mode off](../images/testing-off.png)
+![Blueprints](../images/blueprints.png)
 
-![Testing mode on](../images/testing-on.png)
+**Sources** — git catalogs for blueprints, templates, and Ansible content.
 
-![Testing mode in progress](../images/testing-inprogress.png)
+![Sources](../images/sources.png)
 
-## GOAD & admin
+**Ansible Galaxy** — roles and collections.
 
-**GOAD** — instances, deploy streams, task history.
+![Ansible Galaxy](../images/ansiblerolescollections.png)
+
+**Range logs** — live deploy stream and history while a range is deploying.
+
+![Range logs during a deploy](../images/rangelogs.png)
+
+## VM access
+
+**Console in the browser** — noVNC session.
+
+![Console in the browser](../images/consoleinbrowser.png)
+
+## GOAD and LudusHound
+
+**GOAD management**
 
 ![GOAD management](../images/goad-mgmt.png)
 
-**Ranges overview** — admin-style range list.
+![GOAD Dashboard](../images/goad-dash.png)
 
-![Range overview](../images/rangeoverview.png)
+## Administration
 
-## Users & groups
+**Ranges overview**
+
+![Ranges overview](../images/rangeoverview.png)
 
 **Users**
 
@@ -73,6 +83,16 @@ Screenshots follow roughly the same flow as [Features](features.md): range opera
 **Groups**
 
 ![Groups](../images/groups.png)
+
+**Ludus performance** — Proxmox CPU, memory, and load.
+
+![Ludus performance](../images/performance.png)
+
+## Settings
+
+**About** — Ludus and LUX release status.
+
+![Settings](../images/settings.png)
 
 ## Branding
 

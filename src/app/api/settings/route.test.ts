@@ -35,6 +35,7 @@ vi.mock("@/lib/logs/app-log", () => ({
 
 vi.mock("@/lib/ludus/ludus-ansible-speedups", () => ({
   applyLudusAnsibleSpeedups: vi.fn(async () => ({ ok: true, changed: false, restart: null })),
+  applyLudusChocolateyChecksums: vi.fn(async () => ({ ok: true, changed: false, restart: null })),
 }))
 
 import { GET, POST } from "./route"
@@ -55,6 +56,7 @@ const stored: RuntimeSettings = {
   ludusAnsibleVerbose: true,
   ludusAnsibleSpeedups: true,
   useLudusHostDns: false,
+  ignoreChocolateyChecksums: false,
   rootApiKey: "ROOT.secret-value",
   blueprintOperatorApiKey: "operator-secret",
   blueprintOperatorUserId: "admin-id",

@@ -9,3 +9,6 @@ Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
 # reads self-update and other bodies on stdin.
 Defaults!LUX_HOST !use_pty
 __LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST
+# Ludus runs the Security Onion hub-mode task as user ludus. That account may
+# set one range bridge and cannot run any other lux-host operation.
+ludus ALL=(root) NOPASSWD: /usr/local/sbin/lux-host bridge-ageing vmbr[0-9]*, /usr/local/sbin/lux-host bridge-ageing r[0-9]*

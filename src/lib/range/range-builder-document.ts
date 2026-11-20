@@ -140,6 +140,9 @@ export interface BuilderGraph {
 
 // ── Parse / serialize ─────────────────────────────────────────────────────────
 
+/** A new range opened in the builder. No machines, no VLAN 10, no domain. */
+export const BLANK_RANGE_YAML = "ludus: []\n"
+
 export function parseRangeDocument(yamlText: string): RangeDocument {
   return { root: YAML_LOAD(yamlText ?? "") }
 }

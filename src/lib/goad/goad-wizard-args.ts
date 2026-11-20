@@ -7,6 +7,11 @@ export function shellQuoteGoadArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
+/** Lab and extension names that can be placed in a GOAD command. */
+export function isGoadCatalogName(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(value)
+}
+
 /** GOAD prints this after create_empty / load_instance. */
 const GOAD_INSTANCE_LOADED_RE = /\[\+\]\s+Instance\s+(\S+)\s+loaded/
 
@@ -46,7 +51,13 @@ export function buildGoadWizardInstallArgs(
   exts: string[],
   mode: GoadWizardInstallMode = { kind: "fresh" },
 ): string {
+  if (!isGoadCatalogName(selectedLab)) {
+    throw new Error("That lab is not a GOAD catalog name.")
+  }
   const cleanExts = exts.map((e) => e.trim()).filter((e) => e && !/^none$/i.test(e))
+  for (const ext of cleanExts) {
+    if (!isGoadCatalogName(ext)) throw new Error("That extension is not a GOAD catalog name.")
+  }
 
   if (cleanExts.length === 0) {
     return mode.kind === "existing"

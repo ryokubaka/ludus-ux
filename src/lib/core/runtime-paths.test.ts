@@ -28,6 +28,7 @@ function mockSettings(overrides: Partial<RuntimeSettings>): void {
     ludusAnsibleVerbose: true,
     ludusAnsibleSpeedups: true,
     useLudusHostDns: false,
+    ignoreChocolateyChecksums: false,
     rootApiKey: "",
     blueprintOperatorApiKey: "",
     blueprintOperatorUserId: "",

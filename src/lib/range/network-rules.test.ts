@@ -17,6 +17,7 @@ import {
   isHostAddress,
   sanitizeNetworkIpOctetsInYaml,
   sanitizeNetworkPortsInYaml,
+  sanitizeNetworkVlansInYaml,
   normalizePorts,
   type NetworkRule,
 } from "@/lib/range/network-rules"
@@ -177,6 +178,16 @@ describe("sanitizeNetworkIpOctetsInYaml", () => {
   it("keeps range as string", () => {
     const yaml = `network:\n  rules:\n    - ip_last_octet_dst: 21-25\n`
     expect(sanitizeNetworkIpOctetsInYaml(yaml)).toContain("ip_last_octet_dst: 21-25")
+  })
+})
+
+describe("sanitizeNetworkVlansInYaml", () => {
+  it("writes a VLAN number as an integer and leaves the special words", () => {
+    const yaml = `network:\n  rules:\n    - name: out\n      vlan_src: "10"\n      vlan_dst: wireguard\n`
+    const out = sanitizeNetworkVlansInYaml(yaml)
+    expect(out).toContain("vlan_src: 10")
+    expect(out).not.toContain('"10"')
+    expect(out).toContain("vlan_dst: wireguard")
   })
 })
 

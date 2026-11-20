@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { DatabaseSync } from "node:sqlite"
+import Database from "better-sqlite3"
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -162,7 +162,7 @@ describe("lux_offer_scoped_host_sudo", () => {
     const key = readFileSync(result.keyFile, "utf8").trim().split("\n").pop() ?? ""
     expect(key).toMatch(/^[0-9a-f]{64}$/)
     expect(result.output).not.toContain(key)
-    const db = new DatabaseSync(path.join(result.dir, "ludus-ux.db"))
+    const db = new Database(path.join(result.dir, "ludus-ux.db"))
     const row = db.prepare("SELECT value FROM settings WHERE key = ?").get("luxHostUpdateKey") as { value: string }
     db.close()
     expect(decryptSettingsValueAtRest(row.value, secret)).toBe(key)

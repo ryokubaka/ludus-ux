@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { DatabaseSync } from "node:sqlite"
+import Database from "better-sqlite3"
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -187,7 +187,7 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
     })
     expect(result.status, result.stderr).toBe(0)
     expect(`${result.stdout}${result.stderr}`).not.toContain(key)
-    const db = new DatabaseSync(path.join(dir, "ludus-ux.db"))
+    const db = new Database(path.join(dir, "ludus-ux.db"))
     const row = db.prepare("SELECT value FROM settings WHERE key = ?").get("luxHostUpdateKey") as { value: string }
     db.close()
     expect(row.value.startsWith("enc:v2:")).toBe(true)

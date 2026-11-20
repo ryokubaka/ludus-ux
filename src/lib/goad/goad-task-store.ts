@@ -84,6 +84,8 @@ const taskOrder: string[] = []
 function shouldHydrateTaskStoreOnImport(): boolean {
   if (process.env.NEXT_PHASE === "phase-production-build") return false
   if (process.env.npm_lifecycle_event === "build") return false
+  // Unit tests import this module while the deployment database is read-only.
+  if (process.env.VITEST) return false
   return true
 }
 

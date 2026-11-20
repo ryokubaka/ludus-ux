@@ -77,7 +77,7 @@ export function Header() {
   const handleLogout = async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" })
     clearLuxClientAuthState()
-    window.location.assign("/login")
+    window.location.assign(new URL("/login", window.location.origin).href)
   }
 
   const pageInfo = resolvePageInfo(pendingHref ?? pathname)

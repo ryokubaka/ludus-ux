@@ -41,7 +41,7 @@ export function ShellSessionProvider({
 
   useEffect(() => {
     setResolved(value)
-  }, [value?.username, value?.isAdmin, value?.impersonationUserId])
+  }, [value])
 
   useEffect(() => {
     let cancelled = false

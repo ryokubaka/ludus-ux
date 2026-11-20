@@ -574,7 +574,7 @@ export function VMTable({
       if (matches) confirmed.push(name)
     }
     if (confirmed.length > 0) clearPendingPower(confirmed)
-  }, [vms, pendingPowerAction])
+  }, [vms, pendingPowerAction, clearPendingPower, vmName])
 
   const confirmDestroy = useCallback(async () => {
     const vm = pendingDestroy
@@ -670,6 +670,8 @@ export function VMTable({
   const columnCount = showConsole ? 8 : 7
 
   const virtualize = tableState === "ready" && sortedVms.length > VIRTUALIZE_THRESHOLD
+  // TanStack Virtual returns functions the React compiler cannot memoize.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: sortedVms.length,
     getScrollElement: () => scrollRef.current,

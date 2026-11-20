@@ -20,6 +20,7 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 ## Unreleased
 
 - [Fix] **LUXAI guest command** — A command is checked against the host before the proposal is shown. On Windows, `ps aux` becomes `Get-Process | Format-Table Name, Id -AutoSize` instead of failing in PowerShell. A command that will not run on that host is refused.
+- [Improve] **LUXAI messages** — Each message shows when it was sent. A message from today is the clock time. An older message includes the date. Export includes that time.
 
 ## [1.7.1] - 2026-11-20
 

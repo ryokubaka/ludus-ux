@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { MoreHorizontal } from "lucide-react"
 import { cn } from "@/lib/core/utils"
+import { formatLuxaiMessageTime } from "@/lib/luxai/message-time"
 import { statusSurface, statusText, type StatusKind } from "@/lib/ui/status-colors"
 import { defaultNetworks, defaultVmRows, parseRangeNetworks, parseRangeRules, parseRangeVms, validateDomain, validateNetworks, validateRangeId, validateRangeName, validateRangeVms, validateRules, type RangeNetworkDraft, type RangeRuleDraft, type RangeVmDraft } from "@/lib/luxai/range-vms"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -540,7 +541,9 @@ export function LuxaiPageClient() {
       const content = savedForm
         ? `Form: ${savedForm.prompt}`
         : isResumeQuestion(message.content) ? "Command finished. Continuing the request." : message.content
-      return `## ${message.role === "user" ? "You" : "LUXAI"}\n\n${thinking}${content}`
+      const when = formatLuxaiMessageTime(message.createdAt)
+      const who = message.role === "user" ? "You" : "LUXAI"
+      return `## ${when ? `${who} · ${when}` : who}\n\n${thinking}${content}`
     }).join("\n\n")
     const blob = new Blob([body], { type: "text/markdown" })
     const url = URL.createObjectURL(blob)
@@ -1168,6 +1171,26 @@ function Thinking({ text }: { text: string }) {
   )
 }
 
+function MessageTime({ createdAt, className }: { createdAt: number; className?: string }) {
+  const label = formatLuxaiMessageTime(createdAt)
+  if (!label) return null
+  const date = new Date(createdAt)
+  return (
+    <time dateTime={date.toISOString()} title={date.toLocaleString()} className={cn("tabular-nums", className)}>
+      {label}
+    </time>
+  )
+}
+
+function MessageStamp({ who, createdAt }: { who: string; createdAt: number }) {
+  return (
+    <div className="mb-1 flex items-center gap-3 text-xs text-muted-foreground">
+      <span>{who}</span>
+      <MessageTime createdAt={createdAt} />
+    </div>
+  )
+}
+
 function ChatBubble({
   message,
   activity,
@@ -1184,17 +1207,25 @@ function ChatBubble({
     const savedChoice = { id: message.id, prompt: saved.prompt, multiple: true, options: saved.options, fields: saved.fields }
     const Form = isRangeBuildChoice(savedChoice) ? RangeBuildWizard : ExtensionChecklist
     return (
-      <Form
-        choice={savedChoice}
-        initialValues={saved.values}
-        initialSelected={saved.selected}
-        locked
-        onSubmit={() => undefined}
-      />
+      <div className="mr-10">
+        <MessageStamp who="LUXAI" createdAt={message.createdAt} />
+        <Form
+          choice={savedChoice}
+          initialValues={saved.values}
+          initialSelected={saved.selected}
+          locked
+          onSubmit={() => undefined}
+        />
+      </div>
     )
   }
   if (isResumeQuestion(message.content)) {
-    return <p className="text-center text-xs text-muted-foreground">Command finished. Continuing the request.</p>
+    return (
+      <p className="text-center text-xs text-muted-foreground">
+        Command finished. Continuing the request.
+        <MessageTime createdAt={message.createdAt} className="ml-2" />
+      </p>
+    )
   }
   const mine = message.role === "user"
   return (
@@ -1203,9 +1234,10 @@ function ChatBubble({
         ? "max-w-[46rem] rounded-lg bg-primary px-4 py-3 text-primary-foreground shadow-sm"
         : "max-w-[46rem] rounded-lg border border-border bg-card px-4 py-3 text-card-foreground shadow-sm"}
       >
-        <div className="mb-2 flex items-center justify-between gap-3 text-xs opacity-80">
+        <div className="mb-2 flex items-center gap-3 text-xs opacity-80">
           <span>{mine ? "You" : "LUXAI"}</span>
-          <button type="button" className="underline-offset-2 hover:underline" onClick={onCopy}>{copied ? "Copied" : "Copy"}</button>
+          <MessageTime createdAt={message.createdAt} />
+          <button type="button" className="ml-auto underline-offset-2 hover:underline" onClick={onCopy}>{copied ? "Copied" : "Copy"}</button>
         </div>
         {message.reasoning?.trim() ? <Thinking text={message.reasoning} /> : null}
         {activity && !message.content ? (

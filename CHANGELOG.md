@@ -26,13 +26,13 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 
 **LUX**
 
-- [Fix] **LUXAI GOAD range** — Apply loads the lab's Ludus config from the GOAD checkout and uploads it in place of the stock range config. Firewall rules are merged into that file. A new range no longer sends the default Ludus `config.yml` back to Ludus.
-- [Fix] **Hostnames** — LUXAI, Ludus, and GOAD leave `{{ range_id }}` on the VM name and take it off every hostname. When a hostname includes that token, LUX says the hostname is saved without it.
-- [Fix] **LUXAI existing range** — Choosing a range that already exists says update or deploy. It does not say create.
 - [Add] **LUXAI deploy readiness** — A lab, extension, template, or blueprint this host cannot deploy stays in the list with the missing template or Ansible role. Apply is not offered for it.
 - [Add] **LUXAI deploy landing** — A Ludus deploy opens that range on the dashboard. A GOAD deploy opens the install page, then the instance dashboard once the instance exists.
 - [Add] **LUXAI providers** — Each provider keeps its own API key, model, and base URL. Switching providers restores that provider's saved key. Changing one provider's egress or base URL still clears that provider's key.
 - [Add] **LUXAI HTTPS proxy** — A model URL can redirect on the same host, so nginx can send HTTP to HTTPS or add a trailing slash. A redirect to another host or to a login page is refused.
+- [Fix] **LUXAI GOAD range** — Apply loads the lab's Ludus config from the GOAD checkout and uploads it in place of the stock range config. Firewall rules are merged into that file. A new range no longer sends the default Ludus `config.yml` back to Ludus.
+- [Fix] **Hostnames** — LUXAI, Ludus, and GOAD leave `{{ range_id }}` on the VM name and take it off every hostname. When a hostname includes that token, LUX says the hostname is saved without it.
+- [Fix] **LUXAI existing range** — Choosing a range that already exists says update or deploy. It does not say create.
 
 ## [1.7.0] - 2026-11-20
 

@@ -34,6 +34,13 @@ function unixPs(command: string): boolean {
   return flat(command).split(" ").slice(1).some((arg) => UNIX_PS_ARG.test(arg))
 }
 
+/** `ps` followed only by UNIX listing flags, such as `ps aux` or `ps -ef`. */
+function unixPsListing(text: string): boolean {
+  const parts = text.split(" ")
+  if (parts.length < 2 || parts[0].toLowerCase() !== "ps") return false
+  return parts.slice(1).every((part) => UNIX_PS_ARG.test(part))
+}
+
 function flat(command: string): string {
   return command.trim().replace(/\s+/g, " ")
 }
@@ -144,9 +151,7 @@ function rewritten(shell: GuestShell, command: string): string | null {
   if (shell === "powershell") {
     if (/^Get-Process\s*\|\s*Format-Table\s+Name,\s*Id\s+-AutoSize$/i.test(text)) return text
     if (/^Get-Process$/i.test(text) || /^(ps|tasklist)$/i.test(text)) return PROCESS_TABLE
-    if (/^ps\s+(aux|auxww|-ef|-e|-f|-A|-a|-ax|-aux|-u|-x|-ww|--forest)(\s+(aux|auxww|-ef|-e|-f|-A|-a|-ax|-aux|-u|-x|-ww|--forest))*$/i.test(text)) {
-      return PROCESS_TABLE
-    }
+    if (unixPsListing(text)) return PROCESS_TABLE
     const named = /^(?:ps|Get-Process)\s+(?:-Name\s+)?([A-Za-z0-9_.*?*-]+)$/i.exec(text)
     if (named && !/^(aux|auxww)$/i.test(named[1])) {
       const name = processName(named[1])

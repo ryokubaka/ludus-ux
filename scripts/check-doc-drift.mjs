@@ -19,8 +19,8 @@ const fail = (at, message) => problems.push(`${at}: ${message}`)
 const read = (file) => readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n")
 
 // --- Allowlists -------------------------------------------------------------
-// Variables read by the app that are not configuration: set by Node, Next, the
-// Docker CLI, or the CI runner.
+// Variables read by the app that are not configuration: set by Node, Next,
+// Vitest, the Docker CLI, or the CI runner.
 const ENV_INTERNAL = new Set([
   "NODE_ENV",
   "NODE_TLS_REJECT_UNAUTHORIZED",
@@ -30,6 +30,7 @@ const ENV_INTERNAL = new Set([
   "PATH",
   "DOCKER_HOST",
   "LUX_TEST_REQUIRE_CAPS",
+  "VITEST",
 ])
 
 // Paths a page names that are created on the host at install time, not shipped.

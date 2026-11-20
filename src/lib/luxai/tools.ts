@@ -6,6 +6,7 @@ import { sanitizeNetworkRulesYaml } from "@/lib/range/network-rules"
 import { inferOS } from "@/lib/range/range-vm-wizard"
 import { appendRangeIdHostnameNote, stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
 import { fillAskFields } from "@/lib/luxai/ask-fields"
+import { fitGuestCommand, guestOsForHost } from "@/lib/luxai/guest-command"
 import { listSkillNames, readSkill } from "@/lib/luxai/skills"
 import { insertChange } from "@/lib/luxai/store"
 import type { LuxaiChangeView, LuxaiChoice, LuxaiChoiceField } from "@/lib/luxai/types"
@@ -212,7 +213,7 @@ export const LUXAI_TOOLS: ToolSpec[] = [
   },
   {
     name: "propose_guest_command",
-    description: "Propose one shell or PowerShell command on one inventory host. A short name such as DC01 matches the VM whose name ends with it, for example range-GOAD-DC01. Does not run it. A guest command cannot be reverted automatically.",
+    description: "Propose one command on one inventory host. A short name such as DC01 matches the VM whose name ends with it, for example range-GOAD-DC01. shell is powershell on Windows and posix on Linux. On Windows use a PowerShell command such as Get-Process | Format-Table Name, Id -AutoSize, not ps aux. On Linux use a shell command such as ps -eo pid,comm, not a PowerShell cmdlet. Does not run it. A guest command cannot be reverted automatically.",
     parameters: objectSchema(
       {
         rangeId: rangeIdProp,
@@ -678,28 +679,35 @@ async function runTool(name: string, args: Record<string, unknown>, ctx: ToolCon
       const hint = str(args.host) || argText(args, "hostname") || argText(args, "vm") || argText(args, "machine")
       const host = resolveHostName(vmNames(range), hint)
       if (!HOST_NAME.test(host)) throw new Error("Host name is not valid.")
-      const shell = args.shell === "powershell" ? "powershell" : args.shell === "posix" ? "posix" : ""
-      if (!shell) throw new Error("Shell must be posix or powershell.")
+      const requested = args.shell === "powershell" ? "powershell" : args.shell === "posix" ? "posix" : ""
+      if (!requested) throw new Error("Shell must be posix or powershell.")
       const command = typeof args.command === "string" ? args.command : ""
       if (!command.trim()) throw new Error("Command is empty.")
       if (command.length > LUXAI_LIMITS.commandMax) throw new Error("Command is too long.")
       if (command.includes("\u0000")) throw new Error("Command is not valid.")
-      const guestModule = shell === "powershell" ? "ansible.windows.win_shell" : "ansible.builtin.shell"
+      const [configYaml, inventory] = await Promise.all([
+        ctx.host.readConfig(ctx.apiKey, id).catch(() => ""),
+        ctx.host.readInventory(ctx.apiKey, id).catch(() => ""),
+      ])
+      const fitted = fitGuestCommand(guestOsForHost(id, host, configYaml, inventory), requested, command)
+      const guestModule = fitted.shell === "powershell" ? "ansible.windows.win_shell" : "ansible.builtin.shell"
       const change = insertChange({
         sessionId: ctx.sessionId,
         username: ctx.username,
         rangeId: id,
         kind: "guest_command",
         summary: str(args.summary).slice(0, 400) || `Command on ${host}`,
-        preview: `${host} (${guestModule})\n${command}`,
+        preview: `${host} (${guestModule})\n${fitted.command}`,
         beforeText: "",
-        afterText: JSON.stringify({ host, module: guestModule, command }),
+        afterText: JSON.stringify({ host, module: guestModule, command: fitted.command }),
         revertable: false,
       })
+      const matched = host.toLowerCase() === hint.toLowerCase() ? "" : ` (matched from ${hint})`
+      const adjusted = fitted.note ? ` ${fitted.note}` : ""
       return {
         ok: true,
         change,
-        text: `Proposal ${change.id} targets ${host}${host.toLowerCase() === hint.toLowerCase() ? "" : ` (matched from ${hint})`}. The command was not run. A guest command cannot be reverted automatically.`,
+        text: `Proposal ${change.id} targets ${host}${matched}.${adjusted} The command was not run. A guest command cannot be reverted automatically.`,
       }
     }
     default:

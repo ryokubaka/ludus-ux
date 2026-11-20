@@ -19,6 +19,8 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 
 ## Unreleased
 
+- [Fix] **LUXAI guest command** — A command is checked against the host before the proposal is shown. On Windows, `ps aux` becomes `Get-Process | Format-Table Name, Id -AutoSize` instead of failing in PowerShell. A command that will not run on that host is refused.
+
 ## [1.7.1] - 2026-11-20
 
 **LUX**
@@ -29,7 +31,7 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 - [Add] **LUXAI deploy readiness** — A lab, extension, template, or blueprint this host cannot deploy stays in the list with the missing template or Ansible role. Apply is not offered for it.
 - [Add] **LUXAI deploy landing** — A Ludus deploy opens that range on the dashboard. A GOAD deploy opens the install page, then the instance dashboard once the instance exists.
 - [Add] **LUXAI providers** — Each provider keeps its own API key, model, and base URL. Switching providers restores that provider's saved key. Changing one provider's egress or base URL still clears that provider's key.
-- [Add] **LUXAI HTTPS proxy** — A model URL can redirect on the same host, so nginx can send HTTP to HTTPS or add a trailing slash. A redirect to another host or to a login page is refused. Hermes's dashboard is that login page; its API is the `/v1/` proxy to `127.0.0.1:8642`.
+- [Add] **LUXAI HTTPS proxy** — A model URL can redirect on the same host, so nginx can send HTTP to HTTPS or add a trailing slash. A redirect to another host or to a login page is refused.
 
 ## [1.7.0] - 2026-11-20
 

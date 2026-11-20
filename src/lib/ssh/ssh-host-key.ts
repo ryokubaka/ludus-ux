@@ -92,21 +92,16 @@ type HostKeyStore = {
   remove(host: string, port: number): boolean
 }
 
-let tableReady = false
-
 function hostKeyDb() {
   const db = getDb()
-  if (!tableReady) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS ssh_host_keys (
-        host TEXT NOT NULL,
-        port INTEGER NOT NULL,
-        fingerprint TEXT NOT NULL,
-        PRIMARY KEY (host, port)
-      )
-    `)
-    tableReady = true
-  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ssh_host_keys (
+      host TEXT NOT NULL,
+      port INTEGER NOT NULL,
+      fingerprint TEXT NOT NULL,
+      PRIMARY KEY (host, port)
+    )
+  `)
   return db
 }
 
@@ -196,11 +191,15 @@ export function attachSshHostVerifier(config: ConnectConfig): ConnectConfig {
   return {
     ...config,
     hostVerifier: (key: Buffer, callback: (accepted: boolean) => void) => {
+      // ssh2 treats a synchronous callback as both finished and still pending,
+      // which drops the first handshake. Decide now, answer on the next turn.
+      let accepted = false
       try {
-        callback(verifySshHostKey(host, port, key))
+        accepted = verifySshHostKey(host, port, key)
       } catch {
-        callback(false)
+        accepted = false
       }
+      process.nextTick(() => callback(accepted))
     },
   }
 }

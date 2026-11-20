@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { buildHostProbeCmd, normalizeLuxHostRepoPath, parseHostProbe } from "@/lib/lux/lux-upgrade-host"
+import { buildHostProbeCmd, hostScriptCallerPathFirst, normalizeLuxHostRepoPath, parseHostProbe } from "@/lib/lux/lux-upgrade-host"
 import { sshLoginCommand } from "@/lib/ssh/proxmox-ssh"
 
 describe("sshLoginCommand", () => {
@@ -17,7 +17,7 @@ describe("sshLoginCommand", () => {
     writeFileSync(path.join(dockerStub, "docker"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
     chmodSync(path.join(dockerStub, "docker"), 0o755)
     const wrapped = sshLoginCommand(
-      buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] }),
+      hostScriptCallerPathFirst(buildHostProbeCmd({ containerRef: "ludus-ux", candidates: [repo] })),
     )
     const out = execFileSync("bash", ["--norc", "--noprofile", "-c", wrapped], {
       encoding: "utf8",

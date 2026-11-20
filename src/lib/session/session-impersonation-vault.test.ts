@@ -1,4 +1,5 @@
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import { resetDbForTests } from "@/lib/core/db"

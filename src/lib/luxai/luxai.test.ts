@@ -526,6 +526,23 @@ describe("LUXAI tools and journal", () => {
     expect(outcome.ok).toBe(true)
     expect(outcome.change?.preview).toContain("smeowden-GOAD-Mini-49UF6C-GOAD-DC01")
     expect(outcome.text).toContain("matched from DC01")
+
+    const windows: LuxaiHost = {
+      ...host,
+      readConfig: async () => "ludus:\n  - vm_name: \"{{ range_id }}-GOAD-DC01\"\n    template: win2022-server-x64-template\n",
+      readInventory: async () => "[windows]\nsmeowden-GOAD-Mini-49UF6C-GOAD-DC01 ansible_connection=winrm\n",
+    }
+    const processes = await executeTool("propose_guest_command", {
+      rangeID: "smeowden-GOAD-Mini-49UF6C",
+      host: "DC01",
+      shell: "posix",
+      command: "ps aux",
+      summary: "processes on DC01",
+    }, { username: "alice", apiKey: "k", sessionId: session.id, userText: "List processes on DC01", host: windows })
+    expect(processes.ok).toBe(true)
+    expect(processes.change?.preview).toContain("ansible.windows.win_shell")
+    expect(processes.change?.preview).toContain("Get-Process | Format-Table Name, Id -AutoSize")
+    expect(processes.change?.preview).not.toContain("ps aux")
   })
 
   it("proposes a range config without uploading it, and hides another user's session", async () => {

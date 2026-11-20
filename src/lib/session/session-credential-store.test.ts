@@ -1,6 +1,6 @@
-import crypto from "crypto"
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { resetDbForTests } from "@/lib/core/db"
 import {
@@ -10,31 +10,25 @@ import {
   updateSessionCredentials,
 } from "@/lib/session/session-credential-store"
 
-const TEST_DATA = path.join(process.cwd(), "data-test-session-creds")
-
 describe("session-credential-store", () => {
   const prevSecret = process.env.APP_SECRET
   const prevData = process.env.DATA_DIR
+  let testData = ""
 
   beforeEach(() => {
     resetDbForTests()
     process.env.APP_SECRET = "test-app-secret-for-unit-tests"
-    fs.mkdirSync(TEST_DATA, { recursive: true })
-    process.env.DATA_DIR = TEST_DATA
-    // Reset db singleton by deleting test db
-    const dbFile = path.join(TEST_DATA, "ludus-ux.db")
-    if (fs.existsSync(dbFile)) fs.unlinkSync(dbFile)
-    const wal = `${dbFile}-wal`
-    const shm = `${dbFile}-shm`
-    if (fs.existsSync(wal)) fs.unlinkSync(wal)
-    if (fs.existsSync(shm)) fs.unlinkSync(shm)
+    testData = fs.mkdtempSync(path.join(os.tmpdir(), "lux-session-creds-"))
+    process.env.DATA_DIR = testData
   })
 
   afterEach(() => {
+    resetDbForTests()
     if (prevSecret !== undefined) process.env.APP_SECRET = prevSecret
     else delete process.env.APP_SECRET
     if (prevData !== undefined) process.env.DATA_DIR = prevData
     else delete process.env.DATA_DIR
+    fs.rmSync(testData, { recursive: true, force: true })
   })
 
   it("creates and retrieves credentials", () => {

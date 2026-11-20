@@ -3,6 +3,7 @@ import {
   appendVmsToRangeConfig,
   collectIpLastOctetsByVlan,
   defaultsForTemplate,
+  generateYaml,
   suggestIpLastOctetForVlan,
 } from "@/lib/range/range-vm-wizard"
 
@@ -30,6 +31,20 @@ describe("appendVmsToRangeConfig", () => {
     expect(merged).toContain("kali-x64-desktop-template")
     expect(merged).toContain("debian-12-x64-server-template")
     expect(merged).toContain("inter_vlan_default: DROP")
+  })
+})
+
+describe("generateYaml", () => {
+  it("keeps the range id on the VM name and drops it from a Windows hostname", () => {
+    const windows = defaultsForTemplate("win2019-server-x64-template")
+    windows.hostname = "{{ range_id }}-DC01"
+    const linux = defaultsForTemplate("kali-x64-desktop-template")
+    linux.hostname = "kali"
+    const yaml = generateYaml([windows, linux], null, [])
+    expect(yaml).toContain('vm_name: "{{ range_id }}-')
+    expect(yaml).toContain('hostname: "DC01"')
+    expect(yaml).toContain('hostname: "kali"')
+    expect(yaml).not.toContain('hostname: "{{ range_id }}')
   })
 })
 

@@ -5,12 +5,16 @@ export interface GoadPlanLab {
   name: string
   description?: string
   ludusSupported?: boolean
+  requiredTemplates?: string[]
+  requiredRoles?: string[]
 }
 
 export interface GoadPlanExtension {
   name: string
   description?: string
   compatibility?: string[]
+  requiredTemplates?: string[]
+  requiredRoles?: string[]
 }
 
 export interface GoadPlanCatalog {

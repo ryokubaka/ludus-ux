@@ -63,6 +63,8 @@ import {
   type RouterDetails,
 } from "./builder-types"
 import { trustLabel, trustLinks } from "./builder-routing"
+import { hostnameWithoutRangeId } from "@/lib/range/hostname-range-id"
+import { RangeIdHostnameNote } from "@/components/range/range-id-hostname-note"
 import { TemplateBuildHelp } from "./template-build-help"
 
 interface InspectorProps {
@@ -252,12 +254,12 @@ function VmInspector({
   const disabled = locked
   const update = (patch: Record<string, unknown>) => apply((d) => updateVmRaw(d, vm.id, patch))
   const [nameDraft, setNameDraft] = useState(() => expandRangeId(vm.vmName, rangeId))
-  const [hostDraft, setHostDraft] = useState(() => expandRangeId(vm.hostname, rangeId))
+  const [hostDraft, setHostDraft] = useState(vm.hostname)
   const [vlanDraft, setVlanDraft] = useState(String(vm.vlan))
   const [octetDraft, setOctetDraft] = useState(String(vm.ipLastOctet))
   useEffect(() => {
     setNameDraft(expandRangeId(vm.vmName, rangeId))
-    setHostDraft(expandRangeId(vm.hostname, rangeId))
+    setHostDraft(vm.hostname)
   }, [rangeId, vm.hostname, vm.id, vm.vmName])
   useEffect(() => {
     setVlanDraft(String(vm.vlan))
@@ -322,14 +324,15 @@ function VmInspector({
           disabled={disabled}
           onChange={(e) => setHostDraft(e.target.value)}
           onBlur={() => {
-            const next = restoreRangeId(hostDraft.trim(), vm.hostname, rangeId)
+            const next = hostnameWithoutRangeId(hostDraft.trim())
             if (!next || next === vm.hostname) {
-              setHostDraft(expandRangeId(vm.hostname, rangeId))
+              setHostDraft(vm.hostname)
               return
             }
             update({ hostname: next })
           }}
         />
+        <RangeIdHostnameNote value={hostDraft} />
       </Field>
       <div className="grid grid-cols-2 gap-2">
         <Field label="VLAN">
@@ -1128,6 +1131,10 @@ function Detail({ label, value, mono }: { label: string; value: string; mono?: b
 function RouterInspector({ graph, apply, locked, routerDetails, rangeNumber }: InspectorProps) {
   const r = graph.router
   const set = (key: string, value: unknown) => apply((d) => setRouter(d, { [key]: value }))
+  const [routerHostDraft, setRouterHostDraft] = useState(r.hostname ?? "")
+  useEffect(() => {
+    setRouterHostDraft(r.hostname ?? "")
+  }, [r.hostname])
   const live = routerDetails.live
   return (
     <div className="space-y-3">
@@ -1191,10 +1198,16 @@ function RouterInspector({ graph, apply, locked, routerDetails, rangeNumber }: I
       <Field label="hostname">
         <Input
           className="h-8 text-xs font-mono"
-          defaultValue={r.hostname ?? ""}
+          value={routerHostDraft}
           disabled={locked}
-          onBlur={(e) => set("hostname", e.target.value.trim() || undefined)}
+          onChange={(e) => setRouterHostDraft(e.target.value)}
+          onBlur={() => {
+            const next = hostnameWithoutRangeId(routerHostDraft.trim())
+            setRouterHostDraft(next)
+            set("hostname", next || undefined)
+          }}
         />
+        <RangeIdHostnameNote value={routerHostDraft} />
       </Field>
       <Field label="template">
         <Input

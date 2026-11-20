@@ -16,6 +16,7 @@ import {
   routerTemplateBlockMessage,
 } from "@/lib/ludus/ludus-router-template"
 import { scheduleGoadDeployLinkage } from "@/lib/goad/goad-deploy-link"
+import { stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
 import { assertGoadInstanceAccess, goadTargetInstanceIds } from "@/lib/goad/goad-instance-access"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 
@@ -269,7 +270,7 @@ export async function POST(request: NextRequest) {
           taskOwner ?? undefined,
           effectiveRangeId,
           ludusDeployTags.length > 0 ? ludusDeployTags : undefined,
-          typeof workspaceConfigYaml === "string" ? workspaceConfigYaml : undefined,
+          typeof workspaceConfigYaml === "string" ? stripRangeIdHostnames(workspaceConfigYaml) : undefined,
           ludusOnlyRoles.length > 0 ? ludusOnlyRoles : undefined,
           isAdmin,
         ).then((fn) => {

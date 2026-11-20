@@ -4,6 +4,7 @@ import { LUXAI_LIMITS } from "@/lib/luxai/defaults"
 import { findLabPassword, redactSecrets, userNamedAccount, clipText } from "@/lib/luxai/redact"
 import { sanitizeNetworkRulesYaml } from "@/lib/range/network-rules"
 import { inferOS } from "@/lib/range/range-vm-wizard"
+import { appendRangeIdHostnameNote, stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
 import { fillAskFields } from "@/lib/luxai/ask-fields"
 import { listSkillNames, readSkill } from "@/lib/luxai/skills"
 import { insertChange } from "@/lib/luxai/store"
@@ -35,8 +36,20 @@ export interface LuxaiHost {
   createRange(apiKey: string, rangeId: string, name: string): Promise<void>
   deleteRange(apiKey: string, rangeId: string): Promise<void>
   fetchDoc(slug: string): Promise<string>
+  /**
+   * Render the lab's Ludus config from the GOAD checkout.
+   * A GOAD deploy uploads this in place of the stock range config.
+   */
+  renderGoadConfig?(lab: string, extensions: string[]): Promise<string>
   /** Start a GOAD install that was already confirmed. Returns the task id. */
-  startGoadDeploy(apiKey: string, rangeId: string, args: string, networkRulesJson?: string): Promise<string>
+  startGoadDeploy(
+    apiKey: string,
+    rangeId: string,
+    args: string,
+    networkRulesJson?: string,
+    /** Lab config copied over the workspace file at `ludus range config set`. */
+    workspaceConfigYaml?: string,
+  ): Promise<string>
 }
 
 export interface ToolContext {
@@ -357,7 +370,7 @@ export function prepareUploadedYaml(text: string): string {
   const trimmed = text.trim()
   if (!trimmed) throw new Error("Range config is empty.")
   assertYaml(trimmed)
-  return sanitizeNetworkRulesYaml(ensureVmOsYaml(trimmed))
+  return stripRangeIdHostnames(sanitizeNetworkRulesYaml(ensureVmOsYaml(trimmed)))
 }
 
 /** Ludus accepts a VM only when it has exactly one of windows, linux, or macOS. */
@@ -498,27 +511,49 @@ async function runTool(name: string, args: Record<string, unknown>, ctx: ToolCon
       const id = await resolveRangeId(args, ctx, true)
       const name = str(args.name)
       if (!name) throw new Error("Range name is empty.")
-      const uploaded = prepareUploadedYaml(typeof args.yaml === "string" ? args.yaml : "")
+      const sourceYaml = typeof args.yaml === "string" ? args.yaml : ""
+      const uploaded = prepareUploadedYaml(sourceYaml)
       const deploy = args.deploy === true
+      let exists = false
+      try {
+        await ctx.host.readRange(ctx.apiKey, id)
+        exists = true
+      } catch {
+        exists = false
+      }
+      const supplied = str(args.summary).slice(0, 400)
+      const summary = exists && (!supplied || /^create\b/i.test(supplied))
+        ? (deploy ? `Deploy ${id}` : `Update ${id}`)
+        : (supplied || (deploy ? `Create ${id} and deploy it` : `Create range ${id}`))
+      const previewLine = exists
+        ? (deploy
+          ? "Edit the range config, then Apply. That uploads this config to the existing range and starts a full deploy."
+          : "Edit the range config, then Apply. That uploads this config to the existing range. It does not deploy.")
+        : (deploy
+          ? "Edit the range config, then Apply. That creates the range, uploads this config, and starts a full deploy."
+          : "Edit the range config, then Apply. That creates the range and uploads this config.")
       const change = insertChange({
         sessionId: ctx.sessionId,
         username: ctx.username,
         rangeId: id,
         kind: "range_create",
-        summary: str(args.summary).slice(0, 400) || `Create range ${id}`,
-        preview: deploy
-          ? "Edit the range config, then Apply. That creates the range, uploads this config, and starts a full deploy."
-          : "Edit the range config, then Apply. That creates the range and uploads this config.",
+        summary,
+        preview: appendRangeIdHostnameNote(sourceYaml, previewLine),
         beforeText: "",
         afterText: JSON.stringify({ name, rangeId: id, yaml: uploaded, deploy }),
         revertable: false,
       })
+      const resultLine = exists
+        ? (deploy
+          ? `Proposal ${change.id} uploads the config for existing range ${id} and starts a full deploy when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was changed.`
+          : `Proposal ${change.id} uploads the config for existing range ${id} when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was changed.`)
+        : (deploy
+          ? `Proposal ${change.id} creates range ${id}, uploads the config, and starts a full deploy when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was created.`
+          : `Proposal ${change.id} creates range ${id} and uploads the config when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was created.`)
       return {
         ok: true,
         change,
-        text: deploy
-          ? `Proposal ${change.id} creates range ${id}, uploads the config, and starts a full deploy when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was created.`
-          : `Proposal ${change.id} creates range ${id} and uploads the config when the operator presses Apply. They can edit the YAML on the proposal first. Nothing was created.`,
+        text: appendRangeIdHostnameNote(sourceYaml, resultLine),
       }
     }
     case "propose_delete_range": {
@@ -578,7 +613,7 @@ async function runTool(name: string, args: Record<string, unknown>, ctx: ToolCon
         rangeId: id,
         kind: "range_config",
         summary: str(args.summary).slice(0, 400) || "Update range config",
-        preview: "Edit the range config, then Apply.",
+        preview: appendRangeIdHostnameNote(restored, "Edit the range config, then Apply."),
         beforeText: current,
         afterText: uploaded,
         revertable: true,
@@ -586,7 +621,7 @@ async function runTool(name: string, args: Record<string, unknown>, ctx: ToolCon
       return {
         ok: true,
         change,
-        text: `Proposal ${change.id} is waiting for the operator to apply it. The previous config is stored for revert. Nothing was uploaded.`,
+        text: appendRangeIdHostnameNote(restored, `Proposal ${change.id} is waiting for the operator to apply it. The previous config is stored for revert. Nothing was uploaded.`),
       }
     }
     case "propose_power": {

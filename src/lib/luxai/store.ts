@@ -17,6 +17,7 @@ import type {
   LuxaiMessageView,
   LuxaiModelInfo,
   LuxaiProvider,
+  LuxaiProviderPublic,
   LuxaiPublicSettings,
   LuxaiSessionSummary,
 } from "@/lib/luxai/types"
@@ -123,6 +124,19 @@ export interface LuxaiSettings {
   systemPrompt: string
 }
 
+const LUXAI_PROVIDERS: LuxaiProvider[] = ["openai", "anthropic", "cursor"]
+
+interface LuxaiProviderProfile {
+  egress: LuxaiEgress
+  baseUrl: string
+  model: string
+  apiKey: string
+  effort: string
+  contextWindow: number
+  modelParams: Array<{ id: string; value: string }>
+  modelCatalog: LuxaiModelInfo[]
+}
+
 const DEFAULT_SETTINGS: LuxaiSettings = {
   enabled: false,
   provider: "openai",
@@ -191,35 +205,113 @@ function readJson<T>(key: string, parse: (value: unknown) => T, fallback: T): T 
   }
 }
 
-export function getLuxaiSettings(): LuxaiSettings {
-  const enabled = readSetting("enabled") === "true"
-  const provider = readProvider(readSetting("provider"))
-  const egress = provider === "cursor" || readSetting("egress") === "cloud" ? "cloud" : "local"
-  const storedKey = readSetting("apiKey") ?? ""
-  let apiKey = ""
-  if (storedKey) {
-    try {
-      apiKey = decryptSettingsValueAtRest(storedKey, appSecret())
-    } catch {
-      apiKey = ""
-    }
-  }
+function emptyProfile(provider: LuxaiProvider): LuxaiProviderProfile {
   return {
-    enabled,
-    provider,
-    egress,
-    baseUrl: provider === "cursor" ? CURSOR_API_ORIGIN : (readSetting("baseUrl") ?? ""),
+    egress: provider === "cursor" ? "cloud" : "local",
+    baseUrl: provider === "cursor" ? CURSOR_API_ORIGIN : "",
+    model: "",
+    apiKey: "",
+    effort: "",
+    contextWindow: 0,
+    modelParams: [],
+    modelCatalog: [],
+  }
+}
+
+function readStoredKey(storageKey: string): string {
+  const stored = readSetting(storageKey) ?? ""
+  if (!stored) return ""
+  try {
+    return decryptSettingsValueAtRest(stored, appSecret())
+  } catch {
+    return ""
+  }
+}
+
+function writeStoredKey(storageKey: string, apiKey: string): void {
+  writeSetting(storageKey, apiKey ? encryptSettingsValueAtRest(apiKey, appSecret()) : "")
+}
+
+function parseStoredProfile(provider: LuxaiProvider, raw: string): LuxaiProviderProfile {
+  const blank = emptyProfile(provider)
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const egress = provider === "cursor" || parsed.egress === "cloud" ? "cloud" : "local"
+    return {
+      egress,
+      baseUrl: provider === "cursor" ? CURSOR_API_ORIGIN : (typeof parsed.baseUrl === "string" ? parsed.baseUrl : ""),
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      apiKey: "",
+      effort: readEffort(typeof parsed.effort === "string" ? parsed.effort : ""),
+      contextWindow: readContext(typeof parsed.contextWindow === "number" ? String(parsed.contextWindow) : ""),
+      modelParams: cleanModelParams(parsed.modelParams),
+      modelCatalog: cleanCatalog(parsed.modelCatalog),
+    }
+  } catch {
+    return blank
+  }
+}
+
+function legacyProfile(provider: LuxaiProvider): LuxaiProviderProfile {
+  const profile = emptyProfile(provider)
+  if (provider === "cursor") return {
+    ...profile,
     model: readSetting("model") ?? "",
-    apiKey,
+    apiKey: readStoredKey("apiKey"),
     effort: readEffort(readSetting("effort")),
     contextWindow: readContext(readSetting("contextWindow")),
     modelParams: readJson("modelParams", cleanModelParams, []),
     modelCatalog: readJson("modelCatalog", cleanCatalog, []),
+  }
+  return {
+    ...profile,
+    egress: readSetting("egress") === "cloud" ? "cloud" : "local",
+    baseUrl: readSetting("baseUrl") ?? "",
+    model: readSetting("model") ?? "",
+    apiKey: readStoredKey("apiKey"),
+    effort: readEffort(readSetting("effort")),
+    contextWindow: readContext(readSetting("contextWindow")),
+    modelParams: readJson("modelParams", cleanModelParams, []),
+    modelCatalog: readJson("modelCatalog", cleanCatalog, []),
+  }
+}
+
+/** Saved connection for every provider. A provider that has never been saved is empty. */
+export function loadLuxaiProfiles(): Record<LuxaiProvider, LuxaiProviderProfile> {
+  const active = readProvider(readSetting("provider"))
+  const profiles = {} as Record<LuxaiProvider, LuxaiProviderProfile>
+  for (const provider of LUXAI_PROVIDERS) {
+    const raw = readSetting(`profile.${provider}`)
+    const profile = raw ? parseStoredProfile(provider, raw) : (provider === active ? legacyProfile(provider) : emptyProfile(provider))
+    const storedKey = readSetting(`apiKey.${provider}`)
+    profile.apiKey = storedKey != null ? readStoredKey(`apiKey.${provider}`) : (provider === active && !raw ? profile.apiKey : "")
+    profiles[provider] = profile
+  }
+  return profiles
+}
+
+function settingsFrom(provider: LuxaiProvider, profile: LuxaiProviderProfile): LuxaiSettings {
+  return {
+    enabled: readSetting("enabled") === "true",
+    provider,
+    egress: profile.egress,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    apiKey: profile.apiKey,
+    effort: profile.effort,
+    contextWindow: profile.contextWindow,
+    modelParams: profile.modelParams,
+    modelCatalog: profile.modelCatalog,
     maxRounds: readInt("maxRounds", DEFAULT_SETTINGS.maxRounds, 1, 30),
     maxToolCalls: readInt("maxToolCalls", DEFAULT_SETTINGS.maxToolCalls, 1, 40),
     timeoutSec: readInt("timeoutSec", DEFAULT_SETTINGS.timeoutSec, 5, 600),
     systemPrompt: readSetting("systemPrompt") ?? "",
   }
+}
+
+export function getLuxaiSettings(): LuxaiSettings {
+  const provider = readProvider(readSetting("provider"))
+  return settingsFrom(provider, loadLuxaiProfiles()[provider])
 }
 
 export function luxaiReady(settings: LuxaiSettings): boolean {
@@ -229,8 +321,22 @@ export function luxaiReady(settings: LuxaiSettings): boolean {
   return true
 }
 
+function toPublicProfile(profile: LuxaiProviderProfile, canConfigure: boolean): LuxaiProviderPublic {
+  return {
+    egress: profile.egress,
+    baseUrl: canConfigure ? profile.baseUrl : "",
+    model: profile.model,
+    apiKeySet: profile.apiKey.trim().length > 0,
+    effort: profile.effort,
+    contextWindow: profile.contextWindow,
+    modelParams: profile.modelParams,
+    catalog: canConfigure ? profile.modelCatalog : [],
+  }
+}
+
 export function toPublicLuxaiSettings(settings: LuxaiSettings, canConfigure: boolean): LuxaiPublicSettings {
   const prompt = settings.systemPrompt.trim()
+  const profiles = loadLuxaiProfiles()
   return {
     enabled: settings.enabled,
     ready: luxaiReady(settings),
@@ -243,6 +349,11 @@ export function toPublicLuxaiSettings(settings: LuxaiSettings, canConfigure: boo
     contextWindow: settings.contextWindow,
     modelParams: settings.modelParams,
     catalog: canConfigure ? settings.modelCatalog : [],
+    profiles: {
+      openai: toPublicProfile(profiles.openai, canConfigure),
+      anthropic: toPublicProfile(profiles.anthropic, canConfigure),
+      cursor: toPublicProfile(profiles.cursor, canConfigure),
+    },
     maxRounds: settings.maxRounds,
     maxToolCalls: settings.maxToolCalls,
     timeoutSec: settings.timeoutSec,
@@ -271,34 +382,70 @@ export interface LuxaiSettingsPatch {
   resetPrompt?: boolean
 }
 
-export function saveLuxaiSettings(current: LuxaiSettings, patch: LuxaiSettingsPatch): LuxaiSettings {
-  const next: LuxaiSettings = { ...current }
-  if (typeof patch.enabled === "boolean") next.enabled = patch.enabled
-  if (patch.provider === "openai" || patch.provider === "anthropic" || patch.provider === "cursor") next.provider = patch.provider
+function applyProfile(provider: LuxaiProvider, prior: LuxaiProviderProfile, patch: LuxaiSettingsPatch): LuxaiProviderProfile {
+  const next: LuxaiProviderProfile = {
+    ...prior,
+    modelParams: [...prior.modelParams],
+    modelCatalog: [...prior.modelCatalog],
+  }
   if (patch.egress === "local" || patch.egress === "cloud") next.egress = patch.egress
   if (typeof patch.baseUrl === "string") next.baseUrl = patch.baseUrl.trim()
   if (typeof patch.model === "string") next.model = patch.model.trim()
   if (typeof patch.effort === "string") next.effort = readEffort(patch.effort)
   if (typeof patch.contextWindow === "number") next.contextWindow = readContext(String(patch.contextWindow))
-  if (patch.modelParams) next.modelParams = cleanModelParams(patch.modelParams)
-  if (next.provider === "cursor") {
+  if (provider === "cursor") {
     next.baseUrl = CURSOR_API_ORIGIN
     next.egress = "cloud"
   }
+  const endpointChanged = next.baseUrl !== prior.baseUrl || next.egress !== prior.egress
+  if (patch.modelCatalog) next.modelCatalog = cleanCatalog(patch.modelCatalog)
+  else if (endpointChanged) next.modelCatalog = []
+  if (patch.modelParams) next.modelParams = cleanModelParams(patch.modelParams)
+  else if (endpointChanged) next.modelParams = []
+  if (patch.clearKey) next.apiKey = ""
+  else if (typeof patch.apiKey === "string" && patch.apiKey.trim()) next.apiKey = patch.apiKey.trim()
+  else if (endpointChanged) next.apiKey = ""
+  return next
+}
+
+function writeProfile(provider: LuxaiProvider, profile: LuxaiProviderProfile): void {
+  writeSetting(`profile.${provider}`, JSON.stringify({
+    egress: profile.egress,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    effort: profile.effort,
+    contextWindow: profile.contextWindow,
+    modelParams: profile.modelParams,
+    modelCatalog: profile.modelCatalog,
+  }))
+  writeStoredKey(`apiKey.${provider}`, profile.apiKey)
+}
+
+export function saveLuxaiSettings(current: LuxaiSettings, patch: LuxaiSettingsPatch): LuxaiSettings {
+  const profiles = loadLuxaiProfiles()
+  const provider = patch.provider === "openai" || patch.provider === "anthropic" || patch.provider === "cursor"
+    ? patch.provider
+    : current.provider
+  profiles[provider] = applyProfile(provider, profiles[provider], patch)
+  const active = profiles[provider]
+  const next: LuxaiSettings = {
+    ...current,
+    provider,
+    egress: active.egress,
+    baseUrl: active.baseUrl,
+    model: active.model,
+    apiKey: active.apiKey,
+    effort: active.effort,
+    contextWindow: active.contextWindow,
+    modelParams: active.modelParams,
+    modelCatalog: active.modelCatalog,
+  }
+  if (typeof patch.enabled === "boolean") next.enabled = patch.enabled
   if (typeof patch.maxRounds === "number") next.maxRounds = clampInt(patch.maxRounds, 1, 30, current.maxRounds)
   if (typeof patch.maxToolCalls === "number") next.maxToolCalls = clampInt(patch.maxToolCalls, 1, 40, current.maxToolCalls)
   if (typeof patch.timeoutSec === "number") next.timeoutSec = clampInt(patch.timeoutSec, 5, 600, current.timeoutSec)
   if (patch.resetPrompt) next.systemPrompt = ""
   else if (typeof patch.systemPrompt === "string") next.systemPrompt = patch.systemPrompt.slice(0, 20_000)
-
-  const endpointChanged =
-    next.baseUrl !== current.baseUrl || next.provider !== current.provider || next.egress !== current.egress
-  if (patch.modelCatalog) next.modelCatalog = cleanCatalog(patch.modelCatalog)
-  else if (endpointChanged) next.modelCatalog = []
-  if (endpointChanged && !patch.modelParams) next.modelParams = []
-  if (patch.clearKey) next.apiKey = ""
-  else if (typeof patch.apiKey === "string" && patch.apiKey.trim()) next.apiKey = patch.apiKey.trim()
-  else if (endpointChanged) next.apiKey = ""
 
   if (next.enabled && (!next.baseUrl || !next.model)) {
     throw new Error("Set a model URL and a model name before enabling LUXAI.")
@@ -307,6 +454,7 @@ export function saveLuxaiSettings(current: LuxaiSettings, patch: LuxaiSettingsPa
     throw new Error("A cloud provider needs an API key.")
   }
 
+  for (const id of LUXAI_PROVIDERS) writeProfile(id, profiles[id])
   writeSetting("enabled", next.enabled ? "true" : "false")
   writeSetting("provider", next.provider)
   writeSetting("egress", next.egress)
@@ -320,7 +468,7 @@ export function saveLuxaiSettings(current: LuxaiSettings, patch: LuxaiSettingsPa
   writeSetting("maxToolCalls", String(next.maxToolCalls))
   writeSetting("timeoutSec", String(next.timeoutSec))
   writeSetting("systemPrompt", next.systemPrompt)
-  writeSetting("apiKey", next.apiKey ? encryptSettingsValueAtRest(next.apiKey, appSecret()) : "")
+  writeStoredKey("apiKey", next.apiKey)
   return next
 }
 

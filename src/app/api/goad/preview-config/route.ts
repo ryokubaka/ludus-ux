@@ -7,9 +7,8 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/session/session"
-import { sshExec, isGoadConfigured } from "@/lib/goad/goad-ssh"
-import { GOAD_PREVIEW_CONFIG_PY } from "@/lib/goad/goad-preview-config-py"
-import { resolveGoadPath } from "@/lib/core/runtime-paths"
+import { isGoadConfigured } from "@/lib/goad/goad-ssh"
+import { renderGoadProviderConfig } from "@/lib/goad/render-goad-provider-config"
 import { logLuxRouteAction } from "@/lib/lux/lux-api-audit"
 import { isGoadCatalogName } from "@/lib/goad/goad-wizard-args"
 
@@ -49,7 +48,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "each extension must be a single catalog name" }, { status: 400 })
   }
 
-  const goadPath = resolveGoadPath()
   const creds =
     session.sshPassword && session.username
       ? { username: session.username, password: session.sshPassword }
@@ -62,48 +60,26 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  // Preview defaults: GOAD's default /24 prefix and the literal Ludus placeholder
-  // (resolved by Ludus at deploy). Callers may pass real values when known.
-  const effectiveIpRange = (ipRange || "").trim() || "192.168.56"
-  const effectiveRangeId = (rangeId || "").trim() || "{{ range_id }}"
-
-  const b64 = (s: string) => Buffer.from(s, "utf-8").toString("base64")
-  const encoded = Buffer.from(GOAD_PREVIEW_CONFIG_PY, "utf-8").toString("base64")
-  const cmd = `echo '${encoded}' | base64 -d | python3 - '${b64(goadPath)}' '${b64(labName)}' '${b64(JSON.stringify(extensions))}' '${b64(providerName)}' '${b64(effectiveIpRange)}' '${b64(effectiveRangeId)}'`
-
   try {
-    const { stdout, stderr, code } = await sshExec(cmd, creds)
-    if (code !== 0) {
-      logLuxRouteAction(request, session, {
-        outcome: "failure",
-        detail: `preview-config lab=${lab} exit=${code}`,
-      })
-      return NextResponse.json(
-        { error: `SSH script failed (exit ${code}): ${(stderr || stdout).slice(0, 500)}` },
-        { status: 500 },
-      )
-    }
-
-    const line = stdout.trim().split("\n").filter(Boolean).pop() ?? "{}"
-    const parsed = JSON.parse(line) as { ok?: boolean; yaml?: string; error?: string }
-
-    if (!parsed.ok) {
-      return NextResponse.json(
-        { error: parsed.error || "preview-config failed" },
-        { status: 500 },
-      )
-    }
-
+    const yaml = await renderGoadProviderConfig({
+      lab: labName,
+      extensions,
+      provider: providerName,
+      ipRange,
+      rangeId,
+      creds,
+    })
     logLuxRouteAction(request, session, {
       outcome: "success",
       detail: `preview-config lab=${lab} extensions=${extensions.length}`,
     })
-    return NextResponse.json({ ok: true, yaml: parsed.yaml ?? "" })
+    return NextResponse.json({ ok: true, yaml })
   } catch (err) {
+    const message = err instanceof Error ? err.message : "preview-config failed"
     logLuxRouteAction(request, session, {
       outcome: "failure",
-      detail: `preview-config ${(err as Error).message}`,
+      detail: `preview-config ${message}`,
     })
-    return NextResponse.json({ error: (err as Error).message }, { status: 500 })
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

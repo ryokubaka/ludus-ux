@@ -159,6 +159,88 @@ describe("GOAD deploy planning", () => {
     expect(workstation).not.toContain("domain:")
   })
 
+  it("says deploy on an existing range instead of create", async () => {
+    let answer: { choiceId: string; selected: string[]; values: Record<string, string> } | null = null
+    const result = await askHowToBuildRange({
+      intent: { rangeId: "", labHint: "" },
+      configured: true,
+      catalogError: false,
+      catalog,
+      ranges: [{ id: "rangeb", name: "Range B" }],
+      rangeExists: true,
+      alreadyLinked: false,
+      takeAnswer: () => answer,
+      propose: (spec) => ({
+        id: "c1",
+        sessionId: "s",
+        rangeId: spec.rangeId,
+        kind: "goad_deploy",
+        status: "pending",
+        summary: spec.summary,
+        preview: spec.preview,
+        revertable: false,
+        createdAt: 1,
+      }),
+      onEvent: (event) => {
+        if (event.type !== "choice") return
+        answer = {
+          choiceId: event.choice.id,
+          selected: [],
+          values: { kind: "GOAD-Mini", rangeMode: "rangeb", action: "deploy", rules: "[]" },
+        }
+      },
+    })
+    expect(result.text).toContain("Deploy GOAD-Mini on rangeb")
+    expect(result.text).not.toContain("Create rangeb")
+  })
+
+  it("does not propose a lab this host cannot install", async () => {
+    const events: LuxaiStreamEvent[] = []
+    let answer: { choiceId: string; selected: string[]; values: Record<string, string> } | null = null
+    const result = await askHowToBuildRange({
+      intent: { rangeId: "", labHint: "" },
+      configured: true,
+      catalogError: false,
+      catalog: {
+        labs: [{
+          name: "GOAD-Mini",
+          description: "Small lab",
+          ludusSupported: true,
+          requiredTemplates: ["win11-23h2-x64-enterprise-template"],
+        }],
+        extensions: [],
+      },
+      inventory: {
+        built: new Set(["debian-11-x64-server-template"]),
+        registered: new Set(["debian-11-x64-server-template", "win11-23h2-x64-enterprise-template"]),
+        ansibleRoles: new Set(),
+        ansibleCollections: new Set(),
+        ansibleKnown: true,
+        ludusVersion: "1.0.0",
+      },
+      rangeExists: false,
+      alreadyLinked: false,
+      takeAnswer: () => answer,
+      propose: () => { throw new Error("a blocked lab must not be proposed") },
+      onEvent: (event) => {
+        events.push(event)
+        if (event.type !== "choice") return
+        answer = {
+          choiceId: event.choice.id,
+          selected: [],
+          values: { kind: "GOAD-Mini", rangeMode: "new", rangeId: "lab", name: "Lab", action: "deploy", rules: "[]" },
+        }
+      },
+    })
+    const choice = events.find((event) => event.type === "choice")
+    const kind = choice && choice.type === "choice" ? choice.choice.fields?.find((field) => field.id === "kind") : undefined
+    const lab = kind?.options?.find((option) => option.id === "GOAD-Mini")
+    expect(lab?.disabled).toBe(true)
+    expect(lab?.label).toContain("not built")
+    expect(result.text).toContain("cannot be deployed")
+    expect(result.text).toContain("win11-23h2-x64-enterprise-template")
+  })
+
   it("ignores a question that is not a GOAD deploy", () => {
     expect(matchGoadDeployRequest("What is GOAD-Mini?")).toBeNull()
     expect(matchGoadDeployRequest("Deploy the routers")).toBeNull()

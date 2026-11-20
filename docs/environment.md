@@ -67,7 +67,7 @@ Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go w
 
 ## LUXAI
 
-LUXAI stores its provider, encrypted API key, and limits in SQLite (`luxai_settings`). There is no required environment variable. `APP_SECRET` encrypts the key the same way as other settings secrets. Connection steps for a local OpenAI-compatible server, Claude, OpenCode, and a Cursor API key are in [LUXAI](luxai.md). Effort and context window are stored with the provider.
+LUXAI stores each provider's encrypted API key, model, and base URL, plus shared limits, in SQLite (`luxai_settings`). There is no required environment variable. `APP_SECRET` encrypts the key the same way as other settings secrets. Connection steps for a local OpenAI-compatible server, Claude, OpenCode, and a Cursor API key are in [LUXAI](luxai.md). Effort and context window are stored with the provider.
 
 ## TLS / HTTPS
 

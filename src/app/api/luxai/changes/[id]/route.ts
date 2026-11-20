@@ -62,7 +62,8 @@ export async function POST(
         outcome: "success",
       })
       addMessage(change.sessionId, "assistant", `The operator applied proposal ${id}. ${detail}`)
-      return NextResponse.json({ ok: true, status: "applied", detail })
+      const navigate = deployLanding(change.kind, change.rangeId, afterText, detail)
+      return NextResponse.json({ ok: true, status: "applied", detail, ...(navigate ? { navigate } : {}) })
     } catch (err) {
       const message = err instanceof Error ? err.message : "Apply failed."
       if (err instanceof ChangeStartedError && !err.retryable) {
@@ -118,6 +119,35 @@ export async function POST(
   }
 
   return NextResponse.json({ error: "Action must be apply, revert, or reject." }, { status: 400 })
+}
+
+function deployLanding(
+  kind: string,
+  rangeId: string,
+  afterText: string,
+  detail: string,
+): { href: string; rangeId: string } | undefined {
+  if (kind === "deploy") return { href: "/", rangeId }
+  if (kind === "range_create") {
+    try {
+      const spec = JSON.parse(afterText) as { deploy?: boolean; rangeId?: string }
+      if (spec.deploy === true) return { href: "/", rangeId: spec.rangeId || rangeId }
+    } catch { /* a create that did not deploy stays in the chat */ }
+    return undefined
+  }
+  if (kind !== "goad_deploy") return undefined
+  const task = detail.match(/task (goad-[\w.-]+)/)?.[1]
+  if (!task) return undefined
+  let lab = ""
+  let target = rangeId
+  try {
+    const spec = JSON.parse(afterText) as { lab?: string; create?: { rangeId?: string } | null }
+    lab = typeof spec.lab === "string" ? spec.lab : ""
+    target = spec.create?.rangeId || rangeId
+  } catch { /* the change already names the range */ }
+  const query = new URLSearchParams({ luxaiTask: task, rangeId: target })
+  if (lab) query.set("lab", lab)
+  return { href: `/goad/new?${query.toString()}`, rangeId: target }
 }
 
 function editedRangeAfter(kind: string, stored: string, edited: string): string {

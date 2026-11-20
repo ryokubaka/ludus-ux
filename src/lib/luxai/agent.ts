@@ -140,6 +140,7 @@ Write to them in short sentences. Name the range and what will change, and say t
           contextWindow: settings.contextWindow,
           modelParams: settings.modelParams,
           catalog: settings.modelCatalog,
+          egress: settings.egress,
           messages: turns,
           tools: LUXAI_TOOLS,
           timeoutMs: settings.timeoutSec * 1000,

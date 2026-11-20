@@ -96,4 +96,38 @@ describe("range build wizard markup", () => {
     expect(html).not.toContain("type=\"submit\"")
     expect(html).not.toContain("When you press Apply: Create the range only")
   })
+
+  it("says update and deploy when the range already exists", () => {
+    const html = renderToStaticMarkup(createElement(RangeBuildWizard, {
+      initialIndex: 20,
+      initialValues: { kind: "ludus", start: "scratch", rangeMode: "rangeb" },
+      choice: {
+        id: "c",
+        prompt: "Build this range one step at a time.",
+        multiple: true,
+        options: [],
+        fields: [
+          { id: "kind", label: "Range type", kind: "select", options: [{ id: "ludus", label: "Ludus range" }] },
+          { id: "start", label: "How to start", kind: "select", options: [{ id: "scratch", label: "From scratch" }] },
+          { id: "rangeMode", label: "Range", kind: "select", options: [{ id: "rangeb", label: "Range B" }] },
+          {
+            id: "action",
+            label: "When you press Apply",
+            kind: "select",
+            options: [
+              { id: "create", label: "Create the range only" },
+              { id: "deploy", label: "Create the range and deploy it" },
+            ],
+          },
+        ],
+      },
+      onSubmit: () => {
+        throw new Error("review must not submit on its own")
+      },
+    }))
+    expect(html).toContain("Update this range only")
+    expect(html).toContain("Deploy this range")
+    expect(html).not.toContain("Create the range only")
+    expect(html).toContain("choose update only or deploy")
+  })
 })

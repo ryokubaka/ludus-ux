@@ -1,8 +1,14 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useQueryClient } from "@tanstack/react-query"
+import { queryKeys } from "@/lib/ui/query-keys"
+import { useEffectiveScopeTag } from "@/lib/session/effective-scope-context"
+import { useRange } from "@/lib/range/range-context"
 import { getImpersonationHeaders } from "@/lib/ui/api"
 import { Markdown } from "@/components/luxai/markdown"
+import { RangeIdYamlHostnameNote } from "@/components/range/range-id-hostname-note"
 import { FirewallRules, NetworkRows, RangeBuildWizard, VmRows } from "@/components/luxai/range-build-wizard"
 import { isRangeBuildChoice } from "@/lib/luxai/build-wizard-steps"
 import { Badge } from "@/components/ui/badge"
@@ -38,6 +44,7 @@ import type {
   LuxaiMessageView,
   LuxaiModelInfo,
   LuxaiProvider,
+  LuxaiProviderPublic,
   LuxaiPublicSettings,
   LuxaiSessionSummary,
   LuxaiStreamEvent,
@@ -104,6 +111,10 @@ function emptyPane(): Pane {
 }
 
 export function LuxaiPageClient() {
+  const router = useRouter()
+  const queryClient = useQueryClient()
+  const scopeTag = useEffectiveScopeTag()
+  const { selectRange, refreshRanges } = useRange()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settings, setSettings] = useState<LuxaiPublicSettings | null>(null)
   const [sessions, setSessions] = useState<LuxaiSessionSummary[]>([])
@@ -451,10 +462,27 @@ export function LuxaiPageClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, yaml }),
       })
-      const body = await response.json().catch(() => ({})) as { error?: string; detail?: string; status?: string }
+      const body = await response.json().catch(() => ({})) as {
+        error?: string
+        detail?: string
+        status?: string
+        navigate?: { href?: string; rangeId?: string }
+      }
       const note = body.error || body.detail || (response.ok ? "Done." : `HTTP ${response.status}`)
       setCardNotes((current) => ({ ...current, [id]: note }))
       if (!response.ok && live) live.error = body.error || `HTTP ${response.status}`
+      const href = body.navigate?.href
+      const rangeId = body.navigate?.rangeId
+      if (response.ok && href) {
+        if (rangeId) {
+          await refreshRanges()
+          if (href === "/") {
+            await queryClient.invalidateQueries({ queryKey: queryKeys.rangeStatus(scopeTag, rangeId) })
+          }
+          selectRange(rangeId)
+        }
+        router.push(href)
+      }
     } catch (err) {
       const note = err instanceof Error ? err.message : "The request failed."
       setCardNotes((current) => ({ ...current, [id]: note }))
@@ -1225,6 +1253,7 @@ function ChangeCard({
       {change.yaml ? (
         <>
           <p className="mt-1 text-xs text-muted-foreground">{change.preview}</p>
+          <RangeIdYamlHostnameNote yaml={yaml} />
           <Textarea
             aria-label="Range config"
             className="mt-1 min-h-64 font-mono text-xs"
@@ -1265,6 +1294,40 @@ function ChangeCard({
 
 const fieldClass = "mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 
+interface ProviderDraft {
+  egress: "local" | "cloud"
+  baseUrl: string
+  model: string
+  effort: string
+  contextWindow: number
+  catalog: LuxaiModelInfo[]
+  modelParams: Record<string, string>
+  apiKey: string
+  apiKeySet: boolean
+}
+
+function providerDraft(profile: LuxaiProviderPublic, id: LuxaiProvider): ProviderDraft {
+  return {
+    egress: id === "cursor" ? "cloud" : profile.egress,
+    baseUrl: id === "cursor" ? "https://api.cursor.com" : profile.baseUrl,
+    model: profile.model,
+    effort: profile.effort,
+    contextWindow: profile.contextWindow,
+    catalog: profile.catalog,
+    modelParams: Object.fromEntries(profile.modelParams.map((item) => [item.id, item.value])),
+    apiKey: "",
+    apiKeySet: profile.apiKeySet,
+  }
+}
+
+function providerDrafts(settings: LuxaiPublicSettings): Record<LuxaiProvider, ProviderDraft> {
+  return {
+    openai: providerDraft(settings.profiles.openai, "openai"),
+    anthropic: providerDraft(settings.profiles.anthropic, "anthropic"),
+    cursor: providerDraft(settings.profiles.cursor, "cursor"),
+  }
+}
+
 function SettingsForm({
   settings,
   onSaved,
@@ -1274,28 +1337,27 @@ function SettingsForm({
 }) {
   const [enabled, setEnabled] = useState(settings.enabled)
   const [provider, setProvider] = useState<LuxaiProvider>(settings.provider)
-  const [egress, setEgress] = useState(settings.egress)
-  const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
-  const [model, setModel] = useState(settings.model)
-  const [effort, setEffort] = useState(settings.effort)
-  const [contextWindow, setContextWindow] = useState(settings.contextWindow)
-  const [catalog, setCatalog] = useState<LuxaiModelInfo[]>(settings.catalog)
-  const [modelParams, setModelParams] = useState<Record<string, string>>(() => (
-    Object.fromEntries(settings.modelParams.map((item) => [item.id, item.value]))
-  ))
-  const [apiKey, setApiKey] = useState("")
+  const [drafts, setDrafts] = useState(() => providerDrafts(settings))
   const [notice, setNotice] = useState("")
+  const draft = drafts[provider]
+  const { egress, baseUrl, model, effort, contextWindow, catalog, modelParams, apiKey } = draft
+  const savedProfile = settings.profiles[provider]
+  const keyKept = draft.apiKeySet && (provider === "cursor" || (baseUrl.trim() === savedProfile.baseUrl && egress === savedProfile.egress))
+
+  function updateDraft(partial: Partial<ProviderDraft>) {
+    setDrafts((current) => ({ ...current, [provider]: { ...current[provider], ...partial } }))
+  }
 
   useEffect(() => {
     setEnabled(settings.enabled)
-    setProvider(settings.provider)
-    setEgress(settings.egress)
-    setBaseUrl(settings.baseUrl)
-    setModel(settings.model)
-    setEffort(settings.effort)
-    setContextWindow(settings.contextWindow)
-    setCatalog(settings.catalog)
-    setModelParams(Object.fromEntries(settings.modelParams.map((item) => [item.id, item.value])))
+    setDrafts((current) => {
+      const next = providerDrafts(settings)
+      for (const id of ["openai", "anthropic", "cursor"] as const) {
+        const typed = current[id]?.apiKey ?? ""
+        if (typed.trim()) next[id] = { ...next[id], apiKey: typed }
+      }
+      return next
+    })
   }, [settings])
 
   const selected = catalog.find((item) => item.id === model)
@@ -1334,7 +1396,7 @@ function SettingsForm({
       setNotice(payload.error || `HTTP ${response.status}`)
       return
     }
-    setApiKey("")
+    updateDraft({ apiKey: "" })
     setNotice("Saved.")
     await onSaved()
   }
@@ -1352,8 +1414,10 @@ function SettingsForm({
       return
     }
     const next = payload.catalog ?? []
-    setCatalog(next)
-    if (next.length > 0 && !next.some((item) => item.id === model)) setModel(next[0].id)
+    updateDraft({
+      catalog: next,
+      ...(next.length > 0 && !next.some((item) => item.id === model) ? { model: next[0].id } : {}),
+    })
     setNotice(next.length > 0 ? `Connected. ${next.length} models loaded. Save to keep this connection.` : "Connected. Save to keep this connection.")
   }
 
@@ -1368,24 +1432,15 @@ function SettingsForm({
         (`http://127.0.0.1:11434/v1`) or llama.cpp. Cloud mode requires https. Claude uses provider Anthropic and
         base URL `https://api.anthropic.com`. Cursor uses a key from the Cursor dashboard and lists models from
         `https://api.cursor.com`. Test connection fills the model list. Effort is sent when that provider accepts
-        it. The context window is how much of this chat LUXAI sends. The API key is stored encrypted and is not shown again.
-        {settings.apiKeySet ? " A key is already saved." : ""}
+        it. The context window is how much of this chat LUXAI sends. Each provider keeps its own key. Switching providers restores that key. Changing the address for one provider clears only that key.
+        {keyKept ? " A key is already saved for this provider." : ""}
       </p>
       <div>
         <Label>Provider</Label>
         <select
           className={fieldClass}
           value={provider}
-          onChange={(event) => {
-            const next = event.target.value as LuxaiProvider
-            setProvider(next)
-            setCatalog([])
-            setModelParams({})
-            if (next === "cursor") {
-              setEgress("cloud")
-              setBaseUrl("https://api.cursor.com")
-            }
-          }}
+          onChange={(event) => setProvider(event.target.value as LuxaiProvider)}
         >
           <option value="openai">OpenAI-compatible</option>
           <option value="anthropic">Anthropic (Claude)</option>
@@ -1394,25 +1449,25 @@ function SettingsForm({
       </div>
       <div>
         <Label>Egress</Label>
-        <select className={fieldClass} value={provider === "cursor" ? "cloud" : egress} disabled={provider === "cursor"} onChange={(event) => setEgress(event.target.value as "local" | "cloud")}>
+        <select className={fieldClass} value={provider === "cursor" ? "cloud" : egress} disabled={provider === "cursor"} onChange={(event) => updateDraft({ egress: event.target.value as "local" | "cloud" })}>
           <option value="local">Local network only</option>
           <option value="cloud">Cloud (https)</option>
         </select>
       </div>
       <div>
         <Label>Base URL</Label>
-        <Input value={provider === "cursor" ? "https://api.cursor.com" : baseUrl} readOnly={provider === "cursor"} onChange={(event) => { setBaseUrl(event.target.value); setCatalog([]) }} placeholder="https://api.anthropic.com" />
+        <Input value={provider === "cursor" ? "https://api.cursor.com" : baseUrl} readOnly={provider === "cursor"} onChange={(event) => updateDraft({ baseUrl: event.target.value, catalog: [] })} placeholder="https://api.anthropic.com" />
       </div>
       <div>
         <Label>Model</Label>
         {catalog.length > 0 ? (
-          <select className={fieldClass} value={model} onChange={(event) => setModel(event.target.value)}>
+          <select className={fieldClass} value={model} onChange={(event) => updateDraft({ model: event.target.value })}>
             {modelChoices.map((item) => (
               <option key={item.id} value={item.id}>{item.displayName === item.id ? item.id : `${item.displayName} (${item.id})`}</option>
             ))}
           </select>
         ) : (
-          <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder="Test connection to load models" />
+          <Input value={model} onChange={(event) => updateDraft({ model: event.target.value })} placeholder="Test connection to load models" />
         )}
       </div>
       {provider === "cursor" && /auto/i.test(selected?.displayName || model) ? (
@@ -1422,7 +1477,7 @@ function SettingsForm({
       ) : null}
       <div>
         <Label>Effort</Label>
-        <select className={fieldClass} value={effort} onChange={(event) => setEffort(event.target.value)}>
+        <select className={fieldClass} value={effort} onChange={(event) => updateDraft({ effort: event.target.value })}>
           <option value="">Default</option>
           <option value="low">Low</option>
           <option value="medium">Medium</option>
@@ -1432,7 +1487,7 @@ function SettingsForm({
       </div>
       <div>
         <Label>Context window</Label>
-        <select className={fieldClass} value={String(contextWindow)} onChange={(event) => setContextWindow(Number(event.target.value))}>
+        <select className={fieldClass} value={String(contextWindow)} onChange={(event) => updateDraft({ contextWindow: Number(event.target.value) })}>
           <option value="0">Default</option>
           <option value="32000">32k</option>
           <option value="128000">128k</option>
@@ -1448,7 +1503,7 @@ function SettingsForm({
           <select
             className={fieldClass}
             value={modelParams[param.id] || ""}
-            onChange={(event) => setModelParams((current) => ({ ...current, [param.id]: event.target.value }))}
+            onChange={(event) => updateDraft({ modelParams: { ...modelParams, [param.id]: event.target.value } })}
           >
             <option value="">Default</option>
             {param.values.map((choice) => (
@@ -1459,7 +1514,7 @@ function SettingsForm({
       ))}
       <div className="md:col-span-2">
         <Label>API key</Label>
-        <Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={settings.apiKeySet ? "Saved key kept if this stays blank" : provider === "cursor" ? "Cursor API key" : "Optional for most local servers"} autoComplete="off" />
+        <Input type="password" value={apiKey} onChange={(event) => updateDraft({ apiKey: event.target.value })} placeholder={keyKept ? "Saved key kept if this stays blank" : provider === "cursor" ? "Cursor API key" : "Optional for most local servers"} autoComplete="off" />
       </div>
       <div className="flex flex-wrap gap-2 md:col-span-2">
         <Button type="button" size="sm" onClick={() => void save()}>Save</Button>

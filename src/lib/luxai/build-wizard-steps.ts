@@ -78,19 +78,40 @@ const REVIEW: BuildWizardStep = {
 
 /** Review does not assume "create the range only". Every other select may use its first option. */
 export function chosenSelectId(
-  field: { id: string; kind?: string; options?: ReadonlyArray<{ id: string }> } | undefined,
+  field: { id: string; kind?: string; options?: ReadonlyArray<{ id: string; disabled?: boolean }> } | undefined,
   values: Record<string, string>,
 ): string {
   if (!field) return ""
   const saved = values[field.id]
   if (typeof saved === "string" && saved.length > 0) return saved
   if (field.id === "action") return ""
-  if (field.kind === "select") return field.options?.[0]?.id ?? ""
+  if (field.kind === "select") return field.options?.find((option) => option.id && !option.disabled)?.id ?? ""
   return ""
 }
 
-export function reviewContinueError(hasAction: boolean, action: string | undefined): string {
-  if (hasAction && !action) return "Choose create only, or create and deploy."
+export function existingRangeSelected(rangeMode: string | undefined): boolean {
+  return Boolean(rangeMode && rangeMode !== "new")
+}
+
+/** Review choices. An existing range is updated or deployed. A new range is created. */
+export function applyChoiceLabel(existing: boolean, action: "create" | "deploy"): string {
+  if (existing && action === "create") return "Update this range only"
+  if (existing && action === "deploy") return "Deploy this range"
+  if (action === "create") return "Create the range only"
+  return "Create the range and deploy it"
+}
+
+export function reviewStepDetail(existing: boolean): string {
+  if (existing) {
+    return "Check these answers, then choose update only or deploy. Continue only saves that choice. Nothing changes until you press Apply."
+  }
+  return REVIEW.detail
+}
+
+export function reviewContinueError(hasAction: boolean, action: string | undefined, existing = false): string {
+  if (hasAction && !action) {
+    return existing ? "Choose update only, or deploy this range." : "Choose create only, or create and deploy."
+  }
   return ""
 }
 

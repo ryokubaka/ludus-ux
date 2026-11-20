@@ -2,7 +2,10 @@ import { cursorHeaders, completeCursor } from "@/lib/luxai/cursor"
 import {
   anthropicMessagesUrl,
   anthropicModelsUrl,
+  defaultAddressLookup,
+  fetchModelEndpoint,
   normalizeOpenAiBase,
+  type LuxaiEgress,
 } from "@/lib/luxai/endpoint-policy"
 import { readSse } from "@/lib/luxai/sse"
 import type { LuxaiModelInfo, LuxaiModelParameter, LuxaiProvider } from "@/lib/luxai/types"
@@ -42,6 +45,7 @@ export interface ProviderRequest {
   contextWindow?: number
   modelParams?: Array<{ id: string; value: string }>
   catalog?: LuxaiModelInfo[]
+  egress?: LuxaiEgress
   signal?: AbortSignal
   onPartial?: (partial: { text?: string; reasoning?: string }) => void
 }
@@ -494,13 +498,15 @@ async function requestModel(
   const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout
   let response: Response
   try {
-    response = await fetchImpl(url, {
+    const request = {
       method: "POST",
       headers: providerHeaders(input.provider, input.apiKey),
       body: JSON.stringify(body),
-      redirect: "manual",
       signal,
-    })
+    }
+    response = input.egress
+      ? await fetchModelEndpoint(url, request, input.egress, defaultAddressLookup, fetchImpl)
+      : await fetchImpl(url, { ...request, redirect: "manual" })
   } catch (err) {
     if (input.signal?.aborted) throw new Error("Stopped.")
     const message = err instanceof Error ? err.message : "The model request failed."

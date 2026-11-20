@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import Database from "better-sqlite3"
 import { NextRequest } from "next/server"
-import { assertModelBaseUrl, anthropicMessagesUrl, isCloudBlockedAddress, isLocalAddress, normalizeOpenAiBase, prepareModelUrl } from "@/lib/luxai/endpoint-policy"
+import { assertModelBaseUrl, anthropicMessagesUrl, fetchModelEndpoint, isCloudBlockedAddress, isLocalAddress, normalizeOpenAiBase, prepareModelUrl } from "@/lib/luxai/endpoint-policy"
 import { historyCharBudget } from "@/lib/luxai/defaults"
 import { buildCursorPrompt, completeCursor, cursorFailureDetail, cursorModelParams, cursorRequestModel, extractLuxaiTools, setCursorTurnRunnerForTests } from "@/lib/luxai/cursor"
 import { buildAnthropicBody, buildOpenAiBody, completeProvider, interpretProbe, parseAnthropicBody, parseOpenAiBody, providerHeaders, scrubProviderError, thinkingBudget } from "@/lib/luxai/providers"
@@ -46,6 +46,66 @@ describe("LUXAI endpoint policy", () => {
     expect(normalizeOpenAiBase("http://127.0.0.1:11434/v1/chat/completions")).toBe("http://127.0.0.1:11434/v1")
     expect(anthropicMessagesUrl("https://api.anthropic.com")).toBe("https://api.anthropic.com/v1/messages")
     expect(anthropicMessagesUrl("https://opencode.ai/zen/v1/messages")).toBe("https://opencode.ai/zen/v1/messages")
+  })
+
+  it("follows a same-host http to https redirect and stops at a login page or another host", async () => {
+    const calls: string[] = []
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const target = String(input)
+      calls.push(target)
+      if (calls.length === 1) {
+        return new Response(null, { status: 301, headers: { location: "https://model.lab/v1/models" } })
+      }
+      return new Response(JSON.stringify({ data: [{ id: "hermes-agent" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }) as typeof fetch
+    const response = await fetchModelEndpoint(
+      "http://model.lab/v1/models",
+      { method: "GET" },
+      "local",
+      lookup,
+      fetchImpl,
+    )
+    expect(response.status).toBe(200)
+    expect(calls).toEqual(["http://model.lab/v1/models", "https://model.lab/v1/models"])
+
+    const login = (async () => new Response(null, {
+      status: 302,
+      headers: { location: "/login?next=%2Fv1%2Fmodels" },
+    })) as typeof fetch
+    await expect(fetchModelEndpoint(
+      "https://model.lab/v1/models",
+      { method: "GET" },
+      "local",
+      lookup,
+      login,
+    )).rejects.toThrow(/login page/)
+
+    const otherHost = (async () => new Response(null, {
+      status: 302,
+      headers: { location: "https://evil.example/v1/models" },
+    })) as typeof fetch
+    await expect(fetchModelEndpoint(
+      "https://model.lab/v1/models",
+      { method: "GET" },
+      "local",
+      lookup,
+      otherHost,
+    )).rejects.toThrow(/different host/)
+
+    const downgrade = (async () => new Response(null, {
+      status: 302,
+      headers: { location: "http://model.lab/v1/models" },
+    })) as typeof fetch
+    await expect(fetchModelEndpoint(
+      "https://model.lab/v1/models",
+      { method: "GET" },
+      "local",
+      lookup,
+      downgrade,
+    )).rejects.toThrow(/non-https/)
   })
 })
 
@@ -372,6 +432,58 @@ describe("LUXAI tools and journal", () => {
     expect(saved.contextWindow).toBe(200_000)
     expect(saved.modelCatalog[0]?.id).toBe("composer-2")
     expect(getLuxaiSettings().apiKey).toBe("crsr_example_key_123456")
+    if (previous === undefined) delete process.env.APP_SECRET
+    else process.env.APP_SECRET = previous
+  })
+
+  it("keeps each provider key when the active provider changes", () => {
+    const previous = process.env.APP_SECRET
+    process.env.APP_SECRET = "unit-test-secret-value-32-chars!!"
+    saveLuxaiSettings(getLuxaiSettings(), {
+      provider: "openai",
+      egress: "local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      model: "local",
+      apiKey: "openai-key-aaaa",
+    })
+    saveLuxaiSettings(getLuxaiSettings(), {
+      provider: "anthropic",
+      egress: "cloud",
+      baseUrl: "https://api.anthropic.com",
+      model: "claude",
+      apiKey: "anthropic-key-bbbb",
+    })
+    saveLuxaiSettings(getLuxaiSettings(), {
+      provider: "cursor",
+      model: "composer-2",
+      apiKey: "cursor-key-cccc",
+    })
+    const backToOpenAI = saveLuxaiSettings(getLuxaiSettings(), {
+      provider: "openai",
+      egress: "local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      model: "local",
+    })
+    expect(backToOpenAI.apiKey).toBe("openai-key-aaaa")
+    expect(backToOpenAI.model).toBe("local")
+    const backToAnthropic = saveLuxaiSettings(getLuxaiSettings(), { provider: "anthropic" })
+    expect(backToAnthropic.apiKey).toBe("anthropic-key-bbbb")
+    expect(backToAnthropic.baseUrl).toBe("https://api.anthropic.com")
+    const backToCursor = saveLuxaiSettings(getLuxaiSettings(), { provider: "cursor" })
+    expect(backToCursor.apiKey).toBe("cursor-key-cccc")
+    expect(backToCursor.baseUrl).toBe("https://api.cursor.com")
+    expect(backToCursor.egress).toBe("cloud")
+    const clearedOpenAI = saveLuxaiSettings(getLuxaiSettings(), {
+      provider: "openai",
+      baseUrl: "http://10.1.1.1:11434/v1",
+    })
+    expect(clearedOpenAI.apiKey).toBe("")
+    expect(saveLuxaiSettings(getLuxaiSettings(), { provider: "anthropic" }).apiKey).toBe("anthropic-key-bbbb")
+    const openAiKey = db.prepare("SELECT value FROM luxai_settings WHERE key = 'apiKey.openai'").get() as { value: string }
+    expect(openAiKey.value).toBe("")
+    const anthropicKey = db.prepare("SELECT value FROM luxai_settings WHERE key = 'apiKey.anthropic'").get() as { value: string }
+    expect(anthropicKey.value.startsWith("enc:v2:")).toBe(true)
+    expect(anthropicKey.value).not.toContain("anthropic-key")
     if (previous === undefined) delete process.env.APP_SECRET
     else process.env.APP_SECRET = previous
   })

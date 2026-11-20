@@ -46,4 +46,16 @@ describe("November 2026 dependency advisories", () => {
     expect(Date.now() - started).toBeLessThan(100)
     expect(picomatch.isMatch("aaa", "+(*a)")).toBe(true)
   })
+
+  it("removes picomatch backslashes in one pass", () => {
+    const utils = createRequire(import.meta.url)("../../vendor/picomatch/lib/utils.js") as {
+      removeBackslashes: (value: string) => string
+    }
+    expect(utils.removeBackslashes("a\\b[c\\]d]e\\f")).toBe("ab[c\\]d]ef")
+    expect(utils.removeBackslashes("\\[a]")).toBe("[a]")
+    const attack = "[".repeat(20_000)
+    const started = Date.now()
+    expect(utils.removeBackslashes(attack)).toBe(attack)
+    expect(Date.now() - started).toBeLessThan(100)
+  })
 })

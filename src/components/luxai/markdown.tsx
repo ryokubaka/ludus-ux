@@ -36,11 +36,29 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 }
 
 function isTable(lines: string[], index: number): boolean {
-  return /^\|.+\|$/.test(lines[index] || "") && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(lines[index + 1] || "")
+  return /^\|.+\|$/.test(lines[index] || "") && /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(lines[index + 1] || "")
 }
 
 function tableCells(line: string): string[] {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
+  const body = line.trim().replace(/^\|/, "").replace(/\|$/, "")
+  const cells: string[] = []
+  let current = ""
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (ch === "\\" && i + 1 < body.length) {
+      current += body[i + 1]
+      i += 1
+      continue
+    }
+    if (ch === "|") {
+      cells.push(current.trim())
+      current = ""
+      continue
+    }
+    current += ch
+  }
+  cells.push(current.trim())
+  return cells
 }
 
 export function Markdown({ text }: { text: string }) {

@@ -168,5 +168,5 @@ function markdownTable(headers: string[], rows: string[][]): string {
 }
 
 function escapeCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\n/g, " ")
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\n/g, " ")
 }

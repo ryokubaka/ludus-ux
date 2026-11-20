@@ -12,6 +12,7 @@ import { getSettings } from "@/lib/settings/settings-store"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 import type { ResolvedSession } from "@/lib/session/session"
 import { presentCommandOutput } from "@/lib/luxai/command-output"
+import { htmlToText } from "@/lib/luxai/html-text"
 import { LUXAI_LIMITS } from "@/lib/luxai/defaults"
 import { clipText, redactSecrets, scrubSecret } from "@/lib/luxai/redact"
 import { rangeCreateKeys, rangeCreateNeedsAdminKey } from "@/lib/luxai/range-create-auth"
@@ -233,18 +234,6 @@ export function createLiveHost(session: ResolvedSession, request: NextRequest): 
   }
 }
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim()
-}
 
 export class ChangeStartedError extends Error {
   /** When true, Apply can be pressed again. A sent guest, power, or deploy command stays applied. */

@@ -10,5 +10,6 @@ Cmnd_Alias LUX_HOST = /usr/local/sbin/lux-host
 Defaults!LUX_HOST !use_pty
 __LUX_SSH_USER__ ALL=(root) NOPASSWD: LUX_HOST
 # Ludus runs the Security Onion hub-mode task as user ludus. That account may
-# set one range bridge and cannot run any other lux-host operation.
-ludus ALL=(root) NOPASSWD: /usr/local/sbin/lux-host bridge-ageing vmbr[0-9]*, /usr/local/sbin/lux-host bridge-ageing r[0-9]*
+# run only bridge-ageing. sudo-rs allows a wildcard only as its own final
+# argument, so the bridge name is not a glob here. The helper accepts vmbrN or rN.
+ludus ALL=(root) NOPASSWD: /usr/local/sbin/lux-host bridge-ageing *

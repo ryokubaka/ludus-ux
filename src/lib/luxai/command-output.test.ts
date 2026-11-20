@@ -1,4 +1,7 @@
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { Markdown } from "@/components/luxai/markdown"
 import { presentCommandOutput, renderStructured } from "@/lib/luxai/command-output"
 import { clipText } from "@/lib/luxai/redact"
 
@@ -38,6 +41,14 @@ describe("command output", () => {
     ].join("\n"))
     expect(renderStructured("fqdn: meow.local\nrole: primary-dc\n")).toContain("**fqdn**: meow.local")
     expect(renderStructured("**fqdn**: meow.local")).toBeNull()
+  })
+
+  it("escapes a backslash before a pipe in a table cell", () => {
+    const shown = presentCommandOutput(JSON.stringify([{ name: "a|b\\c" }]))
+    expect(shown).toContain("| a\\|b\\\\c |")
+    const html = renderToStaticMarkup(createElement(Markdown, { text: shown }))
+    expect(html).toContain("a|b\\c")
+    expect(html.match(/<td/g)).toHaveLength(1)
   })
 
   it("clips at a line and says how much was omitted", () => {

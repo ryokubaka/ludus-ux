@@ -204,6 +204,24 @@ const FINDINGS: Record<string, Finding> = {
     tests: {
       "src/security/dependency-pins.test.ts": [
         "uses the vendored picomatch that compiles a repeated star extglob once",
+        "removes picomatch backslashes in one pass",
+      ],
+    },
+  },
+  "LUXAI doc text drops a script block and decodes an entity once": {
+    source: "review",
+    tests: {
+      "src/lib/luxai/html-text.test.ts": [
+        "drops a script whose end tag has space before the bracket",
+        "decodes &amp; once",
+      ],
+    },
+  },
+  "a Markdown table cell escapes a backslash before a pipe": {
+    source: "review",
+    tests: {
+      "src/lib/luxai/command-output.test.ts": [
+        "escapes a backslash before a pipe in a table cell",
       ],
     },
   },

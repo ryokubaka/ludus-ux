@@ -3,7 +3,6 @@
 
 const {
   REGEX_BACKSLASH,
-  REGEX_REMOVE_BACKSLASH,
   REGEX_SPECIAL_CHARS,
   REGEX_SPECIAL_CHARS_GLOBAL
 } = require('./constants');
@@ -27,11 +26,38 @@ exports.isWindows = () => {
   return false;
 };
 
+// A `[...]` class is copied through. A backslash before another character is
+// dropped. Walking the string keeps a long run of `[` from backtracking.
 exports.removeBackslashes = str => {
-  return str.replace(REGEX_REMOVE_BACKSLASH, match => {
-    return match === '\\' ? '' : match;
-  });
+  let out = '';
+  let i = 0;
+  let classesPossible = true;
+  while (i < str.length) {
+    if (classesPossible && str[i] === '[') {
+      const end = charClassEnd(str, i);
+      if (end === -1) classesPossible = false;
+      else {
+        out += str.slice(i, end);
+        i = end;
+        continue;
+      }
+    }
+    if (str[i] === '\\' && i + 1 < str.length) {
+      i += 1;
+      continue;
+    }
+    out += str[i];
+    i += 1;
+  }
+  return out;
 };
+
+function charClassEnd(str, start) {
+  for (let j = start + 2; j < str.length; j++) {
+    if (str[j] === ']' && str[j - 1] !== '\\') return j + 1;
+  }
+  return -1;
+}
 
 exports.escapeLast = (input, char, lastIdx) => {
   const idx = input.lastIndexOf(char, lastIdx);

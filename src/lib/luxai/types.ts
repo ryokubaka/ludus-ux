@@ -22,6 +22,18 @@ export interface LuxaiModelInfo {
   variants?: LuxaiModelVariant[]
 }
 
+/** Connection saved for one provider. The API key itself is never included. */
+export interface LuxaiProviderPublic {
+  egress: LuxaiEgress
+  baseUrl: string
+  model: string
+  apiKeySet: boolean
+  effort: string
+  contextWindow: number
+  modelParams: Array<{ id: string; value: string }>
+  catalog: LuxaiModelInfo[]
+}
+
 export interface LuxaiPublicSettings {
   enabled: boolean
   ready: boolean
@@ -34,6 +46,8 @@ export interface LuxaiPublicSettings {
   contextWindow: number
   modelParams: Array<{ id: string; value: string }>
   catalog: LuxaiModelInfo[]
+  /** Every provider's saved connection, so the form can switch without dropping a key. */
+  profiles: Record<LuxaiProvider, LuxaiProviderPublic>
   maxRounds: number
   maxToolCalls: number
   timeoutSec: number
@@ -79,6 +93,8 @@ export interface LuxaiChoiceOption {
   id: string
   label: string
   detail?: string
+  /** Shown, and not selectable. The detail or label says why. */
+  disabled?: boolean
 }
 
 /** A checklist the operator answers while a run is still in progress. */

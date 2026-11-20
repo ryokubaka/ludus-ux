@@ -1,5 +1,6 @@
 import yaml from "js-yaml"
 import { buildNetworkYaml, type NetworkRule } from "@/lib/range/network-rules"
+import { hostnameWithoutRangeId } from "@/lib/range/hostname-range-id"
 
 const YAML_DUMP_OPTS = {
   indent: 2,
@@ -74,9 +75,7 @@ export function defaultsForTemplate(
 
 export function vmEntryToLudusObject(vm: VMEntry, domainFqdn?: string | null): Record<string, unknown> {
   const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
-  const hostname = vm.hostname.includes("{{ range_id }}")
-    ? vm.hostname
-    : `{{ range_id }}-${vm.hostname}`
+  const hostname = hostnameWithoutRangeId(vm.hostname)
   const out: Record<string, unknown> = {
     vm_name: vmName,
     hostname,
@@ -176,7 +175,7 @@ export function generateYaml(
   const lines: string[] = ["ludus:"]
   for (const vm of vms) {
     const vmName = vm.vmName || `{{ range_id }}-${vm.hostname}`
-    const hostname = `{{ range_id }}-${vm.hostname}`
+    const hostname = hostnameWithoutRangeId(vm.hostname)
     lines.push(`  - vm_name: "${vmName}"`)
     lines.push(`    hostname: "${hostname}"`)
     lines.push(`    template: ${vm.template}`)
@@ -215,7 +214,7 @@ export function parseConfigYaml(yamlText: string): VMEntry[] {
     const template = get("template")
     const { isLinux, isWindows, isServer } = inferOS(template || vmName)
     const rawHostname = get("hostname") || vmName
-    const hostnameSuffix = rawHostname.replace(/^\{\{\s*range_id\s*\}\}-/, "")
+    const hostnameSuffix = hostnameWithoutRangeId(rawHostname)
     entries.push({
       id: newVmEntryId(),
       template: template || vmName,

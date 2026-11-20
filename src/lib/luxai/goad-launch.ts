@@ -27,6 +27,8 @@ export async function launchGoadInstall(opts: {
   args: string
   /** Network section restored after GOAD rewrites the range config. */
   networkRulesJson?: string
+  /** Lab config from the GOAD checkout. Replaces the workspace file at `range config set`. */
+  workspaceConfigYaml?: string
 }): Promise<string> {
   if (!isGoadConfigured()) {
     throw new Error("GOAD is not configured on this server.")
@@ -91,7 +93,7 @@ export async function launchGoadInstall(opts: {
     owner,
     opts.rangeId,
     undefined,
-    undefined,
+    opts.workspaceConfigYaml,
     undefined,
     isAdmin,
   ).then((cleanup) => {

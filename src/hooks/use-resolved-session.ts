@@ -21,9 +21,11 @@ export function useResolvedSession(): ResolvedSession | null {
       : null,
   )
 
+  const username = shell?.username
+  const isAdmin = shell?.isAdmin
   useEffect(() => {
-    if (shell) {
-      setSession({ username: shell.username, isAdmin: shell.isAdmin, loading: true })
+    if (username) {
+      setSession({ username, isAdmin: !!isAdmin, loading: true })
     }
 
     let cancelled = false
@@ -38,15 +40,15 @@ export function useResolvedSession(): ResolvedSession | null {
         })
       })
       .catch(() => {
-        if (!cancelled && shell) {
-          setSession({ username: shell.username, isAdmin: shell.isAdmin, loading: false })
+        if (!cancelled && username) {
+          setSession({ username, isAdmin: !!isAdmin, loading: false })
         }
       })
 
     return () => {
       cancelled = true
     }
-  }, [shell?.username, shell?.isAdmin])
+  }, [username, isAdmin])
 
   return session
 }

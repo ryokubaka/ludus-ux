@@ -14,6 +14,7 @@ import {
   vmEntryToLudusObject,
   inferOS,
 } from "@/lib/range/range-vm-wizard"
+import { stripHostnamesInRoot, hostnameWithoutRangeId } from "@/lib/range/hostname-range-id"
 import {
   FOREST_TRUST_ROLE,
   CHILD_DOMAIN_ROLE,
@@ -152,7 +153,9 @@ export function cloneDocument(doc: RangeDocument): RangeDocument {
 }
 
 export function serializeRangeDocument(doc: RangeDocument): string {
-  return yaml.dump(doc.root, YAML_DUMP_OPTS)
+  const root = structuredClone(doc.root)
+  stripHostnamesInRoot(root)
+  return yaml.dump(root, YAML_DUMP_OPTS)
 }
 
 /** YAML the builder would write. Quoting and indentation are not an edit. */
@@ -283,16 +286,18 @@ function buildVm(raw: Record<string, unknown>): BuilderVm {
   const roles = Array.isArray(raw.roles)
     ? raw.roles.map(parseRoleEntry).filter((r): r is BuilderRoleEntry => r != null)
     : []
+  const os = osOfRaw(raw)
+  const hostname = hostnameWithoutRangeId(String(raw.hostname ?? ""))
   return {
     id: String(raw.vm_name ?? raw.hostname ?? ""),
     vmName: String(raw.vm_name ?? ""),
-    hostname: String(raw.hostname ?? ""),
+    hostname,
     template: String(raw.template ?? ""),
     vlan: Number(raw.vlan) || 0,
     ipLastOctet: Number(raw.ip_last_octet) || 0,
     ramGb: Number(raw.ram_gb) || 0,
     cpus: Number(raw.cpus) || 0,
-    os: osOfRaw(raw),
+    os,
     domainFqdn: domain && typeof domain.fqdn === "string" ? domain.fqdn : null,
     domainRole: domain && typeof domain.role === "string" ? (domain.role as DomainRole) : "none",
     roles,
@@ -467,7 +472,7 @@ function projectRouter(root: Record<string, unknown>): BuilderRouter {
   return {
     present: true,
     vmName: typeof r.vm_name === "string" ? r.vm_name : null,
-    hostname: typeof r.hostname === "string" ? r.hostname : null,
+    hostname: typeof r.hostname === "string" ? hostnameWithoutRangeId(r.hostname) : null,
     template: typeof r.template === "string" ? r.template : null,
     ramGb: r.ram_gb != null ? Number(r.ram_gb) : null,
     cpus: r.cpus != null ? Number(r.cpus) : null,
@@ -640,7 +645,11 @@ export function updateVmRaw(
     const vm = findVmRaw(root, vmId)
     if (!vm) return
     const previousName = typeof vm.vm_name === "string" ? vm.vm_name : ""
-    for (const [k, v] of Object.entries(patch)) {
+    const nextPatch = { ...patch }
+    if (typeof nextPatch.hostname === "string") {
+      nextPatch.hostname = hostnameWithoutRangeId(nextPatch.hostname)
+    }
+    for (const [k, v] of Object.entries(nextPatch)) {
       if (v === undefined) delete vm[k]
       else vm[k] = v
     }
@@ -758,7 +767,7 @@ export function setRouter(doc: RangeDocument, patch: Record<string, unknown>): R
     const router = asRecord(root.router) ? { ...(root.router as Record<string, unknown>) } : {}
     for (const [k, v] of Object.entries(patch)) {
       if (v === undefined || v === "" || v === null) delete router[k]
-      else router[k] = v
+      else router[k] = k === "hostname" && typeof v === "string" ? hostnameWithoutRangeId(v) : v
     }
     if (Object.keys(router).length === 0) delete root.router
     else root.router = router

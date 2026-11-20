@@ -1,5 +1,6 @@
 import yaml from "js-yaml"
 import { injectNetworkRules, type NetworkRule, type VlanValue } from "@/lib/range/network-rules"
+import { hostnameWithoutRangeId } from "@/lib/range/hostname-range-id"
 
 /** Roles a from-scratch Ludus range can place on the first form. `os` limits which templates fit. */
 export const RANGE_VM_ROLES = [
@@ -39,6 +40,8 @@ export interface RangeRuleDraft {
 export interface RangeTemplateChoice {
   id: string
   os: string
+  /** False when the template is on the host but has not been Packer-built. */
+  built?: boolean
 }
 
 const RANGE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
@@ -83,9 +86,13 @@ export function defaultNetworks(): RangeNetworkDraft[] {
   return [{ vlan: "10" }]
 }
 
+export function builtTemplateForRole(role: string, templates: RangeTemplateChoice[]): RangeTemplateChoice | undefined {
+  return templatesForRole(role, templates).find((item) => item.built !== false)
+}
+
 export function defaultVmRows(templates: RangeTemplateChoice[], vlan = "10"): RangeVmDraft[] {
   const role = "primary-dc"
-  return [{ hostname: "dc01", role, template: templatesForRole(role, templates)[0]?.id ?? "", vlan }]
+  return [{ hostname: "dc01", role, template: builtTemplateForRole(role, templates)?.id ?? "", vlan }]
 }
 
 export function nextVmRow(rows: RangeVmDraft[], templates: RangeTemplateChoice[], vlan = "10"): RangeVmDraft {
@@ -94,7 +101,7 @@ export function nextVmRow(rows: RangeVmDraft[], templates: RangeTemplateChoice[]
   const role = hasPrimary ? "member" : "primary-dc"
   const names = HOST_BY_ROLE[role] ?? ["vm01"]
   const hostname = names.find((name) => !used.has(name)) ?? `${role.replace(/[^a-z]/g, "")}${rows.length + 1}`
-  return { hostname, role, template: templatesForRole(role, templates)[0]?.id ?? "", vlan: vlan || rows[0]?.vlan || "10" }
+  return { hostname, role, template: builtTemplateForRole(role, templates)?.id ?? "", vlan: vlan || rows[0]?.vlan || "10" }
 }
 
 export function nextRule(networks: RangeNetworkDraft[]): RangeRuleDraft {
@@ -272,7 +279,7 @@ export function validateRangeVms(rows: RangeVmDraft[], templates: RangeTemplateC
   for (const row of rows) {
     const os = roleOs(row.role)
     if (!os) return "Pick a VM role."
-    const hostname = row.hostname.trim()
+    const hostname = hostnameWithoutRangeId(row.hostname.trim())
     const hostPattern = os === "windows" ? /^[A-Za-z][A-Za-z0-9-]{0,14}$/ : /^[A-Za-z][A-Za-z0-9-]{0,62}$/
     if (!hostPattern.test(hostname) || hostname.endsWith("-")) {
       return os === "windows"
@@ -284,6 +291,8 @@ export function validateRangeVms(rows: RangeVmDraft[], templates: RangeTemplateC
     seen.add(key)
     if (networks && !known.has(row.vlan.trim())) return `${hostname} must use one of the networks.`
     const allowed = new Set(templatesForRole(row.role, templates).map((item) => item.id))
+    const choice = templates.find((item) => item.id === row.template)
+    if (choice?.built === false) return `${choice.id} is not built, so ${hostname} cannot be deployed.`
     if (!row.template || !allowed.has(row.template)) {
       if (row.role === "primary-dc" || row.role === "alt-dc" || row.role === "member") {
         return `Pick a Windows Server template for ${hostname}.`
@@ -439,9 +448,10 @@ export function scratchRangeYaml(rows: RangeVmDraft[], rules: RangeRuleDraft[], 
     nextOctet.set(vlan, octet)
     const role = ludusDomainRole(row)
     const fqdn = role ? domainName(row, rows, sharedDomain) : ""
+    const host = hostnameWithoutRangeId(row.hostname.trim())
     const vm: Record<string, unknown> = {
-      vm_name: `{{ range_id }}-${row.hostname.trim()}`,
-      hostname: `{{ range_id }}-${row.hostname.trim()}`,
+      vm_name: `{{ range_id }}-${host}`,
+      hostname: host,
       template: row.template.trim(),
       vlan: Number(vlan) || vlan,
       ip_last_octet: octet,

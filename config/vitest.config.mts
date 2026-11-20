@@ -13,6 +13,9 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     root: projectRoot,
+    // Negative-path tests log the failure they are asserting. The suite
+    // prints results only; a failing test still reports its assertion.
+    silent: true,
     // The Windows unit container shares one SQLite file. Parallel workers
     // lock it, or fail WAL mode on the Docker Desktop mount.
     ...(process.env.LUX_VITEST_MAX_WORKERS

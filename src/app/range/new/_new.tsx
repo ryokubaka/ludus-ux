@@ -69,6 +69,8 @@ import {
   inferOS,
   parseConfigYaml,
 } from "@/lib/range/range-vm-wizard"
+import { clampHostnameDraft, hostnameWithoutRangeId, stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
+import { RangeIdHostnameNote, RangeIdYamlHostnameNote } from "@/components/range/range-id-hostname-note"
 import {
   ensureUserDefinedRolesTag,
   resolveDeployOnlyRoles,
@@ -368,7 +370,7 @@ export function NewRangePageClient() {
     setVms((prev) => prev.map((v) => {
       if (v.id !== id) return v
       const updated = { ...v, ...patch }
-      if ("hostname" in patch) updated.vmName = `{{ range_id }}-${patch.hostname ?? ""}`
+      if ("hostname" in patch) updated.vmName = `{{ range_id }}-${hostnameWithoutRangeId(patch.hostname ?? "")}`
       return updated
     }))
   }, [])
@@ -525,12 +527,13 @@ export function NewRangePageClient() {
     setDeployResult(null)
     setDeployStatus("")
 
-    const configToUpload =
+    const configToUpload = stripRangeIdHostnames(
       configMethod === "yaml"
         ? yamlConfig
         : configMethod === "wizard"
           ? reviewConfigYaml
-          : wizardYaml
+          : wizardYaml,
+    )
 
     if (configMethod === "wizard") {
       const yamlCheck = validateGoadConfigYaml(reviewConfigYaml)
@@ -1239,9 +1242,10 @@ export function NewRangePageClient() {
                                 {vm.isWindows && <span className="text-muted-foreground ml-1">(max 15 chars)</span>}
                               </Label>
                               <Input value={vm.hostname}
-                                onChange={(e) => updateVM(vm.id, { hostname: e.target.value.slice(0, vm.isWindows ? 15 : 63) })}
-                                maxLength={vm.isWindows ? 15 : 63}
+                                onChange={(e) => updateVM(vm.id, { hostname: clampHostnameDraft(e.target.value, vm.isWindows ? 15 : 63) })}
+                                maxLength={vm.isWindows ? 30 : 63}
                                 className="h-7 text-xs font-mono" placeholder="server-01" />
+                              <RangeIdHostnameNote value={vm.hostname} />
                             </div>
                             <div className="space-y-1">
                               <Label className="text-[10px] text-muted-foreground">VM Name (Proxmox)</Label>
@@ -1295,12 +1299,13 @@ export function NewRangePageClient() {
               </p>
             </CardHeader>
             <CardContent>
+              <RangeIdYamlHostnameNote yaml={yamlConfig} />
               <textarea
                 value={yamlConfig}
                 onChange={(e) => setYamlConfig(e.target.value)}
                 className="w-full font-mono text-xs bg-gray-950 border border-border rounded-lg p-4 text-gray-300 resize-y focus:outline-none focus:ring-1 focus:ring-primary/50"
                 style={{ minHeight: 400 }}
-                placeholder={`ludus:\n  - vm_name: "{{ range_id }}-kali"\n    hostname: "{{ range_id }}-kali"\n    template: kali-x64-desktop-template\n    vlan: 10\n    ip_last_octet: 10\n    ram_gb: 4\n    cpus: 2\n    linux: true\n    testing:\n      snapshot: true\n      block_internet: true`}
+                placeholder={`ludus:\n  - vm_name: "{{ range_id }}-kali"\n    hostname: kali\n    template: kali-x64-desktop-template\n    vlan: 10\n    ip_last_octet: 10\n    ram_gb: 4\n    cpus: 2\n    linux: true\n    testing:\n      snapshot: true\n      block_internet: true`}
                 autoFocus={!yamlConfig}
               />
             </CardContent>
@@ -1541,6 +1546,7 @@ export function NewRangePageClient() {
                   {!wizardYamlValidation.valid && reviewConfigYaml.trim() && (
                     <p className="text-[10px] text-status-error">{wizardYamlValidation.error}</p>
                   )}
+                  <RangeIdYamlHostnameNote yaml={reviewConfigYaml} />
                   <YamlEditor
                     value={reviewConfigYaml}
                     onChange={(value) => {
@@ -1557,6 +1563,7 @@ export function NewRangePageClient() {
                       Configuration modified from blueprint preview — your edits will be uploaded after apply.
                     </p>
                   )}
+                  <RangeIdYamlHostnameNote yaml={reviewBlueprintYaml} />
                   <YamlEditor
                     value={reviewBlueprintYaml}
                     onChange={(value) => {
@@ -1567,9 +1574,12 @@ export function NewRangePageClient() {
                   />
                 </div>
               ) : (
-                <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto resize-y min-h-[10rem] max-h-80 whitespace-pre">
-                  {yamlConfig}
-                </pre>
+                <>
+                  <RangeIdYamlHostnameNote yaml={yamlConfig} />
+                  <pre className="bg-gray-950 border border-border rounded-lg p-4 font-mono text-xs text-gray-300 overflow-auto resize-y min-h-[10rem] max-h-80 whitespace-pre">
+                    {yamlConfig}
+                  </pre>
+                </>
               )}
             </CardContent>
           </Card>

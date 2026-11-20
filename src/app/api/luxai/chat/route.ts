@@ -3,6 +3,8 @@ import { NextResponse } from "next/server"
 import { requireSession } from "@/lib/session/require-session"
 import { getInstanceIdForRange } from "@/lib/goad/goad-instance-range-store"
 import { extractArray } from "@/lib/core/utils"
+import { mapWithConcurrency } from "@/lib/core/concurrency"
+import { ludusBlueprintApiPath } from "@/lib/ludus/ludus-blueprint-proxy-path"
 import { normalizeBlueprintList } from "@/lib/blueprints/blueprint-list-normalize"
 import { ludusGet } from "@/lib/ludus/ludus-client"
 import { discoverGoadCatalog, isGoadConfigured } from "@/lib/goad/goad-ssh"
@@ -10,6 +12,10 @@ import { prepareModelUrl, defaultAddressLookup } from "@/lib/luxai/endpoint-poli
 import { runLuxaiAgent } from "@/lib/luxai/agent"
 import { createLiveHost, luxaiActor } from "@/lib/luxai/actions"
 import { LUXAI_LIMITS } from "@/lib/luxai/defaults"
+import { fetchInstalledAnsibleServer } from "@/lib/ansible/ansible-requirements-server"
+import { parseAnsibleInstalledSets } from "@/lib/goad/goad-dependency-service"
+import { ludusVersionLabel, ludusVersionText } from "@/lib/ludus/ludus-releases"
+import { blueprintInstallBlock, type HostInventory } from "@/lib/luxai/deploy-readiness"
 import { askHowToBuildRange, offerGoadDeploy } from "@/lib/luxai/goad-offer"
 import { matchGoadDeployRequest, matchOpenRangeRequest, type GoadPlanCatalog } from "@/lib/luxai/goad-plan"
 import { isResumeQuestion } from "@/lib/luxai/resume"
@@ -98,6 +104,7 @@ export async function POST(request: NextRequest) {
         const intent = resume ? null : matchGoadDeployRequest(question)
         const openRange = !resume && !intent && matchOpenRangeRequest(question)
         const loaded = intent || openRange ? await loadGoadCatalog(gate.session) : null
+        const inventory = intent || openRange ? await loadHostInventory(actor.apiKey) : null
         const built = openRange && loaded
           ? await askHowToBuildRange({
               intent: { rangeId: "", labHint: "" },
@@ -105,8 +112,9 @@ export async function POST(request: NextRequest) {
               catalogError: loaded.catalogError,
               catalog: loaded.catalog,
               ranges: await listRangeChoices(host, actor.apiKey),
-              blueprints: await listBlueprintChoices(actor.apiKey),
+              blueprints: await listBlueprintChoices(actor.apiKey, inventory),
               templates: await listTemplateChoices(actor.apiKey),
+              inventory,
               rangeExists: false,
               alreadyLinked: false,
               signal: request.signal,
@@ -127,6 +135,7 @@ export async function POST(request: NextRequest) {
                   : JSON.stringify({
                       name: spec.create?.name || spec.rangeId,
                       rangeId: spec.rangeId,
+                      ...(spec.lab ? { lab: spec.lab, extensions: spec.extensions } : {}),
                       ...(spec.yaml ? { yaml: spec.yaml } : {}),
                       ...(spec.deploy ? { deploy: true } : {}),
                       rules: spec.rules ?? [],
@@ -177,6 +186,7 @@ export async function POST(request: NextRequest) {
               configured: loaded.configured,
               catalogError: loaded.catalogError,
               catalog: loaded.catalog,
+              inventory,
               ranges: await listRangeChoices(host, actor.apiKey),
               rangeExists: await rangeExists(host, actor.apiKey, intent.rangeId),
               alreadyLinked: intent.rangeId ? Boolean(getInstanceIdForRange(intent.rangeId)) : false,
@@ -281,34 +291,117 @@ async function loadGoadCatalog(session: { username: string; sshPassword?: string
   }
 }
 
-async function listBlueprintChoices(apiKey: string): Promise<Array<{ id: string; name: string; description?: string }>> {
+function blueprintConfigText(data: unknown): string {
+  if (typeof data === "string") return data
+  if (!data || typeof data !== "object") return ""
+  const record = data as Record<string, unknown>
+  if (typeof record.result === "string") return record.result
+  if (typeof record.config === "string") return record.config
+  return ""
+}
+
+function blueprintRequirementsText(data: unknown): string {
+  if (!data || typeof data !== "object") return ""
+  const record = data as Record<string, unknown>
+  if (typeof record.requirements_yaml === "string") return record.requirements_yaml
+  const result = record.result
+  if (result && typeof result === "object" && typeof (result as { requirements_yaml?: unknown }).requirements_yaml === "string") {
+    return (result as { requirements_yaml: string }).requirements_yaml
+  }
+  return ""
+}
+
+async function blueprintChoiceBlock(apiKey: string, id: string, inventory: HostInventory): Promise<string> {
+  try {
+    const [configRes, detailRes] = await Promise.all([
+      ludusGet<unknown>(ludusBlueprintApiPath(id, "config"), { apiKey }),
+      ludusGet<unknown>(ludusBlueprintApiPath(id), { apiKey }),
+    ])
+    if (configRes.error || configRes.status >= 400) return "Could not read this blueprint"
+    const config = blueprintConfigText(configRes.data)
+    if (!config.trim()) return "Could not read this blueprint"
+    if (detailRes.error || detailRes.status >= 400) {
+      if (detailRes.status !== 404) return "Could not read this blueprint"
+    }
+    return blueprintInstallBlock(config, blueprintRequirementsText(detailRes.data), inventory)
+  } catch {
+    return "Could not read this blueprint"
+  }
+}
+
+async function listBlueprintChoices(
+  apiKey: string,
+  inventory: HostInventory | null,
+): Promise<Array<{ id: string; name: string; description?: string; block?: string }>> {
   try {
     const result = await ludusGet<unknown>("/blueprints", { apiKey })
     if (result.error || result.status >= 400) return []
-    return normalizeBlueprintList(result.data).slice(0, 40).map((item) => ({
+    const listed = normalizeBlueprintList(result.data).slice(0, 40).map((item) => ({
       id: item.id,
       name: item.name?.trim() || item.id,
       description: item.description?.trim() || undefined,
     }))
+    if (!inventory) return listed
+    return mapWithConcurrency(listed, 4, async (item) => {
+      const block = await blueprintChoiceBlock(apiKey, item.id, inventory)
+      return block ? { ...item, block } : item
+    })
   } catch {
     return []
   }
+}
+
+function templateBuilt(value: unknown): boolean {
+  return value === true || value === 1 || value === "true"
 }
 
 async function listTemplateChoices(apiKey: string): Promise<RangeTemplateChoice[]> {
   try {
     const result = await ludusGet<unknown>("/templates", { apiKey })
     if (result.error || result.status >= 400) return []
-    return extractArray<Record<string, unknown>>(result.data).flatMap((row) => {
+    const rows = extractArray<Record<string, unknown>>(result.data).flatMap((row) => {
       const id = typeof row.name === "string" ? row.name.trim() : ""
-      const built = row.built === true || row.built === 1 || row.built === "true"
-      if (!id || !built) return []
+      if (!id) return []
+      const built = templateBuilt(row.built)
       const os = row.os === "windows" || row.os === "linux" || row.os === "macos" || row.os === "other" ? row.os : ""
-      return [{ id, os }]
-    }).slice(0, 80)
+      return [{ id, os, built }]
+    })
+    rows.sort((a, b) => Number(a.built === false) - Number(b.built === false) || a.id.localeCompare(b.id))
+    return rows.slice(0, 120)
   } catch {
     return []
   }
+}
+
+async function loadHostInventory(apiKey: string): Promise<HostInventory> {
+  const built = new Set<string>()
+  const registered = new Set<string>()
+  try {
+    const result = await ludusGet<unknown>("/templates", { apiKey })
+    if (!result.error && result.status < 400) {
+      for (const row of extractArray<Record<string, unknown>>(result.data)) {
+        const id = typeof row.name === "string" ? row.name.trim() : ""
+        if (!id) continue
+        registered.add(id)
+        if (templateBuilt(row.built)) built.add(id)
+      }
+    }
+  } catch { /* templates stay empty, so a deploy that needs them is blocked */ }
+  let ansibleRoles = new Set<string>()
+  let ansibleCollections = new Set<string>()
+  let ansibleKnown = false
+  try {
+    const installed = parseAnsibleInstalledSets(await fetchInstalledAnsibleServer(apiKey))
+    ansibleRoles = installed.roles
+    ansibleCollections = installed.collections
+    ansibleKnown = true
+  } catch { /* ansibleKnown stays false */ }
+  let ludusVersion = ""
+  try {
+    const result = await ludusGet<unknown>("/version", { apiKey })
+    if (!result.error && result.status < 400) ludusVersion = ludusVersionLabel(ludusVersionText(result.data))
+  } catch { /* version stays empty; the router check uses the legacy template */ }
+  return { built, registered, ansibleRoles, ansibleCollections, ansibleKnown, ludusVersion }
 }
 
 async function listRangeChoices(

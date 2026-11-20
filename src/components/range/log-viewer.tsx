@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown, ArrowUp } from "lucide-react"
 import { cn } from "@/lib/core/utils"
 import { useVirtualizer } from "@tanstack/react-virtual"
@@ -90,7 +90,7 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     getScrollToMatch: () => scrollToMatchRef.current,
   })
 
-  const scrollToLiveEdge = () => {
+  const scrollToLiveEdge = useCallback(() => {
     const el = containerRef.current
     if (!el) return
     const override = liveEdgeScrollRef.current
@@ -99,7 +99,7 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     prevScrollTopRef.current = el.scrollTop
     userScrolledAwayRef.current = false
     setShowJumpBtn(false)
-  }
+  }, [newestFirst])
 
   const isNearLiveEdge = (el: HTMLDivElement) =>
     newestFirst
@@ -108,8 +108,7 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
 
   useEffect(() => {
     scrollToLiveEdge()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newestFirst])
+  }, [newestFirst, scrollToLiveEdge])
 
   useEffect(() => {
     const el = containerRef.current
@@ -135,7 +134,7 @@ function useLogViewerRuntime(config: LogViewerConfig): LogViewerContextValue {
     } else if (hasNew) {
       setShowJumpBtn(true)
     }
-  }, [visibleLines, effectiveAutoScroll, newestFirst])
+  }, [visibleLines, effectiveAutoScroll, newestFirst, scrollToLiveEdge])
 
   const handleScroll = () => {
     const el = containerRef.current
@@ -400,6 +399,8 @@ function LogViewerBody() {
     defaultHeight: parsePxHeight(maxHeight, 400),
   })
 
+  // TanStack Virtual returns functions the React compiler cannot memoize.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: parsedLines.length,
     getScrollElement: () => containerRef.current,

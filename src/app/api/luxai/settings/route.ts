@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server"
 import { liveSessionIsAdmin } from "@/lib/session/session-admin-check"
 import { finishAdminResponse, requireAdmin } from "@/lib/session/require-admin"
 import { requireSession } from "@/lib/session/require-session"
+import { CURSOR_API_ORIGIN } from "@/lib/luxai/cursor"
 import { assertModelBaseUrl, defaultAddressLookup } from "@/lib/luxai/endpoint-policy"
 import { cleanCatalog, cleanModelParams } from "@/lib/luxai/providers"
 import {
   getLuxaiSettings,
+  loadLuxaiProfiles,
   saveLuxaiSettings,
   toPublicLuxaiSettings,
   type LuxaiSettingsPatch,
@@ -59,8 +61,12 @@ export async function POST(request: NextRequest) {
   if (typeof record.systemPrompt === "string") patch.systemPrompt = record.systemPrompt
   if (record.resetPrompt === true) patch.resetPrompt = true
 
-  const baseUrl = (patch.baseUrl ?? current.baseUrl).trim()
-  const nextEgress = patch.egress ?? current.egress
+  const target = patch.provider ?? current.provider
+  const stored = loadLuxaiProfiles()[target]
+  const baseUrl = target === "cursor"
+    ? CURSOR_API_ORIGIN
+    : (typeof patch.baseUrl === "string" ? patch.baseUrl.trim() : stored.baseUrl)
+  const nextEgress = target === "cursor" ? "cloud" : (patch.egress ?? stored.egress)
   if (baseUrl) {
     try {
       await assertModelBaseUrl(baseUrl, nextEgress, defaultAddressLookup)

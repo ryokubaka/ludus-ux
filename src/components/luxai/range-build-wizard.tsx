@@ -7,8 +7,10 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NetworkRulesEditor } from "@/components/range/network-rules-editor"
+import { RangeIdHostnameNote } from "@/components/range/range-id-hostname-note"
+import { hostnameIncludesRangeId, hostnameWithoutRangeId, RANGE_ID_HOSTNAME_NOTE } from "@/lib/range/hostname-range-id"
 import type { NetworkRule, VlanValue } from "@/lib/range/network-rules"
-import { chosenSelectId, rangeBuildWizardSteps, reviewContinueError, type BuildWizardStep } from "@/lib/luxai/build-wizard-steps"
+import { applyChoiceLabel, chosenSelectId, existingRangeSelected, rangeBuildWizardSteps, reviewContinueError, reviewStepDetail, type BuildWizardStep } from "@/lib/luxai/build-wizard-steps"
 import {
   defaultNetworks,
   defaultVmRows,
@@ -142,16 +144,16 @@ export function VmRows({
 }: {
   rows: RangeVmDraft[]
   roles: Array<{ id: string; label: string; detail?: string }>
-  templates: Array<{ id: string; os: string }>
+  templates: Array<{ id: string; os: string; built?: boolean }>
   networks: RangeNetworkDraft[]
   disabled: boolean
   onChange: (rows: RangeVmDraft[]) => void
 }) {
   useEffect(() => {
     const next = rows.map((row) => {
-      const allowed = templatesForRole(row.role, templates)
-      if (allowed.some((item) => item.id === row.template)) return row
-      return { ...row, template: allowed[0]?.id ?? "" }
+      const ready = templatesForRole(row.role, templates).filter((item) => item.built !== false)
+      if (ready.some((item) => item.id === row.template)) return row
+      return { ...row, template: ready[0]?.id ?? "" }
     })
     if (next.some((row, index) => row.template !== rows[index]?.template)) onChange(next)
   }, [rows, templates, onChange])
@@ -166,7 +168,8 @@ export function VmRows({
         <span className="sr-only">Remove</span>
       </div>
       {rows.map((row, index) => {
-        const allowed = templatesForRole(row.role, templates)
+        const listed = templatesForRole(row.role, templates)
+        const ready = listed.filter((item) => item.built !== false)
         const emptyTemplate = row.role === "primary-dc" || row.role === "alt-dc" || row.role === "member"
           ? "No built Windows Server template"
           : row.role === "workstation"
@@ -174,13 +177,16 @@ export function VmRows({
             : "No built template"
         return (
           <div key={`${index}-${row.role}`} className={vmRowClass}>
-            <Input
-              aria-label={`VM ${index + 1} hostname`}
-              className="h-8 text-sm"
-              value={row.hostname}
-              disabled={disabled}
-              onChange={(event) => onChange(rows.map((item, itemIndex) => itemIndex === index ? { ...item, hostname: event.target.value } : item))}
-            />
+            <div>
+              <Input
+                aria-label={`VM ${index + 1} hostname`}
+                className="h-8 text-sm"
+                value={row.hostname}
+                disabled={disabled}
+                onChange={(event) => onChange(rows.map((item, itemIndex) => itemIndex === index ? { ...item, hostname: event.target.value } : item))}
+              />
+              <RangeIdHostnameNote value={row.hostname} />
+            </div>
             <select
               aria-label={`VM ${index + 1} role`}
               className={denseSelect}
@@ -188,7 +194,7 @@ export function VmRows({
               disabled={disabled}
               onChange={(event) => {
                 const role = event.target.value
-                const nextAllowed = templatesForRole(role, templates)
+                const nextAllowed = templatesForRole(role, templates).filter((item) => item.built !== false)
                 const template = nextAllowed.some((item) => item.id === row.template) ? row.template : (nextAllowed[0]?.id ?? "")
                 onChange(rows.map((item, itemIndex) => itemIndex === index ? { ...item, role, template } : item))
               }}
@@ -200,13 +206,15 @@ export function VmRows({
             <select
               aria-label={`VM ${index + 1} template`}
               className={denseSelect}
-              value={allowed.some((item) => item.id === row.template) ? row.template : ""}
+              value={ready.some((item) => item.id === row.template) ? row.template : ""}
               disabled={disabled}
               onChange={(event) => onChange(rows.map((item, itemIndex) => itemIndex === index ? { ...item, template: event.target.value } : item))}
             >
-              {allowed.length === 0 ? <option value="">{emptyTemplate}</option> : null}
-              {allowed.map((item) => (
-                <option key={item.id} value={item.id}>{item.id}</option>
+              {ready.length === 0 ? <option value="">{emptyTemplate}</option> : null}
+              {listed.map((item) => (
+                <option key={item.id} value={item.id} disabled={item.built === false}>
+                  {item.built === false ? `${item.id} (not built)` : item.id}
+                </option>
               ))}
             </select>
             <select
@@ -322,7 +330,7 @@ export function RangeBuildWizard({
   const fields = choice.fields ?? []
   const hasKind = fields.some((field) => field.id === "kind")
   const vmsField = fieldById(fields, "vms")
-  const templateChoices = (vmsField?.options ?? []).map((option) => ({ id: option.id, os: option.detail || "" }))
+  const templateChoices = (vmsField?.options ?? []).map((option) => ({ id: option.id, os: option.detail || "", built: option.disabled ? false : undefined }))
   const [picked, setPicked] = useState<Record<string, boolean>>(() => Object.fromEntries((initialSelected ?? []).map((id) => [id, true])))
   const [values, setValues] = useState<Record<string, string>>({ vlan: "10", ...initialValues })
   const [sent, setSent] = useState(locked)
@@ -360,14 +368,15 @@ export function RangeBuildWizard({
     }
     if (step.id === "blueprint") {
       const id = chosen(fields, values, "blueprint")
-      if (!id) return "No blueprints are available to this account."
+      const option = fieldById(fields, "blueprint")?.options?.find((item) => item.id === id)
+      if (!id || option?.disabled) return option?.label || "No blueprints are available to this account."
       return ""
     }
     if (step.id === "networks") return validateNetworks(networks)
     if (step.id === "vms") return validateRangeVms(vmRows, templateChoices, networks)
     if (step.id === "domain") return validateDomain(values.domain || "", vmRows)
     if (step.id === "rules") return validateRules(rules, steps.some((item) => item.id === "networks") ? networks : undefined)
-    if (step.id === "review") return reviewContinueError(Boolean(fieldById(fields, "action")), values.action)
+    if (step.id === "review") return reviewContinueError(Boolean(fieldById(fields, "action")), values.action, existingRangeSelected(values.rangeMode))
     return ""
   }
 
@@ -399,7 +408,7 @@ export function RangeBuildWizard({
     }
     if (steps.some((item) => item.id === "vms")) {
       next.vms = JSON.stringify(vmRows.map((row) => ({
-        hostname: row.hostname.trim(),
+        hostname: hostnameWithoutRangeId(row.hostname.trim()),
         role: row.role,
         template: row.template,
         vlan: row.vlan.trim(),
@@ -460,7 +469,7 @@ export function RangeBuildWizard({
           </ul>
         ) : (
           <>
-            <p className="text-sm text-muted-foreground">{step.detail}</p>
+            <p className="text-sm text-muted-foreground">{step.id === "review" ? reviewStepDetail(existingRangeSelected(values.rangeMode)) : step.detail}</p>
             {step.id === "review" ? (
               <ul className="space-y-1 text-sm">
                 {summary.map((line) => <li key={line}>{line}</li>)}
@@ -499,7 +508,7 @@ export function RangeBuildWizard({
             <Button
               type="button"
               size="sm"
-              disabled={sent || reviewContinueError(Boolean(fieldById(fields, "action")), values.action) !== ""}
+              disabled={sent || reviewContinueError(Boolean(fieldById(fields, "action")), values.action, existingRangeSelected(values.rangeMode)) !== ""}
               onClick={(event) => {
                 // A double-click on Next lands the second click here and would send the default.
                 if (event.detail > 1) return
@@ -538,6 +547,7 @@ function summaryLines(input: {
   }
   if (input.hasKind && input.kind === "ludus" && input.start !== "blueprint") {
     lines.push(`Networks: ${input.networks.map((row) => `VLAN ${row.vlan}`).join(", ") || "none"}`)
+    if (input.vmRows.some((row) => hostnameIncludesRangeId(row.hostname))) lines.push(RANGE_ID_HOSTNAME_NOTE)
     const domains = input.vmRows
       .filter((row) => row.role === "primary-dc")
       .map((row) => (row.domain || input.values.domain || "").trim())
@@ -549,7 +559,8 @@ function summaryLines(input: {
         ? (row.domainJoin ? "joined the domain" : "not domain joined")
         : ""
       const named = row.role === "primary-dc" ? (row.domain || input.values.domain || "").trim() : (row.domain || "").trim()
-      return `${row.hostname || "unnamed"} (${role}, ${row.template || "no template"}, VLAN ${row.vlan}${named ? `, ${named}` : ""}${joined ? `, ${joined}` : ""})`
+      const host = hostnameWithoutRangeId(row.hostname.trim()) || "unnamed"
+      return `${host} (${role}, ${row.template || "no template"}, VLAN ${row.vlan}${named ? `, ${named}` : ""}${joined ? `, ${joined}` : ""})`
     })
     lines.push(`VMs: ${vms.join("; ") || "none"}`)
     for (const warning of domainJoinWarnings(input.vmRows, input.rules)) lines.push(warning)
@@ -561,7 +572,9 @@ function summaryLines(input: {
     lines.push(input.rules.length > 0 ? `Network rules: ${input.rules.length}` : "Network rules: none")
   }
   const action = fieldById(input.fields, "action")
-  if (action && input.values.action) lines.push(`${action.label}: ${optionLabel(action, input.values.action)}`)
+  if (action && (input.values.action === "create" || input.values.action === "deploy")) {
+    lines.push(`When you press Apply: ${applyChoiceLabel(existingRangeSelected(input.values.rangeMode), input.values.action)}`)
+  }
   return lines
 }
 
@@ -589,7 +602,7 @@ function StepFields({
   networks: RangeNetworkDraft[]
   rules: RangeRuleDraft[]
   vmRows: RangeVmDraft[]
-  templateChoices: Array<{ id: string; os: string }>
+  templateChoices: Array<{ id: string; os: string; built?: boolean }>
   picked: Record<string, boolean>
   onValue: (id: string, value: string) => void
   onNetworks: (rows: RangeNetworkDraft[]) => void
@@ -617,15 +630,19 @@ function StepFields({
   }
   if (step.id === "networks") return <NetworkRows rows={networks} disabled={disabled} onChange={onNetworks} />
   if (step.id === "vms") {
+    const unbuilt = (fieldById(fields, "vms")?.options ?? []).some((option) => option.disabled)
     return (
-      <VmRows
-        rows={vmRows}
-        roles={fieldById(fields, "vms")?.roles ?? []}
-        templates={templateChoices}
-        networks={networks}
-        disabled={disabled}
-        onChange={onVms}
-      />
+      <div className="space-y-2">
+        {unbuilt ? <p className="text-sm text-muted-foreground">Templates marked not built cannot be deployed.</p> : null}
+        <VmRows
+          rows={vmRows}
+          roles={fieldById(fields, "vms")?.roles ?? []}
+          templates={templateChoices}
+          networks={networks}
+          disabled={disabled}
+          onChange={onVms}
+        />
+      </div>
     )
   }
   if (step.id === "domain") {
@@ -720,7 +737,7 @@ function StepFields({
           <label key={option.id} className="flex items-start gap-2 text-sm">
             <Checkbox
               checked={picked[option.id] === true}
-              disabled={disabled}
+              disabled={disabled || option.disabled === true}
               onCheckedChange={(value) => onPick((current) => ({ ...current, [option.id]: value === true }))}
             />
             <span>
@@ -750,16 +767,16 @@ function StepFields({
     return (
       <fieldset className="space-y-2" disabled={disabled}>
         <legend className="mb-1.5 text-sm font-medium">{action.label}</legend>
-        {(action.options ?? []).map((option) => (
-          <label key={option.id} className="flex items-start gap-2 text-sm">
+        {(["create", "deploy"] as const).map((id) => (
+          <label key={id} className="flex items-start gap-2 text-sm">
             <input
               type="radio"
               name={action.id}
               className="mt-1 h-4 w-4 accent-primary"
-              checked={picked === option.id}
-              onChange={() => onValue(action.id, option.id)}
+              checked={picked === id}
+              onChange={() => onValue(action.id, id)}
             />
-            <span className="font-medium">{option.label}</span>
+            <span className="font-medium">{applyChoiceLabel(existingRangeSelected(values.rangeMode), id)}</span>
           </label>
         ))}
       </fieldset>
@@ -785,7 +802,7 @@ function SelectField({
       <Label className="mb-1.5 block">{field.label}</Label>
       <select className={fieldSelect} value={value} disabled={disabled} onChange={(event) => onValue(field.id, event.target.value)}>
         {(field.options ?? []).map((option) => (
-          <option key={option.id} value={option.id}>{option.label}</option>
+          <option key={option.id} value={option.id} disabled={option.disabled === true}>{option.label}</option>
         ))}
       </select>
     </div>

@@ -17,6 +17,9 @@ import { LUXAI_LIMITS } from "@/lib/luxai/defaults"
 import { clipText, redactSecrets, scrubSecret } from "@/lib/luxai/redact"
 import { rangeCreateKeys, rangeCreateNeedsAdminKey } from "@/lib/luxai/range-create-auth"
 import { guestAnsibleStdin } from "@/lib/luxai/guest-stdin"
+import { isGoadCatalogName } from "@/lib/goad/goad-wizard-args"
+import { renderGoadProviderConfig } from "@/lib/goad/render-goad-provider-config"
+import { stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
 import { configWithGoadRules, goadRulesSnapshotJson } from "@/lib/luxai/goad-rules"
 import type { RangeRuleDraft } from "@/lib/luxai/range-vms"
 import { ensureLuxHostCurrent } from "@/lib/lux/lux-host-sync"
@@ -209,7 +212,21 @@ export function createLiveHost(session: ResolvedSession, request: NextRequest): 
       })
       if (removed.error || removed.status >= 400) throw new Error(removed.error || "Range delete failed.")
     },
-    async startGoadDeploy(_apiKey, rangeId, args, networkRulesJson) {
+    async renderGoadConfig(lab, extensions) {
+      if (!isGoadConfigured()) throw new Error("GOAD is not configured on this server.")
+      const isAdmin = await liveSessionIsAdmin(session)
+      const impersonation = cookieImpersonation(session)
+      const sshUser = (impersonation.sshLogin || impersonation.ludusPrincipal || "").trim()
+      const asUser = Boolean(isAdmin && impersonation.apiKey && sshUser)
+      const creds = !asUser && session.sshPassword?.trim()
+        ? { username: session.username, password: session.sshPassword }
+        : undefined
+      if (!asUser && !creds) {
+        throw new Error("Log in with your SSH password before deploying GOAD.")
+      }
+      return renderGoadProviderConfig({ lab, extensions, creds })
+    },
+    async startGoadDeploy(_apiKey, rangeId, args, networkRulesJson, workspaceConfigYaml) {
       const taskId = await launchGoadInstall({
         request,
         session,
@@ -217,6 +234,7 @@ export function createLiveHost(session: ResolvedSession, request: NextRequest): 
         rangeId,
         args,
         networkRulesJson,
+        workspaceConfigYaml,
       })
       return taskId
     },
@@ -258,6 +276,49 @@ export async function luxaiActor(
     }
   }
   return { username: session.username, apiKey: session.apiKey }
+}
+
+/**
+ * Ludus keeps the first 15 characters of each Windows computer name.
+ * `{range id}-` is that whole name once the range id is 14 characters or longer.
+ */
+function withHostnameHint(message: string, rangeId: string): string {
+  if (!/duplicate Windows hostname/i.test(message)) return message
+  const id = rangeId.trim()
+  if (id.length < 14) return message
+  return `${message} Range id "${id}" is ${id.length} characters. With the hyphen, that fills the 15 characters Windows keeps, so every Windows computer name in this lab is the same name. Use a range id of 13 characters or fewer.`
+}
+
+/**
+ * Lab config from the GOAD checkout, with the operator's firewall rules merged in.
+ * This replaces the stock Ludus config a new range is created with.
+ */
+async function goadLabConfig(
+  host: LuxaiHost,
+  lab: string,
+  extensions: readonly string[],
+  rules: RangeRuleDraft[],
+): Promise<string> {
+  const name = lab.trim()
+  if (!isGoadCatalogName(name)) {
+    throw new ChangeStartedError("The stored GOAD deploy has no lab. The stock Ludus config was not changed.", true)
+  }
+  if (!host.renderGoadConfig) {
+    throw new ChangeStartedError("Could not read the GOAD lab configuration. The stock Ludus config was not changed.", true)
+  }
+  const clean = extensions.map((item) => item.trim()).filter((item) => isGoadCatalogName(item))
+  let rendered = ""
+  try {
+    rendered = await host.renderGoadConfig(name, clean)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not read the GOAD lab configuration."
+    throw new ChangeStartedError(`${message} The stock Ludus config was not changed.`, true)
+  }
+  const yaml = stripRangeIdHostnames(rules.length > 0 ? configWithGoadRules(rendered, rules) : rendered)
+  if (!yaml.trim()) {
+    throw new ChangeStartedError("The GOAD lab configuration was empty. The stock Ludus config was not changed.", true)
+  }
+  return yaml
 }
 
 export async function applyStoredChange(
@@ -302,6 +363,8 @@ export async function applyStoredChange(
   if (kind === "goad_deploy") {
     const spec = JSON.parse(afterText) as {
       args?: string
+      lab?: string
+      extensions?: string[]
       create?: { name?: string; rangeId?: string } | null
       rules?: RangeRuleDraft[]
     }
@@ -311,25 +374,45 @@ export async function applyStoredChange(
     if (!spec.args) throw new Error("The stored GOAD deploy is incomplete.")
     const targetRange = spec.create?.rangeId || rangeId
     const rules = Array.isArray(spec.rules) ? spec.rules : []
-    if (rules.length > 0) {
-      try {
-        const live = await host.readConfig(apiKey, targetRange).catch(() => "")
-        await host.writeConfig(apiKey, targetRange, configWithGoadRules(live, rules))
-      } catch (err) {
-        throw new ChangeStartedError(err instanceof Error ? err.message : "The range was created, but the firewall rules were not saved.", true)
-      }
+    const extensions = Array.isArray(spec.extensions) ? spec.extensions.filter((item) => typeof item === "string") : []
+    const labYaml = await goadLabConfig(host, spec.lab || "", extensions, rules)
+    try {
+      await host.writeConfig(apiKey, targetRange, labYaml)
+    } catch (err) {
+      if (err instanceof ChangeStartedError) throw err
+      const message = err instanceof Error ? err.message : "The GOAD lab configuration was not saved."
+      throw new ChangeStartedError(withHostnameHint(message, targetRange), true)
     }
-    const taskId = await host.startGoadDeploy(apiKey, targetRange, spec.args, goadRulesSnapshotJson(rules) ?? undefined)
-    return `GOAD deploy started as task ${taskId}. Open GOAD to watch it. This entry cannot be reverted automatically.`
+    const taskId = await host.startGoadDeploy(
+      apiKey,
+      targetRange,
+      spec.args,
+      goadRulesSnapshotJson(rules) ?? undefined,
+      labYaml,
+    )
+    return `GOAD deploy started as task ${taskId}. This entry cannot be reverted automatically.`
   }
   if (kind === "range_create") {
-    const spec = JSON.parse(afterText) as { name?: string; rangeId?: string; yaml?: string; deploy?: boolean; rules?: RangeRuleDraft[] }
+    const spec = JSON.parse(afterText) as {
+      name?: string
+      rangeId?: string
+      yaml?: string
+      deploy?: boolean
+      rules?: RangeRuleDraft[]
+      lab?: string
+      extensions?: string[]
+    }
     if (!spec.rangeId || !spec.name) throw new Error("The stored range is incomplete.")
     await host.createRange(apiKey, spec.rangeId, spec.name)
-    const rulesYaml = !spec.yaml?.trim() && Array.isArray(spec.rules) && spec.rules.length > 0
-      ? configWithGoadRules(await host.readConfig(apiKey, spec.rangeId).catch(() => ""), spec.rules)
+    const rules = Array.isArray(spec.rules) ? spec.rules : []
+    const extensions = Array.isArray(spec.extensions) ? spec.extensions.filter((item) => typeof item === "string") : []
+    const goadYaml = !spec.yaml?.trim() && spec.lab?.trim()
+      ? await goadLabConfig(host, spec.lab, extensions, rules)
       : ""
-    const configYaml = spec.yaml?.trim() || rulesYaml
+    const rulesYaml = !spec.yaml?.trim() && !goadYaml && rules.length > 0
+      ? configWithGoadRules(await host.readConfig(apiKey, spec.rangeId).catch(() => ""), rules)
+      : ""
+    const configYaml = spec.yaml?.trim() || goadYaml || rulesYaml
     if (configYaml) {
       try {
         await host.writeConfig(apiKey, spec.rangeId, configYaml)

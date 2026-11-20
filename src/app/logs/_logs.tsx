@@ -177,7 +177,7 @@ export function LogsPageClient() {
       queryClient.invalidateQueries({ queryKey: queryKeys.vmOperationLog(scopeTag, selectedRangeId) })
     window.addEventListener("vm-operation-log-updated", handler)
     return () => window.removeEventListener("vm-operation-log-updated", handler)
-  }, [queryClient, selectedRangeId])
+  }, [queryClient, scopeTag, selectedRangeId])
 
   // ── Live streaming (existing) ─────────────────────────────────────────────
 

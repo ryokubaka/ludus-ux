@@ -84,6 +84,8 @@ export function GoadTerminal({ lines, onClear, onRefresh, refreshLoading, classN
   )
 
   const useVirtual = parsedLines.length > LOG_VIRTUALIZE_THRESHOLD
+  // TanStack Virtual returns functions the React compiler cannot memoize.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: parsedLines.length,
     getScrollElement: () => containerRef.current,

@@ -1,32 +1,30 @@
 import fs from "fs"
+import os from "os"
 import path from "path"
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import { resetDbForTests } from "@/lib/core/db"
 import { createSessionCredentials } from "@/lib/session/session-credential-store"
 import { resolveSessionPayload } from "@/lib/session/session-node"
 
-const TEST_DATA = path.join(process.cwd(), "data-test-session-impersonation")
-
 describe("resolveSessionPayload impersonation vault", () => {
   const prevSecret = process.env.APP_SECRET
   const prevData = process.env.DATA_DIR
+  let testData = ""
 
   beforeEach(() => {
     resetDbForTests()
     process.env.APP_SECRET = "test-app-secret-for-unit-tests"
-    fs.mkdirSync(TEST_DATA, { recursive: true })
-    process.env.DATA_DIR = TEST_DATA
-    const dbFile = path.join(TEST_DATA, "ludus-ux.db")
-    for (const f of [dbFile, `${dbFile}-wal`, `${dbFile}-shm`]) {
-      if (fs.existsSync(f)) fs.unlinkSync(f)
-    }
+    testData = fs.mkdtempSync(path.join(os.tmpdir(), "lux-session-impersonation-"))
+    process.env.DATA_DIR = testData
   })
 
   afterEach(() => {
+    resetDbForTests()
     if (prevSecret !== undefined) process.env.APP_SECRET = prevSecret
     else delete process.env.APP_SECRET
     if (prevData !== undefined) process.env.DATA_DIR = prevData
     else delete process.env.DATA_DIR
+    fs.rmSync(testData, { recursive: true, force: true })
   })
 
   it("preserves vault impersonationApiKey when cookie accidentally carries admin apiKey", () => {

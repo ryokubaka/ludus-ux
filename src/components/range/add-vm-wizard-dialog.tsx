@@ -18,6 +18,8 @@ import {
   suggestIpLastOctetForVlan,
   type VMEntry,
 } from "@/lib/range/range-vm-wizard"
+import { clampHostnameDraft, hostnameWithoutRangeId } from "@/lib/range/hostname-range-id"
+import { RangeIdHostnameNote } from "@/components/range/range-id-hostname-note"
 import {
   Dialog,
   DialogContent,
@@ -105,7 +107,7 @@ export function AddVmWizardDialog({
         if (v.id !== id) return v
         const updated = { ...v, ...patch }
         if ("hostname" in patch) {
-          updated.vmName = `{{ range_id }}-${patch.hostname ?? ""}`
+          updated.vmName = `{{ range_id }}-${hostnameWithoutRangeId(patch.hostname ?? "")}`
         }
         return updated
       }),
@@ -257,13 +259,14 @@ export function AddVmWizardDialog({
                               value={vm.hostname}
                               onChange={(e) =>
                                 updateVM(vm.id, {
-                                  hostname: e.target.value.slice(0, vm.isWindows ? 15 : 63),
+                                  hostname: clampHostnameDraft(e.target.value, vm.isWindows ? 15 : 63),
                                 })
                               }
-                              maxLength={vm.isWindows ? 15 : 63}
+                              maxLength={vm.isWindows ? 30 : 63}
                               className="h-7 text-xs font-mono"
                               placeholder="server-01"
                             />
+                            <RangeIdHostnameNote value={vm.hostname} />
                             <Label className="text-[10px] text-muted-foreground">VM Name (Proxmox)</Label>
                             <Input
                               value={vm.vmName}

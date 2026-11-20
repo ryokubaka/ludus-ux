@@ -113,6 +113,23 @@ export function wrapEncodedHostShellScript(innerLines: string[]): string {
   return `cd / 2>/dev/null || cd /tmp; printf '%s' '${b64}' | base64 -d | /bin/sh`
 }
 
+/**
+ * The host script puts system directories ahead of $PATH so nsenter finds
+ * docker and git. Tests prepend a stub directory; this puts that $PATH first.
+ */
+export function hostScriptCallerPathFirst(command: string): string {
+  const match = /printf '%s' '([A-Za-z0-9+/=]+)' \| base64 -d \| \/bin\/sh$/.exec(command)
+  if (!match) throw new Error("unexpected host script wrapper")
+  const inner = Buffer.from(match[1], "base64").toString("utf8")
+  const systemPath = 'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"'
+  if (!inner.includes(systemPath)) throw new Error("host script no longer sets the system PATH this way")
+  const rewritten = inner.replace(
+    systemPath,
+    'export PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+  )
+  return command.replace(match[1], Buffer.from(rewritten, "utf8").toString("base64"))
+}
+
 /** Shell helpers: map Docker API client paths to paths the POSIX host shell can stat (e.g. bind-mount mirrors). */
 export function hostClientPathResolverLines(): string[] {
   return [

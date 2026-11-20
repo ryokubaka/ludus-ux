@@ -11,7 +11,7 @@ Use these LUX surfaces, and do not invent a second control plane:
 - Dashboard: VM power, deploy, abort, logs.
 - Configuration and Range Builder: the same range-config.yml.
 - Templates, Ansible Galaxy, Testing Mode, Snapshots, Blueprints, Sources.
-- GOAD Management: one GOAD instance is one lab workspace linked to one Ludus range. LUXAI can propose creating that range, deleting a range, and starting the GOAD install. Provide and provision still run from the GOAD page after Apply. A GOAD install can rewrite the range config; firewall rules LUX saved are re-applied afterwards.
+- GOAD Management: one GOAD instance is one lab workspace linked to one Ludus range. LUXAI can propose creating that range, deleting a range, and starting the GOAD install. Apply replaces the stock Ludus config with the lab config rendered from the GOAD checkout, including firewall rules. Provide and provision still run from the GOAD page after Apply. A GOAD install can rewrite that file; the rules are put back afterwards.
 - Consoles: noVNC and SPICE for a VM the user can already open. LUXAI does not open a console session.
 
 Deploy is slow. Propose it with the tags and limit the operator asked for. A full deploy with empty tags builds the whole range.
@@ -24,7 +24,7 @@ Guest commands run on the Ludus host as one Ansible module against one inventory
     title: "Ludus range config",
     body: `A Ludus range is one YAML document. Top-level keys you will see: ludus (required list of VMs), network, router, defaults, global_role_vars, ludus_extensions, notify. Unknown top-level keys are rejected. Put extension data in ludus_extensions.
 
-Each VM needs vm_name, hostname, template, vlan (2-255), ip_last_octet (1-253), ram_gb, and cpus. Prefer "{{ range_id }}" inside names. The address shape is 10.{rangeNumber}.{vlan}.{ip_last_octet}. A Windows hostname is at most 15 characters after the range id is filled in.
+Each VM needs vm_name, hostname, template, vlan (2-255), ip_last_octet (1-253), ram_gb, and cpus. Put "{{ range_id }}" on vm_name. Leave it off every hostname. LUX removes it from a hostname and tells the operator when they included it. A Windows hostname is at most 15 characters. The address shape is 10.{rangeNumber}.{vlan}.{ip_last_octet}.
 
 A VM must set exactly one of windows, linux, or macOS. A Windows template needs a windows object, such as sysprep: false. A Linux template needs linux: true. Ludus rejects the config when that key is missing. domain.fqdn and domain.role (primary-dc, alt-dc, member) join a Windows VM to a domain. More than one primary-dc is more than one domain, and each one has its own fqdn. A workstation is not a domain member unless the person chose to join it. A joined VM on a different VLAN from the domain controller needs an allow rule both ways. Say that the join may fail when that path is missing, and name the VLAN, the allow rule, or leaving the VM off the domain as the fix. Do not set inter_vlan_default to reject unless the current config already does. roles is a list of role names or { name, depends_on }. role_vars is a map, not a list, and it applies to every role on that VM. global_role_vars applies to every VM. Install a role on the Ludus host before the config names it.
 
@@ -38,7 +38,7 @@ Read fetch_ludus_doc with slug "configuration" when you need the upstream schema
     title: "GOAD labs",
     body: `GOAD (Game of Active Directory) is a lab toolkit. LUX links one GOAD instance to one Ludus range. The instance id, lab name, extensions, and workspace live on the Ludus host under the GOAD install. LUX stores the instance-to-range link locally.
 
-The standard GOAD lab on Ludus uses Windows VMs whose hostnames look like DC01, DC02, DC03, SRV02, and SRV03, on VLAN 10, with the range id prefixed to the Ludus VM name. Other labs (GOAD-Light, GOAD-Mini, NHA, SCCM) and extensions (including ADCS) add or replace machines. A request to deploy a lab is checked against the GOAD catalog on this server before anything is proposed. Trust the live range config and the GOAD inventory over this sketch.
+The standard GOAD lab on Ludus uses Windows VMs whose hostnames look like DC01, DC02, DC03, SRV02, and SRV03, on VLAN 10, with the range id prefixed to the Ludus VM name. Other labs (GOAD-Light, GOAD-Mini, NHA, SCCM) and extensions (including ADCS) add or replace machines. A request to deploy a lab is checked against the GOAD catalog on this server before anything is proposed. Do not propose a lab, extension, template, or blueprint whose templates or Ansible roles are not installed. The form already blocks those. Trust the live range config and the GOAD inventory over this sketch.
 
 Domains, trusts, and which host is a domain controller come from the lab's own inventory and from the range config after provide. Read get_inventory and describe_goad. Do not recite a password from memory. Inventory passwords are redacted until the operator names one account.
 

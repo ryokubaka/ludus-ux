@@ -33,6 +33,10 @@ describe("prepareUploadedYaml", () => {
     expect(doc.ludus[0].windows).toEqual({ sysprep: true })
     expect(doc.ludus[1].windows).toEqual({ sysprep: false })
     expect(doc.ludus[1].linux).toBeUndefined()
+    expect(doc.ludus[0].hostname).toBe("dc01")
+    expect(doc.ludus[1].hostname).toBe("ws01")
+    expect(doc.ludus[0].vm_name).toBe("{{ range_id }}-dc01")
+    expect(doc.ludus[1].vm_name).toBe("{{ range_id }}-ws01")
   })
 
   it("adds linux: true when the template is not Windows", () => {

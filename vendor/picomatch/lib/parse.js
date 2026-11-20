@@ -28,7 +28,6 @@ const expandRange = (args, options) => {
   const value = `[${args.join('-')}]`;
 
   try {
-    /* eslint-disable-next-line no-new */
     new RegExp(value);
   } catch (ex) {
     return args.map(v => utils.escapeRegex(v)).join('..');

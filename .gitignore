@@ -35,6 +35,8 @@ docker/nginx/certificates/*.p12
 
 # Persistent data (SQLite DB — volume-mounted at runtime, not committed to git)
 data/
+# Session unit tests used to write these next to the repo. They belong in the temp dir.
+/data-test-*/
 
 # Live validation harness (keys, databases, local binaries)
 .lux-live/

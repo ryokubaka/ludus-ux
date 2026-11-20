@@ -62,6 +62,8 @@ import {
   mergeGoadPreviewWithNetworkRules,
   validateGoadConfigYaml,
 } from "@/lib/goad/goad-preview-config"
+import { stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
+import { RangeIdYamlHostnameNote } from "@/components/range/range-id-hostname-note"
 import { buildGoadWizardInstallArgs, extractGoadInstanceIdFromOutput } from "@/lib/goad/goad-wizard-args"
 import {
   extensionAnsibleDepsReady,
@@ -388,13 +390,14 @@ export function NewGoadInstancePageClient({
       .catch(() => {})
       .finally(() => setTemplatesLoaded(true))
   }, [])
-  const { lines, isRunning, exitCode, taskId: goadTaskId, run, stop, clear } = useGoadStream({
+  const { lines, isRunning, exitCode, taskId: goadTaskId, run, resumeTask, stop, clear } = useGoadStream({
     getExtraHeaders: impersonationHeaders,
   })
   // Keep a ref so async closures (handleDeploy) can read the latest taskId without
   // a stale closure — same pattern as goad/[id]/page.tsx.
   const goadTaskIdRef = useRef<string | null>(null)
   goadTaskIdRef.current = goadTaskId
+  const luxaiResumeRef = useRef(false)
   const freshDeployRef = useRef<{
     redirected: boolean
     before: Set<string>
@@ -457,6 +460,46 @@ export function NewGoadInstancePageClient({
     if (!id) return
     redirectToFreshInstance(id)
   }, [lines, redirectToFreshInstance])
+
+  // LUXAI already started the GOAD task. This page only watches it, then opens the instance.
+  useEffect(() => {
+    if (luxaiResumeRef.current) return
+    const params = new URLSearchParams(window.location.search)
+    const task = params.get("luxaiTask")?.trim() || ""
+    const rangeId = params.get("rangeId")?.trim() || ""
+    const lab = params.get("lab")?.trim() || ""
+    if (!task || !rangeId) return
+    luxaiResumeRef.current = true
+    setSelectedLab(lab || null)
+    setDedicatedRangeId(rangeId)
+    setRangeMode("existing")
+    setSelectedExistingRange(rangeId)
+    selectRange(rangeId)
+    setStep(4)
+    setDeployed(true)
+    freshDeployRef.current = { redirected: false, before: new Set(), rangeId, handoffId: null }
+    void resumeTask(task)
+    const poll = async () => {
+      const deadline = Date.now() + 5 * 60 * 1000
+      while (Date.now() < deadline && !freshDeployRef.current?.redirected) {
+        await new Promise((resolve) => setTimeout(resolve, 3_000))
+        try {
+          const res = await fetch("/api/goad/instances", {
+            credentials: "include",
+            headers: getImpersonationHeaders(),
+            cache: "no-store",
+          })
+          if (!res.ok) continue
+          const data = await res.json()
+          const match = (data.instances ?? []).find(
+            (item: { instanceId?: string; ludusRangeId?: string }) => item.ludusRangeId === rangeId && item.instanceId,
+          )
+          if (match?.instanceId) redirectToFreshInstance(match.instanceId)
+        } catch { /* the log line is the other way off this page */ }
+      }
+    }
+    void poll()
+  }, [redirectToFreshInstance, resumeTask, selectRange])
 
   /** Wait for execute SSE to emit [TASKID] so redirect can pass ?goadTaskId= for log resume. */
   const waitForGoadTaskId = async (maxMs = 5_000): Promise<string | null> => {
@@ -766,7 +809,7 @@ export function NewGoadInstancePageClient({
       return
     }
 
-    const deployConfigYaml = reviewConfigYaml.trim()
+    const deployConfigYaml = stripRangeIdHostnames(reviewConfigYaml.trim())
     const useWizardYaml = deployConfigYaml.length > 0
     const hasNetworkInYaml = useWizardYaml && reviewConfigYaml.includes("network:")
 
@@ -1800,6 +1843,7 @@ export function NewGoadInstancePageClient({
                   {!yamlValidation.valid && reviewConfigYaml.trim() && (
                     <p className="text-[10px] text-status-error">{yamlValidation.error}</p>
                   )}
+                  <RangeIdYamlHostnameNote yaml={reviewConfigYaml} />
                   <YamlEditor
                     value={reviewConfigYaml}
                     onChange={setReviewConfigYaml}

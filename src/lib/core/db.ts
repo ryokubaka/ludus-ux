@@ -34,9 +34,15 @@ import { encryptGoadTaskSecret, isGoadTaskSecretEncrypted } from "@/lib/goad/goa
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data")
 export const TASKS_LOG_DIR = path.join(DATA_DIR, "tasks")
-const DB_PATH = path.join(DATA_DIR, "ludus-ux.db")
 
 let _db: BetterSqlite3.Database | null = null
+let _openedDbPath: string | null = null
+
+/** DATA_DIR is read at call time so tests can point resetDbForTests() at a fresh directory. */
+function liveDataPaths(): { dir: string; tasks: string; db: string } {
+  const dir = process.env.DATA_DIR || path.join(process.cwd(), "data")
+  return { dir, tasks: path.join(dir, "tasks"), db: path.join(dir, "ludus-ux.db") }
+}
 
 /**
  * Next standalone can load better-sqlite3 JS from node_modules while `bindings`
@@ -97,25 +103,33 @@ export function resetDbForTests(): void {
     _db.close()
     _db = null
   }
+  _openedDbPath = null
 }
 
 export function getDb(): BetterSqlite3.Database {
-  if (_db) return _db
-  fs.mkdirSync(DATA_DIR, { recursive: true })
-  fs.mkdirSync(TASKS_LOG_DIR, { recursive: true })
+  const paths = liveDataPaths()
+  if (_db && _openedDbPath === paths.db) return _db
+  if (_db) {
+    _db.close()
+    _db = null
+    _openedDbPath = null
+  }
+  fs.mkdirSync(paths.dir, { recursive: true })
+  fs.mkdirSync(paths.tasks, { recursive: true })
   // better-sqlite3 is native; require() avoids ESM/CJS edge cases in Next server bundles
   const Sqlite = require("better-sqlite3") as typeof BetterSqlite3
   const nativePath = resolveBetterSqlite3NativePath()
-  _db = new Sqlite(DB_PATH, nativePath ? { nativeBinding: nativePath } : {})
-  _db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes
-  _db.pragma("foreign_keys = ON")
-  _db.pragma("synchronous = NORMAL")  // safe with WAL, faster than FULL
-  _db.pragma("busy_timeout = 8000")   // wait out a deploy's writes instead of failing the page
-  runMigrations(_db)
-  // Belt-and-suspenders: ensure range_ops exists even if the migration system
-  // hasn't caught up yet (e.g. first request to this route before any GOAD
-  // route was hit and triggered the migration via goad-task-store hydration).
-  _db.exec(`
+  const db = new Sqlite(paths.db, nativePath ? { nativeBinding: nativePath } : {})
+  try {
+    db.pragma("journal_mode = WAL")    // concurrent reads + crash-safe writes
+    db.pragma("foreign_keys = ON")
+    db.pragma("synchronous = NORMAL")  // safe with WAL, faster than FULL
+    db.pragma("busy_timeout = 8000")   // wait out a deploy's writes instead of failing the page
+    runMigrations(db)
+    // Belt-and-suspenders: ensure range_ops exists even if the migration system
+    // hasn't caught up yet (e.g. first request to this route before any GOAD
+    // route was hit and triggered the migration via goad-task-store hydration).
+    db.exec(`
     CREATE TABLE IF NOT EXISTS range_ops (
       id          TEXT    PRIMARY KEY,
       rangeId     TEXT    NOT NULL,
@@ -145,6 +159,12 @@ export function getDb(): BetterSqlite3.Database {
       updated_at  INTEGER NOT NULL
     );
   `)
+  } catch (err) {
+    db.close()
+    throw err
+  }
+  _db = db
+  _openedDbPath = paths.db
   return _db
 }
 

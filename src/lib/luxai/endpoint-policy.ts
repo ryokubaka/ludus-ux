@@ -183,6 +183,62 @@ export async function assertModelBaseUrl(
   return parsed
 }
 
+const MAX_MODEL_REDIRECTS = 2
+
+function modelHostname(url: URL): string {
+  return url.hostname.replace(/^\[|\]$/g, "").toLowerCase()
+}
+
+function isLoginRedirect(url: URL): boolean {
+  const path = url.pathname.replace(/\/+$/, "") || "/"
+  return path === "/login" || path.endsWith("/login")
+}
+
+/**
+ * Call a model URL and follow a short chain of redirects on that same host.
+ * An nginx front may answer HTTP with HTTPS, or add a trailing slash.
+ * A different host, an https downgrade, or a login page is not called.
+ */
+export async function fetchModelEndpoint(
+  url: string,
+  init: RequestInit,
+  egress: LuxaiEgress,
+  lookup: AddressLookup,
+  fetchImpl: typeof fetch,
+): Promise<Response> {
+  let current = url
+  for (let hop = 0; ; hop++) {
+    const response = await fetchImpl(current, { ...init, redirect: "manual" })
+    if (response.status < 300 || response.status >= 400) return response
+    const location = response.headers.get("location")
+    await response.body?.cancel().catch(() => undefined)
+    if (!location || hop >= MAX_MODEL_REDIRECTS) {
+      throw new Error("The model URL returned a redirect. LUXAI did not follow it.")
+    }
+    let next: URL
+    try {
+      next = new URL(location, current)
+    } catch {
+      throw new Error("The model URL returned a redirect. LUXAI did not follow it.")
+    }
+    if (isLoginRedirect(next)) {
+      throw new Error("This address redirected to a login page. It is the web UI, not the model API. For Hermes behind nginx, proxy /v1/ to 127.0.0.1:8642, set proxy_buffering off, and use https://that-host/v1 with the API server key.")
+    }
+    const from = new URL(current)
+    if (modelHostname(from) !== modelHostname(next)) {
+      throw new Error("The model URL redirected to a different host. LUXAI did not send the API key there.")
+    }
+    if (from.protocol === "https:" && next.protocol !== "https:") {
+      throw new Error("The model URL redirected from https to a non-https address. LUXAI did not follow it.")
+    }
+    if (next.username || next.password || next.search || next.hash) {
+      throw new Error("The model URL redirected to an address LUXAI will not call.")
+    }
+    await assertModelBaseUrl(next.toString(), egress, lookup)
+    current = next.toString()
+  }
+}
+
 /** Check the URL, and for plain HTTP use the address that passed the check. */
 export async function prepareModelUrl(
   raw: string,

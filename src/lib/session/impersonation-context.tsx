@@ -172,7 +172,7 @@ export function ImpersonationProvider({ children }: { children: React.ReactNode 
         /* still navigate home */
       }
 
-      window.location.assign("/")
+      window.location.assign(new URL("/", window.location.origin).href)
     })()
   }, [])
 

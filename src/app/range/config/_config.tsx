@@ -12,6 +12,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { LogViewerCompound } from "@/components/range/log-viewer"
 import { YamlEditor } from "@/components/range/yaml-editor"
+import { RangeIdYamlHostnameNote } from "@/components/range/range-id-hostname-note"
+import { stripRangeIdHostnames } from "@/lib/range/hostname-range-id"
 import {
   Save,
   Play,
@@ -222,16 +224,17 @@ export function RangeConfigPageClient() {
   }, [selectedRangeId])
 
   const persistRangeConfig = async (yaml: string): Promise<boolean> => {
+    const next = stripRangeIdHostnames(yaml)
     setSaving(true)
     try {
-      const result = await ludusApi.setRangeConfig(yaml, selectedRangeId ?? undefined, forceLudus)
+      const result = await ludusApi.setRangeConfig(next, selectedRangeId ?? undefined, forceLudus)
       if (result.error) {
         toast({ variant: "destructive", title: "Save failed", description: result.error })
         return false
       }
-      setConfig(yaml)
-      setOriginalConfig(yaml)
-      setNetworkRules(extractNetworkRules(yaml))
+      setConfig(next)
+      setOriginalConfig(next)
+      setNetworkRules(extractNetworkRules(next))
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
       const msg = result.data?.result ?? ""
@@ -240,7 +243,7 @@ export function RangeConfigPageClient() {
       } else {
         toast({ title: "Config saved" })
       }
-      queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), yaml)
+      queryClient.setQueryData(queryKeys.rangeConfig(scopeTag, selectedRangeId), next)
       return true
     } finally {
       setSaving(false)
@@ -773,11 +776,16 @@ export function RangeConfigPageClient() {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <YamlEditor
-              value={config}
-              onChange={setConfig}
-              height="600px"
-            />
+            <>
+              <div className="px-4 pt-3">
+                <RangeIdYamlHostnameNote yaml={config} />
+              </div>
+              <YamlEditor
+                value={config}
+                onChange={setConfig}
+                height="600px"
+              />
+            </>
           )}
         </CardContent>
       </Card>

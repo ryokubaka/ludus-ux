@@ -120,6 +120,8 @@ describe("source-catalog-presence", () => {
   it("does not treat unequal when either side empty (raw differ helper)", () => {
     expect(catalogVersionsDiffer("1.0.0", "")).toBe(false)
     expect(catalogVersionsDiffer(undefined, "1.0.0")).toBe(false)
+    expect(catalogVersionsDiffer("1.0", "1.0.0")).toBe(false)
+    expect(catalogVersionsDiffer("1.0.0", "1.0.1")).toBe(true)
     expect(formatVersionTransition("1.0.0", "1.1.0")).toBe("1.0.0 → 1.1.0")
     expect(formatVersionTransition("1.0.1", "1.0.2")).toBe("1.0.1 → 1.0.2")
     expect(formatVersionTransition("(unknown version)", "1.0.2")).toBe("— → 1.0.2")
@@ -150,7 +152,7 @@ describe("source-catalog-presence", () => {
     ).toBe("feat/securityonion-3.3.0")
   })
 
-  it("treats unknown installed version + catalog tip as upgrade until LUX pin exists", () => {
+  it("does not treat a missing Ludus version as out of sync", () => {
     const installed = buildInstalledAnsibleNames(
       [{ name: "ryokubaka.ludus_securityonion", version: "", type: "role" }],
       [],
@@ -159,14 +161,14 @@ describe("source-catalog-presence", () => {
       [{ name: "ryokubaka.ludus_securityonion", version: "", type: "role" }],
       [],
     )
+    // Catalog tip with no Ludus version is the version column's fallback, not an update.
     expect(
       sourceCatalogAnsibleInstallState(
         { name: "ludus_securityonion", version: "1.0.0" },
         installed,
         versions,
       ),
-    ).toBe("upgrade_available")
-    // After re-sync, pin fills installedVersions → in sync
+    ).toBe("installed")
     expect(
       sourceCatalogAnsibleInstallState(
         { name: "ludus_securityonion", version: "1.0.0" },
@@ -174,6 +176,14 @@ describe("source-catalog-presence", () => {
         new Map([["ludus_securityonion", "1.0.0"]]),
       ),
     ).toBe("installed")
+    // A pin from the last install is a real installed version. A newer catalog is an update.
+    expect(
+      sourceCatalogAnsibleInstallState(
+        { name: "ludus_securityonion", version: "1.1.0" },
+        installed,
+        new Map([["ludus_securityonion", "1.0.0"]]),
+      ),
+    ).toBe("upgrade_available")
     expect(
       sourceCatalogAnsibleInstallState(
         { name: "ludus_securityonion", version: "1.0.0", state: "upgrade_available" },
@@ -186,7 +196,7 @@ describe("source-catalog-presence", () => {
           [],
         ),
       ),
-    ).toBe("upgrade_available")
+    ).toBe("installed")
   })
 
   it("does not treat another source's blueprint as installed here", () => {

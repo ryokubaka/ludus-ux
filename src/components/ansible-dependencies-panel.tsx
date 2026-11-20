@@ -23,6 +23,12 @@ export interface DependencyInstallResult {
   failed: Array<{ name: string; error: string }>
 }
 
+/** Templates page focused on adding a missing template, or building one that is already added. */
+export function templateGuideHref(req: BlueprintRequirement): string {
+  const key = req.templateStatus === "unbuilt" ? "build" : "add"
+  return `/templates?${key}=${encodeURIComponent(req.name)}`
+}
+
 export interface AnsibleDependenciesPanelProps {
   onCheck: () => Promise<DependencyCheckResult>
   onInstall: (missing: BlueprintRequirement[]) => Promise<DependencyInstallResult>
@@ -56,6 +62,7 @@ export function AnsibleDependenciesPanel({
   const [check, setCheck] = useState<DependencyCheckResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(false)
+  const [installingKey, setInstallingKey] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const checkGeneration = useRef(0)
   const onCheckRef = useRef(onCheck)
@@ -92,10 +99,8 @@ export function AnsibleDependenciesPanel({
     void runCheck()
   }, [onCheck, runCheck])
 
-  const handleInstall = async () => {
-    if (!check || check.missing.length === 0) return
-    const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
-    if (ansibleMissing.length === 0) return
+  const installAnsible = async (ansibleMissing: BlueprintRequirement[]) => {
+    if (!check || ansibleMissing.length === 0) return
     const generation = ++checkGeneration.current
     onReadyRef.current?.(false)
     setInstalling(true)
@@ -166,7 +171,20 @@ export function AnsibleDependenciesPanel({
       if (superseded) void runCheck()
     } finally {
       setInstalling(false)
+      setInstallingKey(null)
     }
+  }
+
+  const handleInstall = () => {
+    if (!check) return
+    setInstallingKey(null)
+    const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
+    void installAnsible(ansibleMissing)
+  }
+
+  const handleInstallOne = (req: BlueprintRequirement) => {
+    setInstallingKey(`${req.kind}:${req.name}`)
+    void installAnsible([req])
   }
 
   if (loading) {
@@ -197,7 +215,6 @@ export function AnsibleDependenciesPanel({
   if (!check) return null
 
   const ansibleMissing = check.missing.filter((m) => m.kind !== "template")
-  const templateMissing = check.missing.filter((m) => m.kind === "template")
   const hasAnsibleMissing = ansibleMissing.length > 0
 
   if (check.ready) {
@@ -227,23 +244,48 @@ export function AnsibleDependenciesPanel({
           Resolve them before {failureAction} or deployment will fail.
         </p>
         <ul className="space-y-1.5">
-          {check.missing.map((req) => (
-            <li key={`${req.kind}:${req.name}`} className="flex items-start gap-2 text-xs">
-              <Badge variant="outline" className="font-mono shrink-0">
-                {req.kind}
-              </Badge>
-              <span className="font-mono break-all">{req.name}</span>
-              {req.version && <span className="text-muted-foreground shrink-0">{req.version}</span>}
-              {req.kind === "template" && req.templateStatus && (
-                <span className="text-muted-foreground shrink-0">
-                  {req.templateStatus === "unbuilt" ? "not built" : "not registered"}
-                </span>
-              )}
-            </li>
-          ))}
+          {check.missing.map((req) => {
+            const rowKey = `${req.kind}:${req.name}`
+            const rowBusy = installing && (installingKey == null || installingKey === rowKey)
+            return (
+              <li key={rowKey} className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="outline" className="font-mono shrink-0">
+                  {req.kind}
+                </Badge>
+                <span className="font-mono break-all">{req.name}</span>
+                {req.version && <span className="text-muted-foreground shrink-0">{req.version}</span>}
+                {req.kind === "template" && req.templateStatus && (
+                  <span className="text-muted-foreground shrink-0">
+                    {req.templateStatus === "unbuilt" ? "added, not built" : "not on this host"}
+                  </span>
+                )}
+                {(req.kind === "role" || req.kind === "collection") && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-7 gap-1 px-2 text-[11px]"
+                    disabled={installing}
+                    onClick={() => handleInstallOne(req)}
+                  >
+                    {rowBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                    Install
+                  </Button>
+                )}
+                {req.kind === "template" && (
+                  <Button type="button" size="sm" variant="outline" className="ml-auto h-7 gap-1 px-2 text-[11px]" asChild>
+                    <Link href={templateGuideHref(req)}>
+                      <Layers className="h-3 w-3" />
+                      {req.templateStatus === "unbuilt" ? "Build template" : "Add and install"}
+                    </Link>
+                  </Button>
+                )}
+              </li>
+            )
+          })}
         </ul>
         <div className="flex flex-wrap gap-2">
-          {hasAnsibleMissing && (
+          {ansibleMissing.length > 1 && (
             <Button
               type="button"
               size="sm"
@@ -251,12 +293,12 @@ export function AnsibleDependenciesPanel({
               disabled={installing}
               onClick={() => void handleInstall()}
             >
-              {installing ? (
+              {installing && installingKey == null ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Download className="h-3.5 w-3.5" />
               )}
-              Install Ansible dependencies
+              Install all roles and collections
             </Button>
           )}
           <Button
@@ -275,14 +317,6 @@ export function AnsibleDependenciesPanel({
               <Link href="/ansible">
                 <BookOpen className="h-3.5 w-3.5" />
                 Ansible page
-              </Link>
-            </Button>
-          )}
-          {templateMissing.length > 0 && (
-            <Button type="button" variant="ghost" size="sm" className="gap-1.5" asChild>
-              <Link href="/templates">
-                <Layers className="h-3.5 w-3.5" />
-                Templates page
               </Link>
             </Button>
           )}

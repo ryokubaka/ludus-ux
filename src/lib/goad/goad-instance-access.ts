@@ -68,10 +68,10 @@ export async function assertGoadInstanceAccess(
   session: ResolvedSession,
   request: NextRequest,
   instanceId: string,
-  opts: { allowUnclaimed?: boolean } = {},
+  opts: { allowUnclaimed?: boolean; asOperator?: string } = {},
 ): Promise<NextResponse | null> {
-  if (await liveSessionIsAdmin(session)) return null
-  const caller = await effectiveImpersonatedOperatorUsername(session, request)
+  if (!opts.asOperator && (await liveSessionIsAdmin(session))) return null
+  const caller = opts.asOperator || (await effectiveImpersonatedOperatorUsername(session, request))
   const listed = await listGoadInstancesResult()
   if (!listed.ok) {
     return NextResponse.json(

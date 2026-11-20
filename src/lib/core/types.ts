@@ -72,6 +72,8 @@ export interface TemplateObject {
   version?: string
   /** OS category returned by the Ludus API since v2.0.6 */
   os?: "linux" | "windows" | "macos" | "other"
+  /** Filled by LUX from Proxmox, not by the Ludus templates API. */
+  proxmox?: "template" | "vm"
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────

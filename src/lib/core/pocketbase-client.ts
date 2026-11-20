@@ -5,9 +5,13 @@
  * Ludus API (LUDUS_URL) also exposes the PocketBase REST API under /api/ paths
  * (no /api/v2 prefix).
  *
- * Authentication: PocketBase "superuser" / admin account.
+ * Authentication: PocketBase superuser.
  *   email:    root@ludus.internal  (hardcoded by Ludus)
- *   password: LUDUS_ROOT_API_KEY   (from settings / .env)
+ *   password: the root API key as it was when Ludus first created that superuser
+ *
+ * LUDUS_ROOT_API_KEY is the current Ludus ROOT API key. Ludus does not update
+ * the superuser password when that key changes, so a valid key can still be
+ * rejected here.
  *
  * The auth token is cached in process-memory and refreshed after 23 hours (well
  * within the default 30-day PocketBase admin token lifetime).
@@ -18,6 +22,11 @@
 import { getSettings } from "@/lib/settings/settings-store"
 import { ludusFetch } from "@/lib/ludus/ludus-fetch"
 import type { RangeObject, UserObject, RangeState } from "@/lib/core/types"
+import {
+  explainPocketBaseAuthFailure,
+  warnPocketBaseAuthFailure,
+  type PocketBaseAuthAttempt,
+} from "@/lib/core/pocketbase-auth-error"
 
 const PB_EMAIL = "root@ludus.internal"
 
@@ -52,27 +61,33 @@ let _authInFlight: Promise<string | null> | null = null
 async function authenticate(): Promise<string | null> {
   const settings = getSettings()
   const password = settings.rootApiKey
-  if (!password) return null
-
-  const base = settings.ludusUrl.replace(/\/$/, "")
-
-  for (const endpoint of AUTH_ENDPOINTS) {
-    try {
-      const res = await ludusHttpsFetch(`${base}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identity: PB_EMAIL, password }),
-        cache: "no-store",
-      })
-      if (!res.ok) continue
-      const data = await res.json() as { token?: string }
-      if (data.token) return data.token
-    } catch {
-      // Try next endpoint
+  const attempts: PocketBaseAuthAttempt[] = []
+  if (password) {
+    const base = settings.ludusUrl.replace(/\/$/, "")
+    for (const endpoint of AUTH_ENDPOINTS) {
+      try {
+        const res = await ludusHttpsFetch(`${base}${endpoint}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identity: PB_EMAIL, password }),
+          cache: "no-store",
+        })
+        if (!res.ok) {
+          attempts.push({ endpoint, status: res.status })
+          continue
+        }
+        const data = await res.json() as { token?: string }
+        if (data.token) return data.token
+        attempts.push({ endpoint, status: res.status, error: "response had no token" })
+      } catch (err) {
+        const cause = err instanceof Error && err.cause instanceof Error ? err.cause.message : ""
+        const message = err instanceof Error ? err.message : String(err)
+        attempts.push({ endpoint, error: cause || message })
+      }
     }
   }
 
-  console.warn("[pocketbase] Authentication failed — is LUDUS_ROOT_API_KEY set?")
+  warnPocketBaseAuthFailure(explainPocketBaseAuthFailure(attempts, Boolean(password)))
   return null
 }
 

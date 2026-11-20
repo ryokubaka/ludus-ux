@@ -279,9 +279,25 @@ export function sanitizeNetworkPortsInYaml(yamlText: string): string {
   return out
 }
 
+/**
+ * Ludus vlan_src and vlan_dst are an integer 2-255, or the words public, all, or wireguard.
+ * A quoted VLAN number fails that anyOf the same way a quoted octet does.
+ */
+export function sanitizeNetworkVlansInYaml(yamlText: string): string {
+  return yamlText.replace(
+    /^(\s*(?:-\s+)?vlan_(?:src|dst):\s*)(?:"([^"]+)"|'([^']+)'|([^\s#]+))\s*$/gm,
+    (match, prefix: string, dq?: string, sq?: string, bare?: string) => {
+      const raw = (dq ?? sq ?? bare ?? "").trim()
+      if (raw === "public" || raw === "all" || raw === "wireguard") return `${prefix}${raw}`
+      if (/^\d+$/.test(raw)) return `${prefix}${Number(raw)}`
+      return match
+    },
+  )
+}
+
 /** All surgical Ludus network.rules coercions before PUT. */
 export function sanitizeNetworkRulesYaml(yamlText: string): string {
-  return sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText))
+  return sanitizeNetworkVlansInYaml(sanitizeNetworkPortsInYaml(sanitizeNetworkIpOctetsInYaml(yamlText)))
 }
 
 export function injectNetworkRules(

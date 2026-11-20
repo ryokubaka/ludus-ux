@@ -27,6 +27,7 @@ import {
   ScrollText,
   Monitor,
   ShieldCheck,
+  Sparkles,
   PanelLeftClose,
   PanelLeftOpen,
   ExternalLink,
@@ -113,6 +114,7 @@ const navGroups: NavGroup[] = [
     label: "System",
     items: [
       { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/luxai", label: "LUXAI", icon: Sparkles },
     ],
   },
 ]

@@ -213,7 +213,7 @@ sys.exit(0 if hmac.compare_digest(got, mac) and body == want else 1)
 function scratchManualCommand(command: string, dir: string): string {
   return command
     .replace("mkdir -p /usr/local/sbin /etc/sudoers.d", `mkdir -p ${dir}/sbin ${dir}/sudoers.d`)
-    .replace("cat > /usr/local/sbin/lux-host << 'LUX_HOST_FILE'", `cat > ${dir}/sbin/lux-host << 'LUX_HOST_FILE'`)
+    .replace("mv \"$decoded\" /usr/local/sbin/lux-host", `mv "$decoded" ${dir}/sbin/lux-host`)
     .replace("\nchown root:root /usr/local/sbin/lux-host\n", `\ntrue ${dir}/sbin/lux-host\n`)
     .replace("\nchmod 755 /usr/local/sbin/lux-host\n", `\nchmod 755 ${dir}/sbin/lux-host\n`)
     .replace(
@@ -234,6 +234,7 @@ describe("luxHostManualInstallCommand", () => {
     expect(command).toContain("#!/bin/bash")
     expect(command).toContain("echo manual-helper")
     expect(command).toContain("testuser ALL=(root) NOPASSWD: LUX_HOST")
+    expect(command).toContain("bash -n \"$decoded\"")
     expect(command).not.toMatch(/scripts\/lux-host/)
 
     const dir = mkdtempSync(path.join(tmpdir(), "lux-host-manual-"))
@@ -243,6 +244,15 @@ describe("luxHostManualInstallCommand", () => {
     const rule = readFileSync(`${dir}/sudoers.d/lux-host`, "utf8")
     expect(rule).toContain("testuser ALL=(root) NOPASSWD: LUX_HOST")
     expect(rule).not.toContain("__LUX_SSH_USER__")
+  })
+
+  it("does not install a helper that fails bash -n", () => {
+    const helper = "#!/bin/bash\nif\n"
+    const command = luxHostManualInstallCommand("testuser", helper)
+    const dir = mkdtempSync(path.join(tmpdir(), "lux-host-manual-bad-"))
+    const result = spawnSync("bash", ["-s"], { input: scratchManualCommand(command, dir), encoding: "utf8" })
+    expect(result.status).not.toBe(0)
+    expect(existsSync(`${dir}/sbin/lux-host`)).toBe(false)
   })
 
   it.skipIf(lacks("visudo"))("embeds the bundled helper so the paste does not need another file", () => {

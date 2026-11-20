@@ -56,6 +56,11 @@ export interface RuntimeSettings {
    * forwards to the Ludus host (192.0.2.254) instead of public resolvers.
    */
   useLudusHostDns: boolean
+  /**
+   * Write ignore_chocolatey_checksums into Ludus group_vars so every range
+   * deploy, including the CLI, skips Chocolatey package checksums.
+   */
+  ignoreChocolateyChecksums: boolean
   /** ROOT API key — used for admin operations (user create/delete). */
   rootApiKey: string
   /** Ludus admin user API key for global source blueprint install/share (auto-set on first admin source install). */
@@ -106,6 +111,7 @@ function defaults(): RuntimeSettings {
     ludusAnsibleVerbose: process.env.LUDUS_ANSIBLE_VERBOSE !== "false",
     ludusAnsibleSpeedups: process.env.LUX_ANSIBLE_SPEEDUPS !== "false",
     useLudusHostDns: process.env.LUX_USE_LUDUS_HOST_DNS === "true",
+    ignoreChocolateyChecksums: process.env.LUX_IGNORE_CHOCOLATEY_CHECKSUMS === "true",
     rootApiKey: normalizeLudusApiKeyInput(process.env.LUDUS_ROOT_API_KEY),
     blueprintOperatorApiKey: normalizeLudusApiKeyInput(
       process.env.LUX_LUDUS_BLUEPRINT_OPERATOR_API_KEY,
@@ -132,6 +138,7 @@ const SETTINGS_KEYS: Array<keyof RuntimeSettings> = [
   "ludusAnsibleVerbose",
   "ludusAnsibleSpeedups",
   "useLudusHostDns",
+  "ignoreChocolateyChecksums",
   "rootApiKey",
   "blueprintOperatorApiKey",
   "blueprintOperatorUserId",
@@ -183,7 +190,7 @@ function loadOverridesFromDb(): Partial<RuntimeSettings> {
       const k = key as keyof RuntimeSettings
       const decoded = decodeSettingFromDb(key, value)
       // Coerce stored strings back to the right type
-      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose" || k === "ludusAnsibleSpeedups" || k === "useLudusHostDns") {
+      if (k === "goadEnabled" || k === "ludushoundEnabled" || k === "ludusAnsibleVerbose" || k === "ludusAnsibleSpeedups" || k === "useLudusHostDns" || k === "ignoreChocolateyChecksums") {
         (result as Record<string, unknown>)[k] = decoded.value === "true"
       } else if (k === "sshPort") {
         const n = parseInt(decoded.value, 10)

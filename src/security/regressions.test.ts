@@ -191,6 +191,40 @@ const FINDINGS: Record<string, Finding> = {
     source: "review",
     tests: { "src/security/route-audit.test.ts": ["changes no state in a GET handler"] },
   },
+  "Next.js 16.4.5 and ws 8.23.0 close the November 2026 advisories": {
+    source: "advisory",
+    tests: {
+      "src/security/dependency-pins.test.ts": [
+        "pins Next.js at 16.4.5 or newer and ws at 8.23.0 or newer",
+      ],
+    },
+  },
+  "picomatch 4.0.8 collapses a repeated star extglob": {
+    source: "advisory",
+    tests: {
+      "src/security/dependency-pins.test.ts": [
+        "uses the vendored picomatch that compiles a repeated star extglob once",
+        "removes picomatch backslashes in one pass",
+      ],
+    },
+  },
+  "LUXAI doc text drops a script block and decodes an entity once": {
+    source: "review",
+    tests: {
+      "src/lib/luxai/html-text.test.ts": [
+        "drops a script whose end tag has space before the bracket",
+        "decodes &amp; once",
+      ],
+    },
+  },
+  "a Markdown table cell escapes a backslash before a pipe": {
+    source: "review",
+    tests: {
+      "src/lib/luxai/command-output.test.ts": [
+        "escapes a backslash before a pipe in a table cell",
+      ],
+    },
+  },
   "a security changelog entry names a regression test": {
     source: "review",
     tests: {

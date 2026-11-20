@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
@@ -262,6 +263,92 @@ EOF
     expect(file).toContain("Get-ADDomain -ErrorAction Stop")
     expect(file).toContain("until: lux_adws_ready.rc == 0")
     expect(file.match(/BEGIN LUX-ADWS-WAIT/g)).toHaveLength(1)
+  })
+})
+
+describe("patch-dns-cache", () => {
+  const dcPlaybook = `---
+- name: Configure DNS forwarding
+  ansible.windows.win_powershell:
+    script: |
+      Add-DnsServerForwarder -IPAddress 192.0.2.1
+- name: Set the DNS Cache time to 2 seconds (helps DNS blocks at the router be more effective)
+  ansible.windows.win_shell: |
+    Set-DnsServerCache -MaxTTL 00:00:02
+`
+
+  it("loads DnsServer from win_powershell and leaves the task unchanged on the second run", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-dc.yml"
+      cat > "$play" <<'EOF'
+${dcPlaybook}
+EOF
+      export LUX_DNS_CACHE_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-dns-cache
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-dns-cache
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    expect(file).toContain("ansible.windows.win_powershell:")
+    expect(file).toContain("Import-Module DnsServer")
+    expect(file).toContain("Set-DnsServerCache -MaxTTL 00:00:02")
+    expect(file).not.toContain("win_shell")
+    expect(file).toContain("Add-DnsServerForwarder")
+  })
+})
+
+describe("patch-dns-server", () => {
+  const dcPlaybook = `---
+- name: Create domain
+  microsoft.ad.domain:
+    dns_domain_name: example.local
+- name: Configure DNS forwarding
+  ansible.windows.win_powershell:
+    script: |
+      Add-DnsServerForwarder -IPAddress 192.0.2.1
+`
+
+  it("installs the DNS Server role ahead of forwarding and leaves it unchanged on the second run", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      dir=$(mktemp -d)
+      play="$dir/configure-dc.yml"
+      cat > "$play" <<'EOF'
+${dcPlaybook}
+EOF
+      export LUX_DNS_SERVER_PLAYBOOK="$play"
+      bash "$LUX_HOST_HELPER" patch-dns-server
+      echo "---FILE---"
+      cat "$play"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" patch-dns-server
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stdout).toContain("status=ok\nchanged=yes")
+    expect(result.stdout).toContain("status=ok\nchanged=no")
+    const file = result.stdout.split("---FILE---")[1]?.split("---AGAIN---")[0] ?? ""
+    const begin = file.indexOf("# BEGIN LUX-DNS-SERVER")
+    const install = file.indexOf("- name: Install the DNS Server role")
+    const forward = file.indexOf("- name: Configure DNS forwarding")
+    expect(begin).toBeGreaterThan(-1)
+    expect(install).toBeGreaterThan(begin)
+    expect(install).toBeLessThan(forward)
+    expect(file).toContain("name: DNS")
+    expect(file).toContain("Add-DnsServerPrimaryZone -Name $zone -ReplicationScope Domain -DynamicUpdate Secure")
+    expect(file).toContain('when: lux_dns_role.reboot_required | default(false)')
+    expect(file.match(/BEGIN LUX-DNS-SERVER/g)).toHaveLength(1)
+    expect(file).toContain("Add-DnsServerForwarder")
   })
 })
 
@@ -607,6 +694,73 @@ EOF
     expect(file.match(/ignore_checksums: true/g)).toHaveLength(1)
   })
 
+})
+
+describe("lux-host script", () => {
+  it("parses and does not reuse a heredoc marker", () => {
+    const text = readFileSync(helper, "utf8")
+    const parsed = spawnSync("bash", ["-n", helper], { encoding: "utf8" })
+    expect(parsed.status, parsed.stderr).toBe(0)
+    const names = [...text.matchAll(/<<-?\s*'([A-Za-z0-9_]+)'/g)].map((match) => match[1])
+    const dupes = names.filter((name, index) => names.indexOf(name) !== index)
+    expect(dupes).toEqual([])
+  })
+})
+
+describe("chocolatey-checksums", () => {
+  it("sets ignore_chocolatey_checksums in group_vars/all.yml and removes only that block", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      root=$(mktemp -d)
+      mkdir -p "$root/group_vars"
+      printf '%s\n' 'other: 1' > "$root/group_vars/all.yml"
+      export LUX_CHOCOLATEY_VARS_ROOT="$root"
+      bash "$LUX_HOST_HELPER" chocolatey-checksums on
+      echo "---ON---"
+      cat "$root/group_vars/all.yml"
+      echo "---AGAIN---"
+      bash "$LUX_HOST_HELPER" chocolatey-checksums on
+      echo "---OFF---"
+      bash "$LUX_HOST_HELPER" chocolatey-checksums off
+      echo "---FILE---"
+      cat "$root/group_vars/all.yml"
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    expect(result.stdout).toContain("changed=yes")
+    expect(result.stdout).toContain("changed=no")
+    const on = result.stdout.split("---ON---")[1]?.split("---AGAIN---")[0] ?? ""
+    const off = result.stdout.split("---FILE---")[1] ?? ""
+    expect(on).toContain("other: 1")
+    expect(on).toContain("ignore_chocolatey_checksums: true")
+    expect(on).toContain("# BEGIN LUX-CHOCOLATEY-CHECKSUMS")
+    expect(off).toContain("other: 1")
+    expect(off).not.toContain("ignore_chocolatey_checksums")
+    expect(off).not.toContain("BEGIN LUX-CHOCOLATEY-CHECKSUMS")
+  })
+
+  it("writes a fragment when group_vars/all is a directory", () => {
+    const result = bash(
+      `
+      set -euo pipefail
+      root=$(mktemp -d)
+      mkdir -p "$root/group_vars/all"
+      export LUX_CHOCOLATEY_VARS_ROOT="$root"
+      bash "$LUX_HOST_HELPER" chocolatey-checksums on
+      echo "---FILE---"
+      cat "$root/group_vars/all/zz-lux-chocolatey-checksums.yml"
+      echo "---OFF---"
+      bash "$LUX_HOST_HELPER" chocolatey-checksums off
+      if [[ -f "$root/group_vars/all/zz-lux-chocolatey-checksums.yml" ]]; then echo still-there; fi
+      `,
+    )
+    expect(result.status, result.stderr + result.stdout).toBe(0)
+    const file = result.stdout.split("---FILE---")[1]?.split("---OFF---")[0] ?? ""
+    expect(file).toContain("ignore_chocolatey_checksums: true")
+    expect(result.stdout).toContain("changed=yes")
+    expect(result.stdout).not.toContain("still-there")
+  })
 })
 
 describe("patch-debian11-apt", () => {

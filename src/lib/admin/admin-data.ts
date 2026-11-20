@@ -83,11 +83,11 @@ function mergeAdminRangeVms(pbRange: RangeObject, ludusVms: VMObject[] | undefin
   }
 
   if (expected !== undefined && next.length < expected) {
-    return mergeVmUnionPreferNext(prev, next, true)
+    return mergeVmUnionPreferNext(prev, next)
   }
 
   if (prev.length > 0 && next.length < prev.length) {
-    return mergeVmUnionPreferNext(prev, next, true)
+    return mergeVmUnionPreferNext(prev, next)
   }
 
   return next

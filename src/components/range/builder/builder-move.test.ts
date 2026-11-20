@@ -74,6 +74,19 @@ describe("host drop target", () => {
     expect(vm({ id: "vm", x: -400, y: -200, width: 180, height: 48 }, "vlan:10", 10)).toEqual({ kind: "snap" })
   })
 
+  it("moves a domain whose center is inside another subnet even when most of the box still hangs out", () => {
+    expect(
+      hostDropTarget({
+        moving: "domain",
+        rect: { id: "domain:second.local", x: -400, y: 40, width: 1000, height: 80 },
+        parentId: null,
+        currentVlan: null,
+        domains: [],
+        vlans: [vlan10, vlan99],
+      }),
+    ).toEqual({ kind: "move-domain", toVlan: 10 })
+  })
+
   it("moves a domain onto the subnet that covers more of it", () => {
     expect(
       hostDropTarget({

@@ -177,15 +177,24 @@ export function normalizeCatalogVersion(version?: string | null): string {
   return (version ?? "").trim().replace(/^v/i, "")
 }
 
-/** True only when both sides are non-empty and differ (no false upgrades on missing data). */
+/**
+ * True only when both sides are non-empty and differ.
+ * A missing version is not a difference. `1.0` and `1.0.0` are the same release.
+ */
 export function catalogVersionsDiffer(
   catalogVersion?: string | null,
   installedVersion?: string | null,
 ): boolean {
+  if (isMissingOrUnknownVersion(catalogVersion) || isMissingOrUnknownVersion(installedVersion)) {
+    return false
+  }
   const catalog = normalizeCatalogVersion(catalogVersion)
   const installed = normalizeCatalogVersion(installedVersion)
   if (!catalog || !installed) return false
-  return catalog !== installed
+  const dotted = compareDottedVersions(catalog, installed)
+  if (dotted === 0) return false
+  if (dotted === null) return catalog !== installed
+  return true
 }
 
 /**
@@ -376,13 +385,9 @@ export function resolveCatalogInstallState(opts: {
   installedVersion?: string | null
 }): CatalogInstallState {
   if (!opts.present) return "not_installed"
+  // Ludus often omits role versions. The version column then shows the catalog
+  // tip. That is not a difference, and it must not stay Out of sync after Re-sync.
   if (catalogVersionsDiffer(opts.catalogVersion, opts.installedVersion)) {
-    return "upgrade_available"
-  }
-  // Catalog tip known but no installed/pin version yet → out of sync until a
-  // successful install/re-sync records a LUX pin (Ludus list often omits versions).
-  const catalog = normalizeCatalogVersion(opts.catalogVersion)
-  if (catalog && isMissingOrUnknownVersion(opts.installedVersion)) {
     return "upgrade_available"
   }
   return "installed"

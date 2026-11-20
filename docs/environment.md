@@ -49,6 +49,8 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUS_ANSIBLE_VERBOSE` | Pass Ludus `--verbose-ansible` / API `verbose` on range deploy (`false` to default off). Also toggleable in Settings. Stock Ludus ≤2.2.3 may ignore this when `force` is set (upstream bug: server passes `force` as Ansible verbosity). Settings UI hides that warning when the connected server reports ≥2.2.4. | `true` |
 | `LUX_ANSIBLE_SPEEDUPS` | Apply SSH pipelining (`ANSIBLE_PIPELINING=True`) and a higher fork count (`ANSIBLE_FORKS=20`) to Ludus and GOAD Ansible runs. Env only — no Ludus or GOAD playbook is edited. GOAD runs inherit the vars through the SSH session; Ludus range deploys get them from a systemd drop-in written by `lux-host ansible-speedups` (the service restarts to pick them up only when no range is deploying). Also toggleable in Settings. Turn off (`false`) if a guest's sudoers still requires a TTY. | `true` |
 | `LUX_USE_LUDUS_HOST_DNS` | Before a deploy, rewrite `AdGuardHome.yaml.j2` so upstream and bootstrap DNS are `192.0.2.254` (`true` to enable). Also toggleable in Settings. A Ludus update extracts a fresh template; the next deploy puts the host resolver back. | `false` |
+| `LUX_RANGE_VNET_INTERVAL_MS` | How often a Security Onion range is returned to hub mode on the bridge that is up, while one of its VMs is on. `0` or a negative number turns the pass off. A positive value below `15000` is raised to `15000`. | `60000` |
+| `LUX_IGNORE_CHOCOLATEY_CHECKSUMS` | Write `ignore_chocolatey_checksums: true` into the Ludus range playbook group vars (`true` to enable). Also toggleable in Settings. Every range deploy, including the CLI, then skips Chocolatey package checksums on the additional-tools list. Off removes that variable. A Ludus update that deletes the group vars file loses it until the next LUX deploy or Settings save. | `false` |
 | `GOAD_SSH_KEY_PATH` | Optional override for key discovery (usually same as `PROXMOX_SSH_KEY_PATH`) | — |
 | `GOAD_SSH_HOST`, `GOAD_SSH_PORT`, `GOAD_SSH_USER`, `GOAD_SSH_PASSWORD`, `GOAD_SSH_KEY_PASSPHRASE` | Legacy aliases. Each is read only when the matching `LUDUS_SSH_*` or `PROXMOX_SSH_*` value and the saved Settings value are empty. | unset |
 
@@ -62,6 +64,10 @@ All configuration is in `.env`. See [`.env.example`](../.env.example) for the fu
 | `LUDUSHOUND_PATH` | Path to the cloned [LudusHound](https://github.com/bagelByt3s/LudusHound) repo on the Ludus server | `/opt/LudusHound` |
 
 Operator clones the repo on the Ludus host (or use LUX Clone); LUX installs Go when missing, builds the binary, and installs the local Ansible collection tarball. SSH uses the same `LUDUS_SSH_*` settings as GOAD.
+
+## LUXAI
+
+LUXAI stores its provider, encrypted API key, and limits in SQLite (`luxai_settings`). There is no required environment variable. `APP_SECRET` encrypts the key the same way as other settings secrets. Connection steps for a local OpenAI-compatible server, Claude, OpenCode, and a Cursor API key are in [LUXAI](luxai.md). Effort and context window are stored with the provider.
 
 ## TLS / HTTPS
 

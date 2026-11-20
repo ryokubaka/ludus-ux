@@ -20,6 +20,7 @@ export const pageTitles: Record<string, { title: string; description: string }> 
   "/ludushound": { title: "LudusHound", description: "Deploy AD replicas from BloodHound data via LudusHound" },
   "/ludushound/new": { title: "Deploy LudusHound", description: "Generate and deploy a LudusHound range" },
   "/settings": { title: "Settings", description: "Configure Ludus connection and preferences" },
+  "/luxai": { title: "LUXAI", description: "Ask LUXAI to configure, deploy, and check your ranges" },
   "/account": { title: "User Settings", description: "Profile picture and password" },
 }
 

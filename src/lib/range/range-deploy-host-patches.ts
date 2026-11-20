@@ -3,7 +3,11 @@ import "server-only"
 import { sshExec, sshExecAccount } from "@/lib/goad/goad-ssh"
 import { loadLuxHostScriptText, bundledLuxHostSha256 } from "@/lib/lux/lux-host-install"
 import { ensureLuxHostCurrent } from "@/lib/lux/lux-host-sync"
-import { applyLudusAnsibleSpeedups, applyLudusWinAsyncTimeout } from "@/lib/ludus/ludus-ansible-speedups"
+import {
+  applyLudusAnsibleSpeedups,
+  applyLudusChocolateyChecksums,
+  applyLudusWinAsyncTimeout,
+} from "@/lib/ludus/ludus-ansible-speedups"
 import { getSettings } from "@/lib/settings/settings-store"
 import { mapWithConcurrency } from "@/lib/core/concurrency"
 import { TtlCache } from "@/lib/core/server-cache"
@@ -18,6 +22,8 @@ type HostPatchOp =
   | "patch-adguard-host-dns"
   | "patch-linux-reboot-wait"
   | "patch-adws-wait"
+  | "patch-dns-cache"
+  | "patch-dns-server"
   | "patch-windows-static-ip"
   | "patch-windows-sysprep-netnative"
   | "patch-router-single-clone"
@@ -256,6 +262,24 @@ export async function ensureAdwsWait(playbookStamp = "unstamped"): Promise<HostP
 }
 
 /**
+ * The DC DNS cache task calls Set-DnsServerCache from win_shell. That shell
+ * does not autoload DnsServer, so the cmdlet is missing after the forwarder
+ * task already used it from win_powershell. Import the module there instead.
+ */
+export async function ensureDnsCacheModule(playbookStamp = "unstamped"): Promise<HostPlaybookPatch> {
+  return applyHostPatch("patch-dns-cache", "dns-cache", playbookStamp)
+}
+
+/**
+ * A domain that already exists skips promotion, including install_dns. The DC
+ * then has no DNS Server role, port 53 stays closed, and members cannot find
+ * the domain. Install the role and serve the zone before forwarding.
+ */
+export async function ensureDnsServerRole(playbookStamp = "unstamped"): Promise<HostPlaybookPatch> {
+  return applyHostPatch("patch-dns-server", "dns-server", playbookStamp)
+}
+
+/**
  * Windows 8+ static addressing starts async work and waits 5 seconds for
  * Ansible's named pipe. The error names WIN_ASYNC_STARTUP_TIMEOUT; Ansible
  * reads ansible_win_async_startup_timeout. Several guests at once miss the
@@ -303,6 +327,8 @@ export async function ensureRangeDeployHostPatches(
     { id: "choco", run: () => ensureChocolateyOpenSshPatch(playbookStamp) },
     { id: "rebootWait", run: () => ensureLinuxRebootWait(playbookStamp) },
     { id: "adwsWait", run: () => ensureAdwsWait(playbookStamp) },
+    { id: "dnsCache", run: () => ensureDnsCacheModule(playbookStamp) },
+    { id: "dnsServer", run: () => ensureDnsServerRole(playbookStamp) },
     { id: "windowsStaticIp", run: () => ensureWindowsStaticIp(playbookStamp) },
     { id: "windowsSysprep", run: () => ensureWindowsSysprepNetNative(playbookStamp) },
     { id: "routerClone", run: () => ensureRouterSingleClone(playbookStamp) },
@@ -318,6 +344,8 @@ export async function ensureRangeDeployHostPatches(
   const dns = byId.get("dns") ?? ({ ok: true, changed: false, skipped: null } satisfies HostPlaybookPatch)
   const rebootWait = byId.get("rebootWait")!
   const adwsWait = byId.get("adwsWait")!
+  const dnsCache = byId.get("dnsCache")!
+  const dnsServer = byId.get("dnsServer")!
   const windowsStaticIp = byId.get("windowsStaticIp")!
   const windowsSysprep = byId.get("windowsSysprep")!
   const routerClone = byId.get("routerClone")!
@@ -341,6 +369,12 @@ export async function ensureRangeDeployHostPatches(
   if (!adwsWait.ok) {
     warnings.push(`Active Directory Web Services wait edit skipped (${adwsWait.error}). Deploy is continuing.`)
   }
+  if (!dnsCache.ok) {
+    warnings.push(`DNS cache module edit skipped (${dnsCache.error}). Deploy is continuing.`)
+  }
+  if (!dnsServer.ok) {
+    warnings.push(`DNS Server role edit skipped (${dnsServer.error}). Deploy is continuing.`)
+  }
   if (!windowsStaticIp.ok) {
     warnings.push(`Windows static IP edit skipped (${windowsStaticIp.error}). Deploy is continuing.`)
   }
@@ -363,6 +397,18 @@ export async function ensureRangeDeployHostPatches(
     warnings.push(`Windows async startup timeout skipped (${detail}). Deploy is continuing.`)
   }
   try {
+    const checksums = await applyLudusChocolateyChecksums(getSettings().ignoreChocolateyChecksums)
+    if (!checksums.ok) {
+      warnings.push(
+        `Chocolatey checksum setting skipped (${checksums.detail ?? "failed"}). Deploy is continuing.`,
+      )
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn(`[chocolatey-checksums] ${detail}`)
+    warnings.push(`Chocolatey checksum setting skipped (${detail}). Deploy is continuing.`)
+  }
+  try {
     const speedups = await applyLudusAnsibleSpeedups(getSettings().ludusAnsibleSpeedups)
     if (!speedups.ok) {
       warnings.push(
@@ -382,6 +428,8 @@ export async function ensureRangeDeployHostPatches(
       (dns.ok && dns.changed) ||
       (rebootWait.ok && rebootWait.changed) ||
       (adwsWait.ok && adwsWait.changed) ||
+      (dnsCache.ok && dnsCache.changed) ||
+      (dnsServer.ok && dnsServer.changed) ||
       (windowsStaticIp.ok && windowsStaticIp.changed) ||
       (windowsSysprep.ok && windowsSysprep.changed) ||
       (routerClone.ok && routerClone.changed),

@@ -46,25 +46,13 @@ export function dedupeVMs(vms: VMObject[]): VMObject[] {
 }
 
 /**
- * Union merge for partial Ludus VM lists. When `stalePowerPessimistic`, VMs that
- * exist only in `prev` (omitted from this poll's `next`) get poweredOff so the
- * dashboard "Running" count and badges do not show ghost online state.
+ * Union merge for partial Ludus VM lists. A VM the latest poll did not include
+ * keeps the power state from `prev`. The table marks that row unconfirmed
+ * until a later poll names it.
  */
-export function mergeVmUnionPreferNext(
-  prev: VMObject[],
-  next: VMObject[],
-  stalePowerPessimistic: boolean,
-): VMObject[] {
-  const nextKeys = new Set(next.map(vmIdentityKey))
+export function mergeVmUnionPreferNext(prev: VMObject[], next: VMObject[]): VMObject[] {
   const m = new Map<string, VMObject>()
-  for (const vm of prev) {
-    const k = vmIdentityKey(vm)
-    let row = vm
-    if (stalePowerPessimistic && !nextKeys.has(k)) {
-      row = { ...vm, poweredOn: false, powerState: "stopped" }
-    }
-    m.set(k, row)
-  }
+  for (const vm of prev) m.set(vmIdentityKey(vm), vm)
   for (const vm of next) m.set(vmIdentityKey(vm), vm)
   return dedupeVMs(Array.from(m.values()))
 }
@@ -223,6 +211,6 @@ export function resolveVmListForRangeQuery(args: {
     return resolution(listed, listedKeys)
   }
 
-  const merged = dedupeVMs(mergeVmUnionPreferNext(prevVMs, listed, true))
+  const merged = dedupeVMs(mergeVmUnionPreferNext(prevVMs, listed))
   return resolution(merged, listedKeys)
 }

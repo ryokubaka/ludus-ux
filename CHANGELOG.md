@@ -17,11 +17,28 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 
 ---
 
-## Unreleased
+## [1.7.0] - 2026-11-20
 
 **LUX**
 
-- [Fix] **Live security** — `scripts/ci/live-security.sh` prints each step, including the wait for the LUX under test, and stops if that host does not answer.
+- [Security] **Next.js** 16.4.5 — [GHSA-mfr8-8qww-v76h](https://github.com/advisories/GHSA-mfr8-8qww-v76h). Closes the November 2026 cache and image advisories. `eslint-config-next` is 16.4.5.
+- [Security] **ws** 8.23.0 — [GHSA-37g9-w4hg-h9qr](https://github.com/advisories/GHSA-37g9-w4hg-h9qr). The console server uses `ws`.
+- [Security] **picomatch** — [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf). LUX vendors 4.0.8, and npm-resolved copies use it. GitHub withdrew the advisory on 2026-11-18.
+- [Add] **LUXAI** — An assistant on the LUXAI page proposes range and GOAD changes, and nothing runs until Apply. An admin chooses a local model, Claude, or Cursor. Building a range walks the wizard in the chat. Guest output is kept and shown as Markdown. See [LUXAI](docs/luxai.md).
+- [Add] **Security Onion hub mode** — A Security Onion range returns to hub mode on the bridge that is up when it is powered on, and about once a minute while a VM is on. Deleting the range releases its SDN vnet.
+- [Add] **Ignore Chocolatey checksums** — Settings → General can skip additional-tools checksums on every range deploy, including the CLI. Sysinternals still checks its checksum.
+- [Fix] **Ansible role sync** — A role or collection stays In sync when Ludus has no version, and when `1.0` and `1.0.0` are the same source.
+- [Fix] **lux-host syntax** — `lux-host` replaces the live helper only after `bash -n` accepts the new file.
+- [Fix] **Range builder layout** — A new range starts empty. VLAN numbers, domain names, and domain membership save as edited. The GOAD tab keeps membership and VLANs locked.
+- [Fix] **Live security** — `scripts/ci/live-security.sh` prints each step and stops if the LUX under test does not answer.
+- [Fix] **Domain join** — A domain controller gets the DNS Server role, and the domain zone, before members join.
+- [Fix] **DNS cache on a domain controller** — The cache task loads `DnsServer`, so `Set-DnsServerCache` runs after the forwarder task.
+- [Fix] **Template built state** — A Proxmox guest marked as a template counts as built. A same-named VM that is still a normal VM can be powered off and converted.
+- [Fix] **VM power while refreshing** — A VM keeps its last Running or Stopped state until a later poll includes it.
+- [Fix] **PocketBase login warning** — A failed superuser login names an empty key, a rejected password, or a TLS failure. The root API key is copied into that password only when the user is first created.
+- [Fix] **lux-host sudoers** — The ludus account may run `lux-host bridge-ageing` and a bridge name. The helper still accepts only `vmbrN` or `rN`.
+- [Improve] **Range Builder dependencies** — A missing role or collection can be installed from the builder. A missing template opens Templates to add or build it.
+- [Docs] **Screenshots** — The README and the screenshot page show the current pages.
 
 ## [1.6.2] - 2026-11-16
 
@@ -83,11 +100,11 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 **LUX**
 
 - [Fix] **Background SSH probe no longer starves login** — A rejected host credential makes the deploy-log clock back off (up to 60 s) instead of retrying every 2 s, so repeated failures no longer trip OpenSSH per-source penalties that refuse the login SSH connection.
-- [Fix] **lux-host `bridge-ageing`** — Passwordless `sudo lux-host bridge-ageing <vmbrN|rN>` sets the Proxmox range bridge to hub mode (`ageing_time` 0). Security Onion sniff capture on SDN `rN` vnets needs this; the network API reload path drops live taps, so the SO role calls this helper instead of skipping.
+- [Fix] **lux-host** `bridge-ageing` — Passwordless `sudo lux-host bridge-ageing <vmbrN|rN>` sets the Proxmox range bridge to hub mode (`ageing_time` 0). Security Onion sniff capture on SDN `rN` vnets needs this; the network API reload path drops live taps, so the SO role calls this helper instead of skipping.
 - [Improve] **Repository line endings** — Text is stored and checked out as LF. Editors are set to LF, and CI rejects a text file committed with CRLF, so a Windows save no longer turns into a whole-file rewrite.
 - [Improve] **Documentation drift check** — CI refuses a docs tree whose framework version, documented environment names, or page index disagree with the code. It runs in the existing hygiene job on GitHub and GitLab, so no new check is required.
 - [Improve] **Server library layout** — `src/lib` files are grouped by domain. Import paths changed inside the app; no route, export, or behavior changed.
-- [Docs] **Documentation accuracy** — Architecture names Next.js 16 and React 19. Tuning knobs, legacy `GOAD_SSH_*` aliases, the Docker socket path, and the blueprint operator key fallback are documented in Environment variables.
+- [Docs] **Documentation accuracy** — Architecture names Next.js 16 and React 19. Tuning knobs, legacy `GOAD_SSH_`* aliases, the Docker socket path, and the blueprint operator key fallback are documented in Environment variables.
 
 ## [1.5.2] - 2026-10-28
 
@@ -118,7 +135,7 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 **LUX**
 
 - [Breaking] **Container uid and SSH key mount** — The image user defaults to uid 64532. Set `LUX_UID` and `LUX_GID` in `.env`; Compose passes them into the image build, and a change needs a rebuild. `./ssh` is mounted read-only and is not chowned. A key that user cannot read, such as one still owned by uid 1001 after an upgrade, is copied at start into an in-memory `/run/lux-ssh` owned by that user, so host key auth keeps working and the host file is unchanged. Rootless Docker, a user namespace remap, or an NFS `root_squash` mount still need the key readable by that uid; startup warns when it is not. See persistent data.
-- [Breaking] **`LUDUS_TLS_INSECURE` when unset** — A `.env` without `LUDUS_TLS_INSECURE` now verifies the Ludus, PocketBase, and Proxmox certificates. Before 1.5.0 that meant the checks were skipped, and the older quickstart never wrote the key. If Ludus uses its default self-signed certificate, add `LUDUS_TLS_INSECURE=true` to `.env` and run `docker compose up -d`. Login and Settings → Test credentials say when the key is missing. The flag applies only to Ludus, PocketBase, and Proxmox; other HTTPS is always verified.
+- [Breaking] `LUDUS_TLS_INSECURE` **when unset** — A `.env` without `LUDUS_TLS_INSECURE` now verifies the Ludus, PocketBase, and Proxmox certificates. Before 1.5.0 that meant the checks were skipped, and the older quickstart never wrote the key. If Ludus uses its default self-signed certificate, add `LUDUS_TLS_INSECURE=true` to `.env` and run `docker compose up -d`. Login and Settings → Test credentials say when the key is missing. The flag applies only to Ludus, PocketBase, and Proxmox; other HTTPS is always verified.
 - [Security] **Settings and login** — `GET /api/settings` returns an allowlist. The blueprint operator API key, root API key, and host SSH password are not sent to the browser. A manual API key login is accepted only when the Ludus profile matches the username. Operators with non-admin users should rotate the Ludus API key of every admin who has logged in, and rotate a host SSH password that was saved in Settings.
 - [Security] **Sessions** — API routes check the server-side credential vault, so a cookie presented after logout is rejected. Changing the Ludus URL or SSH host requires the current SSH password. The legacy session cookie name is no longer accepted. `/api/auth/revoke` clears a session only when its credential row is already gone, so a link from another site cannot log a user out. Template and blueprint source listings checked the session only for registered sources; every listing now needs one.
 - [Security] **Live admin check** — A route that grants admin power asks Ludus whether the signed-in user is still an admin. The cookie flag is reused for about a minute, then checked again. A demoted admin loses impersonation, host password changes, and the other admin branches instead of keeping them until the cookie expires.
@@ -143,7 +160,7 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 - [Fix] **GOAD deploy redirect** — A new GOAD deploy leaves for that instance's Deploy Status page when the log prints the instance id. Waiting on the workspace list left the wizard on Deploy New Range after the instance already existed.
 - [Fix] **GOAD lab destroy** — After a lab is destroyed, its page goes back to the GOAD list. It no longer opens the lab of whichever range the range picker selected next, and it no longer throws the shell error page by selecting the deleted range again after the sidebar has moved off it.
 - [Fix] **Template repo requests** — Requests to a user-supplied repo host honor the caller's abort signal, time out after 30 seconds, and stop at 10 MB.
-- [Fix] **Saving the API key to `~/.bashrc`** — The save could wait forever because the SSH output was never read.
+- [Fix] **Saving the API key to** `~/.bashrc` — The save could wait forever because the SSH output was never read.
 - [Improve] **Deploy New Range** — Config Method is the first step. Wizard, YAML, and Blueprint then ask whether to create a range or replace an existing one. From GOAD, shown when GOAD is enabled, opens the GOAD deploy wizard on this page. GOAD Management still opens that wizard on its own.
 - [Improve] **Quickstart** — Asks whether Ludus uses a self-signed certificate and sets `LUDUS_TLS_INSECURE` (default yes, scoped to Ludus, PocketBase, and Proxmox). After the host key is authorized, it runs `chown` on `./ssh/id_rsa` to the `LUX_UID`:`LUX_GID` pair in `.env` (default 64532:64532) when that uid is not already a local account. Replacing `./ssh/id_rsa` removes the previous file first, because that file is mode 600 and owned by the container user after a prior run, and `scp` was opening it and failing. The Compose action repeats the ownership check before `docker compose up`.
 - [Improve] **Density** — The root type scale is 13px, so 100% browser zoom matches about 80% of the previous layout. Small labels stay near 10px. Log text and the remote console keep their own sizes.
@@ -345,7 +362,7 @@ A capability that is new in a release is one **[Add]** bullet. Work that only ma
 - [Improve] **Router template gate** — Block GOAD/`deployRange` until `debian-11-x64-server-template` is Packer-built (Ludus range router). Enforced in proxy, Dashboard Deploy, range wizards, and `executeGoad`; included in GOAD `templateAudit`.
 - [Improve] **Sources** — Source ID always shown (Ludus 2.3.0+ may auto-prefix with userID); register dialog documents that behavior.
 - [Improve] **Settings** — Ansible verbose + force quirk warning only when connected Ludus is ≤2.2.3 (or version unknown).
-- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/`** and `scripts/**` files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
+- [Improve] **Repo hygiene** — Stored LF line endings for remaining `docker/`** and `scripts/`** files so checkout/stash no longer dirties the tree (`.gitattributes` already required `eol=lf`).
 - [Fix] **GOAD venv / exit code** — Recreate broken `~/.goad/.venv` (missing activate) and pip-install when `rich` missing; preserve `goad.sh` exit status so failures are not reported as EXIT 0.
 - [Docs] Features / environment notes for `ludus_extensions` preservation and version-gated verbose warning.
 

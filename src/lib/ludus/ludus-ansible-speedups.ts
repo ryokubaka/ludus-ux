@@ -102,6 +102,19 @@ export async function applyLudusAnsibleSpeedups(enabled: boolean): Promise<Ansib
   return applyHostOperation(["ansible-speedups", enabled ? "on" : "off"], "ansible-speedups", speedupsCache)
 }
 
+/**
+ * Write ignore_chocolatey_checksums into the range playbook group_vars.
+ * Ludus reads that variable for every additional-tools install, including a
+ * deploy started from the CLI. Off removes only the LUX block.
+ */
+export async function applyLudusChocolateyChecksums(enabled: boolean): Promise<AnsibleSpeedupsResult> {
+  // On and off are different cache keys. A later On inside the TTL would skip the write.
+  return applyHostOperationUncached(
+    ["chocolatey-checksums", enabled ? "on" : "off"],
+    "chocolatey-checksums",
+  )
+}
+
 /** 120 seconds for every Windows async task the Ludus service starts. */
 export async function applyLudusWinAsyncTimeout(): Promise<AnsibleSpeedupsResult> {
   return applyHostOperation(["win-async-timeout"], "win-async-timeout", winAsyncCache)

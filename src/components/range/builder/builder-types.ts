@@ -176,6 +176,8 @@ export interface TemplateRow {
   name: string
   built: boolean
   os: "windows" | "linux" | "macos" | "other"
+  /** Set when a Proxmox guest uses this name. `vm` is not cloneable yet. */
+  proxmox?: "template" | "vm"
 }
 
 const TEMPLATE_OS_ORDER = ["windows", "linux", "macos", "other"] as const

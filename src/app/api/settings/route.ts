@@ -6,7 +6,7 @@ import { isLudusRootApiKeyEnvOverrideActive } from "@/lib/users/resolve-root-api
 import { invalidateCatalogCache } from "@/lib/goad/goad-ssh"
 import { clientIpFromRequest } from "@/lib/session/security-audit-log"
 import { logAppEvent } from "@/lib/logs/app-log"
-import { applyLudusAnsibleSpeedups } from "@/lib/ludus/ludus-ansible-speedups"
+import { applyLudusAnsibleSpeedups, applyLudusChocolateyChecksums } from "@/lib/ludus/ludus-ansible-speedups"
 import { liveSessionIsAdmin, refreshRevokedAdminCookie } from "@/lib/session/session-admin-check"
 import {
   endpointSettingsChanged,
@@ -61,6 +61,9 @@ export async function POST(request: NextRequest) {
   if (typeof record.ludusAnsibleVerbose === "boolean") patch.ludusAnsibleVerbose = record.ludusAnsibleVerbose
   if (typeof record.ludusAnsibleSpeedups === "boolean") patch.ludusAnsibleSpeedups = record.ludusAnsibleSpeedups
   if (typeof record.useLudusHostDns === "boolean") patch.useLudusHostDns = record.useLudusHostDns
+  if (typeof record.ignoreChocolateyChecksums === "boolean") {
+    patch.ignoreChocolateyChecksums = record.ignoreChocolateyChecksums
+  }
   const rootApiKey = nonEmptySecret(record.rootApiKey)
   if (rootApiKey !== undefined) patch.rootApiKey = rootApiKey.trim()
   if (typeof record.proxmoxSshUser === "string") patch.proxmoxSshUser = record.proxmoxSshUser.trim()
@@ -90,6 +93,14 @@ export async function POST(request: NextRequest) {
   if ("ludusAnsibleSpeedups" in patch && patch.ludusAnsibleSpeedups !== previous.ludusAnsibleSpeedups) {
     void applyLudusAnsibleSpeedups(patch.ludusAnsibleSpeedups === true).catch((err) => {
       console.warn("[settings] applyLudusAnsibleSpeedups:", err instanceof Error ? err.message : err)
+    })
+  }
+  if (
+    "ignoreChocolateyChecksums" in patch &&
+    patch.ignoreChocolateyChecksums !== previous.ignoreChocolateyChecksums
+  ) {
+    void applyLudusChocolateyChecksums(patch.ignoreChocolateyChecksums === true).catch((err) => {
+      console.warn("[settings] applyLudusChocolateyChecksums:", err instanceof Error ? err.message : err)
     })
   }
   logAppEvent("settings_save", "Settings updated", {

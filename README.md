@@ -3,7 +3,7 @@
 ![Ludus User eXperience](./images/lux_logo_large.jpeg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-1.6.2-green)]()
+[![Version](https://img.shields.io/badge/version-1.7.0-green)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/ryokubaka/ludus-ux)](https://github.com/ryokubaka/ludus-ux/stargazers)
 
@@ -75,6 +75,96 @@ Notes:
 
 - Co-locating LUX on the Ludus server is fine; give the host enough headroom for Ludus itself.
 - Lab size (e.g. Security Onion + AD) is bounded by **Proxmox** capacity, not LUX. See [Ludus docs](https://docs.ludus.cloud) and your blueprint/role READMEs for range VM RAM/CPU.
+
+## Screenshots
+
+LUX 1.7.0, at a laptop-sized window so the layout stays readable. The same gallery is in [docs/screenshots.md](docs/screenshots.md).
+
+### Sign in
+
+![Sign in](./images/login.png)
+
+### Dashboard
+
+A deployed range: VM table, power controls, and cluster stats.
+
+![Dashboard](./images/dashboard.png)
+
+The same page while a range is deploying, with live Ansible output open.
+
+![Dashboard during a deploy](./images/dashboard-deploying.png)
+
+### Deploy new range
+
+![Deploy new range](./images/newrange.png)
+
+### Range builder
+
+![Range builder](./images/range-builder.png)
+
+### Configuration
+
+![Range configuration](./images/rangeconfig.png)
+
+### Templates
+
+![Templates](./images/templates.png)
+
+### Testing mode
+
+![Testing mode](./images/testing-off.png)
+
+### Snapshots
+
+![Snapshots](./images/snapshots.png)
+
+### Blueprints
+
+![Blueprints](./images/blueprints.png)
+
+### Sources
+
+![Sources](./images/sources.png)
+
+### Ansible Galaxy
+
+![Ansible Galaxy](./images/ansiblerolescollections.png)
+
+### Range logs
+
+Live deploy output, including the running task stream and deploy history.
+
+![Range logs during a deploy](./images/rangelogs.png)
+
+### Console
+
+![Console in the browser](./images/consoleinbrowser.png)
+
+### GOAD
+
+![GOAD management](./images/goad-mgmt.png)
+
+### Ranges overview
+
+![Ranges overview](./images/rangeoverview.png)
+
+### Users
+
+![Users](./images/users.png)
+
+### Groups
+
+![Groups](./images/groups.png)
+
+### Ludus performance
+
+![Ludus performance](./images/performance.png)
+
+### Settings
+
+About, with Ludus and LUX release status.
+
+![Settings](./images/settings.png)
 
 ## License & author
 

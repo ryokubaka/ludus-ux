@@ -42,4 +42,22 @@ describe("buildAnsibleSourceMatchMap", () => {
     expect(match?.upgradeAvailable).toBe(false)
     expect(match?.sourceLabel).toBe("Ludus Source – Meow · feat/securityonion-3.3.0")
   })
+
+  it("keeps a role in sync when Ludus omits its version and the catalog has one", () => {
+    const map = buildAnsibleSourceMatchMap(
+      "role",
+      [
+        {
+          sourceId: "meow-main",
+          items: [{ sourceId: "meow-main", name: "whispergate.ludus_jenkins", version: "1.0.0" }],
+        },
+      ],
+      sources,
+      [{ name: "whispergate.ludus_jenkins" }],
+    )
+    const match = lookupAnsibleSourceMatch(map, "whispergate.ludus_jenkins")
+    expect(match?.catalogVersion).toBe("1.0.0")
+    expect(match?.installedVersion).toBeUndefined()
+    expect(match?.upgradeAvailable).toBe(false)
+  })
 })

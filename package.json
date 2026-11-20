@@ -1,6 +1,6 @@
 {
   "name": "ludus-ux",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "Open-source web UI for the Ludus cyber range platform",
   "license": "Apache-2.0",
   "scripts": {
@@ -25,6 +25,7 @@
     "unrs-resolver@1.11.1": true
   },
   "dependencies": {
+    "@cursor/sdk": "^1.4.2",
     "@monaco-editor/react": "^4.6.0",
     "@radix-ui/react-accordion": "^1.1.2",
     "@radix-ui/react-alert-dialog": "^1.0.5",
@@ -53,7 +54,8 @@
     "js-yaml": "^4.3.2",
     "lucide-react": "^0.400.0",
     "monaco-editor": "^0.46.0",
-    "next": "^16.4.2",
+    "next": "^16.4.5",
+    "picomatch": "file:vendor/picomatch",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-resizable-panels": "^2.1.7",
@@ -62,7 +64,7 @@
     "tailwind-merge": "^2.3.0",
     "tailwindcss-animate": "^1.0.7",
     "tar": "^7.5.22",
-    "ws": "^8.21.0"
+    "ws": "^8.23.0"
   },
   "overrides": {
     "rimraf": "^5.0.10",
@@ -76,6 +78,7 @@
     "source-map-js": ">=1.2.2",
     "brace-expansion": "5.0.12",
     "braces": "$braces",
+    "picomatch": "$picomatch",
     "browserslist": ">=4.28.7",
     "baseline-browser-mapping": ">=2.11.0",
     "postcss-selector-parser": ">=7.1.6",
@@ -123,7 +126,7 @@
     "@types/ws": "^8.5.13",
     "autoprefixer": "^10.0.1",
     "eslint": "^9.21.0",
-    "eslint-config-next": "^16.4.2",
+    "eslint-config-next": "^16.4.5",
     "postcss": "^8.5.26",
     "tailwindcss": "^3.3.0",
     "tsx": "^4.19.4",

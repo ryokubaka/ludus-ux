@@ -95,6 +95,8 @@ export type GoadDeployLinkageOpts = {
   /** Snapshot of instance ids before execute started. */
   beforeInstanceIds?: Iterable<string>
   runAsOwner: GoadOwnerExec
+  /** Network section the pending-network workflow merges after a successful install. */
+  networkRulesJson?: string
 }
 
 export type GoadDeployLinkageResult =
@@ -201,6 +203,7 @@ export function scheduleGoadDeployLinkage(opts: GoadDeployLinkageOpts): { handof
     rangeId,
     instanceId: opts.instanceId,
     username,
+    networkRulesJson: opts.networkRulesJson,
   })
   linkHandoffToTask(handoff.id, opts.taskId)
 
